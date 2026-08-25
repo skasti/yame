@@ -15,9 +15,12 @@ class SerialConnection(
     private var readerThread: Thread? = null
 
     val output: OutputStream
-        get() = port.outputStream
+        get() {
+            check(port.isOpen) { "Serial port must be open before accessing its output stream" }
+            return port.outputStream
+        }
 
-    fun open(onBytes: (ByteArray) -> Unit) {
+    fun open() {
         port.setComPortParameters(
             baudRate,
             8,
@@ -32,6 +35,11 @@ class SerialConnection(
         }
 
         logger("Opened ${port.systemPortName} at $baudRate baud, 8N1, no flow control")
+    }
+
+    fun startReading(onBytes: (ByteArray) -> Unit) {
+        check(port.isOpen) { "Serial port must be open before starting the reader" }
+        check(readerThread == null) { "Serial reader is already running" }
 
         readerThread = thread(
             name = "serial-reader-${port.systemPortName}",
