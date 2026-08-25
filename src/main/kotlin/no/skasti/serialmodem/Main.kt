@@ -31,6 +31,8 @@ fun main(args: Array<String>) {
         shutdown.countDown()
     })
 
+    connection.open()
+
     val modem = HayesModem(
         output = connection.output,
         baudRate = options.baudRate,
@@ -40,7 +42,7 @@ fun main(args: Array<String>) {
         },
     )
 
-    connection.open(modem::receive)
+    connection.startReading(modem::receive)
     println("Serial modem emulator ready. Press Ctrl+C to stop.")
     shutdown.await()
 }
