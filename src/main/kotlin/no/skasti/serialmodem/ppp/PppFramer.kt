@@ -5,6 +5,7 @@ import java.io.ByteArrayOutputStream
 class PppFramer(
     private val onFrame: (PppFrame) -> Unit,
     private val onInvalidFrame: (ByteArray) -> Unit = {},
+    var receiveAccm: UInt = DEFAULT_RECEIVE_ACCM,
 ) {
     private enum class State {
         WAITING_FOR_FRAME,
@@ -26,18 +27,41 @@ class PppFramer(
                     }
                 }
 
-                State.IN_FRAME -> when (value) {
-                    FLAG -> finishFrame()
-                    ESCAPE -> state = State.ESCAPED
-                    else -> buffer.write(value)
+                State.IN_FRAME -> when {
+                    value == FLAG -> finishFrame()
+                    value == ESCAPE -> state = State.ESCAPED
+                    isMappedControlCharacter(value) -> Unit
+                    else -> appendDecodedByte(value)
                 }
 
                 State.ESCAPED -> {
-                    buffer.write(value xor ESCAPE_MASK)
-                    state = State.IN_FRAME
+                    if (value == FLAG) {
+                        // A Control Escape immediately followed by a Flag Sequence
+                        // aborts the current frame. The flag also starts the next one.
+                        buffer.reset()
+                        state = State.IN_FRAME
+                    } else if (appendDecodedByte(value xor ESCAPE_MASK)) {
+                        state = State.IN_FRAME
+                    }
                 }
             }
         }
+    }
+
+    private fun isMappedControlCharacter(value: Int): Boolean =
+        value < 0x20 && ((receiveAccm shr value) and 1u) != 0u
+
+    private fun appendDecodedByte(value: Int): Boolean {
+        if (buffer.size() >= MAX_DECODED_FRAME_SIZE) {
+            // No closing flag arrived within a plausible PPP frame size. Drop the
+            // partial frame and ignore input until a new flag resynchronizes us.
+            buffer.reset()
+            state = State.WAITING_FOR_FRAME
+            return false
+        }
+
+        buffer.write(value)
+        return true
     }
 
     private fun finishFrame() {
@@ -95,5 +119,12 @@ class PppFramer(
         private const val ADDRESS = 0xff
         private const val CONTROL = 0x03
         private const val MIN_FRAME_SIZE = 4
+
+        const val DEFAULT_RECEIVE_ACCM: UInt = 0xffffffffu
+
+        // The negotiated MRU is normally much smaller (1500 by default), but the
+        // framing layer should not assume a negotiated value. This limit allows
+        // the largest 16-bit information field plus address/control, protocol and FCS.
+        internal const val MAX_DECODED_FRAME_SIZE = 65_541
     }
 }
