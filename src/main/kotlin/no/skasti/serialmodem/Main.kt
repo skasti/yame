@@ -2,7 +2,9 @@ package no.skasti.serialmodem
 
 import no.skasti.serialmodem.modem.HayesModem
 import no.skasti.serialmodem.serial.SerialConnection
+import no.skasti.serialmodem.tone.tone
 import java.util.concurrent.CountDownLatch
+import kotlin.time.Duration.Companion.seconds
 
 fun main(args: Array<String>) {
     val options = parseArgs(args)
@@ -39,6 +41,15 @@ fun main(args: Array<String>) {
         onData = { bytes ->
             val hex = bytes.joinToString(" ") { "%02X".format(it.toInt() and 0xff) }
             println("DATA <= ${bytes.size} bytes: $hex")
+        },
+        onDial = { number ->
+            try {
+                tone.dial(number = number, pickupTime = 2.seconds)
+            } catch (e: Exception) {
+                // Audio is cosmetic: a missing/unconfigured audio device must not
+                // prevent the serial modem itself from establishing a connection.
+                println("AUDIO !! Could not play dialing tones: ${e.message}")
+            }
         },
     )
 
