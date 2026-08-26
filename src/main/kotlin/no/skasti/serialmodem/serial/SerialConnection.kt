@@ -28,7 +28,7 @@ class SerialConnection(
             SerialPort.NO_PARITY,
         )
         port.setFlowControl(SerialPort.FLOW_CONTROL_DISABLED)
-        port.setComPortTimeouts(SerialPort.TIMEOUT_READ_BLOCKING, 0, 0)
+        port.setComPortTimeouts(SerialPort.TIMEOUT_READ_SEMI_BLOCKING, 0, 0)
 
         if (!port.openPort()) {
             error("Could not open serial port ${port.systemPortName}")
