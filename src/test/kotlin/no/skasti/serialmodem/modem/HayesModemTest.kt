@@ -18,12 +18,14 @@ class HayesModemTest {
     }
 
     @Test
-    fun `dial command enters connected mode`() {
+    fun `dial command plays number before entering connected mode`() {
         val output = ByteArrayOutputStream()
-        val modem = HayesModem(output, 115200, logger = {})
+        val dialed = mutableListOf<String>()
+        val modem = HayesModem(output, 115200, onDial = dialed::add, logger = {})
 
-        modem.receive("ATDT5551234\r".toByteArray())
+        modem.receive("ATDT004734576543\r".toByteArray())
 
+        assertEquals(listOf("004734576543"), dialed)
         assertTrue(output.toString().contains("CONNECT 115200"))
         assertEquals(HayesModem.State.CONNECTED, modem.state)
     }
