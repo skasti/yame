@@ -40,6 +40,36 @@ class ToneSequenceTest {
     }
 
     @Test
+    fun `v34 dial plan exposes progress markers in playback order`() {
+        val plan = ToneSequence.dialPlan(
+            number = "12",
+            pickupTime = 2.seconds,
+            dialToneTime = 500.milliseconds,
+            sampleRate = sampleRate,
+        )
+
+        assertEquals(
+            listOf(
+                ToneStep.DIAL_TONE,
+                ToneStep.DTMF_DIALING,
+                ToneStep.RINGBACK,
+                ToneStep.REMOTE_ANSWERED,
+                ToneStep.V8_ANSAM,
+                ToneStep.V8_NEGOTIATION,
+                ToneStep.V34_PHASE2,
+                ToneStep.V34_LINE_PROBE_L1,
+                ToneStep.V34_LINE_PROBE_L2,
+                ToneStep.V34_TRAINING,
+                ToneStep.V34_FINAL_EXCHANGE,
+                ToneStep.COMPLETE,
+            ),
+            plan.progress.map { it.progress.step },
+        )
+        assertTrue(plan.progress.zipWithNext().all { (first, second) -> first.sampleOffset <= second.sampleOffset })
+        assertEquals(plan.samples.size, plan.progress.last().sampleOffset)
+    }
+
+    @Test
     fun `v34 handshake contains audible signal`() {
         val samples = ModemHandshakeSequence.v34(sampleRate)
 
