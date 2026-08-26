@@ -15,17 +15,18 @@ The emulator currently:
 - opens a serial port at 115200 baud, 8N1
 - supports basic Hayes-style AT command handling
 - accepts unknown AT initialization commands with `OK`
-- answers dial commands (`ATD...` / `ATDT...`) with simulated telephone dialing sounds before `CONNECT 115200`
+- answers dial commands (`ATD...` / `ATDT...`) with simulated telephone dialing and modem-handshake sounds before `CONNECT 115200`
 - generates a Norwegian 425 Hz dial tone, standard DTMF digits, and 425 Hz ringback cadence
+- simulates a V.8/V.34-style modem answer, negotiation, line probing and training sequence after pickup
 - normalizes formatted dial strings before generating DTMF
 - switches to raw data mode after `CONNECT`
 - logs the raw bytes received in data mode in hexadecimal
 
 PPP negotiation and Internet routing are not implemented yet. The raw data logger is intentionally the next diagnostic step: it lets us observe what the old laptop actually sends after the modem connection is established.
 
-## Telephone tone simulation
+## Telephone and modem tone simulation
 
-Dialing audio lives in the separate `no.skasti.serialmodem.tone` package. It is blocking by design, so the caller does not continue until the simulated remote side picks up.
+Dialing audio lives in the separate `no.skasti.serialmodem.tone` package. It is blocking by design: `pickupTime` controls how long the simulated remote telephone rings before answering, and the call does not return until the subsequent modem handshake has also completed.
 
 For example:
 
@@ -43,8 +44,27 @@ The default sequence is:
 
 1. 425 Hz dial tone for 500 ms
 2. DTMF digits at 95 ms per tone with 95 ms inter-digit spacing
-3. Norwegian-style 425 Hz ringback at 1 s on / 4 s off
-4. return from `dial()` when `pickupTime` has elapsed
+3. Norwegian-style 425 Hz ringback at 1 s on / 4 s off until `pickupTime` has elapsed
+4. remote modem answer (`ANSam`-style 2100 Hz tone)
+5. simulated V.8 modem-capability negotiation using V.21 frequency pairs
+6. V.34-style 1200/2400 Hz phase-2 carriers and 1800 Hz guard tone
+7. V.34 L1/L2 multi-tone line probing
+8. simulated equalizer/training and final carrier lock
+9. return from `dial()`, after which the Hayes emulator sends `CONNECT`
+
+The V.8/V.34 handshake is an **auditory simulation**, not a decodable modem waveform. Where practical it uses the actual standardized frequencies and timings (including ANSam modulation and the V.34 line-probing tone set), while capability messages and final training data are synthesized only to reproduce the characteristic sound and delay.
+
+The default V.34 handshake adds about 6.2 seconds after pickup. Callers that only want the telephone part can disable it explicitly:
+
+```kotlin
+import no.skasti.serialmodem.tone.HandshakeProfile
+
+tone.dial(
+    number = "5551234",
+    pickupTime = 2.seconds,
+    handshakeProfile = HandshakeProfile.NONE,
+)
+```
 
 Dial strings are normalized before DTMF is generated. A leading `+` is converted to Norway's international access prefix `00`, so `+47 345 76 543` is dialed as `004734576543`. Spaces, dashes, parentheses and other presentation characters are ignored, and a leading Hayes `T` or `P` dial-mode selector is removed.
 
@@ -82,13 +102,13 @@ Specify another line speed if needed:
 
 ## Test tone
 
-Play a complete dialing sequence without opening a serial port:
+Play a complete dialing and modem-handshake sequence without opening a serial port:
 
 ```shell
 ./gradlew run --args="--test-tone '+47 345 76 543'"
 ```
 
-The tone test deliberately uses longer dial-tone and pickup timings so the generated cadence is easy to hear.
+The tone test deliberately uses longer dial-tone and pickup timings so the generated cadence is easy to hear. After the simulated pickup, the V.8/V.34 handshake continues before the test exits.
 
 Run the automated tests with:
 
@@ -109,6 +129,7 @@ AT <= AT&F...
 AT => OK
 AT <= ATDT5551234
 MODEM dialing 5551234
+# dial/ring/handshake audio plays here
 MODEM connected
 AT => CONNECT 115200
 DATA <= ... bytes: 7E FF 03 C0 21 ...
