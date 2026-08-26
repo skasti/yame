@@ -51,6 +51,14 @@ class ToneSequenceTest {
     }
 
     @Test
+    fun `v34 handshake waveform is deterministic`() {
+        val first = ModemHandshakeSequence.v34(sampleRate)
+        val second = ModemHandshakeSequence.v34(sampleRate)
+
+        assertEquals(first.toList(), second.toList())
+    }
+
+    @Test
     fun `ringback is clipped exactly at pickup time`() {
         val samples = ToneSequence.dial(
             number = "1",
