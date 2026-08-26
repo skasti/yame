@@ -1,6 +1,6 @@
 # Serial Modem Emulator
 
-A small Kotlin/JVM project that makes a modern PC behave like a basic Hayes-compatible modem over a physical RS-232/COM port.
+A small Kotlin/JVM project that makes a modern computer behave like a basic Hayes-compatible modem over a physical RS-232 serial connection.
 
 The intended end state is:
 
@@ -25,29 +25,29 @@ PPP negotiation and Internet routing are not implemented yet. The raw data logge
 
 - JDK 21
 - Gradle
-- a serial port or USB-to-RS232 adapter on the modern PC
+- a USB-to-RS232 adapter
 - a null-modem connection to the old laptop
 
 Serial access uses [jSerialComm](https://github.com/Fazecast/jSerialComm).
 
 ## Run
 
-List detected ports:
+List detected serial ports:
 
-```powershell
+```shell
 gradle run --args="--list"
 ```
 
-Start the emulator on a Windows COM port:
+Start the emulator on a detected serial port:
 
-```powershell
-gradle run --args="--port COM3"
+```shell
+gradle run --args="--port <port>"
 ```
 
 Specify another line speed if needed:
 
-```powershell
-gradle run --args="--port COM3 --baud 57600"
+```shell
+gradle run --args="--port <port> --baud 57600"
 ```
 
 ## Expected first test
