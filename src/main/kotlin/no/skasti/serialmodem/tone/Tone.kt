@@ -90,11 +90,8 @@ internal object ToneSequence {
         dialToneTime: Duration,
         sampleRate: Int,
     ): ShortArray {
-        val normalizedNumber = number.uppercase().filterNot(Char::isWhitespace)
+        val normalizedNumber = DialString.normalize(number)
         require(normalizedNumber.isNotEmpty()) { "number must contain at least one DTMF digit" }
-        require(normalizedNumber.all(dtmf::containsKey)) {
-            "number contains unsupported DTMF characters: $number"
-        }
 
         val output = ShortArrayBuilder()
         output.append(tone(425.0, dialToneTime, sampleRate, amplitude = 0.20))
