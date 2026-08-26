@@ -212,12 +212,10 @@ internal object ModemHandshakeSequence {
         output.append(lineProbe(160.milliseconds, sampleRate, amplitude = 0.22))
         output.append(lineProbe(500.milliseconds, sampleRate, amplitude = 0.12))
 
-        // The later V.34 training sounds much less tonal than the preceding
-        // carrier/probing stages. Model that with deterministic scrambled QAM-
-        // like symbol streams instead of whistles or added white noise. A
-        // coarse 4-point constellation represents TRN-style equalizer training,
-        // followed by a denser 16-point sequence for the final parameter/data
-        // exchange before CONNECT.
+        // Later V.34 training is deliberately much less tonal. These are
+        // scrambled QAM-like symbol streams chosen to reproduce the audible
+        // character of equalizer training and final parameter/data exchange;
+        // they are not claimed to be bit-accurate TRN or MP waveforms.
         output.append(qamTraining(
             duration = 1_400.milliseconds,
             sampleRate = sampleRate,
