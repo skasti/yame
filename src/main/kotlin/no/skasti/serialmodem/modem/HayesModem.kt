@@ -1,5 +1,6 @@
 package no.skasti.serialmodem.modem
 
+import no.skasti.serialmodem.tone.DialString
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets
 
@@ -110,12 +111,7 @@ class HayesModem(
     }
 
     private fun dial(dialString: String) {
-        val number = dialString
-            .removePrefix("T")
-            .removePrefix("t")
-            .removePrefix("P")
-            .removePrefix("p")
-            .filter { it.isDigit() || it in "*#ABCDabcd" }
+        val number = DialString.normalize(dialString)
 
         if (number.isEmpty()) {
             respond("NO DIALTONE")
