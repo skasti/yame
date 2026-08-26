@@ -90,13 +90,13 @@ private fun parseArgs(args: Array<String>): Options {
                 baud = args[++i].toInt()
             }
             "--list", "-l" -> list = true
-            "--help", "-h" -> {
-                printUsage()
-                kotlin.system.exitProcess(0)
-            }
             "--test-tone", "-t" -> {
                 require(i + 1 < args.size) { "$arg requires a number to dial" }
                 testNumber = args[++i]
+            }
+            "--help", "-h" -> {
+                printUsage()
+                kotlin.system.exitProcess(0)
             }
             else -> error("Unknown argument: $arg")
         }
@@ -113,13 +113,15 @@ private fun printUsage() {
 
         Usage:
           serial-modem-emulator --list
-          serial-modem-emulator --port COM3 [--baud 115200]
+          serial-modem-emulator --test-tone NUMBER
+          serial-modem-emulator --port PORT [--baud 115200]
 
         Options:
-          -l, --list          List available serial ports
-          -p, --port PORT     Serial port, e.g. COM3
-          -b, --baud RATE     Baud rate (default: 115200)
-          -h, --help          Show this help
+          -l, --list             List available serial ports
+          -t, --test-tone NUM    Play a simulated dialing sequence and exit
+          -p, --port PORT        Serial port, e.g. COM3 or /dev/ttyUSB0
+          -b, --baud RATE        Baud rate (default: 115200)
+          -h, --help             Show this help
         """.trimIndent(),
     )
 }
