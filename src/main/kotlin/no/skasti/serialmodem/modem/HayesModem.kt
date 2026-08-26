@@ -7,6 +7,7 @@ class HayesModem(
     private val output: OutputStream,
     private val baudRate: Int,
     private val onData: (ByteArray) -> Unit = {},
+    private val onDial: (String) -> Unit = {},
     private val logger: (String) -> Unit = ::println,
 ) {
     enum class State {
@@ -97,7 +98,7 @@ class HayesModem(
                 state = State.COMMAND
                 respond("OK")
             }
-            upper.startsWith("ATD") -> connect()
+            upper.startsWith("ATD") -> dial(command.substring(3))
             else -> {
                 // Old modem drivers often send long initialization strings.
                 // For the first milestone we accept unknown AT commands rather
@@ -106,6 +107,24 @@ class HayesModem(
                 respond("OK")
             }
         }
+    }
+
+    private fun dial(dialString: String) {
+        val number = dialString
+            .removePrefix("T")
+            .removePrefix("t")
+            .removePrefix("P")
+            .removePrefix("p")
+            .filter { it.isDigit() || it in "*#ABCDabcd" }
+
+        if (number.isEmpty()) {
+            respond("NO DIALTONE")
+            return
+        }
+
+        logger("MODEM dialing $number")
+        onDial(number)
+        connect()
     }
 
     private fun connect() {
