@@ -102,13 +102,20 @@ Specify another line speed if needed:
 
 ## Test tone
 
-Play a complete dialing and modem-handshake sequence without opening a serial port:
+Play a complete dialing and default V.34 modem-handshake sequence without opening a serial port:
 
 ```shell
 ./gradlew run --args="--test-tone '+47 345 76 543'"
 ```
 
-The tone test deliberately uses longer dial-tone and pickup timings so the generated cadence is easy to hear. After the simulated pickup, the V.8/V.34 handshake continues before the test exits.
+The handshake profile can be selected explicitly with `--handshake-profile`. The currently available profiles are `v34` and `none`:
+
+```shell
+./gradlew run --args="--test-tone '+47 345 76 543' --handshake-profile v34"
+./gradlew run --args="--test-tone '+47 345 76 543' --handshake-profile none"
+```
+
+The tone test deliberately uses longer dial-tone and pickup timings so the generated cadence is easy to hear. With the `v34` profile, the V.8/V.34 handshake continues after the simulated pickup before the test exits. With `none`, the test exits immediately after pickup.
 
 Run the automated tests with:
 
