@@ -69,4 +69,49 @@ class PppFramerTest {
         assertEquals(0, frames.size)
         assertEquals(1, invalid.size)
     }
+
+    @Test
+    fun `escape followed by flag aborts partial frame and resynchronizes`() {
+        val frames = mutableListOf<PppFrame>()
+        val invalid = mutableListOf<ByteArray>()
+        val framer = PppFramer(frames::add, invalid::add)
+
+        framer.receive(byteArrayOf(0x7e, 0xff.toByte(), 0x7d) + trumpetLcpFrame)
+
+        assertEquals(0, invalid.size)
+        assertEquals(1, frames.size)
+        assertEquals(0xc021, frames.single().protocol)
+    }
+
+    @Test
+    fun `default receive ACCM discards unescaped mapped control characters before FCS`() {
+        val frames = mutableListOf<PppFrame>()
+        val invalid = mutableListOf<ByteArray>()
+        val framer = PppFramer(frames::add, invalid::add)
+        val withInsertedXon =
+            trumpetLcpFrame.copyOfRange(0, 4) +
+                byteArrayOf(0x11) +
+                trumpetLcpFrame.copyOfRange(4, trumpetLcpFrame.size)
+
+        framer.receive(withInsertedXon)
+
+        assertEquals(0, invalid.size)
+        assertEquals(1, frames.size)
+        assertEquals(0xc021, frames.single().protocol)
+    }
+
+    @Test
+    fun `oversized partial frame is discarded and next flag resynchronizes`() {
+        val frames = mutableListOf<PppFrame>()
+        val framer = PppFramer(frames::add)
+
+        framer.receive(
+            byteArrayOf(0x7e) +
+                ByteArray(PppFramer.MAX_DECODED_FRAME_SIZE + 1) { 0x41 } +
+                trumpetLcpFrame,
+        )
+
+        assertEquals(1, frames.size)
+        assertEquals(0xc021, frames.single().protocol)
+    }
 }
