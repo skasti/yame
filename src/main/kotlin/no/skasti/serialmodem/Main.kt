@@ -2,10 +2,19 @@ package no.skasti.serialmodem
 
 import no.skasti.serialmodem.modem.HayesModem
 import no.skasti.serialmodem.serial.SerialConnection
+import no.skasti.serialmodem.tone.tone
 import java.util.concurrent.CountDownLatch
+import kotlin.time.Duration.Companion.seconds
 
 fun main(args: Array<String>) {
     val options = parseArgs(args)
+
+    if (options.testNumber != null) {
+        println("Tone test. Dialing: ${options.testNumber}...")
+        tone.dial(options.testNumber, 7.seconds, 1.seconds)
+        println("Tone test complete.")
+        return
+    }
 
     if (options.listPorts) {
         val ports = SerialConnection.availablePorts()
@@ -40,6 +49,15 @@ fun main(args: Array<String>) {
             val hex = bytes.joinToString(" ") { "%02X".format(it.toInt() and 0xff) }
             println("DATA <= ${bytes.size} bytes: $hex")
         },
+        onDial = { number ->
+            try {
+                tone.dial(number = number, pickupTime = 2.seconds)
+            } catch (e: Exception) {
+                // Audio is cosmetic: a missing/unconfigured audio device must not
+                // prevent the serial modem itself from establishing a connection.
+                println("AUDIO !! Could not play dialing tones: ${e.message}")
+            }
+        },
     )
 
     connection.startReading(modem::receive)
@@ -51,12 +69,14 @@ private data class Options(
     val portName: String?,
     val baudRate: Int,
     val listPorts: Boolean,
+    val testNumber: String?,
 )
 
 private fun parseArgs(args: Array<String>): Options {
     var port: String? = null
     var baud = 115200
     var list = false
+    var testNumber: String? = null
 
     var i = 0
     while (i < args.size) {
@@ -70,6 +90,10 @@ private fun parseArgs(args: Array<String>): Options {
                 baud = args[++i].toInt()
             }
             "--list", "-l" -> list = true
+            "--test-tone", "-t" -> {
+                require(i + 1 < args.size) { "$arg requires a number to dial" }
+                testNumber = args[++i]
+            }
             "--help", "-h" -> {
                 printUsage()
                 kotlin.system.exitProcess(0)
@@ -79,7 +103,7 @@ private fun parseArgs(args: Array<String>): Options {
         i++
     }
 
-    return Options(port, baud, list)
+    return Options(port, baud, list, testNumber)
 }
 
 private fun printUsage() {
@@ -89,13 +113,15 @@ private fun printUsage() {
 
         Usage:
           serial-modem-emulator --list
-          serial-modem-emulator --port COM3 [--baud 115200]
+          serial-modem-emulator --test-tone NUMBER
+          serial-modem-emulator --port PORT [--baud 115200]
 
         Options:
-          -l, --list          List available serial ports
-          -p, --port PORT     Serial port, e.g. COM3
-          -b, --baud RATE     Baud rate (default: 115200)
-          -h, --help          Show this help
+          -l, --list             List available serial ports
+          -t, --test-tone NUM    Play a simulated dialing sequence and exit
+          -p, --port PORT        Serial port, e.g. COM3 or /dev/ttyUSB0
+          -b, --baud RATE        Baud rate (default: 115200)
+          -h, --help             Show this help
         """.trimIndent(),
     )
 }

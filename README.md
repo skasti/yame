@@ -15,39 +15,85 @@ The emulator currently:
 - opens a serial port at 115200 baud, 8N1
 - supports basic Hayes-style AT command handling
 - accepts unknown AT initialization commands with `OK`
-- answers dial commands (`ATD...` / `ATDT...`) with `CONNECT 115200`
+- answers dial commands (`ATD...` / `ATDT...`) with simulated telephone dialing sounds before `CONNECT 115200`
+- generates a Norwegian 425 Hz dial tone, standard DTMF digits, and 425 Hz ringback cadence
+- normalizes formatted dial strings before generating DTMF
 - switches to raw data mode after `CONNECT`
 - logs the raw bytes received in data mode in hexadecimal
 
 PPP negotiation and Internet routing are not implemented yet. The raw data logger is intentionally the next diagnostic step: it lets us observe what the old laptop actually sends after the modem connection is established.
 
+## Telephone tone simulation
+
+Dialing audio lives in the separate `no.skasti.serialmodem.tone` package. It is blocking by design, so the caller does not continue until the simulated remote side picks up.
+
+For example:
+
+```kotlin
+import no.skasti.serialmodem.tone.tone
+import kotlin.time.Duration.Companion.seconds
+
+tone.dial(
+    number = "+47 345 76 543",
+    pickupTime = 2.seconds,
+)
+```
+
+The default sequence is:
+
+1. 425 Hz dial tone for 500 ms
+2. DTMF digits at 95 ms per tone with 95 ms inter-digit spacing
+3. Norwegian-style 425 Hz ringback at 1 s on / 4 s off
+4. return from `dial()` when `pickupTime` has elapsed
+
+Dial strings are normalized before DTMF is generated. A leading `+` is converted to Norway's international access prefix `00`, so `+47 345 76 543` is dialed as `004734576543`. Spaces, dashes, parentheses and other presentation characters are ignored, and a leading Hayes `T` or `P` dial-mode selector is removed.
+
+The normal modem entry point currently uses a simulated pickup time of two seconds. Audio failure is treated as cosmetic, so systems without a configured sound device can still use the modem emulator.
+
 ## Requirements
 
 - JDK 21
-- Gradle
 - a USB-to-RS232 adapter
 - a null-modem connection to the old laptop
 
-Serial access uses [jSerialComm](https://github.com/Fazecast/jSerialComm).
+The repository includes the Gradle Wrapper, so a separate Gradle installation is not required. Serial access uses [jSerialComm](https://github.com/Fazecast/jSerialComm).
 
 ## Run
+
+The examples below use the Unix-style wrapper command. On Windows, replace `./gradlew` with `gradlew.bat`.
 
 List detected serial ports:
 
 ```shell
-gradle run --args="--list"
+./gradlew run --args="--list"
 ```
 
 Start the emulator on a detected serial port:
 
 ```shell
-gradle run --args="--port <port>"
+./gradlew run --args="--port <port>"
 ```
 
 Specify another line speed if needed:
 
 ```shell
-gradle run --args="--port <port> --baud 57600"
+./gradlew run --args="--port <port> --baud 57600"
+```
+
+## Test tone
+
+Play a complete dialing sequence without opening a serial port:
+
+```shell
+./gradlew run --args="--test-tone '+47 345 76 543'"
+```
+
+The tone test deliberately uses longer dial-tone and pickup timings so the generated cadence is easy to hear.
+
+Run the automated tests with:
+
+```shell
+./gradlew test
 ```
 
 ## Expected first test
@@ -62,6 +108,7 @@ AT => OK
 AT <= AT&F...
 AT => OK
 AT <= ATDT5551234
+MODEM dialing 5551234
 MODEM connected
 AT => CONNECT 115200
 DATA <= ... bytes: 7E FF 03 C0 21 ...
