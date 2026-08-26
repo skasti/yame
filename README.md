@@ -76,6 +76,14 @@ Specify another line speed if needed:
 gradle run --args="--port <port> --baud 57600"
 ```
 
+## Test tone
+
+Specify a number to dial to test tone dialing:
+
+```shell
+gradle run --args="--test-tone 12345789"
+```
+
 ## Expected first test
 
 Configure the old laptop's modem/dial-up connection to use its serial port and dial any number, for example `5551234`.

@@ -9,6 +9,13 @@ import kotlin.time.Duration.Companion.seconds
 fun main(args: Array<String>) {
     val options = parseArgs(args)
 
+    if (options.testNumber != null) {
+        println("Tone test. Dialing: ${options.testNumber}...")
+        tone.dial(options.testNumber, 7.seconds, 1.seconds)
+        println("Tone test complete.")
+        return
+    }
+
     if (options.listPorts) {
         val ports = SerialConnection.availablePorts()
         if (ports.isEmpty()) {
@@ -62,12 +69,14 @@ private data class Options(
     val portName: String?,
     val baudRate: Int,
     val listPorts: Boolean,
+    val testNumber: String?,
 )
 
 private fun parseArgs(args: Array<String>): Options {
     var port: String? = null
     var baud = 115200
     var list = false
+    var testNumber: String? = null
 
     var i = 0
     while (i < args.size) {
@@ -85,12 +94,16 @@ private fun parseArgs(args: Array<String>): Options {
                 printUsage()
                 kotlin.system.exitProcess(0)
             }
+            "--test-tone", "-t" -> {
+                require(i + 1 < args.size) { "$arg requires a number to dial" }
+                testNumber = args[++i]
+            }
             else -> error("Unknown argument: $arg")
         }
         i++
     }
 
-    return Options(port, baud, list)
+    return Options(port, baud, list, testNumber)
 }
 
 private fun printUsage() {
