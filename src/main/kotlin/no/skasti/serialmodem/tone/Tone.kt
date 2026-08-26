@@ -5,6 +5,8 @@ import javax.sound.sampled.AudioFormat
 import javax.sound.sampled.AudioSystem
 import javax.sound.sampled.SourceDataLine
 import kotlin.math.PI
+import kotlin.math.ceil
+import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.sin
 import kotlin.time.Duration
@@ -210,11 +212,30 @@ internal object ModemHandshakeSequence {
         output.append(lineProbe(160.milliseconds, sampleRate, amplitude = 0.22))
         output.append(lineProbe(500.milliseconds, sampleRate, amplitude = 0.12))
 
-        // Synthetic training/parameter exchange. This intentionally does not
-        // encode valid V.34 TRN/MP data, but produces the familiar whistles,
-        // warbles and dense carrier sound heard while equalizers converge.
-        output.append(training(1_400.milliseconds, sampleRate))
-        output.append(finalLock(500.milliseconds, sampleRate))
+        // The later V.34 training sounds much less tonal than the preceding
+        // carrier/probing stages. Model that with deterministic scrambled QAM-
+        // like symbol streams instead of whistles or added white noise. A
+        // coarse 4-point constellation represents TRN-style equalizer training,
+        // followed by a denser 16-point sequence for the final parameter/data
+        // exchange before CONNECT.
+        output.append(qamTraining(
+            duration = 1_400.milliseconds,
+            sampleRate = sampleRate,
+            symbolRate = 2_400.0,
+            carrierFrequency = 1_800.0,
+            levels = intArrayOf(-1, 1),
+            seed = 0x34C0FFEE,
+            amplitude = 0.14,
+        ))
+        output.append(qamTraining(
+            duration = 500.milliseconds,
+            sampleRate = sampleRate,
+            symbolRate = 3_200.0,
+            carrierFrequency = 1_800.0,
+            levels = intArrayOf(-3, -1, 1, 3),
+            seed = 0x56C0FFEE,
+            amplitude = 0.13,
+        ))
 
         return output.toArray()
     }
@@ -259,25 +280,60 @@ internal object ModemHandshakeSequence {
         amplitude * sample / probeFrequencies.size
     }
 
-    private fun training(duration: Duration, sampleRate: Int): ShortArray =
-        synthesize(duration, sampleRate) { time ->
-            val segment = floor(time / 0.070).toInt()
-            val hop = doubleArrayOf(600.0, 900.0, 1200.0, 1500.0, 1800.0, 2100.0, 2400.0, 2700.0, 3000.0)
-            val frequency = hop[(segment * 5 + 2) % hop.size]
-            val chirp = 900.0 + (time % 0.350) / 0.350 * 1900.0
-            val phase = (segment % 4) * PI / 2.0
+    private fun qamTraining(
+        duration: Duration,
+        sampleRate: Int,
+        symbolRate: Double,
+        carrierFrequency: Double,
+        levels: IntArray,
+        seed: Int,
+        amplitude: Double,
+    ): ShortArray {
+        val count = sampleCount(duration, sampleRate)
+        val symbolCount = ceil(duration.inWholeNanoseconds / 1_000_000_000.0 * symbolRate).toInt() + 2
+        val iSymbols = DoubleArray(symbolCount)
+        val qSymbols = DoubleArray(symbolCount)
+        val levelScale = levels.maxOf { kotlin.math.abs(it) }.toDouble()
+        var random = seed
 
-            0.095 * sin(2.0 * PI * frequency * time + phase) +
-                0.055 * sin(2.0 * PI * chirp * time)
+        fun nextLevel(): Double {
+            // Deterministic xorshift sequence: random-looking enough to create
+            // the audible spectrum of scrambled modem data while making tests
+            // and repeated tone previews exactly reproducible.
+            random = random xor (random shl 13)
+            random = random xor (random ushr 17)
+            random = random xor (random shl 5)
+            val index = (random and Int.MAX_VALUE) % levels.size
+            return levels[index] / levelScale
         }
 
-    private fun finalLock(duration: Duration, sampleRate: Int): ShortArray =
-        synthesize(duration, sampleRate) { time ->
-            val symbol = floor(time * 600.0).toInt()
-            val phase = ((symbol * 3) % 4) * PI / 2.0
-            0.10 * sin(2.0 * PI * 1800.0 * time + phase) +
-                0.035 * sin(2.0 * PI * 2400.0 * time)
+        for (symbol in 0 until symbolCount) {
+            iSymbols[symbol] = nextLevel()
+            qSymbols[symbol] = nextLevel()
         }
+
+        return ShortArray(count) { sampleIndex ->
+            val time = sampleIndex.toDouble() / sampleRate
+            val symbolPosition = time * symbolRate
+            val symbolIndex = floor(symbolPosition).toInt().coerceAtMost(symbolCount - 2)
+            val fraction = symbolPosition - floor(symbolPosition)
+
+            // Smooth only the leading quarter of each symbol. This avoids
+            // digital clicks while retaining the broad, scratchy spectrum that
+            // makes high-speed modem training sound unlike a sequence of tones.
+            val transition = (fraction / 0.25).coerceIn(0.0, 1.0)
+            val smooth = transition * transition * (3.0 - 2.0 * transition)
+            val previousIndex = (symbolIndex - 1).coerceAtLeast(0)
+            val iValue = iSymbols[previousIndex] + (iSymbols[symbolIndex] - iSymbols[previousIndex]) * smooth
+            val qValue = qSymbols[previousIndex] + (qSymbols[symbolIndex] - qSymbols[previousIndex]) * smooth
+            val phase = 2.0 * PI * carrierFrequency * time
+            val value = amplitude * (iValue * cos(phase) - qValue * sin(phase)) / 1.41421356237
+
+            (value * Short.MAX_VALUE).toInt()
+                .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+                .toShort()
+        }
+    }
 }
 
 private fun synthesize(
