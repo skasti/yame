@@ -149,7 +149,7 @@ Typical progress output looks like:
 ```text
 TONE [dial_tone] 425 Hz dial tone
 TONE [dtmf_dialing] DTMF dialing 004734576543
-TONE [ringback] 425 Hz ringback; waiting 7000 ms for pickup
+TONE [ringback] 425 Hz ringback; waiting for pickup...
 TONE [remote_answered] remote side answered
 TONE [v8_ansam] V.8 ANSam answer tone (2100 Hz)
 TONE [v8_negotiation] V.8 CM/JM capability negotiation

@@ -233,7 +233,7 @@ internal object ToneSequence {
             }
         }
 
-        mark(ToneStep.RINGBACK, "425 Hz ringback; waiting ${pickupTime.inWholeMilliseconds} ms for pickup")
+        mark(ToneStep.RINGBACK, "425 Hz ringback; waiting for pickup...")
         var remaining = pickupTime
         while (remaining > Duration.ZERO) {
             val on = minOf(ringOn, remaining)
