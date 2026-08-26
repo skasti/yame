@@ -2,7 +2,6 @@ package no.skasti.serialmodem.tone
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
@@ -39,24 +38,30 @@ class ToneSequenceTest {
     }
 
     @Test
-    fun `supports international numbers made of DTMF digits`() {
-        ToneSequence.dial(
+    fun `converts international plus notation to norwegian access prefix`() {
+        assertEquals("004734576543", DialString.normalize("+47 345-76-543"))
+    }
+
+    @Test
+    fun `removes hayes dial mode and presentation characters`() {
+        assertEquals("004734576543", DialString.normalize("T +47 (345) 76-543"))
+    }
+
+    @Test
+    fun `tone sequence accepts formatted international numbers`() {
+        val formatted = ToneSequence.dial(
+            number = "+47 345 76 543",
+            pickupTime = 2.seconds,
+            dialToneTime = 0.milliseconds,
+            sampleRate = sampleRate,
+        )
+        val normalized = ToneSequence.dial(
             number = "004734576543",
             pickupTime = 2.seconds,
             dialToneTime = 0.milliseconds,
             sampleRate = sampleRate,
         )
-    }
 
-    @Test
-    fun `rejects unsupported dial characters`() {
-        assertFailsWith<IllegalArgumentException> {
-            ToneSequence.dial(
-                number = "+47 345 76 543",
-                pickupTime = 2.seconds,
-                dialToneTime = 0.milliseconds,
-                sampleRate = sampleRate,
-            )
-        }
+        assertEquals(normalized.toList(), formatted.toList())
     }
 }
