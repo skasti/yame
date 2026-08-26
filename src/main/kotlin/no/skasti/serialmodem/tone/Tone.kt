@@ -108,27 +108,34 @@ class JavaSoundTonePlayer(
         // playback crosses each planned phase boundary. This avoids draining
         // between stages, which could otherwise add tiny audible gaps.
         val startFrame = line.longFramePosition
-        val playbackFinished = AtomicBoolean(false)
+        val playbackEnded = AtomicBoolean(false)
+        val playbackSucceeded = AtomicBoolean(false)
         val monitor = Thread {
             var nextEvent = 0
             while (nextEvent < plan.progress.size) {
                 val playedFrames = (line.longFramePosition - startFrame).coerceAtLeast(0L)
                 while (
                     nextEvent < plan.progress.size &&
+                    plan.progress[nextEvent].progress.step != ToneStep.COMPLETE &&
                     plan.progress[nextEvent].sampleOffset.toLong() <= playedFrames
                 ) {
                     onProgress(plan.progress[nextEvent].progress)
                     nextEvent++
                 }
 
-                if (playbackFinished.get()) {
-                    // Some Java Sound implementations may report their final
-                    // frame position a few samples short after drain(). Emit any
-                    // terminal markers rather than losing the COMPLETE event.
-                    while (nextEvent < plan.progress.size) {
-                        onProgress(plan.progress[nextEvent].progress)
-                        nextEvent++
+                if (playbackEnded.get()) {
+                    if (playbackSucceeded.get()) {
+                        // Some Java Sound implementations may report their final
+                        // frame position a few samples short after drain(). Once
+                        // drain() has returned successfully, flush any remaining
+                        // markers and emit COMPLETE as the terminal success event.
+                        while (nextEvent < plan.progress.size) {
+                            onProgress(plan.progress[nextEvent].progress)
+                            nextEvent++
+                        }
                     }
+                    // On write/drain failure, do not emit phases that were not
+                    // observed as played and never claim that playback completed.
                     break
                 }
 
@@ -148,8 +155,9 @@ class JavaSoundTonePlayer(
         try {
             playSamples(plan.samples)
             line.drain()
+            playbackSucceeded.set(true)
         } finally {
-            playbackFinished.set(true)
+            playbackEnded.set(true)
             monitor.join()
         }
     }
