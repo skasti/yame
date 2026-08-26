@@ -1,6 +1,7 @@
 package no.skasti.serialmodem.tone
 
 import java.io.Closeable
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.sound.sampled.AudioFormat
 import javax.sound.sampled.AudioSystem
 import javax.sound.sampled.SourceDataLine
@@ -25,6 +26,28 @@ enum class HandshakeProfile {
     V34,
 }
 
+/** A major audible/logical phase in a simulated dial-up call. */
+enum class ToneStep {
+    DIAL_TONE,
+    DTMF_DIALING,
+    RINGBACK,
+    REMOTE_ANSWERED,
+    V8_ANSAM,
+    V8_NEGOTIATION,
+    V34_PHASE2,
+    V34_LINE_PROBE_L1,
+    V34_LINE_PROBE_L2,
+    V34_TRAINING,
+    V34_FINAL_EXCHANGE,
+    COMPLETE,
+}
+
+/** Progress event emitted close to the point where a tone phase becomes audible. */
+data class ToneProgress(
+    val step: ToneStep,
+    val description: String,
+)
+
 /**
  * Blocking telephone-tone playback for simulated dial-up calls.
  *
@@ -42,9 +65,10 @@ object tone {
         pickupTime: Duration,
         dialToneTime: Duration = 500.milliseconds,
         handshakeProfile: HandshakeProfile = HandshakeProfile.V34,
+        onProgress: ((ToneProgress) -> Unit)? = null,
     ) {
         JavaSoundTonePlayer().use { player ->
-            player.dial(number, pickupTime, dialToneTime, handshakeProfile)
+            player.dial(number, pickupTime, dialToneTime, handshakeProfile, onProgress)
         }
     }
 }
@@ -63,15 +87,74 @@ class JavaSoundTonePlayer(
         pickupTime: Duration,
         dialToneTime: Duration = 500.milliseconds,
         handshakeProfile: HandshakeProfile = HandshakeProfile.V34,
+        onProgress: ((ToneProgress) -> Unit)? = null,
     ) {
         require(!pickupTime.isNegative()) { "pickupTime must not be negative" }
         require(!dialToneTime.isNegative()) { "dialToneTime must not be negative" }
 
-        play(ToneSequence.dial(number, pickupTime, dialToneTime, sampleRate, handshakeProfile))
-        line.drain()
+        val plan = ToneSequence.dialPlan(number, pickupTime, dialToneTime, sampleRate, handshakeProfile)
+        play(plan, onProgress)
     }
 
-    private fun play(samples: ShortArray) {
+    private fun play(plan: TonePlan, onProgress: ((ToneProgress) -> Unit)?) {
+        if (onProgress == null) {
+            playSamples(plan.samples)
+            line.drain()
+            return
+        }
+
+        // Keep the PCM stream continuous. A small monitor thread follows the
+        // SourceDataLine's actual rendered frame position and emits markers as
+        // playback crosses each planned phase boundary. This avoids draining
+        // between stages, which could otherwise add tiny audible gaps.
+        val startFrame = line.longFramePosition
+        val playbackFinished = AtomicBoolean(false)
+        val monitor = Thread {
+            var nextEvent = 0
+            while (nextEvent < plan.progress.size) {
+                val playedFrames = (line.longFramePosition - startFrame).coerceAtLeast(0L)
+                while (
+                    nextEvent < plan.progress.size &&
+                    plan.progress[nextEvent].sampleOffset.toLong() <= playedFrames
+                ) {
+                    onProgress(plan.progress[nextEvent].progress)
+                    nextEvent++
+                }
+
+                if (playbackFinished.get()) {
+                    // Some Java Sound implementations may report their final
+                    // frame position a few samples short after drain(). Emit any
+                    // terminal markers rather than losing the COMPLETE event.
+                    while (nextEvent < plan.progress.size) {
+                        onProgress(plan.progress[nextEvent].progress)
+                        nextEvent++
+                    }
+                    break
+                }
+
+                try {
+                    Thread.sleep(5)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    break
+                }
+            }
+        }.apply {
+            name = "modem-tone-progress"
+            isDaemon = true
+            start()
+        }
+
+        try {
+            playSamples(plan.samples)
+            line.drain()
+        } finally {
+            playbackFinished.set(true)
+            monitor.join()
+        }
+    }
+
+    private fun playSamples(samples: ShortArray) {
         val bytes = ByteArray(samples.size * 2)
         samples.forEachIndexed { index, sample ->
             bytes[index * 2] = (sample.toInt() and 0xff).toByte()
@@ -89,6 +172,16 @@ class JavaSoundTonePlayer(
         line.close()
     }
 }
+
+internal data class TimedToneProgress(
+    val sampleOffset: Int,
+    val progress: ToneProgress,
+)
+
+internal data class TonePlan(
+    val samples: ShortArray,
+    val progress: List<TimedToneProgress>,
+)
 
 internal object ToneSequence {
     private val dtmf = mapOf(
@@ -109,13 +202,29 @@ internal object ToneSequence {
         dialToneTime: Duration,
         sampleRate: Int,
         handshakeProfile: HandshakeProfile = HandshakeProfile.V34,
-    ): ShortArray {
+    ): ShortArray = dialPlan(number, pickupTime, dialToneTime, sampleRate, handshakeProfile).samples
+
+    fun dialPlan(
+        number: String,
+        pickupTime: Duration,
+        dialToneTime: Duration,
+        sampleRate: Int,
+        handshakeProfile: HandshakeProfile = HandshakeProfile.V34,
+    ): TonePlan {
         val normalizedNumber = DialString.normalize(number)
         require(normalizedNumber.isNotEmpty()) { "number must contain at least one DTMF digit" }
 
         val output = ShortArrayBuilder()
+        val progress = mutableListOf<TimedToneProgress>()
+
+        fun mark(step: ToneStep, description: String) {
+            progress += TimedToneProgress(output.size, ToneProgress(step, description))
+        }
+
+        mark(ToneStep.DIAL_TONE, "425 Hz dial tone")
         output.append(tone(425.0, dialToneTime, sampleRate, amplitude = 0.20))
 
+        mark(ToneStep.DTMF_DIALING, "DTMF dialing $normalizedNumber")
         normalizedNumber.forEachIndexed { index, digit ->
             val (low, high) = dtmf.getValue(digit)
             output.append(dualTone(low, high, dtmfTone, sampleRate, amplitude = 0.16))
@@ -124,6 +233,7 @@ internal object ToneSequence {
             }
         }
 
+        mark(ToneStep.RINGBACK, "425 Hz ringback; waiting ${pickupTime.inWholeMilliseconds} ms for pickup")
         var remaining = pickupTime
         while (remaining > Duration.ZERO) {
             val on = minOf(ringOn, remaining)
@@ -136,12 +246,22 @@ internal object ToneSequence {
             remaining -= off
         }
 
+        mark(ToneStep.REMOTE_ANSWERED, "remote side answered")
+
         when (handshakeProfile) {
             HandshakeProfile.NONE -> Unit
-            HandshakeProfile.V34 -> output.append(ModemHandshakeSequence.v34(sampleRate))
+            HandshakeProfile.V34 -> {
+                val handshake = ModemHandshakeSequence.v34Plan(sampleRate)
+                val handshakeOffset = output.size
+                progress += handshake.progress.map { event ->
+                    event.copy(sampleOffset = handshakeOffset + event.sampleOffset)
+                }
+                output.append(handshake.samples)
+            }
         }
 
-        return output.toArray()
+        mark(ToneStep.COMPLETE, "dialing/handshake complete; CONNECT may be returned")
+        return TonePlan(output.toArray(), progress)
     }
 
     private fun tone(
@@ -191,51 +311,87 @@ internal object ModemHandshakeSequence {
         PI, PI, 0.0, 0.0,
     )
 
-    fun v34(sampleRate: Int): ShortArray {
+    fun v34(sampleRate: Int): ShortArray = v34Plan(sampleRate).samples
+
+    fun v34Plan(sampleRate: Int): TonePlan {
         val output = ShortArrayBuilder()
+        val progress = mutableListOf<TimedToneProgress>()
+
+        fun appendStage(step: ToneStep, description: String, samples: ShortArray) {
+            progress += TimedToneProgress(output.size, ToneProgress(step, description))
+            output.append(samples)
+        }
 
         // V.8 ANSam: 2100 Hz, 15 Hz amplitude modulation and 180-degree
         // phase reversals every 450 ms. Kept shorter than the maximum answer
         // tone because the audible simulation proceeds directly into CM/JM.
-        output.append(ansam(1_800.milliseconds, sampleRate))
+        appendStage(
+            ToneStep.V8_ANSAM,
+            "V.8 ANSam answer tone (2100 Hz)",
+            ansam(1_800.milliseconds, sampleRate),
+        )
 
         // Simulated V.8 CM/JM exchange using the real V.21 low/high-band FSK
         // frequencies (980/1180 and 1650/1850 Hz) at a 300-symbol/s cadence.
-        output.append(v21Menu(900.milliseconds, sampleRate))
+        appendStage(
+            ToneStep.V8_NEGOTIATION,
+            "V.8 CM/JM capability negotiation",
+            v21Menu(900.milliseconds, sampleRate),
+        )
 
         // V.34 phase 2: answer-modem 2400 Hz carrier with 1800 Hz guard tone,
         // together with the calling modem's 1200 Hz carrier and phase changes.
-        output.append(v34Phase2(900.milliseconds, sampleRate))
+        appendStage(
+            ToneStep.V34_PHASE2,
+            "V.34 phase 2 carriers and guard tone",
+            v34Phase2(900.milliseconds, sampleRate),
+        )
 
         // V.34 L1/L2 line probing. These use the specified 150 Hz-spaced tone
         // set from 150 to 3750 Hz, with 900/1200/1800/2400 Hz omitted.
-        output.append(lineProbe(160.milliseconds, sampleRate, amplitude = 0.22))
-        output.append(lineProbe(500.milliseconds, sampleRate, amplitude = 0.12))
+        appendStage(
+            ToneStep.V34_LINE_PROBE_L1,
+            "V.34 L1 line probe",
+            lineProbe(160.milliseconds, sampleRate, amplitude = 0.22),
+        )
+        appendStage(
+            ToneStep.V34_LINE_PROBE_L2,
+            "V.34 L2 line probe",
+            lineProbe(500.milliseconds, sampleRate, amplitude = 0.12),
+        )
 
         // Later V.34 training is deliberately much less tonal. These are
         // scrambled QAM-like symbol streams chosen to reproduce the audible
         // character of equalizer training and final parameter/data exchange;
         // they are not claimed to be bit-accurate TRN or MP waveforms.
-        output.append(qamTraining(
-            duration = 1_400.milliseconds,
-            sampleRate = sampleRate,
-            symbolRate = 2_400.0,
-            carrierFrequency = 1_800.0,
-            levels = intArrayOf(-1, 1),
-            seed = 0x34C0FFEE,
-            amplitude = 0.14,
-        ))
-        output.append(qamTraining(
-            duration = 500.milliseconds,
-            sampleRate = sampleRate,
-            symbolRate = 3_200.0,
-            carrierFrequency = 1_800.0,
-            levels = intArrayOf(-3, -1, 1, 3),
-            seed = 0x56C0FFEE,
-            amplitude = 0.13,
-        ))
+        appendStage(
+            ToneStep.V34_TRAINING,
+            "V.34 scrambled QAM-like equalizer training",
+            qamTraining(
+                duration = 1_400.milliseconds,
+                sampleRate = sampleRate,
+                symbolRate = 2_400.0,
+                carrierFrequency = 1_800.0,
+                levels = intArrayOf(-1, 1),
+                seed = 0x34C0FFEE,
+                amplitude = 0.14,
+            ),
+        )
+        appendStage(
+            ToneStep.V34_FINAL_EXCHANGE,
+            "V.34 final parameter/data exchange",
+            qamTraining(
+                duration = 500.milliseconds,
+                sampleRate = sampleRate,
+                symbolRate = 3_200.0,
+                carrierFrequency = 1_800.0,
+                levels = intArrayOf(-3, -1, 1, 3),
+                seed = 0x56C0FFEE,
+                amplitude = 0.13,
+            ),
+        )
 
-        return output.toArray()
+        return TonePlan(output.toArray(), progress)
     }
 
     private fun ansam(duration: Duration, sampleRate: Int): ShortArray =
@@ -352,7 +508,8 @@ private fun sampleCount(duration: Duration, sampleRate: Int): Int =
 
 private class ShortArrayBuilder {
     private var data = ShortArray(4096)
-    private var size = 0
+    var size = 0
+        private set
 
     fun append(values: ShortArray) {
         ensureCapacity(size + values.size)
