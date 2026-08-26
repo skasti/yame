@@ -49,12 +49,12 @@ The default sequence is:
 5. simulated V.8 modem-capability negotiation using V.21 frequency pairs
 6. V.34-style 1200/2400 Hz phase-2 carriers and 1800 Hz guard tone
 7. V.34 L1/L2 multi-tone line probing
-8. scrambled QAM-like equalizer training and parameter/data exchange
+8. scrambled QAM-like equalizer training and final parameter/data exchange
 9. return from `dial()`, after which the Hayes emulator sends `CONNECT`
 
 The V.8/V.34 handshake is an **auditory simulation**, not a decodable modem waveform. Where practical it uses the actual standardized frequencies and timings (including ANSam modulation and the V.34 line-probing tone set), while capability messages and final training data are synthesized only to reproduce the characteristic sound and delay.
 
-The later training stages deliberately use deterministic pseudo-random QAM-like symbol streams rather than a sequence of clean tones or added white noise. A coarse 4-point constellation is used for the first training section and a denser 16-point constellation for the final exchange, producing the more broadband, scratchy sound associated with high-speed modem training while keeping the preview reproducible from run to run. This is intended to approximate the audible character of scrambled V.34 training/data, not to claim a bit-accurate TRN or MP waveform.
+The later training stages deliberately use deterministic pseudo-random QAM-like symbol streams rather than a sequence of clean tones or added white noise. A coarse 4-point constellation is used for the first training section and a denser 16-point constellation for the final exchange, producing the more broadband, scratchy sound associated with high-speed modem training while keeping the preview reproducible from run to run. This approximates the audible character of scrambled V.34 training/data and is not intended to be a bit-accurate TRN or MP waveform.
 
 The default V.34 handshake adds about 6.2 seconds after pickup. Callers that only want the telephone part can disable it explicitly:
 
