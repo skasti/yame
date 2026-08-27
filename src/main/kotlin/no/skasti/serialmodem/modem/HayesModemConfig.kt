@@ -33,6 +33,15 @@ data class HayesModemConfig(
         require(password == null || password.isNotEmpty()) {
             "password must not be empty"
         }
+        require(username == null || username.all(::isLoginCharacter)) {
+            "username must contain only printable ASCII characters"
+        }
+        require(password == null || password.all(::isLoginCharacter)) {
+            "password must contain only printable ASCII characters"
+        }
     }
 
+    companion object {
+        private fun isLoginCharacter(char: Char): Boolean = char.code in 0x20..0x7e
+    }
 }
