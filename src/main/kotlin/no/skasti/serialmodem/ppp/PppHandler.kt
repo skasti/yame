@@ -32,10 +32,7 @@ class RetroPppHandler(
         session = PppSession(
             sendFrame = ::sendFrame,
             logger = logger,
-        ).also {
-            it.start()
-            syncNegotiatedOptions(it)
-        }
+        )
     }
 
     override fun receive(bytes: ByteArray) {
@@ -65,6 +62,12 @@ class RetroPppHandler(
         }
 
         session.receive(frame)
+        syncNegotiatedOptions(session)
+
+        // CONNECT only means that the modem has entered data mode. Some clients,
+        // including Trumpet Winsock, do not enable PPP immediately. Wait until
+        // the peer sends a valid PPP frame before starting our side of LCP.
+        session.start()
         syncNegotiatedOptions(session)
     }
 
