@@ -414,7 +414,7 @@ class HayesModemTest {
             listOf(0x7e, 0xff, 0x03, 0xc0, 0x21),
             pppHandler.received.single().map { it.toInt() and 0xff },
         )
-        assertTrue(output.toString().contains("Username:"))
+        assertFalse(output.toString().contains("Username:"))
     }
 
     @Test
