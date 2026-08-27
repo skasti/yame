@@ -26,7 +26,7 @@ The emulator currently:
 - decodes asynchronous PPP framing with flag/escape processing, ACCM filtering and FCS-16 validation
 - encodes outbound PPP frames with FCS-16 and async-HDLC escaping
 - starts a fresh `PppSession` for each modem connection
-- sends YAME's own LCP Configure-Request after `CONNECT`
+- waits for the first valid inbound PPP frame before starting YAME's side of LCP
 - acknowledges supported peer LCP Configure-Requests, including the options observed from Trumpet Winsock
 - applies peer ACCM/PFC/ACFC negotiation in the correct transmit direction
 - opens LCP only after both directions have been Configure-Acked
@@ -200,11 +200,11 @@ AT => CONNECT 115200
 PPP <= protocol=LCP (0xC021), payload=24 bytes: 01 0B 00 18 01 04 02 40 ...
 ```
 
-YAME now replies to the client's LCP Configure-Request and sends its own Configure-Request. Once both directions are acknowledged it logs `LCP open`; the next useful real-hardware test is whether Trumpet Winsock then advances to IPCP.
+When the client actually starts PPP, YAME replies to its first LCP Configure-Request and then starts its own side by sending a Configure-Request. Once both directions are acknowledged it logs `LCP open`; the next useful real-hardware test is whether Trumpet Winsock then advances to IPCP.
 
 ## PPP architecture
 
-Connected-mode bytes are handed from `HayesModem` to a `PppHandler`. The default `RetroPppHandler` owns the wire-level `PppFramer`/`PppEncoder` pair and creates a fresh `PppSession` whenever the modem connects:
+Connected-mode bytes are handed from `HayesModem` to a `PppHandler`. The default `RetroPppHandler` owns the wire-level `PppFramer`/`PppEncoder` pair and creates a fresh `PppSession` whenever the modem connects. `CONNECT` itself does not start LCP; `RetroPppHandler` waits until the peer sends the first valid PPP frame, which accommodates clients such as Trumpet Winsock that remain in terminal/script mode briefly after the modem connects:
 
 ```text
 HayesModem
