@@ -515,6 +515,23 @@ class HayesModemTest {
     }
 
     @Test
+    fun `closing modem drops carrier`() {
+        val carrierStates = mutableListOf<Boolean>()
+        val modem = HayesModem(
+            output = ByteArrayOutputStream(),
+            baudRate = 115200,
+            tonePlayer = FakeTonePlayer(),
+            logger = {},
+            setCarrierPresent = carrierStates::add,
+        )
+
+        modem.dial("1")
+        modem.close()
+
+        assertEquals(false, carrierStates.last())
+    }
+
+    @Test
     fun `closing modem closes tone player and PPP handler`() {
         val tonePlayer = FakeTonePlayer()
         val pppHandler = FakePppHandler()
