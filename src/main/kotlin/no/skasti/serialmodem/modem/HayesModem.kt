@@ -1,27 +1,21 @@
 package no.skasti.serialmodem.modem
 
 import no.skasti.serialmodem.tone.DialString
-import no.skasti.serialmodem.tone.HandshakeProfile
+import no.skasti.serialmodem.tone.JavaSoundTonePlayer
+import no.skasti.serialmodem.tone.TonePlayer
 import no.skasti.serialmodem.tone.ToneProgress
-import no.skasti.serialmodem.tone.tone
+import java.io.Closeable
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets
-import kotlin.time.Duration
 
 class HayesModem(
     private val output: OutputStream,
     private val baudRate: Int,
     private val config: HayesModemConfig = HayesModemConfig(),
     private val onData: (ByteArray) -> Unit = {},
-    private val toneDialer: (
-        String,
-        Duration,
-        Duration,
-        HandshakeProfile,
-        ((ToneProgress) -> Unit)?,
-    ) -> Unit = tone::dial,
+    private val tonePlayer: TonePlayer = JavaSoundTonePlayer(),
     private val logger: (String) -> Unit = ::println,
-) {
+) : Closeable {
     enum class State {
         COMMAND,
         CONNECTED,
@@ -131,12 +125,12 @@ class HayesModem(
 
         logger("MODEM dialing $number")
         try {
-            toneDialer(
-                number,
-                config.pickupTime,
-                config.dialToneTime,
-                config.handshakeProfile,
-                ::logToneProgress,
+            tonePlayer.dial(
+                number = number,
+                pickupTime = config.pickupTime,
+                dialToneTime = config.dialToneTime,
+                handshakeProfile = config.handshakeProfile,
+                onProgress = ::logToneProgress,
             )
         } catch (e: Exception) {
             // Audio is cosmetic: a missing/unconfigured audio device must not
@@ -169,5 +163,9 @@ class HayesModem(
     private fun writeRaw(value: String) {
         output.write(value.toByteArray(StandardCharsets.US_ASCII))
         output.flush()
+    }
+
+    override fun close() {
+        tonePlayer.close()
     }
 }
