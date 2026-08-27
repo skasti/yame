@@ -337,6 +337,7 @@ class HayesModemTest {
         modem.receive("ppp\r".toByteArray())
 
         assertTrue(output.toString().contains("PPP."))
+        assertTrue(logs.contains("LOGIN <= command: ppp"))
         assertEquals(1, pppHandler.connectedCalls)
         assertEquals(HayesModem.State.CONNECTED, modem.state)
     }
