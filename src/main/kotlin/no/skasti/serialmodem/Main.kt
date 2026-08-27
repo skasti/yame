@@ -56,6 +56,7 @@ fun main(args: Array<String>) {
     try {
         connection.open()
         modem.attachOutput(connection.output)
+        modem.attachCarrierPresent(connection::setCarrierPresent)
     } catch (e: Exception) {
         modem.close()
         connection.close()
@@ -90,6 +91,8 @@ private fun parseArgs(args: Array<String>): Options {
     var pickupTime = defaults.pickupTime
     var dialToneTime = defaults.dialToneTime
     var handshakeProfile = defaults.handshakeProfile
+    var username = defaults.username
+    var password = defaults.password
 
     var i = 0
     while (i < args.size) {
@@ -124,6 +127,14 @@ private fun parseArgs(args: Array<String>): Options {
                 require(i + 1 < args.size) { "$arg requires a profile (${handshakeProfileNames()})" }
                 handshakeProfile = parseHandshakeProfile(args[++i])
             }
+            "--username" -> {
+                require(i + 1 < args.size) { "$arg requires a username" }
+                username = args[++i]
+            }
+            "--password" -> {
+                require(i + 1 < args.size) { "$arg requires a password" }
+                password = args[++i]
+            }
             "--help", "-h" -> {
                 printUsage()
                 kotlin.system.exitProcess(0)
@@ -142,6 +153,8 @@ private fun parseArgs(args: Array<String>): Options {
             pickupTime = pickupTime,
             dialToneTime = dialToneTime,
             handshakeProfile = handshakeProfile,
+            username = username,
+            password = password,
         ),
     )
 }
@@ -189,9 +202,12 @@ private fun printUsage() {
               --pickup-time DURATION  Ringback time before pickup (default: ${defaults.pickupTime})
               --dial-tone-time DUR    Dial-tone duration (default: ${defaults.dialToneTime})
               --handshake-profile P   Handshake profile: ${handshakeProfileNames()} (default: ${defaults.handshakeProfile.name.lowercase()})
+              --username USER         Enable terminal login with this username
+              --password PASS         Terminal login password (requires --username)
           -h, --help                  Show this help
 
         Durations accept milliseconds or seconds, e.g. 500ms, 2s, or 1.5s, up to 10s.
+        Terminal login is only enabled when both --username and --password are provided.
         Tone progress is always logged while a dialing sequence is played.
         """.trimIndent(),
     )

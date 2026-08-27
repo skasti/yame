@@ -17,6 +17,7 @@ class HayesModem(
     private val tonePlayer: TonePlayer = JavaSoundTonePlayer(),
     private val logger: (String) -> Unit = ::println,
     private val pppHandler: PppHandler = RetroPppHandler(logger),
+    private var setCarrierPresent: (Boolean) -> Unit = { /* no-op */ }
 ) : Closeable {
     enum class State {
         COMMAND,
@@ -27,18 +28,38 @@ class HayesModem(
     var state: State = State.COMMAND
         private set
 
+    private enum class CommandParseState {
+        SEEKING_AT,
+        SAW_A,
+        READING_COMMAND,
+    }
+
+    private enum class ConnectedPhase {
+        LOGIN_USERNAME,
+        LOGIN_PASSWORD,
+        LOGIN_COMMAND,
+        PPP,
+    }
+
     private val commandBuffer = StringBuilder()
+    private var commandParseState = CommandParseState.SEEKING_AT
+    private var pendingCommandA = 'A'
     private var echo = true
+    private val loginBuffer = StringBuilder()
+    private var connectedPhase = ConnectedPhase.PPP
+    private var pppStarted = false
+    private var pendingLoginUsername: String? = null
 
     init {
         output?.let(pppHandler::attachOutput)
+        setCarrierPresent(false)
     }
 
     fun receive(bytes: ByteArray) {
         when (state) {
             State.COMMAND -> receiveCommands(bytes)
             State.DIALING -> Unit
-            State.CONNECTED -> pppHandler.receive(bytes)
+            State.CONNECTED -> receiveConnected(bytes)
         }
     }
 
@@ -47,30 +68,74 @@ class HayesModem(
             val value = byte.toInt() and 0xff
             val char = value.toChar()
 
-            when (value) {
-                8, 127 -> { // backspace / delete
-                    if (commandBuffer.isNotEmpty()) {
-                        commandBuffer.deleteCharAt(commandBuffer.lastIndex)
-                        if (echo) writeRaw("\b \b")
+            when (commandParseState) {
+                CommandParseState.SEEKING_AT -> {
+                    if (char == 'A' || char == 'a') {
+                        pendingCommandA = char
+                        commandParseState = CommandParseState.SAW_A
                     }
                 }
 
-                13 -> { // carriage return terminates an AT command
-                    if (echo) writeRaw("\r")
-                    val command = commandBuffer.toString()
-                    commandBuffer.clear()
-                    handleCommand(command)
+                CommandParseState.SAW_A -> {
+                    when {
+                        char == 'T' || char == 't' -> {
+                            commandBuffer.clear()
+                            commandBuffer.append(pendingCommandA).append(char)
+                            commandParseState = CommandParseState.READING_COMMAND
+                            if (echo) writeRaw("$pendingCommandA$char")
+                        }
+
+                        char == 'A' || char == 'a' -> {
+                            pendingCommandA = char
+                            // Stay synchronized on the newest possible AT prefix.
+                        }
+
+                        else -> {
+                            commandParseState = CommandParseState.SEEKING_AT
+                        }
+                    }
                 }
 
-                10 -> {
-                    // Ignore LF. Most modem software terminates commands with CR.
-                    if (echo) writeRaw("\n")
-                }
+                CommandParseState.READING_COMMAND -> {
+                    when (value) {
+                        8, 127 -> { // backspace / delete
+                            if (commandBuffer.length > 2) {
+                                commandBuffer.deleteCharAt(commandBuffer.lastIndex)
+                                if (echo) writeRaw("\b \b")
+                            }
+                        }
 
-                else -> {
-                    if (char.code in 0x20..0x7e) {
-                        commandBuffer.append(char)
-                        if (echo) output?.write(byteArrayOf(byte))
+                        13 -> { // carriage return terminates an AT command
+                            if (echo) writeRaw("\r")
+                            val command = selectCommandCandidate(commandBuffer.toString())
+                            commandBuffer.clear()
+                            commandParseState = CommandParseState.SEEKING_AT
+                            handleCommand(command)
+                        }
+
+                        10 -> Unit // Ignore LF. Most modem software terminates commands with CR.
+
+                        else -> {
+                            when {
+                                value == 0x7d || value == 0x7e -> {
+                                    // PPP framing/escape bytes cannot be part of a Hayes command.
+                                    // Drop a false AT candidate and resume looking for a real one.
+                                    commandBuffer.clear()
+                                    commandParseState = CommandParseState.SEEKING_AT
+                                }
+
+                                char.code in 0x20..0x7e -> {
+                                    commandBuffer.append(char)
+                                    if (echo) output?.write(byteArrayOf(byte))
+                                }
+
+                                else -> {
+                                    // Binary data cannot be part of a Hayes command.
+                                    commandBuffer.clear()
+                                    commandParseState = CommandParseState.SEEKING_AT
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -78,10 +143,177 @@ class HayesModem(
         output?.flush()
     }
 
+    private fun selectCommandCandidate(command: String): String {
+        val lower = command.lowercase()
+        if (!lower.startsWith("at")) return command
+
+        if (!lower.startsWith("atd")) {
+            val laterAt = lower.lastIndexOf("at")
+            return if (laterAt > 1) command.substring(laterAt) else command
+        }
+
+        // Dial strings are deliberately permissive: DialString.normalize() filters
+        // presentation characters that many legacy diallers include. Do not treat an
+        // embedded DTMF A/T sequence as a new command merely because a later formatting
+        // character would be discarded. Only abandon ATD for a later, unambiguous
+        // modem-control command.
+        var searchFrom = lower.length - 2
+        while (searchFrom > 1) {
+            val laterAt = lower.lastIndexOf("at", searchFrom)
+            if (laterAt <= 1) break
+
+            val candidate = command.substring(laterAt)
+            if (isUnambiguousControlCommand(candidate)) {
+                return candidate
+            }
+            searchFrom = laterAt - 1
+        }
+
+        return command
+    }
+
+    private fun isUnambiguousControlCommand(command: String): Boolean {
+        val upper = command.uppercase()
+        return upper == "AT" ||
+            upper.startsWith("ATZ") ||
+            upper.startsWith("AT&F") ||
+            upper.startsWith("ATE0") ||
+            upper.startsWith("ATE1") ||
+            upper.startsWith("ATH")
+    }
+
+    private fun receiveConnected(bytes: ByteArray) {
+        when (connectedPhase) {
+            ConnectedPhase.LOGIN_USERNAME,
+            ConnectedPhase.LOGIN_PASSWORD,
+            ConnectedPhase.LOGIN_COMMAND -> receiveLogin(bytes)
+
+            ConnectedPhase.PPP -> pppHandler.receive(bytes)
+        }
+    }
+
+    private fun receiveLogin(bytes: ByteArray) {
+        var index = 0
+        while (index < bytes.size) {
+            if (connectedPhase == ConnectedPhase.PPP) {
+                pppHandler.receive(bytes.copyOfRange(index, bytes.size))
+                return
+            }
+
+            val value = bytes[index].toInt() and 0xff
+            val char = value.toChar()
+
+            when (value) {
+                8, 127 -> {
+                    if (loginBuffer.isNotEmpty()) {
+                        loginBuffer.deleteCharAt(loginBuffer.lastIndex)
+                    }
+                }
+
+                13 -> {
+                    val line = loginBuffer.toString()
+                    loginBuffer.clear()
+                    handleLoginLine(line)
+                }
+
+                10 -> Unit
+
+                else -> {
+                    if (char.code in 0x20..0x7e) {
+                        loginBuffer.append(char)
+                    }
+                }
+            }
+
+            index++
+        }
+    }
+
+    private fun handleLoginLine(rawLine: String) {
+        when (connectedPhase) {
+            ConnectedPhase.LOGIN_USERNAME -> {
+                if (rawLine.isEmpty()) {
+                    writeRaw("\r\nUsername: ")
+                    return
+                }
+
+                logger("LOGIN <= username received")
+                pendingLoginUsername = rawLine
+                connectedPhase = ConnectedPhase.LOGIN_PASSWORD
+                writeRaw("\r\nPassword: ")
+            }
+
+            ConnectedPhase.LOGIN_PASSWORD -> {
+                logger("LOGIN <= password received")
+
+                if (pendingLoginUsername == config.username && rawLine == config.password) {
+                    pendingLoginUsername = null
+                    connectedPhase = ConnectedPhase.LOGIN_COMMAND
+                    logger("LOGIN authentication accepted")
+                    writeRaw("\r\n> ")
+                } else {
+                    pendingLoginUsername = null
+                    connectedPhase = ConnectedPhase.LOGIN_USERNAME
+                    logger("LOGIN authentication rejected")
+                    writeRaw("\r\nLogin incorrect\r\nUsername: ")
+                }
+            }
+
+            ConnectedPhase.LOGIN_COMMAND -> {
+                val command = rawLine.trim()
+                if (command.isNotEmpty()) {
+                    logger("LOGIN <= command: ${command.take(128)}")
+                }
+
+                if (isPppCommand(command)) {
+                    writeRaw("\r\nPPP.\r\n")
+                    startPpp()
+                } else {
+                    if (command.isNotEmpty()) {
+                        logger("LOGIN .. ignoring unrecognized terminal command")
+                    }
+                    writeRaw("\r\n> ")
+                }
+            }
+
+            ConnectedPhase.PPP -> Unit
+        }
+    }
+
+    private fun isPppCommand(value: String): Boolean {
+        val command = value.trim().lowercase()
+        return command == "p" ||
+            command == "ppp" ||
+            command == "%p" ||
+            command == "%ppp" ||
+            command.startsWith("p ") ||
+            command.startsWith("ppp ") ||
+            command.startsWith("%p ") ||
+            command.startsWith("%ppp ")
+    }
+
+    private fun startPpp() {
+        if (pppStarted) return
+
+        loginBuffer.clear()
+        pendingLoginUsername = null
+        connectedPhase = ConnectedPhase.PPP
+        pppStarted = true
+        logger("PPP data mode active")
+        if (output != null) {
+            pppHandler.connected()
+        }
+    }
+
     fun attachOutput(output: OutputStream) {
         check(this.output == null) { "Modem output is already attached" }
         pppHandler.attachOutput(output)
         this.output = output
+    }
+
+    fun attachCarrierPresent(setCarrierPresent: (Boolean) -> Unit) {
+        this.setCarrierPresent = setCarrierPresent
+        setCarrierPresent(false)
     }
 
     private fun handleCommand(rawCommand: String) {
@@ -115,7 +347,7 @@ class HayesModem(
                 respond("OK")
             }
             upper.startsWith("ATH") -> {
-                state = State.COMMAND
+                reset()
                 respond("OK")
             }
             upper.startsWith("ATD") -> dial(command.substring(3))
@@ -130,6 +362,7 @@ class HayesModem(
     }
 
     fun dial(dialString: String) {
+        setCarrierPresent(false)
         val number = DialString.normalize(dialString)
 
         if (number.isEmpty()) {
@@ -154,6 +387,7 @@ class HayesModem(
             logger("AUDIO !! Could not play dialing tones: ${e.message}")
         }
 
+        setCarrierPresent(true)
         connect()
     }
 
@@ -163,16 +397,41 @@ class HayesModem(
 
     private fun connect() {
         state = State.CONNECTED
+        connectedPhase = if (config.username == null) {
+            ConnectedPhase.PPP
+        } else {
+            ConnectedPhase.LOGIN_USERNAME
+        }
+        pppStarted = false
+
         logger("MODEM connected")
         respond("CONNECT $baudRate")
-        if (output != null) {
-            pppHandler.connected()
+
+        if (output == null) {
+            connectedPhase = ConnectedPhase.PPP
+            return
         }
+
+        if (config.username == null) {
+            logger("LOGIN disabled; PPP data mode ready")
+            startPpp()
+            return
+        }
+
+        loginBuffer.clear()
+        pendingLoginUsername = null
+        logger("LOGIN => Username prompt")
+        writeRaw("\r\nUsername: ")
     }
 
     private fun reset() {
         state = State.COMMAND
+        connectedPhase = ConnectedPhase.PPP
+        pppStarted = false
         echo = true
+        loginBuffer.clear()
+        pendingLoginUsername = null
+        setCarrierPresent(false)
     }
 
     private fun respond(result: String) {
@@ -190,6 +449,7 @@ class HayesModem(
     }
 
     override fun close() {
+        setCarrierPresent(false)
         pppHandler.close()
         tonePlayer.close()
     }
