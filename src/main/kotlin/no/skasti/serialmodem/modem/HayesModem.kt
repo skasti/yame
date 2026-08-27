@@ -22,6 +22,7 @@ class HayesModem(
     enum class State {
         COMMAND,
         DIALING,
+        LOGIN,
         CONNECTED,
     }
 
@@ -34,10 +35,19 @@ class HayesModem(
         READING_COMMAND,
     }
 
+    private enum class LoginStage {
+        WAITING_FOR_PROD,
+        USERNAME,
+        PASSWORD,
+        COMMAND,
+    }
+
     private val commandBuffer = StringBuilder()
     private var commandParseState = CommandParseState.SEEKING_AT
     private var pendingCommandA = 'A'
     private var echo = true
+    private val loginBuffer = StringBuilder()
+    private var loginStage = LoginStage.WAITING_FOR_PROD
 
     init {
         output?.let(pppHandler::attachOutput)
@@ -47,6 +57,7 @@ class HayesModem(
         when (state) {
             State.COMMAND -> receiveCommands(bytes)
             State.DIALING -> Unit
+            State.LOGIN -> receiveLogin(bytes)
             State.CONNECTED -> pppHandler.receive(bytes)
         }
     }
@@ -129,6 +140,110 @@ class HayesModem(
             }
         }
         output?.flush()
+    }
+
+    private fun receiveLogin(bytes: ByteArray) {
+        var index = 0
+        while (index < bytes.size) {
+            if (state == State.CONNECTED) {
+                pppHandler.receive(bytes.copyOfRange(index, bytes.size))
+                return
+            }
+
+            val value = bytes[index].toInt() and 0xff
+            val char = value.toChar()
+
+            if (value == 0x7e && loginBuffer.isEmpty()) {
+                logger("LOGIN <= PPP framing detected; skipping terminal login")
+                startPpp()
+                pppHandler.receive(bytes.copyOfRange(index, bytes.size))
+                return
+            }
+
+            when (value) {
+                8, 127 -> {
+                    if (loginBuffer.isNotEmpty()) {
+                        loginBuffer.deleteCharAt(loginBuffer.lastIndex)
+                    }
+                }
+
+                13 -> {
+                    val line = loginBuffer.toString()
+                    loginBuffer.clear()
+                    handleLoginLine(line)
+                }
+
+                10 -> Unit
+
+                else -> {
+                    if (char.code in 0x20..0x7e) {
+                        loginBuffer.append(char)
+                    }
+                }
+            }
+
+            index++
+        }
+    }
+
+    private fun handleLoginLine(rawLine: String) {
+        val line = rawLine.trim()
+
+        when (loginStage) {
+            LoginStage.WAITING_FOR_PROD -> {
+                logger("LOGIN <= terminal server wakeup")
+                loginStage = LoginStage.USERNAME
+                writeRaw("\r\nUsername: ")
+            }
+
+            LoginStage.USERNAME -> {
+                if (line.isEmpty()) {
+                    writeRaw("\r\nUsername: ")
+                    return
+                }
+
+                logger("LOGIN <= username received")
+                loginStage = LoginStage.PASSWORD
+                writeRaw("\r\nPassword: ")
+            }
+
+            LoginStage.PASSWORD -> {
+                logger("LOGIN <= password received")
+                loginStage = LoginStage.COMMAND
+                writeRaw("\r\n> ")
+            }
+
+            LoginStage.COMMAND -> {
+                if (isPppCommand(line)) {
+                    writeRaw("\r\nPPP.\r\n")
+                    startPpp()
+                } else {
+                    if (line.isNotEmpty()) {
+                        logger("LOGIN .. ignoring terminal command: $line")
+                    }
+                    writeRaw("\r\n> ")
+                }
+            }
+        }
+    }
+
+    private fun isPppCommand(value: String): Boolean {
+        val command = value.trim().lowercase()
+        return command == "ppp" ||
+            command == "%ppp" ||
+            command.startsWith("ppp ") ||
+            command.startsWith("%ppp ")
+    }
+
+    private fun startPpp() {
+        if (state == State.CONNECTED) return
+
+        loginBuffer.clear()
+        state = State.CONNECTED
+        logger("PPP data mode active")
+        if (output != null) {
+            pppHandler.connected()
+        }
     }
 
     fun attachOutput(output: OutputStream) {
@@ -221,12 +336,18 @@ class HayesModem(
     }
 
     private fun connect() {
-        state = State.CONNECTED
         logger("MODEM connected")
         respond("CONNECT $baudRate")
-        if (output != null) {
-            pppHandler.connected()
+
+        if (output == null) {
+            state = State.CONNECTED
+            return
         }
+
+        loginBuffer.clear()
+        loginStage = LoginStage.WAITING_FOR_PROD
+        state = State.LOGIN
+        logger("LOGIN waiting for terminal-server negotiation or PPP")
     }
 
     private fun reset() {
