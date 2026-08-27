@@ -72,6 +72,7 @@ class PppSession(
         when (frame.protocol) {
             LCP_PROTOCOL -> receiveLcp(frame.payload)
             IPCP_PROTOCOL -> receiveIpcp(frame.payload)
+            IPV4_PROTOCOL -> receiveIpv4(frame.payload)
             else -> logger(
                 "PPP .. protocol=${frame.protocolName()} (0x%04X) not handled yet"
                     .format(frame.protocol),
@@ -287,6 +288,84 @@ class PppSession(
             logger("LCP open")
             startIpcp()
         }
+    }
+
+    private fun receiveIpv4(payload: ByteArray) {
+        if (!ipcpOpen) {
+            logger("IPv4 .. ignored before IPCP is open")
+            return
+        }
+
+        val packet = Ipv4Packet.parse(payload)
+        if (packet == null) {
+            logger("IPv4 !! malformed packet or invalid header checksum (${payload.size} bytes)")
+            return
+        }
+
+        if (packet.destination != localIpAddress) {
+            logger(
+                "IPv4 .. ${packet.source} -> ${packet.destination} " +
+                    "protocol=${packet.protocol} not handled yet",
+            )
+            return
+        }
+
+        if (packet.source != peerIpAddress) {
+            logger(
+                "IPv4 !! source ${packet.source} does not match negotiated peer $peerIpAddress",
+            )
+            return
+        }
+
+        if (packet.isFragmented) {
+            logger("IPv4 .. fragmented packet to local endpoint not handled")
+            return
+        }
+
+        if (packet.protocol != Ipv4Packet.ICMP_PROTOCOL) {
+            logger("IPv4 .. local protocol=${packet.protocol} not handled")
+            return
+        }
+
+        val icmp = IcmpPacket.parse(packet.payload)
+        if (icmp == null) {
+            logger("ICMP !! malformed packet or invalid checksum")
+            return
+        }
+
+        val reply = icmp.toEchoReply()
+        if (reply == null) {
+            logger("ICMP .. type=${icmp.type} code=${icmp.code} not handled")
+            return
+        }
+
+        val identifier = icmp.echoIdentifier()
+        val sequence = icmp.echoSequence()
+        logger(
+            "ICMP <= Echo Request ${packet.source} -> ${packet.destination} " +
+                "id=$identifier seq=$sequence",
+        )
+
+        val replyPacket = Ipv4Packet(
+            dscpEcn = packet.dscpEcn,
+            identification = packet.identification,
+            ttl = Ipv4Packet.DEFAULT_TTL,
+            protocol = Ipv4Packet.ICMP_PROTOCOL,
+            source = localIpAddress,
+            destination = packet.source,
+            payload = reply.encode(),
+        )
+        sendFrame(
+            PppFrame(
+                protocol = IPV4_PROTOCOL,
+                payload = replyPacket.encode(),
+            ),
+        )
+
+        logger(
+            "ICMP => Echo Reply $localIpAddress -> ${packet.source} " +
+                "id=$identifier seq=$sequence",
+        )
     }
 
     private fun receiveIpcp(payload: ByteArray) {
@@ -531,6 +610,7 @@ class PppSession(
     companion object {
         const val LCP_PROTOCOL = 0xc021
         const val IPCP_PROTOCOL = 0x8021
+        const val IPV4_PROTOCOL = 0x0021
         const val DEFAULT_MRU = 1500
         private const val REQUESTED_RECEIVE_ACCM: UInt = 0u
         private const val DEFAULT_RESTART_INTERVAL_MILLIS = 3_000L
