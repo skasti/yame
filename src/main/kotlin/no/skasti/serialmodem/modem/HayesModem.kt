@@ -27,7 +27,14 @@ class HayesModem(
     var state: State = State.COMMAND
         private set
 
+    private enum class CommandParseState {
+        SEEKING_AT,
+        SAW_A,
+        READING_COMMAND,
+    }
+
     private val commandBuffer = StringBuilder()
+    private var commandParseState = CommandParseState.SEEKING_AT
     private var echo = true
 
     init {
@@ -47,30 +54,57 @@ class HayesModem(
             val value = byte.toInt() and 0xff
             val char = value.toChar()
 
-            when (value) {
-                8, 127 -> { // backspace / delete
-                    if (commandBuffer.isNotEmpty()) {
-                        commandBuffer.deleteCharAt(commandBuffer.lastIndex)
-                        if (echo) writeRaw("\b \b")
+            when (commandParseState) {
+                CommandParseState.SEEKING_AT -> {
+                    if (char == 'A' || char == 'a') {
+                        commandParseState = CommandParseState.SAW_A
                     }
                 }
 
-                13 -> { // carriage return terminates an AT command
-                    if (echo) writeRaw("\r")
-                    val command = commandBuffer.toString()
-                    commandBuffer.clear()
-                    handleCommand(command)
+                CommandParseState.SAW_A -> {
+                    when {
+                        char == 'T' || char == 't' -> {
+                            commandBuffer.clear()
+                            commandBuffer.append("AT")
+                            commandParseState = CommandParseState.READING_COMMAND
+                            if (echo) writeRaw("AT")
+                        }
+
+                        char == 'A' || char == 'a' -> {
+                            // Stay synchronized on the newest possible AT prefix.
+                        }
+
+                        else -> {
+                            commandParseState = CommandParseState.SEEKING_AT
+                        }
+                    }
                 }
 
-                10 -> {
-                    // Ignore LF. Most modem software terminates commands with CR.
-                    if (echo) writeRaw("\n")
-                }
+                CommandParseState.READING_COMMAND -> {
+                    when (value) {
+                        8, 127 -> { // backspace / delete
+                            if (commandBuffer.length > 2) {
+                                commandBuffer.deleteCharAt(commandBuffer.lastIndex)
+                                if (echo) writeRaw("\\b \\b")
+                            }
+                        }
 
-                else -> {
-                    if (char.code in 0x20..0x7e) {
-                        commandBuffer.append(char)
-                        if (echo) output?.write(byteArrayOf(byte))
+                        13 -> { // carriage return terminates an AT command
+                            if (echo) writeRaw("\\r")
+                            val command = commandBuffer.toString()
+                            commandBuffer.clear()
+                            commandParseState = CommandParseState.SEEKING_AT
+                            handleCommand(command)
+                        }
+
+                        10 -> Unit // Ignore LF. Most modem software terminates commands with CR.
+
+                        else -> {
+                            if (char.code in 0x20..0x7e) {
+                                commandBuffer.append(char)
+                                if (echo) output?.write(byteArrayOf(byte))
+                            }
+                        }
                     }
                 }
             }
