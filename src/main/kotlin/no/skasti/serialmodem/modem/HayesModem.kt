@@ -237,6 +237,10 @@ class HayesModem(
             }
 
             LoginStage.COMMAND -> {
+                if (line.isNotEmpty()) {
+                    logger("LOGIN <= command: ${line.take(128)}")
+                }
+
                 if (isPppCommand(line)) {
                     writeRaw("\r\nPPP.\r\n")
                     startPpp()
