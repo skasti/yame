@@ -50,6 +50,7 @@ class HayesModem(
 
     init {
         output?.let(pppHandler::attachOutput)
+        setCarrierPresent(false)
     }
 
     fun receive(bytes: ByteArray) {
