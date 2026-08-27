@@ -271,7 +271,7 @@ fun discoverLocalIpv4Networks(): List<LocalIpv4Network> {
     return Collections.list(interfaces)
         .filter { networkInterface ->
             runCatching {
-                networkInterface.isUp && !networkInterface.isLoopback
+                networkInterface.isUp
             }.getOrDefault(false)
         }
         .flatMap { networkInterface ->
