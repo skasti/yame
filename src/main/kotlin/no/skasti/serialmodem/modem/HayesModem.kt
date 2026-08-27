@@ -163,8 +163,8 @@ class HayesModem(
         val dialArgument = command.drop(3)
         return dialArgument.all { char ->
             char.isDigit() ||
-                char.uppercaseChar() in "ABCDTP" ||
-                char in "*#+-() ."
+                char.uppercaseChar() in "ABCDTPW" ||
+                char in "*#+-() .,@!;"
         }
     }
 
@@ -448,6 +448,7 @@ class HayesModem(
     }
 
     override fun close() {
+        setCarrierPresent(false)
         pppHandler.close()
         tonePlayer.close()
     }
