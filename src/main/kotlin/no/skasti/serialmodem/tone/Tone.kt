@@ -59,6 +59,10 @@ interface TonePlayer : Closeable {
     )
 
     override fun close() = Unit
+
+    companion object {
+        val MAX_DURATION: Duration = 10.seconds
+    }
 }
 
 class JavaSoundTonePlayer(
@@ -76,6 +80,12 @@ class JavaSoundTonePlayer(
     ) {
         require(!pickupTime.isNegative()) { "pickupTime must not be negative" }
         require(!dialToneTime.isNegative()) { "dialToneTime must not be negative" }
+        require(pickupTime <= TonePlayer.MAX_DURATION) {
+            "pickupTime must not exceed ${TonePlayer.MAX_DURATION}"
+        }
+        require(dialToneTime <= TonePlayer.MAX_DURATION) {
+            "dialToneTime must not exceed ${TonePlayer.MAX_DURATION}"
+        }
 
         ensureLine()
         val plan = ToneSequence.dialPlan(number, pickupTime, dialToneTime, sampleRate, handshakeProfile)
