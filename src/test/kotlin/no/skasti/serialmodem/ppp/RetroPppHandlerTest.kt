@@ -7,20 +7,14 @@ import kotlin.test.assertEquals
 
 class RetroPppHandlerTest {
     @Test
-    fun `connected starts LCP and incoming configure request is acknowledged`() {
+    fun `connected waits for peer PPP traffic before starting LCP`() {
         val output = ByteArrayOutputStream()
         val handler = RetroPppHandler(logger = {})
         handler.attachOutput(output)
 
         handler.connected()
 
-        val initialFrames = decode(output.toByteArray())
-        assertEquals(1, initialFrames.size)
-
-        val localRequest = requireNotNull(LcpPacket.parse(initialFrames.single().payload))
-        assertEquals(LcpPacket.CONFIGURE_REQUEST, localRequest.code)
-
-        output.reset()
+        assertEquals(0, output.size())
 
         val peerRequest = LcpPacket(
             code = LcpPacket.CONFIGURE_REQUEST,
@@ -43,32 +37,73 @@ class RetroPppHandlerTest {
         )
 
         val replies = decode(output.toByteArray())
-        assertEquals(1, replies.size)
+        assertEquals(2, replies.size)
 
-        val ack = requireNotNull(LcpPacket.parse(replies.single().payload))
+        val ack = requireNotNull(LcpPacket.parse(replies[0].payload))
         assertEquals(LcpPacket.CONFIGURE_ACK, ack.code)
         assertEquals(peerRequest.identifier, ack.identifier)
         assertContentEquals(peerRequest.data, ack.data)
+
+        val localRequest = requireNotNull(LcpPacket.parse(replies[1].payload))
+        assertEquals(LcpPacket.CONFIGURE_REQUEST, localRequest.code)
     }
 
     @Test
-    fun `each modem connection starts a fresh PPP session`() {
+    fun `each modem connection creates a fresh PPP session that waits for peer traffic`() {
         val output = ByteArrayOutputStream()
         val handler = RetroPppHandler(logger = {})
         handler.attachOutput(output)
 
         handler.connected()
-        val firstRequest = requireNotNull(LcpPacket.parse(decode(output.toByteArray()).single().payload))
+        assertEquals(0, output.size())
+        handler.receive(peerConfigureRequestWire())
+        val firstRequest = decode(output.toByteArray())
+            .mapNotNull { LcpPacket.parse(it.payload) }
+            .single { it.code == LcpPacket.CONFIGURE_REQUEST }
 
         output.reset()
         handler.connected()
-        val secondRequest = requireNotNull(LcpPacket.parse(decode(output.toByteArray()).single().payload))
+        assertEquals(0, output.size())
+        handler.receive(peerConfigureRequestWire())
+        val secondRequest = decode(output.toByteArray())
+            .mapNotNull { LcpPacket.parse(it.payload) }
+            .single { it.code == LcpPacket.CONFIGURE_REQUEST }
 
         assertEquals(LcpPacket.CONFIGURE_REQUEST, firstRequest.code)
         assertEquals(LcpPacket.CONFIGURE_REQUEST, secondRequest.code)
         assertEquals(firstRequest.identifier, secondRequest.identifier)
         assertContentEquals(firstRequest.data, secondRequest.data)
     }
+
+    @Test
+    fun `invalid PPP traffic does not start LCP`() {
+        val output = ByteArrayOutputStream()
+        val handler = RetroPppHandler(logger = {})
+        handler.attachOutput(output)
+        handler.connected()
+
+        handler.receive(byteArrayOf(0x7e, 0x01, 0x02, 0x03, 0x7e))
+
+        assertEquals(0, output.size())
+    }
+
+    private fun peerConfigureRequestWire(): ByteArray =
+        PppEncoder().encode(
+            PppFrame(
+                protocol = PppSession.LCP_PROTOCOL,
+                payload = LcpPacket(
+                    code = LcpPacket.CONFIGURE_REQUEST,
+                    identifier = 0x0b,
+                    data = byteArrayOf(
+                        0x01, 0x04, 0x02, 0x40,
+                        0x02, 0x06, 0x00, 0x00, 0x00, 0x00,
+                        0x05, 0x06, 0x00, 0x02, 0x76, 0xd1.toByte(),
+                        0x07, 0x02,
+                        0x08, 0x02,
+                    ),
+                ).encode(),
+            ),
+        )
 
     private fun decode(wire: ByteArray): List<PppFrame> {
         val frames = mutableListOf<PppFrame>()
