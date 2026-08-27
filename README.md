@@ -21,9 +21,12 @@ The emulator currently:
 - can log the individual dialing/handshake stages as they become audible
 - normalizes formatted dial strings before generating DTMF
 - switches to raw data mode after `CONNECT`
-- logs the raw bytes received in data mode in hexadecimal
+- decodes asynchronous PPP framing in connected mode
+- handles PPP flag/escape processing, receive ACCM filtering and FCS-16 validation
+- logs complete valid PPP frames with their decoded protocol and payload
+- logs malformed PPP frames separately for diagnostics
 
-PPP negotiation and Internet routing are not implemented yet. The raw data logger is intentionally the next diagnostic step: it lets us observe what the old laptop actually sends after the modem connection is established.
+PPP framing is implemented, but PPP protocol negotiation and Internet routing are not. The next milestone is LCP negotiation: replying to the client's LCP Configure-Request, sending YAME's own Configure-Request, and progressing far enough to observe IPCP from the old laptop.
 
 ## Telephone and modem tone simulation
 
@@ -185,10 +188,10 @@ MODEM dialing 5551234
 # dial/ring/handshake audio plays here
 MODEM connected
 AT => CONNECT 115200
-DATA <= ... bytes: 7E FF 03 C0 21 ...
+PPP <= protocol=LCP (0xC021), payload=24 bytes: 01 0B 00 18 01 04 02 40 ...
 ```
 
-Once we have the `DATA` output from a real dial attempt, the next milestone is implementing PPP framing and LCP negotiation.
+Repeated LCP Configure-Request frames are expected for now because YAME does not yet reply to PPP control protocols. This has been verified against Trumpet Winsock on a real Windows 3.1 laptop. The next milestone is implementing minimal LCP negotiation so the client can advance to IPCP.
 
 ## Supported modem behavior
 

@@ -1,6 +1,7 @@
 package no.skasti.serialmodem
 
 import no.skasti.serialmodem.modem.HayesModem
+import no.skasti.serialmodem.ppp.PppFramer
 import no.skasti.serialmodem.serial.SerialConnection
 import no.skasti.serialmodem.tone.HandshakeProfile
 import no.skasti.serialmodem.tone.ToneProgress
@@ -51,13 +52,24 @@ fun main(args: Array<String>) {
 
     connection.open()
 
+    val pppFramer = PppFramer(
+        onFrame = { frame ->
+            val hex = frame.payload.joinToString(" ") { "%02X".format(it.toInt() and 0xff) }
+            println(
+                "PPP <= protocol=${frame.protocolName()} (0x%04X), payload=${frame.payload.size} bytes: $hex"
+                    .format(frame.protocol),
+            )
+        },
+        onInvalidFrame = { frame ->
+            val hex = frame.joinToString(" ") { "%02X".format(it.toInt() and 0xff) }
+            println("PPP !! invalid frame (${frame.size} bytes): $hex")
+        },
+    )
+
     val modem = HayesModem(
         output = connection.output,
         baudRate = options.baudRate,
-        onData = { bytes ->
-            val hex = bytes.joinToString(" ") { "%02X".format(it.toInt() and 0xff) }
-            println("DATA <= ${bytes.size} bytes: $hex")
-        },
+        onData = pppFramer::receive,
         onDial = { number ->
             try {
                 tone.dial(
