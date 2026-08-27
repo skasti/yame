@@ -56,6 +56,7 @@ fun main(args: Array<String>) {
     try {
         connection.open()
         modem.attachOutput(connection.output)
+        modem.attachCarrierPresent(connection::setCarrierPresent)
     } catch (e: Exception) {
         modem.close()
         connection.close()

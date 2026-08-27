@@ -49,6 +49,16 @@ class SerialConnection(
         }
     }
 
+    fun setCarrierPresent(carrierPresent: Boolean) {
+        if (carrierPresent) {
+            port.setDTR()
+            port.setRTS()
+        } else {
+            port.clearDTR()
+            port.clearRTS()
+        }
+    }
+
     private fun readLoop(input: InputStream, onBytes: (ByteArray) -> Unit) {
         val buffer = ByteArray(4096)
         try {

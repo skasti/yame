@@ -17,6 +17,7 @@ class HayesModem(
     private val tonePlayer: TonePlayer = JavaSoundTonePlayer(),
     private val logger: (String) -> Unit = ::println,
     private val pppHandler: PppHandler = RetroPppHandler(logger),
+    private var setCarrierPresent: (Boolean) -> Unit = { /* no-op */ }
 ) : Closeable {
     enum class State {
         COMMAND,
@@ -136,6 +137,10 @@ class HayesModem(
         this.output = output
     }
 
+    fun attachCarrierPresent(setCarrierPresent: (Boolean) -> Unit) {
+        this.setCarrierPresent = setCarrierPresent
+    }
+
     private fun handleCommand(rawCommand: String) {
         val command = rawCommand.trim()
         if (command.isEmpty()) return
@@ -182,6 +187,7 @@ class HayesModem(
     }
 
     fun dial(dialString: String) {
+        setCarrierPresent(false)
         val number = DialString.normalize(dialString)
 
         if (number.isEmpty()) {
@@ -206,6 +212,7 @@ class HayesModem(
             logger("AUDIO !! Could not play dialing tones: ${e.message}")
         }
 
+        setCarrierPresent(true)
         connect()
     }
 
