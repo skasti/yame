@@ -10,7 +10,7 @@ class PppEncoder(
     fun encode(frame: PppFrame): ByteArray {
         val decoded = ByteArrayOutputStream()
 
-        if (!addressControlFieldCompression) {
+        if (!addressControlFieldCompression || frame.protocol == LCP_PROTOCOL) {
             decoded.write(ADDRESS)
             decoded.write(CONTROL)
         }
@@ -55,6 +55,7 @@ class PppEncoder(
         private const val ESCAPE_MASK = 0x20
         private const val ADDRESS = 0xff
         private const val CONTROL = 0x03
+        private const val LCP_PROTOCOL = 0xc021
 
         const val DEFAULT_TRANSMIT_ACCM: UInt = 0xffffffffu
     }
