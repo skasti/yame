@@ -9,7 +9,7 @@ import java.io.OutputStream
 import java.nio.charset.StandardCharsets
 
 class HayesModem(
-    output: OutputStream? = null,
+    private var output: OutputStream? = null,
     private val baudRate: Int,
     private val config: HayesModemConfig = HayesModemConfig(),
     private val onData: (ByteArray) -> Unit = {},
@@ -25,7 +25,6 @@ class HayesModem(
     var state: State = State.COMMAND
         private set
 
-    private var output: OutputStream? = output
     private val commandBuffer = StringBuilder()
     private var echo = true
 
