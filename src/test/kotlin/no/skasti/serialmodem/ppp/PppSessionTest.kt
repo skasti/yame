@@ -27,6 +27,47 @@ class PppSessionTest {
     }
 
     @Test
+    fun `retransmits outstanding configure request until matching ack arrives`() {
+        val sent = mutableListOf<PppFrame>()
+        val session = PppSession(
+            sendFrame = { synchronized(sent) { sent += it } },
+            logger = {},
+            restartIntervalMillis = 20,
+        )
+
+        try {
+            session.start()
+            Thread.sleep(70)
+
+            val beforeAck = synchronized(sent) { sent.toList() }
+            assertTrue(beforeAck.size >= 2)
+
+            val requests = beforeAck.map { requireNotNull(LcpPacket.parse(it.payload)) }
+            assertTrue(requests.all { it.code == LcpPacket.CONFIGURE_REQUEST })
+            assertTrue(requests.all { it.identifier == requests.first().identifier })
+            assertTrue(requests.all { it.data.contentEquals(requests.first().data) })
+
+            val request = requests.first()
+            session.receive(
+                PppFrame(
+                    protocol = PppSession.LCP_PROTOCOL,
+                    payload = LcpPacket(
+                        code = LcpPacket.CONFIGURE_ACK,
+                        identifier = request.identifier,
+                        data = request.data,
+                    ).encode(),
+                ),
+            )
+
+            val countAfterAck = synchronized(sent) { sent.size }
+            Thread.sleep(60)
+            assertEquals(countAfterAck, synchronized(sent) { sent.size })
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
     fun `acks trumpet configure request and applies peer transmit options`() {
         val sent = mutableListOf<PppFrame>()
         val session = PppSession(sendFrame = sent::add, logger = {})
@@ -80,6 +121,50 @@ class PppSessionTest {
 
         assertEquals(0u, session.receiveAccm)
         assertTrue(session.lcpOpen)
+    }
+
+    @Test
+    fun `new rejected peer request clears previously configured peer state`() {
+        val sent = mutableListOf<PppFrame>()
+        val session = PppSession(sendFrame = sent::add, logger = {})
+        session.start()
+
+        session.receive(
+            PppFrame(
+                protocol = PppSession.LCP_PROTOCOL,
+                payload = trumpetConfigureRequest(identifier = 0x0b).encode(),
+            ),
+        )
+
+        val unsupported = LcpOption(
+            type = LcpOption.AUTHENTICATION_PROTOCOL,
+            data = byteArrayOf(0xc0.toByte(), 0x23),
+        )
+        session.receive(
+            PppFrame(
+                protocol = PppSession.LCP_PROTOCOL,
+                payload = LcpPacket(
+                    code = LcpPacket.CONFIGURE_REQUEST,
+                    identifier = 0x0c,
+                    data = unsupported.encode(),
+                ).encode(),
+            ),
+        )
+
+        val localRequest = requireNotNull(LcpPacket.parse(sent.first().payload))
+        session.receive(
+            PppFrame(
+                protocol = PppSession.LCP_PROTOCOL,
+                payload = LcpPacket(
+                    code = LcpPacket.CONFIGURE_ACK,
+                    identifier = localRequest.identifier,
+                    data = localRequest.data,
+                ).encode(),
+            ),
+        )
+
+        assertFalse(session.lcpOpen)
+        session.close()
     }
 
     @Test
