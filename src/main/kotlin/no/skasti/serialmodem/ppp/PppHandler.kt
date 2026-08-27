@@ -13,14 +13,17 @@ interface PppHandler : Closeable {
 
 class RetroPppHandler(
     private val logger: (String) -> Unit = ::println,
+    private val ipConfig: PppIpConfig = PppIpConfig(),
 ) : PppHandler {
     private var output: OutputStream? = null
     private var encoder = PppEncoder()
     private var framer = createFramer()
     private var session: PppSession? = null
+    private var addressResolver = createAddressResolver()
 
     override fun attachOutput(output: OutputStream) {
         check(this.output == null) { "PPP output is already attached" }
+        addressResolver.validateConfiguredSubnet()
         this.output = output
     }
 
@@ -30,15 +33,28 @@ class RetroPppHandler(
         session?.close()
         encoder = PppEncoder()
         framer = createFramer()
+        addressResolver = createAddressResolver()
+
+        val addresses = addressResolver.resolve()
+        logger("PPP IP local=${addresses.localAddress} peer=${addresses.peerAddress}")
+
         session = PppSession(
             sendFrame = ::sendFrame,
             logger = logger,
+            ipAddresses = addresses,
+            selectPeerAddress = addressResolver::selectPeerAddress,
         )
     }
 
     override fun receive(bytes: ByteArray) {
         framer.receive(bytes)
     }
+
+    private fun createAddressResolver(): PppAddressResolver =
+        PppAddressResolver(
+            config = ipConfig,
+            logger = logger,
+        )
 
     private fun createFramer(): PppFramer =
         PppFramer(

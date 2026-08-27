@@ -1,6 +1,6 @@
 package no.skasti.serialmodem.ppp
 
-data class LcpPacket(
+data class PppControlPacket(
     val code: Int,
     val identifier: Int,
     val data: ByteArray,
@@ -23,7 +23,7 @@ data class LcpPacket(
 
         private const val HEADER_SIZE = 4
 
-        fun parse(payload: ByteArray): LcpPacket? {
+        fun parse(payload: ByteArray): PppControlPacket? {
             if (payload.size < HEADER_SIZE) return null
 
             val length =
@@ -32,7 +32,7 @@ data class LcpPacket(
 
             if (length < HEADER_SIZE || length > payload.size) return null
 
-            return LcpPacket(
+            return PppControlPacket(
                 code = payload[0].toInt() and 0xff,
                 identifier = payload[1].toInt() and 0xff,
                 data = payload.copyOfRange(HEADER_SIZE, length),
@@ -41,7 +41,7 @@ data class LcpPacket(
     }
 }
 
-data class LcpOption(
+data class PppControlOption(
     val type: Int,
     val data: ByteArray,
 ) {
@@ -56,8 +56,11 @@ data class LcpOption(
         const val PROTOCOL_FIELD_COMPRESSION = 7
         const val ADDRESS_CONTROL_FIELD_COMPRESSION = 8
 
-        fun parseAll(data: ByteArray): List<LcpOption>? {
-            val result = mutableListOf<LcpOption>()
+        const val IPCP_IP_COMPRESSION_PROTOCOL = 2
+        const val IPCP_IP_ADDRESS = 3
+
+        fun parseAll(data: ByteArray): List<PppControlOption>? {
+            val result = mutableListOf<PppControlOption>()
             var offset = 0
 
             while (offset < data.size) {
@@ -67,7 +70,7 @@ data class LcpOption(
                 val length = data[offset + 1].toInt() and 0xff
                 if (length < 2 || offset + length > data.size) return null
 
-                result += LcpOption(
+                result += PppControlOption(
                     type = type,
                     data = data.copyOfRange(offset + 2, offset + length),
                 )
@@ -78,3 +81,6 @@ data class LcpOption(
         }
     }
 }
+
+typealias LcpPacket = PppControlPacket
+typealias LcpOption = PppControlOption
