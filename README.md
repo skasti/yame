@@ -18,7 +18,7 @@ The emulator currently:
 - answers dial commands (`ATD...` / `ATDT...`) with simulated telephone dialing and modem-handshake sounds before `CONNECT 115200`
 - generates a Norwegian 425 Hz dial tone, standard DTMF digits, and 425 Hz ringback cadence
 - simulates a V.8/V.34-style modem answer, negotiation, line probing and training sequence after pickup
-- can log the individual dialing/handshake stages as they become audible
+- logs the individual dialing/handshake stages as they become audible
 - normalizes formatted dial strings before generating DTMF
 - switches to raw data mode after `CONNECT`
 - decodes asynchronous PPP framing in connected mode
@@ -88,7 +88,7 @@ The progress monitor follows the Java Sound output line's rendered frame positio
 
 Dial strings are normalized before DTMF is generated. A leading `+` is converted to Norway's international access prefix `00`, so `+47 345 76 543` is dialed as `004734576543`. Spaces, dashes, parentheses and other presentation characters are ignored, and a leading Hayes `T` or `P` dial-mode selector is removed.
 
-The normal modem entry point currently uses a simulated pickup time of two seconds. Audio failure is treated as cosmetic, so systems without a configured sound device can still use the modem emulator.
+The modem owns dialing-tone playback and its timing configuration. By default it uses a 500 ms dial tone, a two-second simulated pickup time, and the `v34` handshake profile. These values can be overridden from the command line. Audio failure is treated as cosmetic, so systems without a configured sound device can still use the modem emulator.
 
 ## Requirements
 
@@ -114,10 +114,10 @@ Start the emulator on a detected serial port:
 ./gradlew run --args="--port <port>"
 ```
 
-Enable dialing/handshake step logging for real modem calls:
+Dialing/handshake progress is logged automatically. Modem timing and handshake behavior can be overridden explicitly:
 
 ```shell
-./gradlew run --args="--port <port> --log-tone-steps"
+./gradlew run --args="--port <port> --pickup-time 3s --dial-tone-time 750ms --handshake-profile v34"
 ```
 
 Specify another line speed if needed:
@@ -134,20 +134,14 @@ Play a complete dialing and default V.34 modem-handshake sequence without openin
 ./gradlew run --args="--test-tone '+47 345 76 543'"
 ```
 
-The handshake profile can be selected explicitly with `--handshake-profile`. The currently available profiles are `v34` and `none`:
+The test uses the same modem configuration path as a real AT dial. The defaults are a 500 ms dial tone, two seconds before pickup, and the `v34` handshake profile. All three can be overridden:
 
 ```shell
-./gradlew run --args="--test-tone '+47 345 76 543' --handshake-profile v34"
+./gradlew run --args="--test-tone '+47 345 76 543' --pickup-time 3s --dial-tone-time 750ms --handshake-profile v34"
 ./gradlew run --args="--test-tone '+47 345 76 543' --handshake-profile none"
 ```
 
-Add `--log-tone-steps` to see each phase while listening:
-
-```shell
-./gradlew run --args="--test-tone '+47 345 76 543' --handshake-profile v34 --log-tone-steps"
-```
-
-Typical progress output looks like:
+Dialing/handshake progress is always logged. Typical output looks like:
 
 ```text
 TONE [dial_tone] 425 Hz dial tone
@@ -164,7 +158,7 @@ TONE [v34_final_exchange] V.34 final parameter/data exchange
 TONE [complete] dialing/handshake complete; CONNECT may be returned
 ```
 
-The tone test deliberately uses longer dial-tone and pickup timings so the generated cadence is easy to hear. With the `v34` profile, the V.8/V.34 handshake continues after the simulated pickup before the test exits. With `none`, the test exits immediately after pickup.
+`--test-tone` calls the same public `HayesModem.dial()` path used by AT dialing, but discards serial output instead of opening a port. With the `v34` profile, the V.8/V.34 handshake continues after the simulated pickup before the test exits. With `none`, the test exits immediately after pickup.
 
 Run the automated tests with:
 
