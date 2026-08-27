@@ -47,6 +47,7 @@ class HayesModem(
     private var echo = true
     private val loginBuffer = StringBuilder()
     private var loginStage = LoginStage.USERNAME
+    private var pendingLoginUsername: String? = null
 
     init {
         output?.let(pppHandler::attachOutput)
@@ -177,13 +178,6 @@ class HayesModem(
             val value = bytes[index].toInt() and 0xff
             val char = value.toChar()
 
-            if (value == 0x7e && loginBuffer.isEmpty()) {
-                logger("LOGIN <= PPP framing detected; skipping terminal login")
-                startPpp()
-                pppHandler.receive(bytes.copyOfRange(index, bytes.size))
-                return
-            }
-
             when (value) {
                 8, 127 -> {
                     if (loginBuffer.isNotEmpty()) {
@@ -221,14 +215,25 @@ class HayesModem(
                 }
 
                 logger("LOGIN <= username received")
+                pendingLoginUsername = line
                 loginStage = LoginStage.PASSWORD
                 writeRaw("\r\nPassword: ")
             }
 
             LoginStage.PASSWORD -> {
                 logger("LOGIN <= password received")
-                loginStage = LoginStage.COMMAND
-                writeRaw("\r\n> ")
+
+                if (pendingLoginUsername == config.username && line == config.password) {
+                    pendingLoginUsername = null
+                    loginStage = LoginStage.COMMAND
+                    logger("LOGIN authentication accepted")
+                    writeRaw("\r\n> ")
+                } else {
+                    pendingLoginUsername = null
+                    loginStage = LoginStage.USERNAME
+                    logger("LOGIN authentication rejected")
+                    writeRaw("\r\nLogin incorrect\r\nUsername: ")
+                }
             }
 
             LoginStage.COMMAND -> {
@@ -363,7 +368,14 @@ class HayesModem(
             return
         }
 
+        if (config.username == null) {
+            logger("LOGIN disabled; waiting for PPP")
+            startPpp()
+            return
+        }
+
         loginBuffer.clear()
+        pendingLoginUsername = null
         loginStage = LoginStage.USERNAME
         state = State.LOGIN
         logger("LOGIN => Username prompt")
@@ -373,6 +385,9 @@ class HayesModem(
     private fun reset() {
         state = State.COMMAND
         echo = true
+        loginBuffer.clear()
+        pendingLoginUsername = null
+        loginStage = LoginStage.USERNAME
     }
 
     private fun respond(result: String) {
