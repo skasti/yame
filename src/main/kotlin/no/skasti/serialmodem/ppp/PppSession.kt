@@ -51,6 +51,7 @@ class PppSession(
     private var lcpRestartTimer: Timer? = null
 
     private var ipcpStarted = false
+    private var ipcpGeneration = 0L
     private var ipcpPeerConfigured = false
     private var ipcpLocalConfigured = false
     private var nextIpcpIdentifier = 1
@@ -396,6 +397,7 @@ class PppSession(
 
         val identifier = icmp.echoIdentifier()
         val sequence = icmp.echoSequence()
+        val generation = ipcpGeneration
         logger(
             "ICMP <= Echo Request ${packet.source} -> ${packet.destination} " +
                 "id=$identifier seq=$sequence; probing via host",
@@ -405,7 +407,13 @@ class PppSession(
             result.fold(
                 onSuccess = { reachable ->
                     if (reachable) {
-                        sendExternalEchoReply(packet, reply, identifier, sequence)
+                        sendExternalEchoReply(
+                            packet,
+                            reply,
+                            identifier,
+                            sequence,
+                            generation,
+                        )
                     } else {
                         logger(
                             "ICMP .. host Echo Request to ${packet.destination} " +
@@ -430,8 +438,14 @@ class PppSession(
         reply: IcmpPacket,
         identifier: Int?,
         sequence: Int?,
+        generation: Long,
     ) {
-        if (closed || !ipcpOpen || request.source != peerIpAddress) {
+        if (
+            closed ||
+            !ipcpOpen ||
+            generation != ipcpGeneration ||
+            request.source != peerIpAddress
+        ) {
             logger(
                 "ICMP .. dropping host Echo Reply from ${request.destination}; PPP/IPCP state changed",
             )
@@ -521,6 +535,7 @@ class PppSession(
         ipcpOpen = false
 
         if (wasOpen) {
+            ipcpGeneration++
             restartLocalIpcpNegotiation()
         }
 
@@ -708,6 +723,7 @@ class PppSession(
     }
 
     private fun resetIpcp() {
+        ipcpGeneration++
         ipcpStarted = false
         ipcpPeerConfigured = false
         ipcpLocalConfigured = false

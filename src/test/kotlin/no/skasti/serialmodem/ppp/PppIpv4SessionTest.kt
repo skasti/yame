@@ -160,6 +160,64 @@ class PppIpv4SessionTest {
     }
 
     @Test
+    fun `external ICMP reply is dropped after IPCP renegotiates`() {
+        val sent = mutableListOf<PppFrame>()
+        val proxy = DeferredIcmpEchoProxy()
+        val session = newSession(sent, icmpEchoProxy = proxy)
+        openIpcp(session, sent)
+        sent.clear()
+
+        val request = Ipv4Packet(
+            protocol = Ipv4Packet.ICMP_PROTOCOL,
+            source = Ipv4Address.parse("10.0.0.2"),
+            destination = Ipv4Address.parse("8.8.8.8"),
+            payload = IcmpPacket(
+                type = IcmpPacket.ECHO_REQUEST,
+                code = 0,
+                body = byteArrayOf(0, 1, 0, 1),
+            ).encode(),
+        )
+        session.receive(PppFrame(PppSession.IPV4_PROTOCOL, request.encode()))
+
+        session.receive(
+            PppFrame(
+                protocol = PppSession.IPCP_PROTOCOL,
+                payload = PppControlPacket(
+                    code = PppControlPacket.CONFIGURE_REQUEST,
+                    identifier = 10,
+                    data = PppControlOption(
+                        type = PppControlOption.IPCP_IP_ADDRESS,
+                        data = Ipv4Address.parse("10.0.0.2").toByteArray(),
+                    ).encode(),
+                ).encode(),
+            ),
+        )
+
+        val renegotiationRequest = sent
+            .asSequence()
+            .filter { it.protocol == PppSession.IPCP_PROTOCOL }
+            .mapNotNull { PppControlPacket.parse(it.payload) }
+            .first { it.code == PppControlPacket.CONFIGURE_REQUEST }
+        session.receive(
+            PppFrame(
+                protocol = PppSession.IPCP_PROTOCOL,
+                payload = PppControlPacket(
+                    code = PppControlPacket.CONFIGURE_ACK,
+                    identifier = renegotiationRequest.identifier,
+                    data = renegotiationRequest.data,
+                ).encode(),
+            ),
+        )
+        assertTrue(session.ipcpOpen)
+
+        sent.clear()
+        proxy.complete(reachable = true)
+
+        assertTrue(sent.isEmpty())
+        session.close()
+    }
+
+    @Test
     fun `external ICMP reply is dropped after session closes`() {
         val sent = mutableListOf<PppFrame>()
         val proxy = DeferredIcmpEchoProxy()
