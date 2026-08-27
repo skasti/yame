@@ -77,8 +77,13 @@ class PppSession(
     }
 
     private fun receiveConfigureRequest(packet: LcpPacket) {
+        val wasOpen = lcpOpen
         peerConfigured = false
         lcpOpen = false
+
+        if (wasOpen) {
+            restartLocalNegotiation()
+        }
 
         val options = LcpOption.parseAll(packet.data)
         if (options == null) {
@@ -174,6 +179,14 @@ class PppSession(
                     transmitAddressControlFieldCompression = true
             }
         }
+    }
+
+    private fun restartLocalNegotiation() {
+        localConfigured = false
+        receiveAccm = PppFramer.DEFAULT_RECEIVE_ACCM
+        createLocalConfigureRequest()
+        sendOutstandingConfigureRequest()
+        startRestartTimer()
     }
 
     private fun createLocalConfigureRequest() {
