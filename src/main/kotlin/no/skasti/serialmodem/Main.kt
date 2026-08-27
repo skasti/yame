@@ -4,6 +4,7 @@ import no.skasti.serialmodem.modem.HayesModem
 import no.skasti.serialmodem.modem.HayesModemConfig
 import no.skasti.serialmodem.ppp.PppFramer
 import no.skasti.serialmodem.serial.SerialConnection
+import no.skasti.serialmodem.tone.DialString
 import no.skasti.serialmodem.tone.HandshakeProfile
 import java.util.concurrent.CountDownLatch
 import kotlin.time.Duration
@@ -120,7 +121,12 @@ private fun parseArgs(args: Array<String>): Options {
             "--list", "-l" -> list = true
             "--test-tone", "-t" -> {
                 require(i + 1 < args.size) { "$arg requires a number to dial" }
-                testNumber = args[++i]
+                val value = args[++i]
+                require(value.isNotBlank()) { "$arg requires a non-empty number to dial" }
+                require(DialString.normalize(value).isNotEmpty()) {
+                    "$arg requires a number containing at least one DTMF digit"
+                }
+                testNumber = value
             }
             "--pickup-time" -> {
                 require(i + 1 < args.size) { "$arg requires a duration, e.g. 2s or 500ms" }
