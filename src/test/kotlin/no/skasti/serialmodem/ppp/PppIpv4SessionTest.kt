@@ -185,10 +185,15 @@ class PppIpv4SessionTest {
                 payload = PppControlPacket(
                     code = PppControlPacket.CONFIGURE_REQUEST,
                     identifier = 10,
-                    data = PppControlOption(
-                        type = PppControlOption.IPCP_IP_ADDRESS,
-                        data = Ipv4Address.parse("10.0.0.2").toByteArray(),
-                    ).encode(),
+                    data =
+                        PppControlOption(
+                            type = PppControlOption.IPCP_IP_ADDRESS,
+                            data = Ipv4Address.parse("10.0.0.2").toByteArray(),
+                        ).encode() +
+                            PppControlOption(
+                                type = PppControlOption.IPCP_PRIMARY_DNS,
+                                data = Ipv4Address.parse("10.0.0.1").toByteArray(),
+                            ).encode(),
                 ).encode(),
             ),
         )
@@ -407,10 +412,15 @@ class PppIpv4SessionTest {
                 payload = PppControlPacket(
                     code = PppControlPacket.CONFIGURE_REQUEST,
                     identifier = 10,
-                    data = PppControlOption(
-                        type = PppControlOption.IPCP_IP_ADDRESS,
-                        data = source.toByteArray(),
-                    ).encode(),
+                    data =
+                        PppControlOption(
+                            type = PppControlOption.IPCP_IP_ADDRESS,
+                            data = source.toByteArray(),
+                        ).encode() +
+                            PppControlOption(
+                                type = PppControlOption.IPCP_PRIMARY_DNS,
+                                data = Ipv4Address.parse("10.0.0.1").toByteArray(),
+                            ).encode(),
                 ).encode(),
             ),
         )
