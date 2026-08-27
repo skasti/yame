@@ -70,9 +70,9 @@ class JavaSoundTonePlayer(
     override fun dial(
         number: String,
         pickupTime: Duration,
-        dialToneTime: Duration = 500.milliseconds,
-        handshakeProfile: HandshakeProfile = HandshakeProfile.V34,
-        onProgress: ((ToneProgress) -> Unit)? = null,
+        dialToneTime: Duration,
+        handshakeProfile: HandshakeProfile,
+        onProgress: ((ToneProgress) -> Unit)?,
     ) {
         require(!pickupTime.isNegative()) { "pickupTime must not be negative" }
         require(!dialToneTime.isNegative()) { "dialToneTime must not be negative" }
