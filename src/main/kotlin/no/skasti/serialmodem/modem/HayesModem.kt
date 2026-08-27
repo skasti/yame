@@ -136,6 +136,7 @@ class HayesModem(
                                         commandBuffer.append(previous).append(char)
                                     } else {
                                         commandBuffer.append(char)
+                                        resynchronizeInvalidDialCandidate()
                                     }
 
                                     if (echo) output?.write(byteArrayOf(byte))
@@ -163,6 +164,19 @@ class HayesModem(
             char.isDigit() ||
                 char.uppercaseChar() in "ABCDTP" ||
                 char in "*#+-() ."
+        }
+    }
+
+    private fun resynchronizeInvalidDialCandidate() {
+        val command = commandBuffer.toString()
+        if (!command.startsWith("ATD", ignoreCase = true) || isPlausibleDialCandidate(command)) {
+            return
+        }
+
+        val laterAt = command.lowercase().lastIndexOf("at")
+        if (laterAt > 1) {
+            commandBuffer.clear()
+            commandBuffer.append(command.substring(laterAt))
         }
     }
 
