@@ -11,6 +11,8 @@ data class HayesModemConfig(
     val handshakeProfile: HandshakeProfile = HandshakeProfile.V34,
 ) {
     init {
+        require(pickupTime.isFinite()) { "pickupTime must be finite" }
+        require(dialToneTime.isFinite()) { "dialToneTime must be finite" }
         require(!pickupTime.isNegative()) { "pickupTime must not be negative" }
         require(!dialToneTime.isNegative()) { "dialToneTime must not be negative" }
     }
