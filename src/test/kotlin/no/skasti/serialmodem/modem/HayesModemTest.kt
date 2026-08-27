@@ -69,6 +69,20 @@ class HayesModemTest {
     }
 
     @Test
+    fun `later AT prefix replaces an unterminated false command candidate`() {
+        val output = ByteArrayOutputStream()
+        val logs = mutableListOf<String>()
+        val modem = HayesModem(output, 115200, logger = logs::add)
+
+        modem.receive("AT~".toByteArray())
+        modem.receive("ATZ\r".toByteArray())
+
+        assertTrue(output.toString().contains("OK"))
+        assertFalse(output.toString().contains("ERROR"))
+        assertEquals(listOf("AT <= ATZ", "AT => OK"), logs)
+    }
+
+    @Test
     fun `garbage without AT prefix produces no modem response`() {
         val output = ByteArrayOutputStream()
         val logs = mutableListOf<String>()
