@@ -62,7 +62,51 @@ class HayesModemTest {
     }
 
     @Test
-    fun `audio failure does not prevent connection`() {
+    fun `modem can attach serial output after construction`() {
+        val output = ByteArrayOutputStream()
+        val modem = HayesModem(
+            baudRate = 115200,
+            tonePlayer = FakeTonePlayer(),
+            logger = {},
+        )
+
+        modem.attachOutput(output)
+        modem.receive("AT\r".toByteArray())
+
+        assertTrue(output.toString().contains("OK"))
+        assertEquals(HayesModem.State.COMMAND, modem.state)
+    }
+
+    @Test
+    fun `public dial works without attached serial output`() {
+        val modem = HayesModem(
+            baudRate = 115200,
+            tonePlayer = FakeTonePlayer(),
+            logger = {},
+        )
+
+        modem.dial("1")
+
+        assertEquals(HayesModem.State.CONNECTED, modem.state)
+    }
+
+    @Test
+    fun `public dial propagates tone player failure`() {
+        val modem = HayesModem(
+            baudRate = 115200,
+            tonePlayer = FakeTonePlayer { _, _, _, _, _ -> error("no audio device") },
+            logger = {},
+        )
+
+        assertFailsWith<IllegalStateException> {
+            modem.dial("1")
+        }
+
+        assertEquals(HayesModem.State.DIALING, modem.state)
+    }
+
+    @Test
+    fun `audio failure does not prevent AT dial connection`() {
         val output = ByteArrayOutputStream()
         val logs = mutableListOf<String>()
         val modem = HayesModem(
