@@ -2,7 +2,6 @@ package no.skasti.serialmodem
 
 import no.skasti.serialmodem.modem.HayesModem
 import no.skasti.serialmodem.modem.HayesModemConfig
-import no.skasti.serialmodem.ppp.PppFramer
 import no.skasti.serialmodem.serial.SerialConnection
 import no.skasti.serialmodem.tone.DialString
 import no.skasti.serialmodem.tone.HandshakeProfile
@@ -14,24 +13,9 @@ import kotlin.time.Duration.Companion.seconds
 fun main(args: Array<String>) {
     val options = parseArgs(args)
 
-    val pppFramer = PppFramer(
-        onFrame = { frame ->
-            val hex = frame.payload.joinToString(" ") { "%02X".format(it.toInt() and 0xff) }
-            println(
-                "PPP <= protocol=${frame.protocolName()} (0x%04X), payload=${frame.payload.size} bytes: $hex"
-                    .format(frame.protocol),
-            )
-        },
-        onInvalidFrame = { frame ->
-            val hex = frame.joinToString(" ") { "%02X".format(it.toInt() and 0xff) }
-            println("PPP !! invalid frame (${frame.size} bytes): $hex")
-        },
-    )
-
     val modem = HayesModem(
         baudRate = options.baudRate,
         config = options.modemConfig,
-        onData = pppFramer::receive,
     )
 
     if (options.testNumber != null) {

@@ -1,10 +1,12 @@
 package no.skasti.serialmodem.modem
 
+import no.skasti.serialmodem.ppp.PppHandler
 import no.skasti.serialmodem.tone.HandshakeProfile
 import no.skasti.serialmodem.tone.TonePlayer
 import no.skasti.serialmodem.tone.ToneProgress
 import no.skasti.serialmodem.tone.ToneStep
 import java.io.ByteArrayOutputStream
+import java.io.OutputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -122,22 +124,46 @@ class HayesModemTest {
     }
 
     @Test
-    fun `bytes after connect are passed to data handler`() {
+    fun `connected bytes are passed to PPP handler`() {
         val output = ByteArrayOutputStream()
-        val received = mutableListOf<ByteArray>()
+        val pppHandler = FakePppHandler()
         val modem = HayesModem(
             output = output,
             baudRate = 115200,
-            onData = received::add,
             tonePlayer = FakeTonePlayer(),
             logger = {},
+            pppHandler = pppHandler,
         )
 
         modem.receive("ATD1\r".toByteArray())
         modem.receive(byteArrayOf(0x7e, 0xff.toByte(), 0x03, 0xc0.toByte(), 0x21))
 
-        assertEquals(1, received.size)
-        assertEquals(listOf(0x7e, 0xff, 0x03, 0xc0, 0x21), received.single().map { it.toInt() and 0xff })
+        assertEquals(1, pppHandler.connectedCalls)
+        assertEquals(1, pppHandler.received.size)
+        assertEquals(
+            listOf(0x7e, 0xff, 0x03, 0xc0, 0x21),
+            pppHandler.received.single().map { it.toInt() and 0xff },
+        )
+    }
+
+    @Test
+    fun `PPP handler starts after CONNECT result is written`() {
+        val output = ByteArrayOutputStream()
+        var outputAtConnect = ""
+        val pppHandler = FakePppHandler(
+            onConnected = { outputAtConnect = output.toString() },
+        )
+        val modem = HayesModem(
+            output = output,
+            baudRate = 115200,
+            tonePlayer = FakeTonePlayer(),
+            logger = {},
+            pppHandler = pppHandler,
+        )
+
+        modem.dial("1")
+
+        assertTrue(outputAtConnect.contains("CONNECT 115200"))
     }
 
     @Test
@@ -169,18 +195,21 @@ class HayesModemTest {
     }
 
     @Test
-    fun `closing modem closes tone player`() {
+    fun `closing modem closes tone player and PPP handler`() {
         val tonePlayer = FakeTonePlayer()
+        val pppHandler = FakePppHandler()
         val modem = HayesModem(
             output = ByteArrayOutputStream(),
             baudRate = 115200,
             tonePlayer = tonePlayer,
             logger = {},
+            pppHandler = pppHandler,
         )
 
         modem.close()
 
         assertTrue(tonePlayer.closed)
+        assertTrue(pppHandler.closed)
     }
 }
 
@@ -204,6 +233,39 @@ private class FakeTonePlayer(
         onProgress: ((ToneProgress) -> Unit)?,
     ) {
         onDial(number, pickupTime, dialToneTime, handshakeProfile, onProgress)
+    }
+
+    override fun close() {
+        closed = true
+    }
+}
+
+
+private class FakePppHandler(
+    private val onConnected: () -> Unit = {},
+) : PppHandler {
+    var attachedOutput: OutputStream? = null
+        private set
+
+    var connectedCalls = 0
+        private set
+
+    val received = mutableListOf<ByteArray>()
+
+    var closed = false
+        private set
+
+    override fun attachOutput(output: OutputStream) {
+        attachedOutput = output
+    }
+
+    override fun connected() {
+        connectedCalls++
+        onConnected()
+    }
+
+    override fun receive(bytes: ByteArray) {
+        received += bytes
     }
 
     override fun close() {
