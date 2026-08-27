@@ -35,6 +35,7 @@ class HayesModem(
 
     private val commandBuffer = StringBuilder()
     private var commandParseState = CommandParseState.SEEKING_AT
+    private var pendingCommandA = 'A'
     private var echo = true
 
     init {
@@ -57,6 +58,7 @@ class HayesModem(
             when (commandParseState) {
                 CommandParseState.SEEKING_AT -> {
                     if (char == 'A' || char == 'a') {
+                        pendingCommandA = char
                         commandParseState = CommandParseState.SAW_A
                     }
                 }
@@ -65,12 +67,13 @@ class HayesModem(
                     when {
                         char == 'T' || char == 't' -> {
                             commandBuffer.clear()
-                            commandBuffer.append("AT")
+                            commandBuffer.append(pendingCommandA).append(char)
                             commandParseState = CommandParseState.READING_COMMAND
-                            if (echo) writeRaw("AT")
+                            if (echo) writeRaw("$pendingCommandA$char")
                         }
 
                         char == 'A' || char == 'a' -> {
+                            pendingCommandA = char
                             // Stay synchronized on the newest possible AT prefix.
                         }
 
@@ -85,12 +88,12 @@ class HayesModem(
                         8, 127 -> { // backspace / delete
                             if (commandBuffer.length > 2) {
                                 commandBuffer.deleteCharAt(commandBuffer.lastIndex)
-                                if (echo) writeRaw("\\b \\b")
+                                if (echo) writeRaw("\b \b")
                             }
                         }
 
                         13 -> { // carriage return terminates an AT command
-                            if (echo) writeRaw("\\r")
+                            if (echo) writeRaw("\r")
                             val command = commandBuffer.toString()
                             commandBuffer.clear()
                             commandParseState = CommandParseState.SEEKING_AT
