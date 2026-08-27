@@ -83,6 +83,18 @@ class HayesModemTest {
     }
 
     @Test
+    fun `printable false AT candidate resynchronizes on later real command`() {
+        val output = ByteArrayOutputStream()
+        val logs = mutableListOf<String>()
+        val modem = HayesModem(output, 115200, logger = logs::add)
+
+        modem.receive("ATjunkATZ\r".toByteArray())
+
+        assertFalse(output.toString().contains("ERROR"))
+        assertEquals(listOf("AT <= ATZ", "AT => OK"), logs)
+    }
+
+    @Test
     fun `embedded AT sequence in dial string does not trigger resynchronization`() {
         val output = ByteArrayOutputStream()
         val dialed = mutableListOf<String>()
@@ -146,6 +158,20 @@ class HayesModemTest {
         assertTrue(logs.contains("TONE [dial_tone] test dial tone"))
         assertTrue(output.toString().contains("CONNECT 115200"))
         assertEquals(HayesModem.State.LOGIN, modem.state)
+    }
+
+    @Test
+    fun `attaching carrier callback initializes carrier as absent`() {
+        val carrierStates = mutableListOf<Boolean>()
+        val modem = HayesModem(
+            baudRate = 115200,
+            tonePlayer = FakeTonePlayer(),
+            logger = {},
+        )
+
+        modem.attachCarrierPresent(carrierStates::add)
+
+        assertEquals(listOf(false), carrierStates)
     }
 
     @Test
