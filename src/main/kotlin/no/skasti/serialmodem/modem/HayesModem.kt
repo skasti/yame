@@ -36,7 +36,6 @@ class HayesModem(
     }
 
     private enum class LoginStage {
-        WAITING_FOR_PROD,
         USERNAME,
         PASSWORD,
         COMMAND,
@@ -47,7 +46,7 @@ class HayesModem(
     private var pendingCommandA = 'A'
     private var echo = true
     private val loginBuffer = StringBuilder()
-    private var loginStage = LoginStage.WAITING_FOR_PROD
+    private var loginStage = LoginStage.USERNAME
 
     init {
         output?.let(pppHandler::attachOutput)
@@ -214,15 +213,9 @@ class HayesModem(
         val line = rawLine.trim()
 
         when (loginStage) {
-            LoginStage.WAITING_FOR_PROD -> {
-                logger("LOGIN <= terminal server wakeup")
-                loginStage = LoginStage.USERNAME
-                writeRaw("\r\nLogin: Username: ")
-            }
-
             LoginStage.USERNAME -> {
                 if (line.isEmpty()) {
-                    writeRaw("\r\nLogin: Username: ")
+                    writeRaw("\r\nUsername: ")
                     return
                 }
 
@@ -370,9 +363,10 @@ class HayesModem(
         }
 
         loginBuffer.clear()
-        loginStage = LoginStage.WAITING_FOR_PROD
+        loginStage = LoginStage.USERNAME
         state = State.LOGIN
-        logger("LOGIN waiting for terminal-server negotiation or PPP")
+        logger("LOGIN => Username prompt")
+        writeRaw("\r\nUsername: ")
     }
 
     private fun reset() {
