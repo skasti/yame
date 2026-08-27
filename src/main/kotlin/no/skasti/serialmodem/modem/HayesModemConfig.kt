@@ -1,6 +1,7 @@
 package no.skasti.serialmodem.modem
 
 import no.skasti.serialmodem.tone.HandshakeProfile
+import no.skasti.serialmodem.tone.TonePlayer
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -15,11 +16,12 @@ data class HayesModemConfig(
         require(dialToneTime.isFinite()) { "dialToneTime must be finite" }
         require(!pickupTime.isNegative()) { "pickupTime must not be negative" }
         require(!dialToneTime.isNegative()) { "dialToneTime must not be negative" }
-        require(pickupTime <= MAX_TONE_DURATION) { "pickupTime must not exceed $MAX_TONE_DURATION" }
-        require(dialToneTime <= MAX_TONE_DURATION) { "dialToneTime must not exceed $MAX_TONE_DURATION" }
+        require(pickupTime <= TonePlayer.MAX_DURATION) {
+            "pickupTime must not exceed ${TonePlayer.MAX_DURATION}"
+        }
+        require(dialToneTime <= TonePlayer.MAX_DURATION) {
+            "dialToneTime must not exceed ${TonePlayer.MAX_DURATION}"
+        }
     }
 
-    companion object {
-        val MAX_TONE_DURATION: Duration = 10.seconds
-    }
 }
