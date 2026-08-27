@@ -9,7 +9,7 @@ import java.io.OutputStream
 import java.nio.charset.StandardCharsets
 
 class HayesModem(
-    private val output: OutputStream,
+    output: OutputStream? = null,
     private val baudRate: Int,
     private val config: HayesModemConfig = HayesModemConfig(),
     private val onData: (ByteArray) -> Unit = {},
@@ -25,6 +25,7 @@ class HayesModem(
     var state: State = State.COMMAND
         private set
 
+    private var output: OutputStream? = output
     private val commandBuffer = StringBuilder()
     private var echo = true
 
@@ -64,12 +65,17 @@ class HayesModem(
                 else -> {
                     if (char.code in 0x20..0x7e) {
                         commandBuffer.append(char)
-                        if (echo) output.write(byteArrayOf(byte))
+                        if (echo) output?.write(byteArrayOf(byte))
                     }
                 }
             }
         }
-        output.flush()
+        output?.flush()
+    }
+
+    fun attachOutput(output: OutputStream) {
+        check(this.output == null) { "Modem output is already attached" }
+        this.output = output
     }
 
     private fun handleCommand(rawCommand: String) {
@@ -106,7 +112,7 @@ class HayesModem(
                 state = State.COMMAND
                 respond("OK")
             }
-            upper.startsWith("ATD") -> dial(command.substring(3))
+            upper.startsWith("ATD") -> dialFromCommand(command.substring(3))
             else -> {
                 // Old modem drivers often send long initialization strings.
                 // For the first milestone we accept unknown AT commands rather
@@ -127,20 +133,25 @@ class HayesModem(
 
         state = State.DIALING
         logger("MODEM dialing $number")
-        try {
-            tonePlayer.dial(
-                number = number,
-                pickupTime = config.pickupTime,
-                dialToneTime = config.dialToneTime,
-                handshakeProfile = config.handshakeProfile,
-                onProgress = ::logToneProgress,
-            )
-        } catch (e: Exception) {
-            // Audio is cosmetic: a missing/unconfigured audio device must not
-            // prevent the serial modem itself from establishing a connection.
-            logger("AUDIO !! Could not play dialing tones: ${e.message}")
-        }
+        tonePlayer.dial(
+            number = number,
+            pickupTime = config.pickupTime,
+            dialToneTime = config.dialToneTime,
+            handshakeProfile = config.handshakeProfile,
+            onProgress = ::logToneProgress,
+        )
         connect()
+    }
+
+    private fun dialFromCommand(dialString: String) {
+        try {
+            dial(dialString)
+        } catch (e: Exception) {
+            // Audio is cosmetic for a real modem connection: a missing or
+            // unconfigured audio device must not prevent the link itself.
+            logger("AUDIO !! Could not play dialing tones: ${e.message}")
+            connect()
+        }
     }
 
     private fun logToneProgress(progress: ToneProgress) {
@@ -164,8 +175,10 @@ class HayesModem(
     }
 
     private fun writeRaw(value: String) {
-        output.write(value.toByteArray(StandardCharsets.US_ASCII))
-        output.flush()
+        output?.let {
+            it.write(value.toByteArray(StandardCharsets.US_ASCII))
+            it.flush()
+        }
     }
 
     override fun close() {
