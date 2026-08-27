@@ -16,7 +16,11 @@ class HayesModem(
     private val config: HayesModemConfig = HayesModemConfig(),
     private val tonePlayer: TonePlayer = JavaSoundTonePlayer(),
     private val logger: (String) -> Unit = ::println,
-    private val pppHandler: PppHandler = RetroPppHandler(logger, config.pppIpConfig),
+    private val pppHandler: PppHandler = RetroPppHandler(
+        logger = logger,
+        ipConfig = config.pppIpConfig,
+        dnsConfig = config.pppDnsConfig,
+    ),
     private var setCarrierPresent: (Boolean) -> Unit = { /* no-op */ }
 ) : Closeable {
     enum class State {

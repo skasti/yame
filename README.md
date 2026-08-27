@@ -31,8 +31,13 @@ The emulator currently:
 - applies peer ACCM/PFC/ACFC negotiation in the correct transmit direction
 - opens LCP only after both directions have been Configure-Acked
 - logs complete valid PPP frames and malformed frames for diagnostics
+- negotiates IPv4 addresses through IPCP
+- handles local and external ICMP echo traffic
+- forwards generic UDP traffic through userspace UDP flows
+- negotiates RFC 1877 primary/secondary DNS options and advertises YAME's local PPP address
+- proxies DNS queries sent to YAME's PPP address to a configurable upstream DNS server
 
-Minimal LCP negotiation is now implemented. IPCP and Internet routing are not yet implemented; the next milestone is to observe and handle the client's IPCP negotiation once LCP reaches the Opened state.
+The current networking milestone provides IPv4, ICMP, UDP and DNS over PPP without requiring host routing/NAT configuration. TCP forwarding remains future work.
 
 ## Telephone and modem tone simulation
 
@@ -137,6 +142,12 @@ Specify another line speed if needed:
 
 ```shell
 ./gradlew run --args="--port <port> --baud 57600"
+```
+
+YAME advertises its local PPP address as DNS through RFC 1877 IPCP options and forwards those DNS queries to `8.8.8.8` by default. Choose another upstream resolver with:
+
+```shell
+./gradlew run --args="--port <port> --dns-upstream 1.1.1.1"
 ```
 
 ## Test tone

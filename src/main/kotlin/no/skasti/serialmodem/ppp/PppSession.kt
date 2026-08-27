@@ -15,6 +15,7 @@ class PppSession(
     private val icmpEchoProxy: IcmpEchoProxy = SystemPingIcmpEchoProxy(),
     private val icmpEchoTimeoutMillis: Long = DEFAULT_ICMP_ECHO_TIMEOUT_MILLIS,
     private val udpProxy: UdpProxy = SystemUdpProxy(),
+    private val dnsConfig: PppDnsConfig = PppDnsConfig(),
 ) : Closeable {
     var transmitMru: Int = DEFAULT_MRU
         private set
@@ -53,6 +54,7 @@ class PppSession(
 
     private var ipcpStarted = false
     private var ipcpGeneration = 0L
+    private var ipcpDnsPrompted = false
     private var ipcpPeerConfigured = false
     private var ipcpLocalConfigured = false
     private var nextIpcpIdentifier = 1
@@ -328,11 +330,14 @@ class PppSession(
             return
         }
 
-        if (packet.protocol != Ipv4Packet.ICMP_PROTOCOL) {
-            logger("IPv4 .. local protocol=${packet.protocol} not handled")
-            return
+        when (packet.protocol) {
+            Ipv4Packet.ICMP_PROTOCOL -> receiveLocalIcmp(packet)
+            Ipv4Packet.UDP_PROTOCOL -> receiveLocalUdp(packet)
+            else -> logger("IPv4 .. local protocol=${packet.protocol} not handled")
         }
+    }
 
+    private fun receiveLocalIcmp(packet: Ipv4Packet) {
         val icmp = IcmpPacket.parse(packet.payload)
         if (icmp == null) {
             logger("ICMP !! malformed packet or invalid checksum")
@@ -368,6 +373,51 @@ class PppSession(
             identifier = identifier,
             sequence = sequence,
         )
+    }
+
+    private fun receiveLocalUdp(packet: Ipv4Packet) {
+        val udp = UdpPacket.parse(
+            bytes = packet.payload,
+            source = packet.source,
+            destination = packet.destination,
+        )
+        if (udp == null) {
+            logger("UDP !! malformed local datagram or invalid checksum")
+            return
+        }
+
+        if (udp.destinationPort != DNS_PORT) {
+            logger("UDP .. local port=${udp.destinationPort} not handled")
+            return
+        }
+
+        val generation = ipcpGeneration
+        val flow = UdpFlow(
+            peerPort = udp.sourcePort,
+            destination = dnsConfig.upstreamServer,
+            destinationPort = DNS_PORT,
+            generation = generation,
+        )
+        logger(
+            "DNS <= ${packet.source}:${udp.sourcePort} -> " +
+                "$localIpAddress:$DNS_PORT; forwarding to ${dnsConfig.upstreamServer}:$DNS_PORT",
+        )
+
+        udpProxy.send(flow, udp.payload) { result ->
+            result.fold(
+                onSuccess = { payload ->
+                    sendLocalDnsReply(
+                        flow = flow,
+                        payload = payload,
+                        dscpEcn = packet.dscpEcn,
+                    )
+                },
+                onFailure = { error ->
+                    val reason = error.message ?: error.javaClass.simpleName
+                    logger("DNS !! upstream ${dnsConfig.upstreamServer}:$DNS_PORT failed: $reason")
+                },
+            )
+        }
     }
 
     private fun receiveExternalIpv4(packet: Ipv4Packet) {
@@ -520,16 +570,34 @@ class PppSession(
     }
 
     @Synchronized
+    private fun sendLocalDnsReply(
+        flow: UdpFlow,
+        payload: ByteArray,
+        dscpEcn: Int,
+    ) {
+        if (closed || !ipcpOpen || flow.generation != ipcpGeneration) {
+            logger("DNS .. dropping upstream reply; PPP/IPCP state changed")
+            return
+        }
+
+        sendUdpReply(
+            source = localIpAddress,
+            sourcePort = DNS_PORT,
+            destination = peerIpAddress,
+            destinationPort = flow.peerPort,
+            payload = payload,
+            dscpEcn = dscpEcn,
+            logPrefix = "DNS",
+        )
+    }
+
+    @Synchronized
     private fun sendExternalUdpReply(
         flow: UdpFlow,
         payload: ByteArray,
         dscpEcn: Int,
     ) {
-        if (
-            closed ||
-            !ipcpOpen ||
-            flow.generation != ipcpGeneration
-        ) {
+        if (closed || !ipcpOpen || flow.generation != ipcpGeneration) {
             logger(
                 "UDP .. dropping reply from ${flow.destination}:${flow.destinationPort}; " +
                     "PPP/IPCP state changed",
@@ -537,25 +605,45 @@ class PppSession(
             return
         }
 
-        val udp = UdpPacket(
+        sendUdpReply(
+            source = flow.destination,
             sourcePort = flow.destinationPort,
+            destination = peerIpAddress,
             destinationPort = flow.peerPort,
+            payload = payload,
+            dscpEcn = dscpEcn,
+            logPrefix = "UDP",
+        )
+    }
+
+    private fun sendUdpReply(
+        source: Ipv4Address,
+        sourcePort: Int,
+        destination: Ipv4Address,
+        destinationPort: Int,
+        payload: ByteArray,
+        dscpEcn: Int,
+        logPrefix: String,
+    ) {
+        val udp = UdpPacket(
+            sourcePort = sourcePort,
+            destinationPort = destinationPort,
             payload = payload,
         )
         val replyPacket = Ipv4Packet(
             dscpEcn = dscpEcn,
             protocol = Ipv4Packet.UDP_PROTOCOL,
-            source = flow.destination,
-            destination = peerIpAddress,
+            source = source,
+            destination = destination,
             payload = udp.encode(
-                source = flow.destination,
-                destination = peerIpAddress,
+                source = source,
+                destination = destination,
             ),
         )
         val encodedReply = replyPacket.encode()
         if (encodedReply.size > transmitMru) {
             logger(
-                "UDP .. reply ${encodedReply.size} bytes exceeds peer MRU $transmitMru; not sent",
+                "$logPrefix .. reply ${encodedReply.size} bytes exceeds peer MRU $transmitMru; not sent",
             )
             return
         }
@@ -567,8 +655,8 @@ class PppSession(
             ),
         )
         logger(
-            "UDP => ${flow.destination}:${flow.destinationPort} -> " +
-                "$peerIpAddress:${flow.peerPort} payload=${payload.size} bytes",
+            "$logPrefix => $source:$sourcePort -> " +
+                "$destination:$destinationPort payload=${payload.size} bytes",
         )
     }
 
@@ -638,6 +726,7 @@ class PppSession(
 
         if (wasOpen) {
             ipcpGeneration++
+            ipcpDnsPrompted = false
             udpProxy.invalidateBefore(ipcpGeneration)
             restartLocalIpcpNegotiation()
         }
@@ -648,9 +737,7 @@ class PppSession(
             return
         }
 
-        val rejected = options.filterNot {
-            it.type == PppControlOption.IPCP_IP_ADDRESS && it.data.size == 4
-        }
+        val rejected = options.filterNot(::isSupportedPeerIpcpOption)
         if (rejected.isNotEmpty()) {
             val rejectData = rejected.fold(ByteArray(0)) { bytes, option -> bytes + option.encode() }
             logger(
@@ -667,31 +754,75 @@ class PppSession(
             return
         }
 
-        val addressOption = options.firstOrNull {
-            it.type == PppControlOption.IPCP_IP_ADDRESS
-        }
+        val nakOptions = mutableListOf<PppControlOption>()
+        val addressOption = options.firstOrNull { it.type == PppControlOption.IPCP_IP_ADDRESS }
         val requestedAddress = addressOption
             ?.let { Ipv4Address.fromBytes(it.data) }
             ?: Ipv4Address.ZERO
         val selectedAddress = selectPeerAddress(requestedAddress)
+        var primaryDnsSeen = false
 
-        if (addressOption == null ||
-            requestedAddress == Ipv4Address.ZERO ||
-            requestedAddress != selectedAddress
-        ) {
-            val nak = PppControlOption(
+        for (option in options) {
+            when (option.type) {
+                PppControlOption.IPCP_IP_ADDRESS -> {
+                    if (
+                        requestedAddress == Ipv4Address.ZERO ||
+                        requestedAddress != selectedAddress
+                    ) {
+                        nakOptions += PppControlOption(
+                            type = PppControlOption.IPCP_IP_ADDRESS,
+                            data = selectedAddress.toByteArray(),
+                        )
+                    }
+                }
+
+                PppControlOption.IPCP_PRIMARY_DNS,
+                PppControlOption.IPCP_SECONDARY_DNS,
+                -> {
+                    if (option.type == PppControlOption.IPCP_PRIMARY_DNS) {
+                        primaryDnsSeen = true
+                        ipcpDnsPrompted = true
+                    }
+                    val requestedDns = Ipv4Address.fromBytes(option.data)
+                    if (requestedDns != localIpAddress) {
+                        nakOptions += PppControlOption(
+                            type = option.type,
+                            data = localIpAddress.toByteArray(),
+                        )
+                    }
+                }
+            }
+        }
+
+        if (addressOption == null) {
+            nakOptions += PppControlOption(
                 type = PppControlOption.IPCP_IP_ADDRESS,
                 data = selectedAddress.toByteArray(),
             )
+        }
+
+        if (!primaryDnsSeen && !ipcpDnsPrompted) {
+            nakOptions += PppControlOption(
+                type = PppControlOption.IPCP_PRIMARY_DNS,
+                data = localIpAddress.toByteArray(),
+            )
+            ipcpDnsPrompted = true
+        }
+
+        if (nakOptions.isNotEmpty()) {
+            val nakData = nakOptions.fold(ByteArray(0)) { bytes, option -> bytes + option.encode() }
             logger(
-                "IPCP => Configure-Nak id=${packet.identifier} " +
-                    "(IP-Address=$selectedAddress)",
+                "IPCP => Configure-Nak id=${packet.identifier}: " +
+                    nakOptions.joinToString { option ->
+                        val address = Ipv4Address.fromBytes(option.data)
+                        "type=${option.type} address=$address"
+                    },
             )
             sendIpcp(
                 PppControlPacket(
                     code = PppControlPacket.CONFIGURE_NAK,
                     identifier = packet.identifier,
-                    data = nak.encode(),
+                    data = nakData,
                 ),
             )
             return
@@ -713,6 +844,16 @@ class PppSession(
         ipcpPeerConfigured = true
         updateIpcpState()
     }
+
+    private fun isSupportedPeerIpcpOption(option: PppControlOption): Boolean =
+        when (option.type) {
+            PppControlOption.IPCP_IP_ADDRESS,
+            PppControlOption.IPCP_PRIMARY_DNS,
+            PppControlOption.IPCP_SECONDARY_DNS,
+            -> option.data.size == 4
+
+            else -> false
+        }
 
     private fun receiveIpcpConfigureAck(packet: PppControlPacket) {
         val request = localIpcpConfigureRequest
@@ -827,6 +968,7 @@ class PppSession(
 
     private fun resetIpcp() {
         ipcpGeneration++
+        ipcpDnsPrompted = false
         udpProxy.invalidateBefore(ipcpGeneration)
         ipcpStarted = false
         ipcpPeerConfigured = false
@@ -857,6 +999,7 @@ class PppSession(
         private const val REQUESTED_RECEIVE_ACCM: UInt = 0u
         private const val DEFAULT_RESTART_INTERVAL_MILLIS = 3_000L
         private const val DEFAULT_ICMP_ECHO_TIMEOUT_MILLIS = 2_000L
+        private const val DNS_PORT = 53
 
         private val DEFAULT_IP_ADDRESSES = PppAddresses(
             localAddress = Ipv4Address.parse("10.0.0.1"),

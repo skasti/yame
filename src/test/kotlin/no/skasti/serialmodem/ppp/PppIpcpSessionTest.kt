@@ -145,6 +145,100 @@ class PppIpcpSessionTest {
     }
 
     @Test
+    fun `zero primary DNS is nacked with YAME local address`() {
+        val sent = mutableListOf<PppFrame>()
+        val session = newSession(sent)
+        openLcp(session, sent)
+
+        session.receive(
+            ipcpConfigureRequest(
+                identifier = 10,
+                address = Ipv4Address.parse("10.0.0.2"),
+                dnsAddress = Ipv4Address.ZERO,
+            ),
+        )
+
+        val nak = sent.last().let { requireNotNull(PppControlPacket.parse(it.payload)) }
+        assertEquals(PppControlPacket.CONFIGURE_NAK, nak.code)
+        val dns = requireNotNull(PppControlOption.parseAll(nak.data)).single()
+        assertEquals(PppControlOption.IPCP_PRIMARY_DNS, dns.type)
+        assertEquals(Ipv4Address.parse("10.0.0.1"), Ipv4Address.fromBytes(dns.data))
+        session.close()
+    }
+
+    @Test
+    fun `primary and secondary DNS are independently nacked to YAME address`() {
+        val sent = mutableListOf<PppFrame>()
+        val session = newSession(sent)
+        openLcp(session, sent)
+
+        val data =
+            PppControlOption(
+                type = PppControlOption.IPCP_IP_ADDRESS,
+                data = Ipv4Address.parse("10.0.0.2").toByteArray(),
+            ).encode() +
+                PppControlOption(
+                    type = PppControlOption.IPCP_PRIMARY_DNS,
+                    data = Ipv4Address.ZERO.toByteArray(),
+                ).encode() +
+                PppControlOption(
+                    type = PppControlOption.IPCP_SECONDARY_DNS,
+                    data = Ipv4Address.parse("8.8.8.8").toByteArray(),
+                ).encode()
+        session.receive(
+            PppFrame(
+                protocol = PppSession.IPCP_PROTOCOL,
+                payload = PppControlPacket(
+                    code = PppControlPacket.CONFIGURE_REQUEST,
+                    identifier = 11,
+                    data = data,
+                ).encode(),
+            ),
+        )
+
+        val nak = sent.last().let { requireNotNull(PppControlPacket.parse(it.payload)) }
+        val options = requireNotNull(PppControlOption.parseAll(nak.data))
+        assertEquals(
+            listOf(PppControlOption.IPCP_PRIMARY_DNS, PppControlOption.IPCP_SECONDARY_DNS),
+            options.map { it.type },
+        )
+        assertTrue(options.all { Ipv4Address.fromBytes(it.data) == Ipv4Address.parse("10.0.0.1") })
+        session.close()
+    }
+
+    @Test
+    fun `missing primary DNS is suggested once without blocking an old client`() {
+        val sent = mutableListOf<PppFrame>()
+        val session = newSession(sent)
+        openLcp(session, sent)
+
+        session.receive(
+            ipcpConfigureRequest(
+                identifier = 12,
+                address = Ipv4Address.parse("10.0.0.2"),
+                dnsAddress = null,
+            ),
+        )
+        val nak = sent.last().let { requireNotNull(PppControlPacket.parse(it.payload)) }
+        assertEquals(PppControlPacket.CONFIGURE_NAK, nak.code)
+        val suggested = requireNotNull(PppControlOption.parseAll(nak.data)).single()
+        assertEquals(PppControlOption.IPCP_PRIMARY_DNS, suggested.type)
+        assertEquals(Ipv4Address.parse("10.0.0.1"), Ipv4Address.fromBytes(suggested.data))
+
+        session.receive(
+            ipcpConfigureRequest(
+                identifier = 13,
+                address = Ipv4Address.parse("10.0.0.2"),
+                dnsAddress = null,
+            ),
+        )
+        val ack = sent.last().let { requireNotNull(PppControlPacket.parse(it.payload)) }
+        assertEquals(PppControlPacket.CONFIGURE_ACK, ack.code)
+        assertEquals(13, ack.identifier)
+        session.close()
+    }
+
+    @Test
     fun `unsupported IPCP options are rejected`() {
         val sent = mutableListOf<PppFrame>()
         val session = newSession(sent)
@@ -218,16 +312,30 @@ class PppIpcpSessionTest {
         assertTrue(session.lcpOpen)
     }
 
-    private fun ipcpConfigureRequest(identifier: Int, address: Ipv4Address): PppFrame =
-        PppFrame(
+    private fun ipcpConfigureRequest(
+        identifier: Int,
+        address: Ipv4Address,
+        dnsAddress: Ipv4Address? = Ipv4Address.parse("10.0.0.1"),
+    ): PppFrame {
+        val data =
+            PppControlOption(
+                type = PppControlOption.IPCP_IP_ADDRESS,
+                data = address.toByteArray(),
+            ).encode() +
+                (dnsAddress?.let {
+                    PppControlOption(
+                        type = PppControlOption.IPCP_PRIMARY_DNS,
+                        data = it.toByteArray(),
+                    ).encode()
+                } ?: ByteArray(0))
+
+        return PppFrame(
             protocol = PppSession.IPCP_PROTOCOL,
             payload = PppControlPacket(
                 code = PppControlPacket.CONFIGURE_REQUEST,
                 identifier = identifier,
-                data = PppControlOption(
-                    type = PppControlOption.IPCP_IP_ADDRESS,
-                    data = address.toByteArray(),
-                ).encode(),
+                data = data,
             ).encode(),
         )
+    }
 }
