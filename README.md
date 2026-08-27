@@ -30,18 +30,20 @@ PPP framing is implemented, but PPP protocol negotiation and Internet routing ar
 
 ## Telephone and modem tone simulation
 
-Dialing audio lives in the separate `no.skasti.serialmodem.tone` package. It is blocking by design: `pickupTime` controls how long the simulated remote telephone rings before answering, and the call does not return until the subsequent modem handshake has also completed.
+Dialing audio lives in the separate `no.skasti.serialmodem.tone` package behind the `TonePlayer` interface; `JavaSoundTonePlayer` is the production implementation. It is blocking by design: `pickupTime` controls how long the simulated remote telephone rings before answering, and the call does not return until the subsequent modem handshake has also completed.
 
 For example:
 
 ```kotlin
-import no.skasti.serialmodem.tone.tone
+import no.skasti.serialmodem.tone.JavaSoundTonePlayer
 import kotlin.time.Duration.Companion.seconds
 
-tone.dial(
-    number = "+47 345 76 543",
-    pickupTime = 2.seconds,
-)
+JavaSoundTonePlayer().use { player ->
+    player.dial(
+        number = "+47 345 76 543",
+        pickupTime = 2.seconds,
+    )
+}
 ```
 
 The default sequence is:
@@ -64,24 +66,29 @@ The default V.34 handshake adds about 6.2 seconds after pickup. Callers that onl
 
 ```kotlin
 import no.skasti.serialmodem.tone.HandshakeProfile
+import no.skasti.serialmodem.tone.JavaSoundTonePlayer
 
-tone.dial(
-    number = "5551234",
-    pickupTime = 2.seconds,
-    handshakeProfile = HandshakeProfile.NONE,
-)
+JavaSoundTonePlayer().use { player ->
+    player.dial(
+        number = "5551234",
+        pickupTime = 2.seconds,
+        handshakeProfile = HandshakeProfile.NONE,
+    )
+}
 ```
 
 Callers can optionally receive progress events as the corresponding part of the waveform is actually being played:
 
 ```kotlin
-tone.dial(
-    number = "5551234",
-    pickupTime = 2.seconds,
-    onProgress = { progress ->
-        println("${progress.step}: ${progress.description}")
-    },
-)
+JavaSoundTonePlayer().use { player ->
+    player.dial(
+        number = "5551234",
+        pickupTime = 2.seconds,
+        onProgress = { progress ->
+            println("${progress.step}: ${progress.description}")
+        },
+    )
+}
 ```
 
 The progress monitor follows the Java Sound output line's rendered frame position, so logging does not split or drain the PCM stream between stages. The callback is invoked from a small playback-monitor thread and should therefore remain lightweight.
