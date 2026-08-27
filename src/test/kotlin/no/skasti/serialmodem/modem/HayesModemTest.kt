@@ -312,9 +312,7 @@ class HayesModemTest {
         modem.receive("ATD123\r".toByteArray())
         assertEquals(HayesModem.State.LOGIN, modem.state)
         assertTrue(output.toString().contains("CONNECT 9600"))
-
-        modem.receive("\r".toByteArray())
-        assertTrue(output.toString().contains("Login: Username:"))
+        assertTrue(output.toString().contains("Username:"))
 
         modem.receive("trumpet-user\r".toByteArray())
         assertTrue(output.toString().contains("Password:"))
@@ -331,6 +329,28 @@ class HayesModemTest {
     }
 
     @Test
+    fun `CONNECT immediately starts terminal login with username prompt`() {
+        val output = ByteArrayOutputStream()
+        val pppHandler = FakePppHandler()
+        val modem = HayesModem(
+            output = output,
+            baudRate = 9600,
+            tonePlayer = FakeTonePlayer(),
+            logger = {},
+            pppHandler = pppHandler,
+        )
+
+        modem.receive("ATD123\r".toByteArray())
+
+        val text = output.toString()
+        assertTrue(text.contains("CONNECT 9600"))
+        assertTrue(text.contains("Username:"))
+        assertTrue(text.indexOf("CONNECT 9600") < text.indexOf("Username:"))
+        assertEquals(HayesModem.State.LOGIN, modem.state)
+        assertEquals(0, pppHandler.connectedCalls)
+    }
+
+    @Test
     fun `PPP bytes following ppp command in same read are forwarded`() {
         val output = ByteArrayOutputStream()
         val pppHandler = FakePppHandler()
@@ -343,7 +363,7 @@ class HayesModemTest {
         )
 
         modem.receive("ATD1\r".toByteArray())
-        modem.receive("\ruser\rpassword\r".toByteArray())
+        modem.receive("user\rpassword\r".toByteArray())
 
         val pppBytes = byteArrayOf(0x7e, 0xff.toByte(), 0x03, 0xc0.toByte(), 0x21)
         modem.receive("ppp\r".toByteArray() + pppBytes)
@@ -379,7 +399,7 @@ class HayesModemTest {
             listOf(0x7e, 0xff, 0x03, 0xc0, 0x21),
             pppHandler.received.single().map { it.toInt() and 0xff },
         )
-        assertFalse(output.toString().contains("Username:"))
+        assertTrue(output.toString().contains("Username:"))
     }
 
     @Test
