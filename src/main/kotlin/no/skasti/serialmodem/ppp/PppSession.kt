@@ -12,6 +12,8 @@ class PppSession(
     private val selectPeerAddress: (Ipv4Address) -> Ipv4Address = { requested ->
         if (requested == Ipv4Address.ZERO) ipAddresses.peerAddress else requested
     },
+    private val icmpEchoProxy: IcmpEchoProxy = SystemPingIcmpEchoProxy(),
+    private val icmpEchoTimeoutMillis: Long = DEFAULT_ICMP_ECHO_TIMEOUT_MILLIS,
 ) : Closeable {
     var transmitMru: Int = DEFAULT_MRU
         private set
@@ -56,6 +58,7 @@ class PppSession(
 
     init {
         require(restartIntervalMillis > 0) { "restartIntervalMillis must be positive" }
+        require(icmpEchoTimeoutMillis > 0) { "icmpEchoTimeoutMillis must be positive" }
     }
 
     @Synchronized
@@ -302,14 +305,6 @@ class PppSession(
             return
         }
 
-        if (packet.destination != localIpAddress) {
-            logger(
-                "IPv4 .. ${packet.source} -> ${packet.destination} " +
-                    "protocol=${packet.protocol} not handled yet",
-            )
-            return
-        }
-
         if (packet.source != peerIpAddress) {
             logger(
                 "IPv4 !! source ${packet.source} does not match negotiated peer $peerIpAddress",
@@ -317,6 +312,14 @@ class PppSession(
             return
         }
 
+        if (packet.destination == localIpAddress) {
+            receiveLocalIpv4(packet)
+        } else {
+            receiveExternalIpv4(packet)
+        }
+    }
+
+    private fun receiveLocalIpv4(packet: Ipv4Packet) {
         if (packet.isFragmented) {
             logger("IPv4 .. fragmented packet to local endpoint not handled")
             return
@@ -355,6 +358,110 @@ class PppSession(
             destination = packet.source,
             payload = reply.encode(),
         )
+        sendIpv4EchoReply(
+            replyPacket = replyPacket,
+            logSource = localIpAddress,
+            logDestination = packet.source,
+            identifier = identifier,
+            sequence = sequence,
+        )
+    }
+
+    private fun receiveExternalIpv4(packet: Ipv4Packet) {
+        if (packet.isFragmented) {
+            logger("IPv4 .. fragmented egress packet not handled")
+            return
+        }
+
+        if (packet.protocol != Ipv4Packet.ICMP_PROTOCOL) {
+            logger(
+                "IPv4 .. ${packet.source} -> ${packet.destination} " +
+                    "protocol=${packet.protocol} egress not handled yet",
+            )
+            return
+        }
+
+        val icmp = IcmpPacket.parse(packet.payload)
+        if (icmp == null) {
+            logger("ICMP !! malformed packet or invalid checksum")
+            return
+        }
+
+        val reply = icmp.toEchoReply()
+        if (reply == null) {
+            logger("ICMP .. egress type=${icmp.type} code=${icmp.code} not handled")
+            return
+        }
+
+        val identifier = icmp.echoIdentifier()
+        val sequence = icmp.echoSequence()
+        logger(
+            "ICMP <= Echo Request ${packet.source} -> ${packet.destination} " +
+                "id=$identifier seq=$sequence; probing via host",
+        )
+
+        icmpEchoProxy.echo(packet.destination, icmpEchoTimeoutMillis) { result ->
+            result.fold(
+                onSuccess = { reachable ->
+                    if (reachable) {
+                        sendExternalEchoReply(packet, reply, identifier, sequence)
+                    } else {
+                        logger(
+                            "ICMP .. host Echo Request to ${packet.destination} " +
+                                "id=$identifier seq=$sequence timed out",
+                        )
+                    }
+                },
+                onFailure = { error ->
+                    val reason = error.message ?: error.javaClass.simpleName
+                    logger(
+                        "ICMP !! host Echo Request to ${packet.destination} " +
+                            "id=$identifier seq=$sequence failed: $reason",
+                    )
+                },
+            )
+        }
+    }
+
+    @Synchronized
+    private fun sendExternalEchoReply(
+        request: Ipv4Packet,
+        reply: IcmpPacket,
+        identifier: Int?,
+        sequence: Int?,
+    ) {
+        if (!ipcpOpen || request.source != peerIpAddress) {
+            logger(
+                "ICMP .. dropping host Echo Reply from ${request.destination}; PPP/IPCP state changed",
+            )
+            return
+        }
+
+        val replyPacket = Ipv4Packet(
+            dscpEcn = request.dscpEcn,
+            identification = request.identification,
+            ttl = Ipv4Packet.DEFAULT_TTL,
+            protocol = Ipv4Packet.ICMP_PROTOCOL,
+            source = request.destination,
+            destination = request.source,
+            payload = reply.encode(),
+        )
+        sendIpv4EchoReply(
+            replyPacket = replyPacket,
+            logSource = request.destination,
+            logDestination = request.source,
+            identifier = identifier,
+            sequence = sequence,
+        )
+    }
+
+    private fun sendIpv4EchoReply(
+        replyPacket: Ipv4Packet,
+        logSource: Ipv4Address,
+        logDestination: Ipv4Address,
+        identifier: Int?,
+        sequence: Int?,
+    ) {
         val encodedReply = replyPacket.encode()
         if (encodedReply.size > transmitMru) {
             logger(
@@ -371,7 +478,7 @@ class PppSession(
         )
 
         logger(
-            "ICMP => Echo Reply $localIpAddress -> ${packet.source} " +
+            "ICMP => Echo Reply $logSource -> $logDestination " +
                 "id=$identifier seq=$sequence",
         )
     }
@@ -613,6 +720,7 @@ class PppSession(
     override fun close() {
         stopLcpRestartTimer()
         stopIpcpRestartTimer()
+        icmpEchoProxy.close()
     }
 
     companion object {
@@ -622,6 +730,7 @@ class PppSession(
         const val DEFAULT_MRU = 1500
         private const val REQUESTED_RECEIVE_ACCM: UInt = 0u
         private const val DEFAULT_RESTART_INTERVAL_MILLIS = 3_000L
+        private const val DEFAULT_ICMP_ECHO_TIMEOUT_MILLIS = 2_000L
 
         private val DEFAULT_IP_ADDRESSES = PppAddresses(
             localAddress = Ipv4Address.parse("10.0.0.1"),
