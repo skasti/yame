@@ -36,14 +36,16 @@ class HayesModemTest {
             dialToneTime = 750.milliseconds,
             handshakeProfile = HandshakeProfile.NONE,
         )
+        lateinit var modem: HayesModem
         val tonePlayer = FakeTonePlayer { number, pickupTime, dialToneTime, handshakeProfile, onProgress ->
+            assertEquals(HayesModem.State.DIALING, modem.state)
             dialed += number
             assertEquals(3.seconds, pickupTime)
             assertEquals(750.milliseconds, dialToneTime)
             assertEquals(HandshakeProfile.NONE, handshakeProfile)
             onProgress?.invoke(ToneProgress(ToneStep.DIAL_TONE, "test dial tone"))
         }
-        val modem = HayesModem(
+        modem = HayesModem(
             output = output,
             baudRate = 115200,
             config = config,
