@@ -2,6 +2,8 @@ package no.skasti.serialmodem
 
 import no.skasti.serialmodem.modem.HayesModem
 import no.skasti.serialmodem.modem.HayesModemConfig
+import no.skasti.serialmodem.ppp.Ipv4Cidr
+import no.skasti.serialmodem.ppp.PppIpConfig
 import no.skasti.serialmodem.serial.SerialConnection
 import no.skasti.serialmodem.tone.DialString
 import no.skasti.serialmodem.tone.HandshakeProfile
@@ -93,6 +95,7 @@ private fun parseArgs(args: Array<String>): Options {
     var handshakeProfile = defaults.handshakeProfile
     var username = defaults.username
     var password = defaults.password
+    var pppSubnet: Ipv4Cidr? = null
 
     var i = 0
     while (i < args.size) {
@@ -135,6 +138,10 @@ private fun parseArgs(args: Array<String>): Options {
                 require(i + 1 < args.size) { "$arg requires a password" }
                 password = args[++i]
             }
+            "--subnet" -> {
+                require(i + 1 < args.size) { "$arg requires an IPv4 CIDR, e.g. 10.0.0.0/30" }
+                pppSubnet = Ipv4Cidr.parse(args[++i])
+            }
             "--help", "-h" -> {
                 printUsage()
                 kotlin.system.exitProcess(0)
@@ -155,6 +162,7 @@ private fun parseArgs(args: Array<String>): Options {
             handshakeProfile = handshakeProfile,
             username = username,
             password = password,
+            pppIpConfig = PppIpConfig(configuredSubnet = pppSubnet),
         ),
     )
 }
@@ -204,8 +212,11 @@ private fun printUsage() {
               --handshake-profile P   Handshake profile: ${handshakeProfileNames()} (default: ${defaults.handshakeProfile.name.lowercase()})
               --username USER         Enable terminal login with this username
               --password PASS         Terminal login password (requires --username)
+              --subnet CIDR           PPP address pool, e.g. 10.0.0.0/30 (default: automatic)
           -h, --help                  Show this help
 
+        The first usable address in --subnet is assigned to YAME and the second to the PPP client.
+        Explicit PPP subnets must not overlap an active local IPv4 interface subnet.
         Durations accept milliseconds or seconds, e.g. 500ms, 2s, or 1.5s, up to 10s.
         Terminal login is only enabled when both --username and --password are provided.
         Tone progress is always logged while a dialing sequence is played.

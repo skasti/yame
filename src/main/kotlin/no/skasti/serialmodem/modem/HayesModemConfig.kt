@@ -1,5 +1,6 @@
 package no.skasti.serialmodem.modem
 
+import no.skasti.serialmodem.ppp.PppIpConfig
 import no.skasti.serialmodem.tone.HandshakeProfile
 import no.skasti.serialmodem.tone.TonePlayer
 import kotlin.time.Duration
@@ -12,6 +13,7 @@ data class HayesModemConfig(
     val handshakeProfile: HandshakeProfile = HandshakeProfile.V34,
     val username: String? = null,
     val password: String? = null,
+    val pppIpConfig: PppIpConfig = PppIpConfig(),
 ) {
     init {
         require(pickupTime.isFinite()) { "pickupTime must be finite" }
