@@ -46,6 +46,7 @@ class PppSessionTest {
         assertEquals(request.identifier, ack.identifier)
         assertContentEquals(request.data, ack.data)
 
+        assertEquals(576, session.transmitMru)
         assertEquals(0u, session.transmitAccm)
         assertTrue(session.transmitProtocolFieldCompression)
         assertTrue(session.transmitAddressControlFieldCompression)
