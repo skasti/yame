@@ -15,5 +15,11 @@ data class HayesModemConfig(
         require(dialToneTime.isFinite()) { "dialToneTime must be finite" }
         require(!pickupTime.isNegative()) { "pickupTime must not be negative" }
         require(!dialToneTime.isNegative()) { "dialToneTime must not be negative" }
+        require(pickupTime <= MAX_TONE_DURATION) { "pickupTime must not exceed $MAX_TONE_DURATION" }
+        require(dialToneTime <= MAX_TONE_DURATION) { "dialToneTime must not exceed $MAX_TONE_DURATION" }
+    }
+
+    companion object {
+        val MAX_TONE_DURATION: Duration = 10.seconds
     }
 }
