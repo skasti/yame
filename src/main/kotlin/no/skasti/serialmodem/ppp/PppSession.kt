@@ -1,9 +1,14 @@
 package no.skasti.serialmodem.ppp
 
+import java.io.Closeable
+import java.util.Timer
+import java.util.TimerTask
+
 class PppSession(
     private val sendFrame: (PppFrame) -> Unit,
     private val logger: (String) -> Unit = ::println,
-) {
+    private val restartIntervalMillis: Long = DEFAULT_RESTART_INTERVAL_MILLIS,
+) : Closeable {
     var transmitMru: Int = DEFAULT_MRU
         private set
 
@@ -27,13 +32,22 @@ class PppSession(
     private var localConfigured = false
     private var nextIdentifier = 1
     private var localConfigureRequest: LcpPacket? = null
+    private var restartTimer: Timer? = null
 
+    init {
+        require(restartIntervalMillis > 0) { "restartIntervalMillis must be positive" }
+    }
+
+    @Synchronized
     fun start() {
         if (started) return
         started = true
-        sendLocalConfigureRequest()
+        createLocalConfigureRequest()
+        sendOutstandingConfigureRequest()
+        startRestartTimer()
     }
 
+    @Synchronized
     fun receive(frame: PppFrame) {
         when (frame.protocol) {
             LCP_PROTOCOL -> receiveLcp(frame.payload)
@@ -63,6 +77,9 @@ class PppSession(
     }
 
     private fun receiveConfigureRequest(packet: LcpPacket) {
+        peerConfigured = false
+        lcpOpen = false
+
         val options = LcpOption.parseAll(packet.data)
         if (options == null) {
             logger("LCP !! malformed Configure-Request id=${packet.identifier}")
@@ -113,6 +130,7 @@ class PppSession(
         logger("LCP <= Configure-Ack id=${packet.identifier}")
         receiveAccm = REQUESTED_RECEIVE_ACCM
         localConfigured = true
+        stopRestartTimer()
         updateLcpState()
     }
 
@@ -158,7 +176,7 @@ class PppSession(
         }
     }
 
-    private fun sendLocalConfigureRequest() {
+    private fun createLocalConfigureRequest() {
         val identifier = nextIdentifier and 0xff
         nextIdentifier = (nextIdentifier + 1) and 0xff
 
@@ -166,15 +184,56 @@ class PppSession(
             type = LcpOption.ACCM,
             data = byteArrayOf(0x00, 0x00, 0x00, 0x00),
         )
-        val request = LcpPacket(
+        localConfigureRequest = LcpPacket(
             code = LcpPacket.CONFIGURE_REQUEST,
             identifier = identifier,
             data = accm.encode(),
         )
+    }
 
-        localConfigureRequest = request
-        logger("LCP => Configure-Request id=$identifier (ACCM=0)")
+    private fun sendOutstandingConfigureRequest(isRetry: Boolean = false) {
+        val request = localConfigureRequest ?: return
+
+        if (isRetry) {
+            logger("LCP => Configure-Request id=${request.identifier} retry")
+        } else {
+            logger("LCP => Configure-Request id=${request.identifier} (ACCM=0)")
+        }
         sendLcp(request)
+    }
+
+    private fun startRestartTimer() {
+        stopRestartTimer()
+        restartTimer = Timer("ppp-lcp-restart", true).apply {
+            schedule(
+                object : TimerTask() {
+                    override fun run() {
+                        retryOutstandingConfigureRequest()
+                    }
+                },
+                restartIntervalMillis,
+                restartIntervalMillis,
+            )
+        }
+    }
+
+    @Synchronized
+    private fun retryOutstandingConfigureRequest() {
+        if (localConfigured) {
+            stopRestartTimer()
+            return
+        }
+
+        try {
+            sendOutstandingConfigureRequest(isRetry = true)
+        } catch (e: Exception) {
+            logger("LCP !! Configure-Request retry failed: ${e.message}")
+        }
+    }
+
+    private fun stopRestartTimer() {
+        restartTimer?.cancel()
+        restartTimer = null
     }
 
     private fun sendLcp(packet: LcpPacket) {
@@ -194,9 +253,15 @@ class PppSession(
         }
     }
 
+    @Synchronized
+    override fun close() {
+        stopRestartTimer()
+    }
+
     companion object {
         const val LCP_PROTOCOL = 0xc021
         const val DEFAULT_MRU = 1500
         private const val REQUESTED_RECEIVE_ACCM: UInt = 0u
+        private const val DEFAULT_RESTART_INTERVAL_MILLIS = 3_000L
     }
 }
