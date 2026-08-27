@@ -325,7 +325,7 @@ class HayesModemTest {
         modem.receive("ATD123\r".toByteArray())
         assertEquals(HayesModem.State.LOGIN, modem.state)
         assertTrue(output.toString().contains("CONNECT 9600"))
-        assertFalse(output.toString().contains("Username:"))
+        assertTrue(output.toString().contains("Username:"))
 
         modem.receive("trumpet-user\r".toByteArray())
         assertTrue(output.toString().contains("Password:"))
@@ -360,7 +360,7 @@ class HayesModemTest {
         assertTrue(text.contains("CONNECT 9600"))
         assertTrue(text.contains("Username:"))
         assertTrue(text.indexOf("CONNECT 9600") < text.indexOf("Username:"))
-        assertEquals(HayesModem.State.CONNECTED, modem.state)
+        assertEquals(HayesModem.State.LOGIN, modem.state)
         assertEquals(0, pppHandler.connectedCalls)
     }
 
