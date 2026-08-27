@@ -51,6 +51,25 @@ class RetroPppHandlerTest {
         assertContentEquals(peerRequest.data, ack.data)
     }
 
+    @Test
+    fun `each modem connection starts a fresh PPP session`() {
+        val output = ByteArrayOutputStream()
+        val handler = RetroPppHandler(logger = {})
+        handler.attachOutput(output)
+
+        handler.connected()
+        val firstRequest = requireNotNull(LcpPacket.parse(decode(output.toByteArray()).single().payload))
+
+        output.reset()
+        handler.connected()
+        val secondRequest = requireNotNull(LcpPacket.parse(decode(output.toByteArray()).single().payload))
+
+        assertEquals(LcpPacket.CONFIGURE_REQUEST, firstRequest.code)
+        assertEquals(LcpPacket.CONFIGURE_REQUEST, secondRequest.code)
+        assertEquals(firstRequest.identifier, secondRequest.identifier)
+        assertContentEquals(firstRequest.data, secondRequest.data)
+    }
+
     private fun decode(wire: ByteArray): List<PppFrame> {
         val frames = mutableListOf<PppFrame>()
         PppFramer(frames::add).receive(wire)
