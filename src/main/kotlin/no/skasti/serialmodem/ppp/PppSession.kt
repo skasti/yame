@@ -4,6 +4,9 @@ class PppSession(
     private val sendFrame: (PppFrame) -> Unit,
     private val logger: (String) -> Unit = ::println,
 ) {
+    var transmitMru: Int = DEFAULT_MRU
+        private set
+
     var transmitAccm: UInt = PppEncoder.DEFAULT_TRANSMIT_ACCM
         private set
 
@@ -125,12 +128,19 @@ class PppSession(
         }
 
     private fun applyPeerOptions(options: List<LcpOption>) {
+        transmitMru = DEFAULT_MRU
         transmitAccm = PppEncoder.DEFAULT_TRANSMIT_ACCM
         transmitProtocolFieldCompression = false
         transmitAddressControlFieldCompression = false
 
         for (option in options) {
             when (option.type) {
+                LcpOption.MRU -> {
+                    transmitMru =
+                        ((option.data[0].toInt() and 0xff) shl 8) or
+                            (option.data[1].toInt() and 0xff)
+                }
+
                 LcpOption.ACCM -> {
                     transmitAccm =
                         ((option.data[0].toUInt() and 0xffu) shl 24) or
@@ -186,6 +196,7 @@ class PppSession(
 
     companion object {
         const val LCP_PROTOCOL = 0xc021
+        const val DEFAULT_MRU = 1500
         private const val REQUESTED_RECEIVE_ACCM: UInt = 0u
     }
 }
