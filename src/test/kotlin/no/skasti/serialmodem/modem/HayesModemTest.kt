@@ -274,7 +274,7 @@ class HayesModemTest {
         assertTrue(output.toString().contains("CONNECT 9600"))
 
         modem.receive("\r".toByteArray())
-        assertTrue(output.toString().contains("Username:"))
+        assertTrue(output.toString().contains("Login: Username:"))
 
         modem.receive("trumpet-user\r".toByteArray())
         assertTrue(output.toString().contains("Password:"))
@@ -288,6 +288,33 @@ class HayesModemTest {
         assertTrue(output.toString().contains("PPP."))
         assertEquals(1, pppHandler.connectedCalls)
         assertEquals(HayesModem.State.CONNECTED, modem.state)
+    }
+
+    @Test
+    fun `PPP bytes following ppp command in same read are forwarded`() {
+        val output = ByteArrayOutputStream()
+        val pppHandler = FakePppHandler()
+        val modem = HayesModem(
+            output = output,
+            baudRate = 115200,
+            tonePlayer = FakeTonePlayer(),
+            logger = {},
+            pppHandler = pppHandler,
+        )
+
+        modem.receive("ATD1\r".toByteArray())
+        modem.receive("\ruser\rpassword\r".toByteArray())
+
+        val pppBytes = byteArrayOf(0x7e, 0xff.toByte(), 0x03, 0xc0.toByte(), 0x21)
+        modem.receive("ppp\r".toByteArray() + pppBytes)
+
+        assertEquals(HayesModem.State.CONNECTED, modem.state)
+        assertEquals(1, pppHandler.connectedCalls)
+        assertEquals(1, pppHandler.received.size)
+        assertEquals(
+            listOf(0x7e, 0xff, 0x03, 0xc0, 0x21),
+            pppHandler.received.single().map { it.toInt() and 0xff },
+        )
     }
 
     @Test
