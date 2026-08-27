@@ -48,55 +48,52 @@ data class ToneProgress(
     val description: String,
 )
 
-/**
- * Blocking telephone-tone playback for simulated dial-up calls.
- *
- * The default sequence models a Norwegian PSTN call followed by a V.34-style
- * modem handshake:
- * - 425 Hz dial tone
- * - standard DTMF frequency pairs
- * - 95 ms DTMF tone / 95 ms inter-digit pause (classic Hayes S11 default)
- * - 425 Hz ringback, 1 s on / 4 s off
- * - V.8/V.34-style answer, negotiation, probing and training sounds
- */
-object tone {
+/** Blocking player for simulated telephone and modem tones. */
+interface TonePlayer : Closeable {
     fun dial(
         number: String,
         pickupTime: Duration,
         dialToneTime: Duration = 500.milliseconds,
         handshakeProfile: HandshakeProfile = HandshakeProfile.V34,
         onProgress: ((ToneProgress) -> Unit)? = null,
-    ) {
-        JavaSoundTonePlayer().use { player ->
-            player.dial(number, pickupTime, dialToneTime, handshakeProfile, onProgress)
-        }
+    )
+
+    override fun close() = Unit
+
+    companion object {
+        val MAX_DURATION: Duration = 10.seconds
     }
 }
 
 class JavaSoundTonePlayer(
     private val sampleRate: Int = 44_100,
-) : Closeable {
+) : TonePlayer {
     private val format = AudioFormat(sampleRate.toFloat(), 16, 1, true, false)
-    private val line: SourceDataLine = AudioSystem.getSourceDataLine(format).apply {
-        open(format)
-        start()
-    }
+    private var line: SourceDataLine? = null
 
-    fun dial(
+    override fun dial(
         number: String,
         pickupTime: Duration,
-        dialToneTime: Duration = 500.milliseconds,
-        handshakeProfile: HandshakeProfile = HandshakeProfile.V34,
-        onProgress: ((ToneProgress) -> Unit)? = null,
+        dialToneTime: Duration,
+        handshakeProfile: HandshakeProfile,
+        onProgress: ((ToneProgress) -> Unit)?,
     ) {
         require(!pickupTime.isNegative()) { "pickupTime must not be negative" }
         require(!dialToneTime.isNegative()) { "dialToneTime must not be negative" }
+        require(pickupTime <= TonePlayer.MAX_DURATION) {
+            "pickupTime must not exceed ${TonePlayer.MAX_DURATION}"
+        }
+        require(dialToneTime <= TonePlayer.MAX_DURATION) {
+            "dialToneTime must not exceed ${TonePlayer.MAX_DURATION}"
+        }
 
+        ensureLine()
         val plan = ToneSequence.dialPlan(number, pickupTime, dialToneTime, sampleRate, handshakeProfile)
         play(plan, onProgress)
     }
 
     private fun play(plan: TonePlan, onProgress: ((ToneProgress) -> Unit)?) {
+        val line = requireNotNull(line) { "audio line is not open" }
         if (onProgress == null) {
             playSamples(plan.samples)
             line.drain()
@@ -163,6 +160,7 @@ class JavaSoundTonePlayer(
     }
 
     private fun playSamples(samples: ShortArray) {
+        val line = requireNotNull(line) { "audio line is not open" }
         val bytes = ByteArray(samples.size * 2)
         samples.forEachIndexed { index, sample ->
             bytes[index * 2] = (sample.toInt() and 0xff).toByte()
@@ -175,9 +173,20 @@ class JavaSoundTonePlayer(
         }
     }
 
+    private fun ensureLine() {
+        if (line != null) return
+        line = AudioSystem.getSourceDataLine(format).apply {
+            open(format)
+            start()
+        }
+    }
+
     override fun close() {
-        line.stop()
-        line.close()
+        line?.let {
+            it.stop()
+            it.close()
+        }
+        line = null
     }
 }
 

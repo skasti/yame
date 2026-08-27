@@ -1,18 +1,24 @@
 package no.skasti.serialmodem.modem
 
 import no.skasti.serialmodem.tone.DialString
+import no.skasti.serialmodem.tone.JavaSoundTonePlayer
+import no.skasti.serialmodem.tone.TonePlayer
+import no.skasti.serialmodem.tone.ToneProgress
+import java.io.Closeable
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets
 
 class HayesModem(
-    private val output: OutputStream,
+    private var output: OutputStream? = null,
     private val baudRate: Int,
+    private val config: HayesModemConfig = HayesModemConfig(),
     private val onData: (ByteArray) -> Unit = {},
-    private val onDial: (String) -> Unit = {},
+    private val tonePlayer: TonePlayer = JavaSoundTonePlayer(),
     private val logger: (String) -> Unit = ::println,
-) {
+) : Closeable {
     enum class State {
         COMMAND,
+        DIALING,
         CONNECTED,
     }
 
@@ -25,6 +31,7 @@ class HayesModem(
     fun receive(bytes: ByteArray) {
         when (state) {
             State.COMMAND -> receiveCommands(bytes)
+            State.DIALING -> Unit
             State.CONNECTED -> onData(bytes)
         }
     }
@@ -57,12 +64,17 @@ class HayesModem(
                 else -> {
                     if (char.code in 0x20..0x7e) {
                         commandBuffer.append(char)
-                        if (echo) output.write(byteArrayOf(byte))
+                        if (echo) output?.write(byteArrayOf(byte))
                     }
                 }
             }
         }
-        output.flush()
+        output?.flush()
+    }
+
+    fun attachOutput(output: OutputStream) {
+        check(this.output == null) { "Modem output is already attached" }
+        this.output = output
     }
 
     private fun handleCommand(rawCommand: String) {
@@ -110,7 +122,7 @@ class HayesModem(
         }
     }
 
-    private fun dial(dialString: String) {
+    fun dial(dialString: String) {
         val number = DialString.normalize(dialString)
 
         if (number.isEmpty()) {
@@ -118,9 +130,28 @@ class HayesModem(
             return
         }
 
+        state = State.DIALING
         logger("MODEM dialing $number")
-        onDial(number)
+
+        try {
+            tonePlayer.dial(
+                number = number,
+                pickupTime = config.pickupTime,
+                dialToneTime = config.dialToneTime,
+                handshakeProfile = config.handshakeProfile,
+                onProgress = ::logToneProgress,
+            )
+        } catch (e: Exception) {
+            // Audio is cosmetic for a real modem connection: a missing or
+            // unconfigured audio device must not prevent the link itself.
+            logger("AUDIO !! Could not play dialing tones: ${e.message}")
+        }
+
         connect()
+    }
+
+    private fun logToneProgress(progress: ToneProgress) {
+        logger("TONE [${progress.step.name.lowercase()}] ${progress.description}")
     }
 
     private fun connect() {
@@ -135,12 +166,20 @@ class HayesModem(
     }
 
     private fun respond(result: String) {
-        logger("AT => $result")
-        writeRaw("\r\n$result\r\n")
+        if (writeRaw("\r\n$result\r\n")) {
+            logger("AT => $result")
+        }
     }
 
-    private fun writeRaw(value: String) {
-        output.write(value.toByteArray(StandardCharsets.US_ASCII))
-        output.flush()
+    private fun writeRaw(value: String): Boolean {
+        output?.let {
+            it.write(value.toByteArray(StandardCharsets.US_ASCII))
+            it.flush()
+        } ?: return false
+        return true
+    }
+
+    override fun close() {
+        tonePlayer.close()
     }
 }

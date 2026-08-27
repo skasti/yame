@@ -2,6 +2,7 @@ package no.skasti.serialmodem.tone
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -37,6 +38,25 @@ class ToneSequenceTest {
         val expectedDuration = 500.milliseconds + 95.milliseconds + 2.seconds + ModemHandshakeSequence.v34Duration
         val expectedSamples = (expectedDuration.inWholeMilliseconds * sampleRate / 1_000).toInt()
         assertEquals(expectedSamples, samples.size)
+    }
+
+    @Test
+    fun `java sound player rejects tone durations over ten seconds before opening audio`() {
+        val player = JavaSoundTonePlayer()
+
+        assertFailsWith<IllegalArgumentException> {
+            player.dial(
+                number = "1",
+                pickupTime = 10_001.milliseconds,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            player.dial(
+                number = "1",
+                pickupTime = 1.seconds,
+                dialToneTime = 10_001.milliseconds,
+            )
+        }
     }
 
     @Test
