@@ -158,6 +158,7 @@ private fun parseDuration(value: String, argument: String): Duration {
         ?: error("$argument expects a duration such as 500ms, 2s, or 1.5s")
 
     val amount = match.groupValues[1].toDouble()
+    require(amount.isFinite()) { "$argument must be finite" }
     require(amount >= 0.0) { "$argument must not be negative" }
 
     return when (match.groupValues[2]) {
