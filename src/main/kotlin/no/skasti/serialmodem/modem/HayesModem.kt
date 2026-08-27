@@ -121,7 +121,7 @@ class HayesModem(
         }
     }
 
-    private fun dial(dialString: String) {
+    fun dial(dialString: String) {
         val number = DialString.normalize(dialString)
 
         if (number.isEmpty()) {
