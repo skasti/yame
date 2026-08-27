@@ -12,11 +12,17 @@ import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
+enum class UdpFlowNamespace {
+    EXTERNAL,
+    LOCAL_DNS,
+}
+
 data class UdpFlow(
     val peerPort: Int,
     val destination: Ipv4Address,
     val destinationPort: Int,
     val generation: Long,
+    val namespace: UdpFlowNamespace = UdpFlowNamespace.EXTERNAL,
 ) {
     init {
         require(peerPort in 0..0xffff) { "UDP peer port must be 0..65535" }
