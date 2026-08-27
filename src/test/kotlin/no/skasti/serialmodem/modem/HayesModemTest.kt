@@ -10,6 +10,7 @@ import java.io.OutputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.INFINITE
@@ -25,6 +26,58 @@ class HayesModemTest {
         modem.receive("AT\r".toByteArray())
 
         assertTrue(output.toString().contains("OK"))
+        assertEquals(HayesModem.State.COMMAND, modem.state)
+    }
+
+    @Test
+    fun `garbage before AT command is ignored without ERROR response`() {
+        val output = ByteArrayOutputStream()
+        val logs = mutableListOf<String>()
+        val modem = HayesModem(output, 115200, logger = logs::add)
+
+        modem.receive("~~\rAT\r".toByteArray())
+
+        assertTrue(output.toString().contains("OK"))
+        assertFalse(output.toString().contains("ERROR"))
+        assertEquals(listOf("AT <= AT", "AT => OK"), logs)
+    }
+
+    @Test
+    fun `PPP-like garbage can be immediately followed by modem reset`() {
+        val output = ByteArrayOutputStream()
+        val logs = mutableListOf<String>()
+        val modem = HayesModem(output, 115200, logger = logs::add)
+        val pppLikeGarbage = byteArrayOf(
+            0x7e,
+            0x7e,
+            0x7d,
+            0x23,
+            0x21,
+            0x7d,
+            0x21,
+            0x7e,
+        )
+
+        modem.receive(pppLikeGarbage)
+        modem.receive("a".toByteArray())
+        modem.receive("tz\r".toByteArray())
+
+        assertTrue(output.toString().contains("atz"))
+        assertTrue(output.toString().contains("OK"))
+        assertFalse(output.toString().contains("ERROR"))
+        assertEquals(listOf("AT <= atz", "AT => OK"), logs)
+    }
+
+    @Test
+    fun `garbage without AT prefix produces no modem response`() {
+        val output = ByteArrayOutputStream()
+        val logs = mutableListOf<String>()
+        val modem = HayesModem(output, 115200, logger = logs::add)
+
+        modem.receive("~~ random garbage }#!\r".toByteArray())
+
+        assertEquals("", output.toString())
+        assertTrue(logs.isEmpty())
         assertEquals(HayesModem.State.COMMAND, modem.state)
     }
 
