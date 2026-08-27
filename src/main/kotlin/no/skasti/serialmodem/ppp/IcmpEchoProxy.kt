@@ -2,7 +2,9 @@ package no.skasti.serialmodem.ppp
 
 import java.io.Closeable
 import java.util.Locale
-import java.util.concurrent.Executors
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
 interface IcmpEchoProxy : Closeable {
@@ -16,11 +18,19 @@ interface IcmpEchoProxy : Closeable {
 }
 
 class SystemPingIcmpEchoProxy : IcmpEchoProxy {
-    private val executor = Executors.newCachedThreadPool { task ->
-        Thread(task, "icmp-echo-proxy").apply {
-            isDaemon = true
-        }
-    }
+    private val executor = ThreadPoolExecutor(
+        MAX_CONCURRENT_PINGS,
+        MAX_CONCURRENT_PINGS,
+        0L,
+        TimeUnit.MILLISECONDS,
+        ArrayBlockingQueue(MAX_QUEUED_PINGS),
+        { task ->
+            Thread(task, "icmp-echo-proxy").apply {
+                isDaemon = true
+            }
+        },
+        ThreadPoolExecutor.AbortPolicy(),
+    )
 
     @Volatile
     private var closed = false
@@ -33,12 +43,22 @@ class SystemPingIcmpEchoProxy : IcmpEchoProxy {
         require(timeoutMillis > 0) { "timeoutMillis must be positive" }
         if (closed) return
 
-        executor.execute {
-            val result = runCatching {
-                runSystemPing(destination, timeoutMillis)
+        try {
+            executor.execute {
+                val result = runCatching {
+                    runSystemPing(destination, timeoutMillis)
+                }
+                if (!closed) {
+                    callback(result)
+                }
             }
+        } catch (_: RejectedExecutionException) {
             if (!closed) {
-                callback(result)
+                callback(
+                    Result.failure(
+                        IllegalStateException("ICMP echo proxy is busy"),
+                    ),
+                )
             }
         }
     }
@@ -95,5 +115,10 @@ class SystemPingIcmpEchoProxy : IcmpEchoProxy {
     override fun close() {
         closed = true
         executor.shutdownNow()
+    }
+
+    companion object {
+        private const val MAX_CONCURRENT_PINGS = 4
+        private const val MAX_QUEUED_PINGS = 16
     }
 }

@@ -159,6 +159,32 @@ class PppIpv4SessionTest {
         session.close()
     }
 
+    @Test
+    fun `external ICMP reply is dropped after session closes`() {
+        val sent = mutableListOf<PppFrame>()
+        val proxy = DeferredIcmpEchoProxy()
+        val session = newSession(sent, icmpEchoProxy = proxy)
+        openIpcp(session, sent)
+        sent.clear()
+
+        val request = Ipv4Packet(
+            protocol = Ipv4Packet.ICMP_PROTOCOL,
+            source = Ipv4Address.parse("10.0.0.2"),
+            destination = Ipv4Address.parse("8.8.8.8"),
+            payload = IcmpPacket(
+                type = IcmpPacket.ECHO_REQUEST,
+                code = 0,
+                body = byteArrayOf(0, 1, 0, 1),
+            ).encode(),
+        )
+
+        session.receive(PppFrame(PppSession.IPV4_PROTOCOL, request.encode()))
+        session.close()
+        proxy.complete(reachable = true)
+
+        assertTrue(sent.isEmpty())
+    }
+
     private fun newSession(
         sent: MutableList<PppFrame>,
         logger: (String) -> Unit = {},
@@ -261,6 +287,24 @@ class PppIpv4SessionTest {
 
         assertTrue(session.ipcpOpen)
     }
+    private class DeferredIcmpEchoProxy : IcmpEchoProxy {
+        private var callback: ((Result<Boolean>) -> Unit)? = null
+
+        override fun echo(
+            destination: Ipv4Address,
+            timeoutMillis: Long,
+            callback: (Result<Boolean>) -> Unit,
+        ) {
+            this.callback = callback
+        }
+
+        fun complete(reachable: Boolean) {
+            val callback = requireNotNull(callback)
+            this.callback = null
+            callback(Result.success(reachable))
+        }
+    }
+
     private class FakeIcmpEchoProxy(
         private val reachable: Boolean = true,
     ) : IcmpEchoProxy {

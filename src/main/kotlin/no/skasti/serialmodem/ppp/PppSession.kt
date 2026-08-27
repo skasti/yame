@@ -43,6 +43,7 @@ class PppSession(
         private set
 
     private var started = false
+    private var closed = false
     private var peerConfigured = false
     private var localConfigured = false
     private var nextLcpIdentifier = 1
@@ -430,7 +431,7 @@ class PppSession(
         identifier: Int?,
         sequence: Int?,
     ) {
-        if (!ipcpOpen || request.source != peerIpAddress) {
+        if (closed || !ipcpOpen || request.source != peerIpAddress) {
             logger(
                 "ICMP .. dropping host Echo Reply from ${request.destination}; PPP/IPCP state changed",
             )
@@ -718,6 +719,10 @@ class PppSession(
 
     @Synchronized
     override fun close() {
+        if (closed) return
+        closed = true
+        lcpOpen = false
+        ipcpOpen = false
         stopLcpRestartTimer()
         stopIpcpRestartTimer()
         icmpEchoProxy.close()
