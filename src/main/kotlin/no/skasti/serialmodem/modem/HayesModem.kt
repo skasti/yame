@@ -18,6 +18,7 @@ class HayesModem(
 ) : Closeable {
     enum class State {
         COMMAND,
+        DIALING,
         CONNECTED,
     }
 
@@ -30,6 +31,7 @@ class HayesModem(
     fun receive(bytes: ByteArray) {
         when (state) {
             State.COMMAND -> receiveCommands(bytes)
+            State.DIALING -> Unit
             State.CONNECTED -> onData(bytes)
         }
     }
@@ -123,6 +125,7 @@ class HayesModem(
             return
         }
 
+        state = State.DIALING
         logger("MODEM dialing $number")
         try {
             tonePlayer.dial(
