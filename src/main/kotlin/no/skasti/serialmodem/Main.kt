@@ -5,7 +5,6 @@ import no.skasti.serialmodem.modem.HayesModemConfig
 import no.skasti.serialmodem.ppp.PppFramer
 import no.skasti.serialmodem.serial.SerialConnection
 import no.skasti.serialmodem.tone.HandshakeProfile
-import java.io.OutputStream
 import java.util.concurrent.CountDownLatch
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -13,45 +12,6 @@ import kotlin.time.Duration.Companion.seconds
 
 fun main(args: Array<String>) {
     val options = parseArgs(args)
-
-    if (options.testNumber != null) {
-        println(
-            "Tone test. Dialing: ${options.testNumber} " +
-                "(pickup: ${options.modemConfig.pickupTime}, " +
-                "dial tone: ${options.modemConfig.dialToneTime}, " +
-                "handshake: ${options.modemConfig.handshakeProfile})...",
-        )
-        HayesModem(
-            output = OutputStream.nullOutputStream(),
-            baudRate = options.baudRate,
-            config = options.modemConfig,
-        ).use { modem ->
-            modem.dial(options.testNumber)
-        }
-        println("Tone test complete.")
-        return
-    }
-
-    if (options.listPorts) {
-        val ports = SerialConnection.availablePorts()
-        if (ports.isEmpty()) {
-            println("No serial ports found")
-        } else {
-            println("Available serial ports:")
-            ports.forEach { println("  $it") }
-        }
-        return
-    }
-
-    val portName = options.portName ?: run {
-        printUsage()
-        return
-    }
-
-    val connection = SerialConnection(portName, options.baudRate)
-    val shutdown = CountDownLatch(1)
-
-    connection.open()
 
     val pppFramer = PppFramer(
         onFrame = { frame ->
@@ -68,11 +28,54 @@ fun main(args: Array<String>) {
     )
 
     val modem = HayesModem(
-        output = connection.output,
         baudRate = options.baudRate,
         config = options.modemConfig,
         onData = pppFramer::receive,
     )
+
+    if (options.testNumber != null) {
+        println(
+            "Tone test. Dialing: ${options.testNumber} " +
+                "(pickup: ${options.modemConfig.pickupTime}, " +
+                "dial tone: ${options.modemConfig.dialToneTime}, " +
+                "handshake: ${options.modemConfig.handshakeProfile})...",
+        )
+        modem.use {
+            it.dial(options.testNumber)
+        }
+        println("Tone test complete.")
+        return
+    }
+
+    if (options.listPorts) {
+        val ports = SerialConnection.availablePorts()
+        if (ports.isEmpty()) {
+            println("No serial ports found")
+        } else {
+            println("Available serial ports:")
+            ports.forEach { println("  $it") }
+        }
+        modem.close()
+        return
+    }
+
+    val portName = options.portName ?: run {
+        modem.close()
+        printUsage()
+        return
+    }
+
+    val connection = SerialConnection(portName, options.baudRate)
+    val shutdown = CountDownLatch(1)
+
+    try {
+        connection.open()
+        modem.attachOutput(connection.output)
+    } catch (e: Exception) {
+        modem.close()
+        connection.close()
+        throw e
+    }
 
     Runtime.getRuntime().addShutdownHook(Thread {
         modem.close()
