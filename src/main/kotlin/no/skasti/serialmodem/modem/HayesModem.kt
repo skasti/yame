@@ -22,7 +22,6 @@ class HayesModem(
     enum class State {
         COMMAND,
         DIALING,
-        LOGIN,
         CONNECTED,
     }
 
@@ -35,10 +34,11 @@ class HayesModem(
         READING_COMMAND,
     }
 
-    private enum class LoginStage {
-        USERNAME,
-        PASSWORD,
-        COMMAND,
+    private enum class ConnectedPhase {
+        LOGIN_USERNAME,
+        LOGIN_PASSWORD,
+        LOGIN_COMMAND,
+        PPP,
     }
 
     private val commandBuffer = StringBuilder()
@@ -46,7 +46,7 @@ class HayesModem(
     private var pendingCommandA = 'A'
     private var echo = true
     private val loginBuffer = StringBuilder()
-    private var loginStage = LoginStage.USERNAME
+    private var connectedPhase = ConnectedPhase.PPP
     private var pendingLoginUsername: String? = null
 
     init {
@@ -58,8 +58,7 @@ class HayesModem(
         when (state) {
             State.COMMAND -> receiveCommands(bytes)
             State.DIALING -> Unit
-            State.LOGIN -> receiveLogin(bytes)
-            State.CONNECTED -> pppHandler.receive(bytes)
+            State.CONNECTED -> receiveConnected(bytes)
         }
     }
 
@@ -167,10 +166,21 @@ class HayesModem(
         }
     }
 
+    private fun receiveConnected(bytes: ByteArray) {
+        when (connectedPhase) {
+            ConnectedPhase.LOGIN_USERNAME,
+            ConnectedPhase.LOGIN_PASSWORD,
+            ConnectedPhase.LOGIN_COMMAND,
+            -> receiveLogin(bytes)
+
+            ConnectedPhase.PPP -> pppHandler.receive(bytes)
+        }
+    }
+
     private fun receiveLogin(bytes: ByteArray) {
         var index = 0
         while (index < bytes.size) {
-            if (state == State.CONNECTED) {
+            if (connectedPhase == ConnectedPhase.PPP) {
                 pppHandler.receive(bytes.copyOfRange(index, bytes.size))
                 return
             }
@@ -205,68 +215,74 @@ class HayesModem(
     }
 
     private fun handleLoginLine(rawLine: String) {
-        val line = rawLine.trim()
-
-        when (loginStage) {
-            LoginStage.USERNAME -> {
-                if (line.isEmpty()) {
+        when (connectedPhase) {
+            ConnectedPhase.LOGIN_USERNAME -> {
+                if (rawLine.isEmpty()) {
                     writeRaw("\r\nUsername: ")
                     return
                 }
 
                 logger("LOGIN <= username received")
-                pendingLoginUsername = line
-                loginStage = LoginStage.PASSWORD
+                pendingLoginUsername = rawLine
+                connectedPhase = ConnectedPhase.LOGIN_PASSWORD
                 writeRaw("\r\nPassword: ")
             }
 
-            LoginStage.PASSWORD -> {
+            ConnectedPhase.LOGIN_PASSWORD -> {
                 logger("LOGIN <= password received")
 
-                if (pendingLoginUsername == config.username && line == config.password) {
+                if (pendingLoginUsername == config.username && rawLine == config.password) {
                     pendingLoginUsername = null
-                    loginStage = LoginStage.COMMAND
+                    connectedPhase = ConnectedPhase.LOGIN_COMMAND
                     logger("LOGIN authentication accepted")
                     writeRaw("\r\n> ")
                 } else {
                     pendingLoginUsername = null
-                    loginStage = LoginStage.USERNAME
+                    connectedPhase = ConnectedPhase.LOGIN_USERNAME
                     logger("LOGIN authentication rejected")
                     writeRaw("\r\nLogin incorrect\r\nUsername: ")
                 }
             }
 
-            LoginStage.COMMAND -> {
-                if (line.isNotEmpty()) {
-                    logger("LOGIN <= command: ${line.take(128)}")
+            ConnectedPhase.LOGIN_COMMAND -> {
+                val command = rawLine.trim()
+                if (command.isNotEmpty()) {
+                    logger("LOGIN <= command: ${command.take(128)}")
                 }
 
-                if (isPppCommand(line)) {
+                if (isPppCommand(command)) {
                     writeRaw("\r\nPPP.\r\n")
                     startPpp()
                 } else {
-                    if (line.isNotEmpty()) {
+                    if (command.isNotEmpty()) {
                         logger("LOGIN .. ignoring unrecognized terminal command")
                     }
                     writeRaw("\r\n> ")
                 }
             }
+
+            ConnectedPhase.PPP -> Unit
         }
     }
 
     private fun isPppCommand(value: String): Boolean {
         val command = value.trim().lowercase()
-        return command == "ppp" ||
+        return command == "p" ||
+            command == "ppp" ||
+            command == "%p" ||
             command == "%ppp" ||
+            command.startsWith("p ") ||
             command.startsWith("ppp ") ||
+            command.startsWith("%p ") ||
             command.startsWith("%ppp ")
     }
 
     private fun startPpp() {
-        if (state == State.CONNECTED) return
+        if (connectedPhase == ConnectedPhase.PPP) return
 
         loginBuffer.clear()
-        state = State.CONNECTED
+        pendingLoginUsername = null
+        connectedPhase = ConnectedPhase.PPP
         logger("PPP data mode active")
         if (output != null) {
             pppHandler.connected()
@@ -315,7 +331,7 @@ class HayesModem(
                 respond("OK")
             }
             upper.startsWith("ATH") -> {
-                state = State.COMMAND
+                reset()
                 respond("OK")
             }
             upper.startsWith("ATD") -> dial(command.substring(3))
@@ -364,34 +380,40 @@ class HayesModem(
     }
 
     private fun connect() {
+        state = State.CONNECTED
+        connectedPhase = if (config.username == null) {
+            ConnectedPhase.LOGIN_COMMAND
+        } else {
+            ConnectedPhase.LOGIN_USERNAME
+        }
+
         logger("MODEM connected")
         respond("CONNECT $baudRate")
 
         if (output == null) {
-            state = State.CONNECTED
+            connectedPhase = ConnectedPhase.PPP
             return
         }
 
         if (config.username == null) {
-            logger("LOGIN disabled; waiting for PPP")
+            logger("LOGIN disabled; PPP data mode ready")
             startPpp()
             return
         }
 
         loginBuffer.clear()
         pendingLoginUsername = null
-        loginStage = LoginStage.USERNAME
-        state = State.LOGIN
         logger("LOGIN => Username prompt")
         writeRaw("\r\nUsername: ")
     }
 
     private fun reset() {
         state = State.COMMAND
+        connectedPhase = ConnectedPhase.PPP
         echo = true
         loginBuffer.clear()
         pendingLoginUsername = null
-        loginStage = LoginStage.USERNAME
+        setCarrierPresent(false)
     }
 
     private fun respond(result: String) {
