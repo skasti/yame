@@ -95,7 +95,7 @@ The progress monitor follows the Java Sound output line's rendered frame positio
 
 Dial strings are normalized before DTMF is generated. A leading `+` is converted to Norway's international access prefix `00`, so `+47 345 76 543` is dialed as `004734576543`. Spaces, dashes, parentheses and other presentation characters are ignored, and a leading Hayes `T` or `P` dial-mode selector is removed.
 
-The modem owns dialing-tone playback and its timing configuration. By default it uses a 500 ms dial tone, a two-second simulated pickup time, and the `v34` handshake profile. These values can be overridden from the command line. Audio failure is treated as cosmetic, so systems without a configured sound device can still use the modem emulator.
+The modem owns dialing-tone playback and its timing configuration. By default it uses a 500 ms dial tone, a two-second simulated pickup time, and the `v34` handshake profile. These values can be overridden from the command line; pickup and dial-tone durations are capped at 10 seconds to keep the eagerly generated PCM buffers bounded. Audio failure is treated as cosmetic, so systems without a configured sound device can still use the modem emulator.
 
 ## Requirements
 
@@ -165,10 +165,9 @@ TONE [v34_training] V.34 scrambled QAM-like equalizer training
 TONE [v34_final_exchange] V.34 final parameter/data exchange
 TONE [complete] dialing/handshake complete; CONNECT may be returned
 MODEM connected
-AT => CONNECT 115200
 ```
 
-`--test-tone` calls the same public `HayesModem.dial()` path used by AT dialing, but discards serial output instead of opening a port. With the `v34` profile, the V.8/V.34 handshake continues after the simulated pickup before the test exits. With `none`, the test exits immediately after pickup.
+`--test-tone` calls the same public `HayesModem.dial()` path used by AT dialing, but does not attach a serial output or open a port. With the `v34` profile, the V.8/V.34 handshake continues after the simulated pickup before the test exits. With `none`, the test exits immediately after pickup.
 
 Run the automated tests with:
 
