@@ -129,7 +129,7 @@ class HayesModem(
                                         (char == 'T' || char == 't') &&
                                             (previous == 'A' || previous == 'a') &&
                                             commandBuffer.length > 2 &&
-                                            !commandBuffer.startsWith("ATD", ignoreCase = true)
+                                            !isPlausibleDialCandidate(commandBuffer.toString())
 
                                     if (startsNewAtPrefix) {
                                         commandBuffer.clear()
@@ -153,6 +153,17 @@ class HayesModem(
             }
         }
         output?.flush()
+    }
+
+    private fun isPlausibleDialCandidate(command: String): Boolean {
+        if (!command.startsWith("ATD", ignoreCase = true)) return false
+
+        val dialArgument = command.drop(3)
+        return dialArgument.all { char ->
+            char.isDigit() ||
+                char.uppercaseChar() in "ABCDTP" ||
+                char in "*#+-() ."
+        }
     }
 
     private fun receiveLogin(bytes: ByteArray) {
