@@ -95,6 +95,20 @@ class HayesModemTest {
     }
 
     @Test
+    fun `implausible ATD garbage resynchronizes on later real command`() {
+        val output = ByteArrayOutputStream()
+        val logs = mutableListOf<String>()
+        val modem = HayesModem(output, 115200, logger = logs::add)
+
+        modem.receive("ATDjunkATZ\r".toByteArray())
+
+        assertFalse(output.toString().contains("CONNECT"))
+        assertFalse(output.toString().contains("ERROR"))
+        assertEquals(listOf("AT <= ATZ", "AT => OK"), logs)
+        assertEquals(HayesModem.State.COMMAND, modem.state)
+    }
+
+    @Test
     fun `embedded AT sequence in dial string does not trigger resynchronization`() {
         val output = ByteArrayOutputStream()
         val dialed = mutableListOf<String>()
