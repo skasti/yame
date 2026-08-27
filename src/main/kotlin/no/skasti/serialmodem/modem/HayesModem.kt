@@ -103,21 +103,24 @@ class HayesModem(
                         10 -> Unit // Ignore LF. Most modem software terminates commands with CR.
 
                         else -> {
-                            if (char.code in 0x20..0x7e) {
-                                val previous = commandBuffer.lastOrNull()
-                                val startsNewAtPrefix =
-                                    (char == 'T' || char == 't') &&
-                                        (previous == 'A' || previous == 'a') &&
-                                        commandBuffer.length > 2
-
-                                if (startsNewAtPrefix) {
+                            when {
+                                value == 0x7d || value == 0x7e -> {
+                                    // PPP framing/escape bytes cannot be part of a Hayes command.
+                                    // Drop a false AT candidate and resume looking for a real one.
                                     commandBuffer.clear()
-                                    commandBuffer.append(previous).append(char)
-                                } else {
-                                    commandBuffer.append(char)
+                                    commandParseState = CommandParseState.SEEKING_AT
                                 }
 
-                                if (echo) output?.write(byteArrayOf(byte))
+                                char.code in 0x20..0x7e -> {
+                                    commandBuffer.append(char)
+                                    if (echo) output?.write(byteArrayOf(byte))
+                                }
+
+                                else -> {
+                                    // Binary data cannot be part of a Hayes command.
+                                    commandBuffer.clear()
+                                    commandParseState = CommandParseState.SEEKING_AT
+                                }
                             }
                         }
                     }
