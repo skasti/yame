@@ -101,6 +101,45 @@ class PppFramerTest {
     }
 
     @Test
+    fun `mapped control byte inside escape sequence is discarded without consuming escape`() {
+        val frames = mutableListOf<PppFrame>()
+        val invalid = mutableListOf<ByteArray>()
+        val framer = PppFramer(frames::add, invalid::add)
+        val withInsertedXon =
+            trumpetLcpFrame.copyOfRange(0, 3) +
+                byteArrayOf(0x11) +
+                trumpetLcpFrame.copyOfRange(3, trumpetLcpFrame.size)
+
+        framer.receive(withInsertedXon)
+
+        assertEquals(0, invalid.size)
+        assertEquals(1, frames.size)
+        assertEquals(0xc021, frames.single().protocol)
+    }
+
+    @Test
+    fun `three byte frame is invalid even with a compressed protocol field`() {
+        val frames = mutableListOf<PppFrame>()
+        val invalid = mutableListOf<ByteArray>()
+        val framer = PppFramer(frames::add, invalid::add, receiveAccm = 0u)
+
+        // Protocol 0x21 plus a valid 16-bit FCS. RFC 1662 section 4.3 still
+        // requires at least four octets between flags.
+        framer.receive(
+            byteArrayOf(
+                0x7e,
+                0x21,
+                0xf3.toByte(),
+                0xc0.toByte(),
+                0x7e,
+            ),
+        )
+
+        assertEquals(0, frames.size)
+        assertEquals(1, invalid.size)
+    }
+
+    @Test
     fun `oversized partial frame is discarded and next flag resynchronizes`() {
         val frames = mutableListOf<PppFrame>()
         val framer = PppFramer(frames::add)
