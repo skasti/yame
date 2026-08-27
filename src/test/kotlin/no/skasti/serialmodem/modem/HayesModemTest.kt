@@ -151,6 +151,24 @@ class HayesModemTest {
     }
 
     @Test
+    fun `modem config accepts ten second tone durations`() {
+        HayesModemConfig(
+            pickupTime = 10.seconds,
+            dialToneTime = 10.seconds,
+        )
+    }
+
+    @Test
+    fun `modem config rejects tone durations over ten seconds`() {
+        assertFailsWith<IllegalArgumentException> {
+            HayesModemConfig(pickupTime = 10_001.milliseconds)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            HayesModemConfig(dialToneTime = 10_001.milliseconds)
+        }
+    }
+
+    @Test
     fun `closing modem closes tone player`() {
         val tonePlayer = FakeTonePlayer()
         val modem = HayesModem(
