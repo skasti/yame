@@ -124,6 +124,81 @@ class PppSessionTest {
     }
 
     @Test
+    fun `peer reconfiguration after LCP open restarts local negotiation`() {
+        val sent = mutableListOf<PppFrame>()
+        val session = PppSession(sendFrame = sent::add, logger = {})
+        session.start()
+
+        val firstPeerRequest = trumpetConfigureRequest(identifier = 0x0b)
+        session.receive(
+            PppFrame(
+                protocol = PppSession.LCP_PROTOCOL,
+                payload = firstPeerRequest.encode(),
+            ),
+        )
+
+        val firstLocalRequest = requireNotNull(LcpPacket.parse(sent.first().payload))
+        session.receive(
+            PppFrame(
+                protocol = PppSession.LCP_PROTOCOL,
+                payload = LcpPacket(
+                    code = LcpPacket.CONFIGURE_ACK,
+                    identifier = firstLocalRequest.identifier,
+                    data = firstLocalRequest.data,
+                ).encode(),
+            ),
+        )
+
+        assertTrue(session.lcpOpen)
+        assertEquals(0u, session.receiveAccm)
+
+        val sentBeforeReconfigure = sent.size
+        val secondPeerRequest = trumpetConfigureRequest(identifier = 0x0c)
+        session.receive(
+            PppFrame(
+                protocol = PppSession.LCP_PROTOCOL,
+                payload = secondPeerRequest.encode(),
+            ),
+        )
+
+        assertFalse(session.lcpOpen)
+        assertEquals(PppFramer.DEFAULT_RECEIVE_ACCM, session.receiveAccm)
+
+        val reconfigurePackets = sent.drop(sentBeforeReconfigure)
+            .map { requireNotNull(LcpPacket.parse(it.payload)) }
+        val secondLocalRequest = reconfigurePackets
+            .single { it.code == LcpPacket.CONFIGURE_REQUEST }
+
+        assertTrue(secondLocalRequest.identifier != firstLocalRequest.identifier)
+
+        session.receive(
+            PppFrame(
+                protocol = PppSession.LCP_PROTOCOL,
+                payload = LcpPacket(
+                    code = LcpPacket.CONFIGURE_ACK,
+                    identifier = firstLocalRequest.identifier,
+                    data = firstLocalRequest.data,
+                ).encode(),
+            ),
+        )
+        assertFalse(session.lcpOpen)
+
+        session.receive(
+            PppFrame(
+                protocol = PppSession.LCP_PROTOCOL,
+                payload = LcpPacket(
+                    code = LcpPacket.CONFIGURE_ACK,
+                    identifier = secondLocalRequest.identifier,
+                    data = secondLocalRequest.data,
+                ).encode(),
+            ),
+        )
+
+        assertTrue(session.lcpOpen)
+        session.close()
+    }
+
+    @Test
     fun `new rejected peer request clears previously configured peer state`() {
         val sent = mutableListOf<PppFrame>()
         val session = PppSession(sendFrame = sent::add, logger = {})
