@@ -47,6 +47,7 @@ class HayesModem(
     private var echo = true
     private val loginBuffer = StringBuilder()
     private var connectedPhase = ConnectedPhase.PPP
+    private var pppStarted = false
     private var pendingLoginUsername: String? = null
 
     init {
@@ -184,8 +185,7 @@ class HayesModem(
         when (connectedPhase) {
             ConnectedPhase.LOGIN_USERNAME,
             ConnectedPhase.LOGIN_PASSWORD,
-            ConnectedPhase.LOGIN_COMMAND,
-            -> receiveLogin(bytes)
+            ConnectedPhase.LOGIN_COMMAND -> receiveLogin(bytes)
 
             ConnectedPhase.PPP -> pppHandler.receive(bytes)
         }
@@ -292,11 +292,12 @@ class HayesModem(
     }
 
     private fun startPpp() {
-        if (connectedPhase == ConnectedPhase.PPP) return
+        if (pppStarted) return
 
         loginBuffer.clear()
         pendingLoginUsername = null
         connectedPhase = ConnectedPhase.PPP
+        pppStarted = true
         logger("PPP data mode active")
         if (output != null) {
             pppHandler.connected()
@@ -396,10 +397,11 @@ class HayesModem(
     private fun connect() {
         state = State.CONNECTED
         connectedPhase = if (config.username == null) {
-            ConnectedPhase.LOGIN_COMMAND
+            ConnectedPhase.PPP
         } else {
             ConnectedPhase.LOGIN_USERNAME
         }
+        pppStarted = false
 
         logger("MODEM connected")
         respond("CONNECT $baudRate")
@@ -424,6 +426,7 @@ class HayesModem(
     private fun reset() {
         state = State.COMMAND
         connectedPhase = ConnectedPhase.PPP
+        pppStarted = false
         echo = true
         loginBuffer.clear()
         pendingLoginUsername = null
