@@ -124,6 +124,14 @@ class HayesModem(
     }
 
     fun dial(dialString: String) {
+        dial(dialString, tolerateToneFailure = false)
+    }
+
+    private fun dialFromCommand(dialString: String) {
+        dial(dialString, tolerateToneFailure = true)
+    }
+
+    private fun dial(dialString: String, tolerateToneFailure: Boolean) {
         val number = DialString.normalize(dialString)
 
         if (number.isEmpty()) {
@@ -133,25 +141,24 @@ class HayesModem(
 
         state = State.DIALING
         logger("MODEM dialing $number")
-        tonePlayer.dial(
-            number = number,
-            pickupTime = config.pickupTime,
-            dialToneTime = config.dialToneTime,
-            handshakeProfile = config.handshakeProfile,
-            onProgress = ::logToneProgress,
-        )
-        connect()
-    }
 
-    private fun dialFromCommand(dialString: String) {
         try {
-            dial(dialString)
+            tonePlayer.dial(
+                number = number,
+                pickupTime = config.pickupTime,
+                dialToneTime = config.dialToneTime,
+                handshakeProfile = config.handshakeProfile,
+                onProgress = ::logToneProgress,
+            )
         } catch (e: Exception) {
+            if (!tolerateToneFailure) throw e
+
             // Audio is cosmetic for a real modem connection: a missing or
             // unconfigured audio device must not prevent the link itself.
             logger("AUDIO !! Could not play dialing tones: ${e.message}")
-            connect()
         }
+
+        connect()
     }
 
     private fun logToneProgress(progress: ToneProgress) {
