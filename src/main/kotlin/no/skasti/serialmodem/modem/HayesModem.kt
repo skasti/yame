@@ -177,15 +177,17 @@ class HayesModem(
     }
 
     private fun respond(result: String) {
-        logger("AT => $result")
-        writeRaw("\r\n$result\r\n")
+        if (writeRaw("\r\n$result\r\n")) {
+            logger("AT => $result")
+        }
     }
 
-    private fun writeRaw(value: String) {
+    private fun writeRaw(value: String): Boolean {
         output?.let {
             it.write(value.toByteArray(StandardCharsets.US_ASCII))
             it.flush()
-        }
+        } ?: return false
+        return true
     }
 
     override fun close() {
