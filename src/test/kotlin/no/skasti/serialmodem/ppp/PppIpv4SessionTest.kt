@@ -59,6 +59,32 @@ class PppIpv4SessionTest {
     }
 
     @Test
+    fun `local ICMP echo reply is not sent when it exceeds peer MRU`() {
+        val sent = mutableListOf<PppFrame>()
+        val logs = mutableListOf<String>()
+        val session = newSession(sent, logs::add)
+        openIpcp(session, sent, peerMru = 64)
+        sent.clear()
+
+        val request = Ipv4Packet(
+            protocol = Ipv4Packet.ICMP_PROTOCOL,
+            source = Ipv4Address.parse("10.0.0.2"),
+            destination = Ipv4Address.parse("10.0.0.1"),
+            payload = IcmpPacket(
+                type = IcmpPacket.ECHO_REQUEST,
+                code = 0,
+                body = ByteArray(100) { 0x55 },
+            ).encode(),
+        )
+
+        session.receive(PppFrame(PppSession.IPV4_PROTOCOL, request.encode()))
+
+        assertTrue(sent.isEmpty())
+        assertTrue(logs.any { it.contains("exceeds peer MRU 64") })
+        session.close()
+    }
+
+    @Test
     fun `IPv4 packet for another destination is left for future forwarding`() {
         val sent = mutableListOf<PppFrame>()
         val session = newSession(sent)
@@ -82,7 +108,10 @@ class PppIpv4SessionTest {
         session.close()
     }
 
-    private fun newSession(sent: MutableList<PppFrame>): PppSession {
+    private fun newSession(
+        sent: MutableList<PppFrame>,
+        logger: (String) -> Unit = {},
+    ): PppSession {
         val addresses = PppAddresses(
             localAddress = Ipv4Address.parse("10.0.0.1"),
             peerAddress = Ipv4Address.parse("10.0.0.2"),
@@ -90,7 +119,7 @@ class PppIpv4SessionTest {
         )
         return PppSession(
             sendFrame = sent::add,
-            logger = {},
+            logger = logger,
             ipAddresses = addresses,
             selectPeerAddress = { requested ->
                 if (requested == Ipv4Address.ZERO) addresses.peerAddress else requested
@@ -98,15 +127,40 @@ class PppIpv4SessionTest {
         )
     }
 
-    private fun openIpcp(session: PppSession, sent: MutableList<PppFrame>) {
+    private fun openIpcp(
+        session: PppSession,
+        sent: MutableList<PppFrame>,
+        peerMru: Int? = null,
+    ) {
         session.start()
+
+        val lcpOptions = buildList {
+            if (peerMru != null) {
+                add(
+                    LcpOption(
+                        type = LcpOption.MRU,
+                        data = byteArrayOf(
+                            (peerMru ushr 8).toByte(),
+                            peerMru.toByte(),
+                        ),
+                    ),
+                )
+            }
+            add(
+                LcpOption(
+                    type = LcpOption.ACCM,
+                    data = byteArrayOf(0x00, 0x00, 0x00, 0x00),
+                ),
+            )
+        }.fold(ByteArray(0)) { bytes, option -> bytes + option.encode() }
+
         session.receive(
             PppFrame(
                 protocol = PppSession.LCP_PROTOCOL,
                 payload = LcpPacket(
                     code = LcpPacket.CONFIGURE_REQUEST,
                     identifier = 0x1c,
-                    data = byteArrayOf(0x02, 0x06, 0x00, 0x00, 0x00, 0x00),
+                    data = lcpOptions,
                 ).encode(),
             ),
         )

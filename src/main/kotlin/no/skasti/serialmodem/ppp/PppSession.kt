@@ -355,10 +355,18 @@ class PppSession(
             destination = packet.source,
             payload = reply.encode(),
         )
+        val encodedReply = replyPacket.encode()
+        if (encodedReply.size > transmitMru) {
+            logger(
+                "ICMP .. Echo Reply ${encodedReply.size} bytes exceeds peer MRU $transmitMru; not sent",
+            )
+            return
+        }
+
         sendFrame(
             PppFrame(
                 protocol = IPV4_PROTOCOL,
-                payload = replyPacket.encode(),
+                payload = encodedReply,
             ),
         )
 
