@@ -207,7 +207,7 @@ private fun printUsage() {
               --handshake-profile P   Handshake profile: ${handshakeProfileNames()} (default: ${defaults.handshakeProfile.name.lowercase()})
           -h, --help                  Show this help
 
-        Durations accept milliseconds or seconds, e.g. 500ms, 2s, or 1.5s.
+        Durations accept milliseconds or seconds, e.g. 500ms, 2s, or 1.5s, up to 10s.
         Tone progress is always logged while a dialing sequence is played.
         """.trimIndent(),
     )
