@@ -10,6 +10,7 @@ import java.nio.channels.SelectionKey
 import java.nio.channels.Selector
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 data class UdpFlow(
     val peerPort: Int,
@@ -29,6 +30,8 @@ interface UdpProxy : Closeable {
         payload: ByteArray,
         onReply: (Result<ByteArray>) -> Unit,
     )
+
+    fun invalidateBefore(generation: Long) = Unit
 
     override fun close() = Unit
 }
@@ -51,10 +54,17 @@ class SystemUdpProxy(
         var lastActivityNanos: Long,
     )
 
+    init {
+        require(idleTimeoutMillis > 0) { "idleTimeoutMillis must be positive" }
+        require(maxFlows > 0) { "maxFlows must be positive" }
+        require(maxQueuedCommands > 0) { "maxQueuedCommands must be positive" }
+    }
+
     private val selector = Selector.open()
     private val commands = ArrayBlockingQueue<SendCommand>(maxQueuedCommands)
     private val flows = mutableMapOf<UdpFlow, FlowState>()
     private val idleTimeoutNanos = TimeUnit.MILLISECONDS.toNanos(idleTimeoutMillis)
+    private val minimumGeneration = AtomicLong(Long.MIN_VALUE)
 
     @Volatile
     private var closed = false
@@ -62,12 +72,6 @@ class SystemUdpProxy(
     private val worker = Thread(::runLoop, "udp-proxy").apply {
         isDaemon = true
         start()
-    }
-
-    init {
-        require(idleTimeoutMillis > 0) { "idleTimeoutMillis must be positive" }
-        require(maxFlows > 0) { "maxFlows must be positive" }
-        require(maxQueuedCommands > 0) { "maxQueuedCommands must be positive" }
     }
 
     override fun send(
@@ -97,8 +101,11 @@ class SystemUdpProxy(
     private fun runLoop() {
         try {
             while (!closed) {
+                discardStaleFlows()
+                expireIdleFlows()
                 drainCommands()
                 selector.select(SELECT_TIMEOUT_MILLIS)
+                discardStaleFlows()
                 drainCommands()
                 receiveReplies()
                 expireIdleFlows()
@@ -122,6 +129,14 @@ class SystemUdpProxy(
     }
 
     private fun sendCommand(command: SendCommand) {
+        if (command.flow.generation < minimumGeneration.get()) {
+            safeCallback(
+                command.onReply,
+                Result.failure(IllegalStateException("UDP flow belongs to an old IPCP generation")),
+            )
+            return
+        }
+
         var state = flows[command.flow]
         if (state == null) {
             if (flows.size >= maxFlows) {
@@ -217,6 +232,12 @@ class SystemUdpProxy(
         }
     }
 
+    private fun discardStaleFlows() {
+        val minimum = minimumGeneration.get()
+        val stale = flows.values.filter { it.flow.generation < minimum }
+        stale.forEach(::removeFlow)
+    }
+
     private fun expireIdleFlows() {
         val cutoff = System.nanoTime() - idleTimeoutNanos
         val expired = flows.values.filter { it.lastActivityNanos <= cutoff }
@@ -235,6 +256,11 @@ class SystemUdpProxy(
         result: Result<ByteArray>,
     ) {
         runCatching { callback(result) }
+    }
+
+    override fun invalidateBefore(generation: Long) {
+        minimumGeneration.accumulateAndGet(generation, ::maxOf)
+        selector.wakeup()
     }
 
     override fun close() {

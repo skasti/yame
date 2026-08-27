@@ -638,6 +638,7 @@ class PppSession(
 
         if (wasOpen) {
             ipcpGeneration++
+            udpProxy.invalidateBefore(ipcpGeneration)
             restartLocalIpcpNegotiation()
         }
 
@@ -826,6 +827,7 @@ class PppSession(
 
     private fun resetIpcp() {
         ipcpGeneration++
+        udpProxy.invalidateBefore(ipcpGeneration)
         ipcpStarted = false
         ipcpPeerConfigured = false
         ipcpLocalConfigured = false

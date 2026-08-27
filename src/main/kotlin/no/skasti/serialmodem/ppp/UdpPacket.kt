@@ -40,9 +40,9 @@ data class UdpPacket(
             if (bytes.size < HEADER_LENGTH) return null
 
             val length = readU16(bytes, 4)
-            if (length < HEADER_LENGTH || length > bytes.size) return null
+            if (length < HEADER_LENGTH || length != bytes.size) return null
 
-            val datagram = if (length == bytes.size) bytes else bytes.copyOf(length)
+            val datagram = bytes
             val checksum = readU16(datagram, 6)
             if (checksum != 0 && udpChecksum(source, destination, datagram) != 0) {
                 return null

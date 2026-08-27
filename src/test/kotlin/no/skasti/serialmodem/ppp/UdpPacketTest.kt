@@ -51,4 +51,17 @@ class UdpPacketTest {
 
         assertNull(UdpPacket.parse(encoded, source, destination))
     }
+    @Test
+    fun `UDP length must match IPv4 payload length`() {
+        val source = Ipv4Address.parse("10.0.0.2")
+        val destination = Ipv4Address.parse("8.8.8.8")
+        val encoded = UdpPacket(
+            sourcePort = 1037,
+            destinationPort = 53,
+            payload = byteArrayOf(1, 2, 3),
+        ).encode(source, destination) + byteArrayOf(0)
+
+        assertNull(UdpPacket.parse(encoded, source, destination))
+    }
+
 }
