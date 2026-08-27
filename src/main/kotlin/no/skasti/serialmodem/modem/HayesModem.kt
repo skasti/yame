@@ -104,7 +104,19 @@ class HayesModem(
 
                         else -> {
                             if (char.code in 0x20..0x7e) {
-                                commandBuffer.append(char)
+                                val previous = commandBuffer.lastOrNull()
+                                val startsNewAtPrefix =
+                                    (char == 'T' || char == 't') &&
+                                        (previous == 'A' || previous == 'a') &&
+                                        commandBuffer.length > 2
+
+                                if (startsNewAtPrefix) {
+                                    commandBuffer.clear()
+                                    commandBuffer.append(previous).append(char)
+                                } else {
+                                    commandBuffer.append(char)
+                                }
+
                                 if (echo) output?.write(byteArrayOf(byte))
                             }
                         }
