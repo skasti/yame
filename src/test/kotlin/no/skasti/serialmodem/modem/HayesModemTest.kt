@@ -7,8 +7,10 @@ import no.skasti.serialmodem.tone.ToneStep
 import java.io.ByteArrayOutputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.INFINITE
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
@@ -92,6 +94,16 @@ class HayesModemTest {
 
         assertEquals(1, received.size)
         assertEquals(listOf(0x7e, 0xff, 0x03, 0xc0, 0x21), received.single().map { it.toInt() and 0xff })
+    }
+
+    @Test
+    fun `modem config rejects infinite tone durations`() {
+        assertFailsWith<IllegalArgumentException> {
+            HayesModemConfig(pickupTime = INFINITE)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            HayesModemConfig(dialToneTime = INFINITE)
+        }
     }
 
     @Test
