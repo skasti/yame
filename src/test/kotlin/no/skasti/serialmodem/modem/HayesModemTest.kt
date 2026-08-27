@@ -175,6 +175,20 @@ class HayesModemTest {
     }
 
     @Test
+    fun `constructor carrier callback initializes carrier as absent`() {
+        val carrierStates = mutableListOf<Boolean>()
+
+        HayesModem(
+            baudRate = 115200,
+            tonePlayer = FakeTonePlayer(),
+            logger = {},
+            setCarrierPresent = carrierStates::add,
+        )
+
+        assertEquals(listOf(false), carrierStates)
+    }
+
+    @Test
     fun `attaching carrier callback initializes carrier as absent`() {
         val carrierStates = mutableListOf<Boolean>()
         val modem = HayesModem(
