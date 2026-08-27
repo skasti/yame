@@ -111,7 +111,7 @@ class HayesModem(
                 state = State.COMMAND
                 respond("OK")
             }
-            upper.startsWith("ATD") -> dialFromCommand(command.substring(3))
+            upper.startsWith("ATD") -> dial(command.substring(3))
             else -> {
                 // Old modem drivers often send long initialization strings.
                 // For the first milestone we accept unknown AT commands rather
@@ -123,14 +123,6 @@ class HayesModem(
     }
 
     fun dial(dialString: String) {
-        dial(dialString, tolerateToneFailure = false)
-    }
-
-    private fun dialFromCommand(dialString: String) {
-        dial(dialString, tolerateToneFailure = true)
-    }
-
-    private fun dial(dialString: String, tolerateToneFailure: Boolean) {
         val number = DialString.normalize(dialString)
 
         if (number.isEmpty()) {
@@ -150,8 +142,6 @@ class HayesModem(
                 onProgress = ::logToneProgress,
             )
         } catch (e: Exception) {
-            if (!tolerateToneFailure) throw e
-
             // Audio is cosmetic for a real modem connection: a missing or
             // unconfigured audio device must not prevent the link itself.
             logger("AUDIO !! Could not play dialing tones: ${e.message}")

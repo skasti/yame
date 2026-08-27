@@ -91,18 +91,16 @@ class HayesModemTest {
     }
 
     @Test
-    fun `public dial propagates tone player failure`() {
+    fun `public dial does not propagate tone player failure`() {
         val modem = HayesModem(
             baudRate = 115200,
             tonePlayer = FakeTonePlayer { _, _, _, _, _ -> error("no audio device") },
             logger = {},
         )
 
-        assertFailsWith<IllegalStateException> {
-            modem.dial("1")
-        }
+        modem.dial("1")
 
-        assertEquals(HayesModem.State.DIALING, modem.state)
+        assertEquals(HayesModem.State.CONNECTED, modem.state)
     }
 
     @Test
