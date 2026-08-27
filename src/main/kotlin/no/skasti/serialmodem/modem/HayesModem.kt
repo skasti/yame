@@ -1,14 +1,25 @@
 package no.skasti.serialmodem.modem
 
 import no.skasti.serialmodem.tone.DialString
+import no.skasti.serialmodem.tone.HandshakeProfile
+import no.skasti.serialmodem.tone.ToneProgress
+import no.skasti.serialmodem.tone.tone
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets
+import kotlin.time.Duration
 
 class HayesModem(
     private val output: OutputStream,
     private val baudRate: Int,
+    private val config: HayesModemConfig = HayesModemConfig(),
     private val onData: (ByteArray) -> Unit = {},
-    private val onDial: (String) -> Unit = {},
+    private val toneDialer: (
+        String,
+        Duration,
+        Duration,
+        HandshakeProfile,
+        ((ToneProgress) -> Unit)?,
+    ) -> Unit = tone::dial,
     private val logger: (String) -> Unit = ::println,
 ) {
     enum class State {
@@ -119,8 +130,24 @@ class HayesModem(
         }
 
         logger("MODEM dialing $number")
-        onDial(number)
+        try {
+            toneDialer(
+                number,
+                config.pickupTime,
+                config.dialToneTime,
+                config.handshakeProfile,
+                ::logToneProgress,
+            )
+        } catch (e: Exception) {
+            // Audio is cosmetic: a missing/unconfigured audio device must not
+            // prevent the serial modem itself from establishing a connection.
+            logger("AUDIO !! Could not play dialing tones: ${e.message}")
+        }
         connect()
+    }
+
+    private fun logToneProgress(progress: ToneProgress) {
+        logger("TONE [${progress.step.name.lowercase()}] ${progress.description}")
     }
 
     private fun connect() {
