@@ -140,6 +140,24 @@ class HayesModemTest {
     }
 
     @Test
+    fun `formatted dial string with embedded AT remains a dial command`() {
+        val output = ByteArrayOutputStream()
+        val dialed = mutableListOf<String>()
+        val modem = HayesModem(
+            output = output,
+            baudRate = 115200,
+            tonePlayer = FakeTonePlayer { number, _, _, _, _ -> dialed += number },
+            logger = {},
+        )
+
+        modem.receive("ATDAT/123\r".toByteArray())
+
+        assertEquals(listOf("A123"), dialed)
+        assertTrue(output.toString().contains("CONNECT 115200"))
+        assertEquals(HayesModem.State.CONNECTED, modem.state)
+    }
+
+    @Test
     fun `garbage without AT prefix produces no modem response`() {
         val output = ByteArrayOutputStream()
         val logs = mutableListOf<String>()
@@ -483,6 +501,19 @@ class HayesModemTest {
         }
         assertFailsWith<IllegalArgumentException> {
             HayesModemConfig(password = "somethingsafe")
+        }
+    }
+
+    @Test
+    fun `modem config rejects credentials outside printable ASCII`() {
+        assertFailsWith<IllegalArgumentException> {
+            HayesModemConfig(username = "brukeræ", password = "password")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            HayesModemConfig(username = "user", password = "secret\tvalue")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            HayesModemConfig(username = "user", password = "secret\u007f")
         }
     }
 
