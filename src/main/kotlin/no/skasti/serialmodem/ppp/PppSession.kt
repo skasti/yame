@@ -321,8 +321,13 @@ class PppSession(
     }
 
     private fun receiveIpcpConfigureRequest(packet: PppControlPacket) {
+        val wasOpen = ipcpOpen
         ipcpPeerConfigured = false
         ipcpOpen = false
+
+        if (wasOpen) {
+            restartLocalIpcpNegotiation()
+        }
 
         val options = PppControlOption.parseAll(packet.data)
         if (options == null) {
@@ -415,6 +420,13 @@ class PppSession(
     private fun startIpcp() {
         if (ipcpStarted) return
         ipcpStarted = true
+        createLocalIpcpConfigureRequest()
+        sendOutstandingIpcpConfigureRequest()
+        startIpcpRestartTimer()
+    }
+
+    private fun restartLocalIpcpNegotiation() {
+        ipcpLocalConfigured = false
         createLocalIpcpConfigureRequest()
         sendOutstandingIpcpConfigureRequest()
         startIpcpRestartTimer()

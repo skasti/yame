@@ -81,6 +81,70 @@ class PppIpcpSessionTest {
     }
 
     @Test
+    fun `peer reconfiguration after IPCP open restarts local negotiation`() {
+        val sent = mutableListOf<PppFrame>()
+        val session = newSession(sent)
+        openLcp(session, sent)
+
+        val firstLocalRequest = sent
+            .last { it.protocol == PppSession.IPCP_PROTOCOL }
+            .let { requireNotNull(PppControlPacket.parse(it.payload)) }
+
+        session.receive(ipcpConfigureRequest(9, Ipv4Address.parse("10.0.0.2")))
+        session.receive(
+            PppFrame(
+                protocol = PppSession.IPCP_PROTOCOL,
+                payload = PppControlPacket(
+                    code = PppControlPacket.CONFIGURE_ACK,
+                    identifier = firstLocalRequest.identifier,
+                    data = firstLocalRequest.data,
+                ).encode(),
+            ),
+        )
+        assertTrue(session.ipcpOpen)
+
+        val sentBeforeReconfigure = sent.size
+        session.receive(ipcpConfigureRequest(10, Ipv4Address.parse("10.0.0.2")))
+
+        assertFalse(session.ipcpOpen)
+        val reconfigurePackets = sent.drop(sentBeforeReconfigure)
+            .filter { it.protocol == PppSession.IPCP_PROTOCOL }
+            .map { requireNotNull(PppControlPacket.parse(it.payload)) }
+        val secondLocalRequest = reconfigurePackets
+            .single { it.code == PppControlPacket.CONFIGURE_REQUEST }
+        assertTrue(secondLocalRequest.identifier != firstLocalRequest.identifier)
+        assertTrue(reconfigurePackets.any {
+            it.code == PppControlPacket.CONFIGURE_ACK && it.identifier == 10
+        })
+
+        session.receive(
+            PppFrame(
+                protocol = PppSession.IPCP_PROTOCOL,
+                payload = PppControlPacket(
+                    code = PppControlPacket.CONFIGURE_ACK,
+                    identifier = firstLocalRequest.identifier,
+                    data = firstLocalRequest.data,
+                ).encode(),
+            ),
+        )
+        assertFalse(session.ipcpOpen)
+
+        session.receive(
+            PppFrame(
+                protocol = PppSession.IPCP_PROTOCOL,
+                payload = PppControlPacket(
+                    code = PppControlPacket.CONFIGURE_ACK,
+                    identifier = secondLocalRequest.identifier,
+                    data = secondLocalRequest.data,
+                ).encode(),
+            ),
+        )
+
+        assertTrue(session.ipcpOpen)
+        session.close()
+    }
+
+    @Test
     fun `unsupported IPCP options are rejected`() {
         val sent = mutableListOf<PppFrame>()
         val session = newSession(sent)
