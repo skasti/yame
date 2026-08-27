@@ -55,6 +55,8 @@ class PppSession(
     private var ipcpStarted = false
     private var ipcpGeneration = 0L
     private var ipcpDnsPrompted = false
+    private var ipcpDnsPromptRequestIdentifier: Int? = null
+    private var ipcpDnsPromptRequestData: ByteArray? = null
     private var ipcpPeerConfigured = false
     private var ipcpLocalConfigured = false
     private var nextIpcpIdentifier = 1
@@ -297,7 +299,6 @@ class PppSession(
             startIpcp()
         }
     }
-
     private fun receiveIpv4(payload: ByteArray) {
         if (!ipcpOpen) {
             logger("IPv4 .. ignored before IPCP is open")
@@ -397,6 +398,7 @@ class PppSession(
             destination = dnsConfig.upstreamServer,
             destinationPort = DNS_PORT,
             generation = generation,
+            namespace = UdpFlowNamespace.LOCAL_DNS,
         )
         logger(
             "DNS <= ${packet.source}:${udp.sourcePort} -> " +
@@ -727,6 +729,8 @@ class PppSession(
         if (wasOpen) {
             ipcpGeneration++
             ipcpDnsPrompted = false
+            ipcpDnsPromptRequestIdentifier = null
+            ipcpDnsPromptRequestData = null
             udpProxy.invalidateBefore(ipcpGeneration)
             restartLocalIpcpNegotiation()
         }
@@ -782,6 +786,8 @@ class PppSession(
                     if (option.type == PppControlOption.IPCP_PRIMARY_DNS) {
                         primaryDnsSeen = true
                         ipcpDnsPrompted = true
+                        ipcpDnsPromptRequestIdentifier = null
+                        ipcpDnsPromptRequestData = null
                     }
                     val requestedDns = Ipv4Address.fromBytes(option.data)
                     if (requestedDns != localIpAddress) {
@@ -801,12 +807,20 @@ class PppSession(
             )
         }
 
-        if (!primaryDnsSeen && !ipcpDnsPrompted) {
+        val repeatedDnsPromptRequest =
+            ipcpDnsPrompted &&
+                ipcpDnsPromptRequestIdentifier == packet.identifier &&
+                ipcpDnsPromptRequestData?.contentEquals(packet.data) == true
+        if (!primaryDnsSeen && (!ipcpDnsPrompted || repeatedDnsPromptRequest)) {
             nakOptions += PppControlOption(
                 type = PppControlOption.IPCP_PRIMARY_DNS,
                 data = localIpAddress.toByteArray(),
             )
-            ipcpDnsPrompted = true
+            if (!ipcpDnsPrompted) {
+                ipcpDnsPrompted = true
+                ipcpDnsPromptRequestIdentifier = packet.identifier
+                ipcpDnsPromptRequestData = packet.data.copyOf()
+            }
         }
 
         if (nakOptions.isNotEmpty()) {
@@ -969,6 +983,8 @@ class PppSession(
     private fun resetIpcp() {
         ipcpGeneration++
         ipcpDnsPrompted = false
+        ipcpDnsPromptRequestIdentifier = null
+        ipcpDnsPromptRequestData = null
         udpProxy.invalidateBefore(ipcpGeneration)
         ipcpStarted = false
         ipcpPeerConfigured = false
