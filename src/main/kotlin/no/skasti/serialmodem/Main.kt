@@ -25,7 +25,9 @@ fun main(args: Array<String>) {
             output = OutputStream.nullOutputStream(),
             baudRate = options.baudRate,
             config = options.modemConfig,
-        ).dial(options.testNumber)
+        ).use { modem ->
+            modem.dial(options.testNumber)
+        }
         println("Tone test complete.")
         return
     }
@@ -49,11 +51,6 @@ fun main(args: Array<String>) {
     val connection = SerialConnection(portName, options.baudRate)
     val shutdown = CountDownLatch(1)
 
-    Runtime.getRuntime().addShutdownHook(Thread {
-        connection.close()
-        shutdown.countDown()
-    })
-
     connection.open()
 
     val pppFramer = PppFramer(
@@ -76,6 +73,12 @@ fun main(args: Array<String>) {
         config = options.modemConfig,
         onData = pppFramer::receive,
     )
+
+    Runtime.getRuntime().addShutdownHook(Thread {
+        modem.close()
+        connection.close()
+        shutdown.countDown()
+    })
 
     connection.startReading(modem::receive)
     println("Serial modem emulator ready. Press Ctrl+C to stop.")
