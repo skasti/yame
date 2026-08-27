@@ -21,12 +21,18 @@ The emulator currently:
 - logs the individual dialing/handshake stages as they become audible
 - normalizes formatted dial strings before generating DTMF
 - switches to raw data mode after `CONNECT`
-- decodes asynchronous PPP framing in connected mode
-- handles PPP flag/escape processing, receive ACCM filtering and FCS-16 validation
-- logs complete valid PPP frames with their decoded protocol and payload
-- logs malformed PPP frames separately for diagnostics
+- routes connected-mode data through a pluggable `PppHandler`
+- uses `RetroPppHandler` to own PPP framing and session state
+- decodes asynchronous PPP framing with flag/escape processing, ACCM filtering and FCS-16 validation
+- encodes outbound PPP frames with FCS-16 and async-HDLC escaping
+- starts a fresh `PppSession` for each modem connection
+- sends YAME's own LCP Configure-Request after `CONNECT`
+- acknowledges supported peer LCP Configure-Requests, including the options observed from Trumpet Winsock
+- applies peer ACCM/PFC/ACFC negotiation in the correct transmit direction
+- opens LCP only after both directions have been Configure-Acked
+- logs complete valid PPP frames and malformed frames for diagnostics
 
-PPP framing is implemented, but PPP protocol negotiation and Internet routing are not. The next milestone is LCP negotiation: replying to the client's LCP Configure-Request, sending YAME's own Configure-Request, and progressing far enough to observe IPCP from the old laptop.
+Minimal LCP negotiation is now implemented. IPCP and Internet routing are not yet implemented; the next milestone is to observe and handle the client's IPCP negotiation once LCP reaches the Opened state.
 
 ## Telephone and modem tone simulation
 
@@ -194,7 +200,23 @@ AT => CONNECT 115200
 PPP <= protocol=LCP (0xC021), payload=24 bytes: 01 0B 00 18 01 04 02 40 ...
 ```
 
-Repeated LCP Configure-Request frames are expected for now because YAME does not yet reply to PPP control protocols. This has been verified against Trumpet Winsock on a real Windows 3.1 laptop. The next milestone is implementing minimal LCP negotiation so the client can advance to IPCP.
+YAME now replies to the client's LCP Configure-Request and sends its own Configure-Request. Once both directions are acknowledged it logs `LCP open`; the next useful real-hardware test is whether Trumpet Winsock then advances to IPCP.
+
+## PPP architecture
+
+Connected-mode bytes are handed from `HayesModem` to a `PppHandler`. The default `RetroPppHandler` owns the wire-level `PppFramer`/`PppEncoder` pair and creates a fresh `PppSession` whenever the modem connects:
+
+```text
+HayesModem
+  └─ PppHandler
+      └─ RetroPppHandler
+          ├─ PppFramer
+          ├─ PppEncoder
+          └─ PppSession
+              └─ LCP
+```
+
+This keeps PPP details out of `Main` and keeps the Hayes layer from needing to know how LCP/IPCP packets are represented.
 
 ## Supported modem behavior
 
