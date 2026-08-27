@@ -1,5 +1,7 @@
 package no.skasti.serialmodem.modem
 
+import no.skasti.serialmodem.ppp.PppHandler
+import no.skasti.serialmodem.ppp.RetroPppHandler
 import no.skasti.serialmodem.tone.DialString
 import no.skasti.serialmodem.tone.JavaSoundTonePlayer
 import no.skasti.serialmodem.tone.TonePlayer
@@ -12,9 +14,9 @@ class HayesModem(
     private var output: OutputStream? = null,
     private val baudRate: Int,
     private val config: HayesModemConfig = HayesModemConfig(),
-    private val onData: (ByteArray) -> Unit = {},
     private val tonePlayer: TonePlayer = JavaSoundTonePlayer(),
     private val logger: (String) -> Unit = ::println,
+    private val pppHandler: PppHandler = RetroPppHandler(logger),
 ) : Closeable {
     enum class State {
         COMMAND,
@@ -28,11 +30,15 @@ class HayesModem(
     private val commandBuffer = StringBuilder()
     private var echo = true
 
+    init {
+        output?.let(pppHandler::attachOutput)
+    }
+
     fun receive(bytes: ByteArray) {
         when (state) {
             State.COMMAND -> receiveCommands(bytes)
             State.DIALING -> Unit
-            State.CONNECTED -> onData(bytes)
+            State.CONNECTED -> pppHandler.receive(bytes)
         }
     }
 
@@ -74,6 +80,7 @@ class HayesModem(
 
     fun attachOutput(output: OutputStream) {
         check(this.output == null) { "Modem output is already attached" }
+        pppHandler.attachOutput(output)
         this.output = output
     }
 
@@ -158,6 +165,9 @@ class HayesModem(
         state = State.CONNECTED
         logger("MODEM connected")
         respond("CONNECT $baudRate")
+        if (output != null) {
+            pppHandler.connected()
+        }
     }
 
     private fun reset() {
@@ -180,6 +190,7 @@ class HayesModem(
     }
 
     override fun close() {
+        pppHandler.close()
         tonePlayer.close()
     }
 }
