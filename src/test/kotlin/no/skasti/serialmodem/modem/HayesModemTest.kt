@@ -97,7 +97,7 @@ class HayesModemTest {
 
         assertEquals(listOf("A123"), dialed)
         assertTrue(output.toString().contains("CONNECT 115200"))
-        assertEquals(HayesModem.State.CONNECTED, modem.state)
+        assertEquals(HayesModem.State.LOGIN, modem.state)
     }
 
     @Test
@@ -145,7 +145,7 @@ class HayesModemTest {
         assertEquals(listOf("004734576543"), dialed)
         assertTrue(logs.contains("TONE [dial_tone] test dial tone"))
         assertTrue(output.toString().contains("CONNECT 115200"))
-        assertEquals(HayesModem.State.CONNECTED, modem.state)
+        assertEquals(HayesModem.State.LOGIN, modem.state)
     }
 
     @Test
@@ -205,7 +205,7 @@ class HayesModemTest {
 
         assertTrue(logs.any { it.startsWith("AUDIO !! Could not play dialing tones:") })
         assertTrue(output.toString().contains("CONNECT 115200"))
-        assertEquals(HayesModem.State.CONNECTED, modem.state)
+        assertEquals(HayesModem.State.LOGIN, modem.state)
     }
 
     @Test
@@ -232,7 +232,7 @@ class HayesModemTest {
     }
 
     @Test
-    fun `PPP handler starts after CONNECT result is written`() {
+    fun `PPP handler starts after CONNECT when direct PPP framing is detected`() {
         val output = ByteArrayOutputStream()
         var outputAtConnect = ""
         val pppHandler = FakePppHandler(
@@ -247,8 +247,72 @@ class HayesModemTest {
         )
 
         modem.dial("1")
+        assertEquals(0, pppHandler.connectedCalls)
+
+        modem.receive(byteArrayOf(0x7e))
 
         assertTrue(outputAtConnect.contains("CONNECT 115200"))
+        assertEquals(1, pppHandler.connectedCalls)
+        assertEquals(HayesModem.State.CONNECTED, modem.state)
+    }
+
+    @Test
+    fun `Trumpet terminal login transitions to PPP after ppp command`() {
+        val output = ByteArrayOutputStream()
+        val logs = mutableListOf<String>()
+        val pppHandler = FakePppHandler()
+        val modem = HayesModem(
+            output = output,
+            baudRate = 9600,
+            tonePlayer = FakeTonePlayer(),
+            logger = logs::add,
+            pppHandler = pppHandler,
+        )
+
+        modem.receive("ATD123\r".toByteArray())
+        assertEquals(HayesModem.State.LOGIN, modem.state)
+        assertTrue(output.toString().contains("CONNECT 9600"))
+
+        modem.receive("\r".toByteArray())
+        assertTrue(output.toString().contains("Username:"))
+
+        modem.receive("trumpet-user\r".toByteArray())
+        assertTrue(output.toString().contains("Password:"))
+
+        modem.receive("secret-password\r".toByteArray())
+        assertTrue(output.toString().contains(">"))
+        assertFalse(logs.any { it.contains("secret-password") })
+
+        modem.receive("ppp\r".toByteArray())
+
+        assertTrue(output.toString().contains("PPP."))
+        assertEquals(1, pppHandler.connectedCalls)
+        assertEquals(HayesModem.State.CONNECTED, modem.state)
+    }
+
+    @Test
+    fun `PPP bytes immediately after CONNECT skip terminal login`() {
+        val output = ByteArrayOutputStream()
+        val pppHandler = FakePppHandler()
+        val modem = HayesModem(
+            output = output,
+            baudRate = 115200,
+            tonePlayer = FakeTonePlayer(),
+            logger = {},
+            pppHandler = pppHandler,
+        )
+
+        modem.receive("ATD1\r".toByteArray())
+        modem.receive(byteArrayOf(0x7e, 0xff.toByte(), 0x03, 0xc0.toByte(), 0x21))
+
+        assertEquals(HayesModem.State.CONNECTED, modem.state)
+        assertEquals(1, pppHandler.connectedCalls)
+        assertEquals(1, pppHandler.received.size)
+        assertEquals(
+            listOf(0x7e, 0xff, 0x03, 0xc0, 0x21),
+            pppHandler.received.single().map { it.toInt() and 0xff },
+        )
+        assertFalse(output.toString().contains("Username:"))
     }
 
     @Test
