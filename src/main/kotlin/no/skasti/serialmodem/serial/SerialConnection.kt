@@ -52,10 +52,8 @@ class SerialConnection(
     fun setCarrierPresent(carrierPresent: Boolean) {
         if (carrierPresent) {
             port.setDTR()
-            port.setRTS()
         } else {
             port.clearDTR()
-            port.clearRTS()
         }
     }
 
