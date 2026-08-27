@@ -35,13 +35,23 @@ class PppFramer(
                 }
 
                 State.ESCAPED -> {
-                    if (value == FLAG) {
-                        // A Control Escape immediately followed by a Flag Sequence
-                        // aborts the current frame. The flag also starts the next one.
-                        buffer.reset()
-                        state = State.IN_FRAME
-                    } else if (appendDecodedByte(value xor ESCAPE_MASK)) {
-                        state = State.IN_FRAME
+                    when {
+                        value == FLAG -> {
+                            // A Control Escape immediately followed by a Flag Sequence
+                            // aborts the current frame. The flag also starts the next one.
+                            buffer.reset()
+                            state = State.IN_FRAME
+                        }
+
+                        isMappedControlCharacter(value) -> {
+                            // An ACCM-mapped control octet may have been inserted by
+                            // intermediate equipment. Discard it without consuming the
+                            // pending escape; the next octet is still the escaped value.
+                        }
+
+                        appendDecodedByte(value xor ESCAPE_MASK) -> {
+                            state = State.IN_FRAME
+                        }
                     }
                 }
             }
@@ -118,6 +128,8 @@ class PppFramer(
         private const val ESCAPE_MASK = 0x20
         private const val ADDRESS = 0xff
         private const val CONTROL = 0x03
+        // RFC 1662 section 4.3 defines frames shorter than four octets as invalid
+        // when using the 16-bit FCS, even when header compression is negotiated.
         private const val MIN_FRAME_SIZE = 4
 
         const val DEFAULT_RECEIVE_ACCM: UInt = 0xffffffffu
