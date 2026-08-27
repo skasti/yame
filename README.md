@@ -144,6 +144,7 @@ The test uses the same modem configuration path as a real AT dial. The defaults 
 Dialing/handshake progress is always logged. Typical output looks like:
 
 ```text
+MODEM dialing 004734576543
 TONE [dial_tone] 425 Hz dial tone
 TONE [dtmf_dialing] DTMF dialing 004734576543
 TONE [ringback] 425 Hz ringback; waiting for pickup...
@@ -156,6 +157,8 @@ TONE [v34_line_probe_l2] V.34 L2 line probe
 TONE [v34_training] V.34 scrambled QAM-like equalizer training
 TONE [v34_final_exchange] V.34 final parameter/data exchange
 TONE [complete] dialing/handshake complete; CONNECT may be returned
+MODEM connected
+AT => CONNECT 115200
 ```
 
 `--test-tone` calls the same public `HayesModem.dial()` path used by AT dialing, but discards serial output instead of opening a port. With the `v34` profile, the V.8/V.34 handshake continues after the simulated pickup before the test exits. With `none`, the test exits immediately after pickup.
