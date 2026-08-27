@@ -193,12 +193,12 @@ class HayesModem(
             LoginStage.WAITING_FOR_PROD -> {
                 logger("LOGIN <= terminal server wakeup")
                 loginStage = LoginStage.USERNAME
-                writeRaw("\r\nUsername: ")
+                writeRaw("\r\nLogin: Username: ")
             }
 
             LoginStage.USERNAME -> {
                 if (line.isEmpty()) {
-                    writeRaw("\r\nUsername: ")
+                    writeRaw("\r\nLogin: Username: ")
                     return
                 }
 
@@ -219,7 +219,7 @@ class HayesModem(
                     startPpp()
                 } else {
                     if (line.isNotEmpty()) {
-                        logger("LOGIN .. ignoring terminal command: $line")
+                        logger("LOGIN .. ignoring unrecognized terminal command")
                     }
                     writeRaw("\r\n> ")
                 }
