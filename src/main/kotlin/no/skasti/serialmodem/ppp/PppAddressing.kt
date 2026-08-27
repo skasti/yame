@@ -113,6 +113,26 @@ data class Ipv4Cidr private constructor(
     }
 }
 
+private data class ReservedIpv4Range(
+    val subnet: Ipv4Cidr,
+    val reason: String,
+)
+
+private val UNUSABLE_PPP_ENDPOINT_RANGES =
+    listOf(
+        ReservedIpv4Range(Ipv4Cidr.parse("0.0.0.0/8"), "this-network"),
+        ReservedIpv4Range(Ipv4Cidr.parse("127.0.0.0/8"), "loopback"),
+        ReservedIpv4Range(Ipv4Cidr.parse("169.254.0.0/16"), "link-local"),
+        ReservedIpv4Range(Ipv4Cidr.parse("224.0.0.0/4"), "multicast"),
+        ReservedIpv4Range(Ipv4Cidr.parse("240.0.0.0/4"), "reserved/broadcast"),
+    )
+
+private fun reservedRangeFor(address: Ipv4Address): ReservedIpv4Range? =
+    UNUSABLE_PPP_ENDPOINT_RANGES.firstOrNull { it.subnet.contains(address) }
+
+private fun reservedRangeOverlapping(subnet: Ipv4Cidr): ReservedIpv4Range? =
+    UNUSABLE_PPP_ENDPOINT_RANGES.firstOrNull { subnet.overlaps(it.subnet) }
+
 data class LocalIpv4Network(
     val interfaceName: String,
     val subnet: Ipv4Cidr,
@@ -145,7 +165,10 @@ class PppAddressResolver(
     private val addresses: PppAddresses by lazy(::resolveAddresses)
 
     fun validateConfiguredSubnet() {
-        config.configuredSubnet?.let(::requireNoLocalOverlap)
+        config.configuredSubnet?.let {
+            requireUsablePppSubnet(it)
+            requireNoLocalOverlap(it)
+        }
     }
 
     fun resolve(): PppAddresses = addresses
@@ -154,6 +177,15 @@ class PppAddressResolver(
         val resolved = addresses
 
         if (config.configuredSubnet != null || requested == Ipv4Address.ZERO) {
+            return resolved.peerAddress
+        }
+
+        val reserved = reservedRangeFor(requested)
+        if (reserved != null) {
+            logger(
+                "PPP IP requested peer address $requested is in unusable " +
+                    "${reserved.subnet} (${reserved.reason}); suggesting ${resolved.peerAddress}",
+            )
             return resolved.peerAddress
         }
 
@@ -180,9 +212,13 @@ class PppAddressResolver(
 
     private fun resolveAddresses(): PppAddresses {
         val subnet =
-            config.configuredSubnet?.also(::requireNoLocalOverlap)
+            config.configuredSubnet?.also {
+                requireUsablePppSubnet(it)
+                requireNoLocalOverlap(it)
+            }
                 ?: AUTO_SUBNETS.firstOrNull { candidate ->
-                    localNetworks.none { candidate.overlaps(it.subnet) }
+                    reservedRangeOverlapping(candidate) == null &&
+                        localNetworks.none { candidate.overlaps(it.subnet) }
                 }
                 ?: error(
                     "Could not find a private PPP subnet that does not overlap a local interface",
@@ -195,6 +231,14 @@ class PppAddressResolver(
             localAddress = subnet.firstUsableAddress(),
             peerAddress = subnet.secondUsableAddress(),
             allocationSubnet = subnet,
+        )
+    }
+
+    private fun requireUsablePppSubnet(subnet: Ipv4Cidr) {
+        val reserved = reservedRangeOverlapping(subnet) ?: return
+        error(
+            "Configured PPP subnet $subnet overlaps unusable IPv4 range " +
+                "${reserved.subnet} (${reserved.reason})",
         )
     }
 

@@ -71,13 +71,7 @@ class PppSession(
     fun receive(frame: PppFrame) {
         when (frame.protocol) {
             LCP_PROTOCOL -> receiveLcp(frame.payload)
-            IPCP_PROTOCOL -> {
-                if (lcpOpen) {
-                    receiveIpcp(frame.payload)
-                } else {
-                    logger("IPCP .. ignored before LCP is open")
-                }
-            }
+            IPCP_PROTOCOL -> receiveIpcp(frame.payload)
             else -> logger(
                 "PPP .. protocol=${frame.protocolName()} (0x%04X) not handled yet"
                     .format(frame.protocol),
@@ -296,6 +290,11 @@ class PppSession(
     }
 
     private fun receiveIpcp(payload: ByteArray) {
+        if (!lcpOpen) {
+            logger("IPCP .. ignored before LCP is open")
+            return
+        }
+
         val packet = PppControlPacket.parse(payload)
         if (packet == null) {
             logger("IPCP !! malformed packet (${payload.size} bytes)")

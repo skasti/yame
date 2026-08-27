@@ -90,4 +90,53 @@ class PppAddressingTest {
             resolver.selectPeerAddress(Ipv4Address.parse("192.168.50.10")),
         )
     }
+    @Test
+    fun `configured subnet rejects unusable PPP endpoint ranges`() {
+        val unusableSubnets =
+            listOf(
+                "0.0.0.0/30",
+                "127.0.0.0/30",
+                "169.254.10.0/30",
+                "224.0.0.0/30",
+                "240.0.0.0/30",
+            )
+
+        for (subnet in unusableSubnets) {
+            val resolver = PppAddressResolver(
+                config = PppIpConfig(Ipv4Cidr.parse(subnet)),
+                localNetworksProvider = { emptyList() },
+                logger = {},
+            )
+
+            assertFailsWith<IllegalStateException>("Expected $subnet to be rejected") {
+                resolver.validateConfiguredSubnet()
+            }
+        }
+    }
+
+    @Test
+    fun `unconfigured policy rejects unusable peer requested addresses`() {
+        val resolver = PppAddressResolver(
+            localNetworksProvider = { emptyList() },
+            logger = {},
+        )
+        val assignedPeer = resolver.resolve().peerAddress
+        val unusableAddresses =
+            listOf(
+                "0.0.0.1",
+                "127.0.0.1",
+                "169.254.10.20",
+                "224.0.0.1",
+                "255.255.255.255",
+            )
+
+        for (address in unusableAddresses) {
+            assertEquals(
+                assignedPeer,
+                resolver.selectPeerAddress(Ipv4Address.parse(address)),
+                "Expected $address to be replaced with the assigned peer address",
+            )
+        }
+    }
+
 }
