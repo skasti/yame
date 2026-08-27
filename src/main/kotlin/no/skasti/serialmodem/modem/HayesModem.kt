@@ -107,7 +107,7 @@ class HayesModem(
 
                         13 -> { // carriage return terminates an AT command
                             if (echo) writeRaw("\r")
-                            val command = commandBuffer.toString()
+                            val command = selectCommandCandidate(commandBuffer.toString())
                             commandBuffer.clear()
                             commandParseState = CommandParseState.SEEKING_AT
                             handleCommand(command)
@@ -125,21 +125,7 @@ class HayesModem(
                                 }
 
                                 char.code in 0x20..0x7e -> {
-                                    val previous = commandBuffer.lastOrNull()
-                                    val startsNewAtPrefix =
-                                        (char == 'T' || char == 't') &&
-                                            (previous == 'A' || previous == 'a') &&
-                                            commandBuffer.length > 2 &&
-                                            !isPlausibleDialCandidate(commandBuffer.toString())
-
-                                    if (startsNewAtPrefix) {
-                                        commandBuffer.clear()
-                                        commandBuffer.append(previous).append(char)
-                                    } else {
-                                        commandBuffer.append(char)
-                                        resynchronizeInvalidDialCandidate()
-                                    }
-
+                                    commandBuffer.append(char)
                                     if (echo) output?.write(byteArrayOf(byte))
                                 }
 
@@ -157,28 +143,43 @@ class HayesModem(
         output?.flush()
     }
 
-    private fun isPlausibleDialCandidate(command: String): Boolean {
-        if (!command.startsWith("ATD", ignoreCase = true)) return false
+    private fun selectCommandCandidate(command: String): String {
+        val lower = command.lowercase()
+        if (!lower.startsWith("at")) return command
 
-        val dialArgument = command.drop(3)
-        return dialArgument.all { char ->
-            char.isDigit() ||
-                char.uppercaseChar() in "ABCDTPW" ||
-                char in "*#+-() .,@!;"
+        if (!lower.startsWith("atd")) {
+            val laterAt = lower.lastIndexOf("at")
+            return if (laterAt > 1) command.substring(laterAt) else command
         }
+
+        // Dial strings are deliberately permissive: DialString.normalize() filters
+        // presentation characters that many legacy diallers include. Do not treat an
+        // embedded DTMF A/T sequence as a new command merely because a later formatting
+        // character would be discarded. Only abandon ATD for a later, unambiguous
+        // modem-control command.
+        var searchFrom = lower.length - 2
+        while (searchFrom > 1) {
+            val laterAt = lower.lastIndexOf("at", searchFrom)
+            if (laterAt <= 1) break
+
+            val candidate = command.substring(laterAt)
+            if (isUnambiguousControlCommand(candidate)) {
+                return candidate
+            }
+            searchFrom = laterAt - 1
+        }
+
+        return command
     }
 
-    private fun resynchronizeInvalidDialCandidate() {
-        val command = commandBuffer.toString()
-        if (!command.startsWith("ATD", ignoreCase = true) || isPlausibleDialCandidate(command)) {
-            return
-        }
-
-        val laterAt = command.lowercase().lastIndexOf("at")
-        if (laterAt > 1) {
-            commandBuffer.clear()
-            commandBuffer.append(command.substring(laterAt))
-        }
+    private fun isUnambiguousControlCommand(command: String): Boolean {
+        val upper = command.uppercase()
+        return upper == "AT" ||
+            upper.startsWith("ATZ") ||
+            upper.startsWith("AT&F") ||
+            upper.startsWith("ATE0") ||
+            upper.startsWith("ATE1") ||
+            upper.startsWith("ATH")
     }
 
     private fun receiveConnected(bytes: ByteArray) {
