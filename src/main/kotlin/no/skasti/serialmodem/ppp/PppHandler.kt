@@ -27,6 +27,7 @@ class RetroPppHandler(
     override fun connected() {
         if (output == null) return
 
+        session?.close()
         encoder = PppEncoder()
         framer = createFramer()
         session = PppSession(
@@ -71,6 +72,7 @@ class RetroPppHandler(
         syncNegotiatedOptions(session)
     }
 
+    @Synchronized
     private fun sendFrame(frame: PppFrame) {
         val output = output ?: return
         val wire = encoder.encode(frame)
@@ -89,5 +91,10 @@ class RetroPppHandler(
         encoder.protocolFieldCompression = session.transmitProtocolFieldCompression
         encoder.addressControlFieldCompression = session.transmitAddressControlFieldCompression
         framer.receiveAccm = session.receiveAccm
+    }
+
+    override fun close() {
+        session?.close()
+        session = null
     }
 }
