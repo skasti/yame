@@ -69,7 +69,7 @@ class HayesModemTest {
     }
 
     @Test
-    fun `later AT prefix replaces an unterminated false command candidate`() {
+    fun `invalid framing discards a false AT candidate before the real command`() {
         val output = ByteArrayOutputStream()
         val logs = mutableListOf<String>()
         val modem = HayesModem(output, 115200, logger = logs::add)
@@ -80,6 +80,24 @@ class HayesModemTest {
         assertTrue(output.toString().contains("OK"))
         assertFalse(output.toString().contains("ERROR"))
         assertEquals(listOf("AT <= ATZ", "AT => OK"), logs)
+    }
+
+    @Test
+    fun `embedded AT sequence in dial string does not trigger resynchronization`() {
+        val output = ByteArrayOutputStream()
+        val dialed = mutableListOf<String>()
+        val modem = HayesModem(
+            output = output,
+            baudRate = 115200,
+            tonePlayer = FakeTonePlayer { number, _, _, _, _ -> dialed += number },
+            logger = {},
+        )
+
+        modem.receive("ATDAT123\r".toByteArray())
+
+        assertEquals(listOf("A123"), dialed)
+        assertTrue(output.toString().contains("CONNECT 115200"))
+        assertEquals(HayesModem.State.CONNECTED, modem.state)
     }
 
     @Test
