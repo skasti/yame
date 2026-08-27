@@ -54,6 +54,7 @@ data class Ipv4Packet(
 
     companion object {
         const val ICMP_PROTOCOL = 1
+        const val UDP_PROTOCOL = 17
         const val DEFAULT_TTL = 64
 
         private const val VERSION = 4

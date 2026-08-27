@@ -14,6 +14,7 @@ class PppSession(
     },
     private val icmpEchoProxy: IcmpEchoProxy = SystemPingIcmpEchoProxy(),
     private val icmpEchoTimeoutMillis: Long = DEFAULT_ICMP_ECHO_TIMEOUT_MILLIS,
+    private val udpProxy: UdpProxy = SystemUdpProxy(),
 ) : Closeable {
     var transmitMru: Int = DEFAULT_MRU
         private set
@@ -375,14 +376,17 @@ class PppSession(
             return
         }
 
-        if (packet.protocol != Ipv4Packet.ICMP_PROTOCOL) {
-            logger(
+        when (packet.protocol) {
+            Ipv4Packet.ICMP_PROTOCOL -> receiveExternalIcmp(packet)
+            Ipv4Packet.UDP_PROTOCOL -> receiveExternalUdp(packet)
+            else -> logger(
                 "IPv4 .. ${packet.source} -> ${packet.destination} " +
                     "protocol=${packet.protocol} egress not handled yet",
             )
-            return
         }
+    }
 
+    private fun receiveExternalIcmp(packet: Ipv4Packet) {
         val icmp = IcmpPacket.parse(packet.payload)
         if (icmp == null) {
             logger("ICMP !! malformed packet or invalid checksum")
@@ -432,6 +436,51 @@ class PppSession(
         }
     }
 
+    private fun receiveExternalUdp(packet: Ipv4Packet) {
+        val udp = UdpPacket.parse(
+            bytes = packet.payload,
+            source = packet.source,
+            destination = packet.destination,
+        )
+        if (udp == null) {
+            logger("UDP !! malformed datagram or invalid checksum")
+            return
+        }
+
+        val generation = ipcpGeneration
+        val flow = UdpFlow(
+            peerPort = udp.sourcePort,
+            destination = packet.destination,
+            destinationPort = udp.destinationPort,
+            generation = generation,
+        )
+        logger(
+            "UDP <= ${packet.source}:${udp.sourcePort} -> " +
+                "${packet.destination}:${udp.destinationPort} " +
+                "payload=${udp.payload.size} bytes",
+        )
+
+        udpProxy.send(flow, udp.payload) { result ->
+            result.fold(
+                onSuccess = { payload ->
+                    sendExternalUdpReply(
+                        flow = flow,
+                        payload = payload,
+                        dscpEcn = packet.dscpEcn,
+                    )
+                },
+                onFailure = { error ->
+                    val reason = error.message ?: error.javaClass.simpleName
+                    logger(
+                        "UDP !! ${packet.destination}:${udp.destinationPort} " +
+                            "flow failed: $reason",
+                    )
+                },
+            )
+        }
+    }
+
+
     @Synchronized
     private fun sendExternalEchoReply(
         request: Ipv4Packet,
@@ -467,6 +516,59 @@ class PppSession(
             logDestination = request.source,
             identifier = identifier,
             sequence = sequence,
+        )
+    }
+
+    @Synchronized
+    private fun sendExternalUdpReply(
+        flow: UdpFlow,
+        payload: ByteArray,
+        dscpEcn: Int,
+    ) {
+        if (
+            closed ||
+            !ipcpOpen ||
+            flow.generation != ipcpGeneration
+        ) {
+            logger(
+                "UDP .. dropping reply from ${flow.destination}:${flow.destinationPort}; " +
+                    "PPP/IPCP state changed",
+            )
+            return
+        }
+
+        val udp = UdpPacket(
+            sourcePort = flow.destinationPort,
+            destinationPort = flow.peerPort,
+            payload = payload,
+        )
+        val replyPacket = Ipv4Packet(
+            dscpEcn = dscpEcn,
+            protocol = Ipv4Packet.UDP_PROTOCOL,
+            source = flow.destination,
+            destination = peerIpAddress,
+            payload = udp.encode(
+                source = flow.destination,
+                destination = peerIpAddress,
+            ),
+        )
+        val encodedReply = replyPacket.encode()
+        if (encodedReply.size > transmitMru) {
+            logger(
+                "UDP .. reply ${encodedReply.size} bytes exceeds peer MRU $transmitMru; not sent",
+            )
+            return
+        }
+
+        sendFrame(
+            PppFrame(
+                protocol = IPV4_PROTOCOL,
+                payload = encodedReply,
+            ),
+        )
+        logger(
+            "UDP => ${flow.destination}:${flow.destinationPort} -> " +
+                "$peerIpAddress:${flow.peerPort} payload=${payload.size} bytes",
         )
     }
 
@@ -536,6 +638,7 @@ class PppSession(
 
         if (wasOpen) {
             ipcpGeneration++
+            udpProxy.invalidateBefore(ipcpGeneration)
             restartLocalIpcpNegotiation()
         }
 
@@ -724,6 +827,7 @@ class PppSession(
 
     private fun resetIpcp() {
         ipcpGeneration++
+        udpProxy.invalidateBefore(ipcpGeneration)
         ipcpStarted = false
         ipcpPeerConfigured = false
         ipcpLocalConfigured = false
@@ -742,6 +846,7 @@ class PppSession(
         stopLcpRestartTimer()
         stopIpcpRestartTimer()
         icmpEchoProxy.close()
+        udpProxy.close()
     }
 
     companion object {

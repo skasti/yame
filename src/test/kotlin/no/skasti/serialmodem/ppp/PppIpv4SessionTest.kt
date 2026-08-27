@@ -243,10 +243,152 @@ class PppIpv4SessionTest {
         assertTrue(sent.isEmpty())
     }
 
+    @Test
+    fun `external UDP datagram is proxied and reply is returned over PPP`() {
+        val sent = mutableListOf<PppFrame>()
+        val udpProxy = FakeUdpProxy(replyPayload = byteArrayOf(0x42, 0x43))
+        val session = newSession(sent, udpProxy = udpProxy)
+        openIpcp(session, sent)
+        sent.clear()
+
+        val source = Ipv4Address.parse("10.0.0.2")
+        val destination = Ipv4Address.parse("8.8.8.8")
+        val udp = UdpPacket(
+            sourcePort = 1037,
+            destinationPort = 53,
+            payload = byteArrayOf(0x12, 0x34, 0x01, 0x00),
+        )
+        val request = Ipv4Packet(
+            protocol = Ipv4Packet.UDP_PROTOCOL,
+            source = source,
+            destination = destination,
+            payload = udp.encode(source, destination),
+        )
+
+        session.receive(PppFrame(PppSession.IPV4_PROTOCOL, request.encode()))
+
+        val sentFlow = udpProxy.sent.single()
+        assertEquals(1037, sentFlow.flow.peerPort)
+        assertEquals(destination, sentFlow.flow.destination)
+        assertEquals(53, sentFlow.flow.destinationPort)
+        assertContentEquals(byteArrayOf(0x12, 0x34, 0x01, 0x00), sentFlow.payload)
+
+        val frame = sent.single()
+        val reply = requireNotNull(Ipv4Packet.parse(frame.payload))
+        assertEquals(Ipv4Packet.UDP_PROTOCOL, reply.protocol)
+        assertEquals(destination, reply.source)
+        assertEquals(source, reply.destination)
+
+        val replyUdp = requireNotNull(
+            UdpPacket.parse(
+                bytes = reply.payload,
+                source = reply.source,
+                destination = reply.destination,
+            ),
+        )
+        assertEquals(53, replyUdp.sourcePort)
+        assertEquals(1037, replyUdp.destinationPort)
+        assertContentEquals(byteArrayOf(0x42, 0x43), replyUdp.payload)
+
+        session.close()
+    }
+
+    @Test
+    fun `invalid external UDP checksum is rejected`() {
+        val sent = mutableListOf<PppFrame>()
+        val logs = mutableListOf<String>()
+        val udpProxy = FakeUdpProxy()
+        val session = newSession(sent, logs::add, udpProxy = udpProxy)
+        openIpcp(session, sent)
+        sent.clear()
+
+        val source = Ipv4Address.parse("10.0.0.2")
+        val destination = Ipv4Address.parse("8.8.8.8")
+        val encodedUdp = UdpPacket(
+            sourcePort = 1037,
+            destinationPort = 53,
+            payload = byteArrayOf(1, 2, 3, 4),
+        ).encode(source, destination)
+        encodedUdp[encodedUdp.lastIndex] = (encodedUdp.last().toInt() xor 0x01).toByte()
+
+        val request = Ipv4Packet(
+            protocol = Ipv4Packet.UDP_PROTOCOL,
+            source = source,
+            destination = destination,
+            payload = encodedUdp,
+        )
+        session.receive(PppFrame(PppSession.IPV4_PROTOCOL, request.encode()))
+
+        assertTrue(udpProxy.sent.isEmpty())
+        assertTrue(sent.isEmpty())
+        assertTrue(logs.any { it.contains("invalid checksum") })
+        session.close()
+    }
+
+    @Test
+    fun `external UDP reply is dropped after IPCP renegotiates`() {
+        val sent = mutableListOf<PppFrame>()
+        val udpProxy = DeferredUdpProxy()
+        val session = newSession(sent, udpProxy = udpProxy)
+        openIpcp(session, sent)
+        sent.clear()
+
+        val source = Ipv4Address.parse("10.0.0.2")
+        val destination = Ipv4Address.parse("8.8.8.8")
+        val request = Ipv4Packet(
+            protocol = Ipv4Packet.UDP_PROTOCOL,
+            source = source,
+            destination = destination,
+            payload = UdpPacket(
+                sourcePort = 1037,
+                destinationPort = 53,
+                payload = byteArrayOf(1, 2),
+            ).encode(source, destination),
+        )
+        session.receive(PppFrame(PppSession.IPV4_PROTOCOL, request.encode()))
+
+        session.receive(
+            PppFrame(
+                protocol = PppSession.IPCP_PROTOCOL,
+                payload = PppControlPacket(
+                    code = PppControlPacket.CONFIGURE_REQUEST,
+                    identifier = 10,
+                    data = PppControlOption(
+                        type = PppControlOption.IPCP_IP_ADDRESS,
+                        data = source.toByteArray(),
+                    ).encode(),
+                ).encode(),
+            ),
+        )
+        val renegotiationRequest = sent
+            .asSequence()
+            .filter { it.protocol == PppSession.IPCP_PROTOCOL }
+            .mapNotNull { PppControlPacket.parse(it.payload) }
+            .first { it.code == PppControlPacket.CONFIGURE_REQUEST }
+        session.receive(
+            PppFrame(
+                protocol = PppSession.IPCP_PROTOCOL,
+                payload = PppControlPacket(
+                    code = PppControlPacket.CONFIGURE_ACK,
+                    identifier = renegotiationRequest.identifier,
+                    data = renegotiationRequest.data,
+                ).encode(),
+            ),
+        )
+        assertTrue(session.ipcpOpen)
+
+        sent.clear()
+        udpProxy.reply(byteArrayOf(9, 9))
+
+        assertTrue(sent.isEmpty())
+        session.close()
+    }
+
     private fun newSession(
         sent: MutableList<PppFrame>,
         logger: (String) -> Unit = {},
         icmpEchoProxy: IcmpEchoProxy = FakeIcmpEchoProxy(),
+        udpProxy: UdpProxy = FakeUdpProxy(),
     ): PppSession {
         val addresses = PppAddresses(
             localAddress = Ipv4Address.parse("10.0.0.1"),
@@ -261,6 +403,7 @@ class PppIpv4SessionTest {
                 if (requested == Ipv4Address.ZERO) addresses.peerAddress else requested
             },
             icmpEchoProxy = icmpEchoProxy,
+            udpProxy = udpProxy,
         )
     }
 
@@ -375,6 +518,42 @@ class PppIpv4SessionTest {
         ) {
             destinations += destination
             callback(Result.success(reachable))
+        }
+    }
+
+    private data class SentUdp(
+        val flow: UdpFlow,
+        val payload: ByteArray,
+    )
+
+    private class FakeUdpProxy(
+        private val replyPayload: ByteArray? = null,
+    ) : UdpProxy {
+        val sent = mutableListOf<SentUdp>()
+
+        override fun send(
+            flow: UdpFlow,
+            payload: ByteArray,
+            onReply: (Result<ByteArray>) -> Unit,
+        ) {
+            sent += SentUdp(flow, payload.copyOf())
+            replyPayload?.let { onReply(Result.success(it.copyOf())) }
+        }
+    }
+
+    private class DeferredUdpProxy : UdpProxy {
+        private var onReply: ((Result<ByteArray>) -> Unit)? = null
+
+        override fun send(
+            flow: UdpFlow,
+            payload: ByteArray,
+            onReply: (Result<ByteArray>) -> Unit,
+        ) {
+            this.onReply = onReply
+        }
+
+        fun reply(payload: ByteArray) {
+            requireNotNull(onReply)(Result.success(payload.copyOf()))
         }
     }
 
