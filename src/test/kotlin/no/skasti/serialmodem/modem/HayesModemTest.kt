@@ -23,7 +23,7 @@ class HayesModemTest {
     }
 
     @Test
-    fun `dial command normalizes number and uses configured tone settings before connecting`() {
+    fun `dial normalizes number and uses configured tone settings before connecting`() {
         val output = ByteArrayOutputStream()
         val dialed = mutableListOf<String>()
         val logs = mutableListOf<String>()
@@ -46,7 +46,7 @@ class HayesModemTest {
             logger = logs::add,
         )
 
-        modem.receive("ATDT+47 (345) 76-543\r".toByteArray())
+        modem.dial("+47 (345) 76-543")
 
         assertEquals(listOf("004734576543"), dialed)
         assertTrue(logs.contains("TONE [dial_tone] test dial tone"))
