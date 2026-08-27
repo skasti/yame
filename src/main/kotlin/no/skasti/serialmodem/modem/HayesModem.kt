@@ -124,7 +124,20 @@ class HayesModem(
                                 }
 
                                 char.code in 0x20..0x7e -> {
-                                    commandBuffer.append(char)
+                                    val previous = commandBuffer.lastOrNull()
+                                    val startsNewAtPrefix =
+                                        (char == 'T' || char == 't') &&
+                                            (previous == 'A' || previous == 'a') &&
+                                            commandBuffer.length > 2 &&
+                                            !commandBuffer.startsWith("ATD", ignoreCase = true)
+
+                                    if (startsNewAtPrefix) {
+                                        commandBuffer.clear()
+                                        commandBuffer.append(previous).append(char)
+                                    } else {
+                                        commandBuffer.append(char)
+                                    }
+
                                     if (echo) output?.write(byteArrayOf(byte))
                                 }
 
@@ -254,6 +267,7 @@ class HayesModem(
 
     fun attachCarrierPresent(setCarrierPresent: (Boolean) -> Unit) {
         this.setCarrierPresent = setCarrierPresent
+        setCarrierPresent(false)
     }
 
     private fun handleCommand(rawCommand: String) {
