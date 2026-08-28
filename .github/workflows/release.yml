@@ -284,8 +284,19 @@ jobs:
             # planning detects the missing ZIP and retries it here.
             if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
                  grep -Fxq "$asset_name"; then
-              gh release upload "$tag" "$asset" \
-                --repo "$GITHUB_REPOSITORY"
+              if ! gh release upload "$tag" "$asset" \
+                --repo "$GITHUB_REPOSITORY"; then
+                # Another overlapping recovery run may have uploaded the same asset
+                # after our existence check. Treat that conflict as success only if
+                # the expected asset is now present; otherwise preserve the failure.
+                if gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
+                   grep -Fxq "$asset_name"; then
+                  echo "Asset $asset_name was uploaded concurrently; continuing"
+                else
+                  echo "::error::Failed to upload $asset_name for $tag"
+                  exit 1
+                fi
+              fi
             fi
 
             # Publish only after the expected asset is present. This covers both fresh
