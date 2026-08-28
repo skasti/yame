@@ -1,22 +1,33 @@
 name: Release
 
 on:
-  push:
+  pull_request:
     branches:
       - main
+    types:
+      - closed
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
 jobs:
   release:
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     env:
-      RELEASE_VERSION: 0.1.0-main.${{ github.run_number }}
+      TARGET_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+      PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
 
     steps:
-      - name: Check out repository
+      - name: Check out merged commit
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
 
       - name: Set up JDK 21
         uses: actions/setup-java@v5
@@ -29,25 +40,88 @@ jobs:
         with:
           cache-provider: basic
 
+      - name: Determine release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          existing_tag="$(
+            git tag --points-at "$TARGET_SHA" |
+              grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' |
+              sort -V |
+              tail -n 1 || true
+          )"
+
+          if [ -n "$existing_tag" ]; then
+            version="${existing_tag#v}"
+            echo "Reusing existing release tag $existing_tag for this merge commit"
+          else
+            latest_tag="$(
+              git tag --list 'v*' |
+                grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' |
+                sort -V |
+                tail -n 1 || true
+            )"
+
+            if [ -n "$latest_tag" ]; then
+              current="${latest_tag#v}"
+            else
+              current="0.1.0"
+            fi
+
+            IFS='.' read -r major minor patch <<< "$current"
+
+            has_major=false
+            has_minor=false
+            case ",$PR_LABELS," in
+              *",release:major,"*) has_major=true ;;
+            esac
+            case ",$PR_LABELS," in
+              *",release:minor,"*) has_minor=true ;;
+            esac
+
+            if [ "$has_major" = true ] && [ "$has_minor" = true ]; then
+              echo "::error::PR must not have both release:major and release:minor labels"
+              exit 1
+            fi
+
+            if [ "$has_major" = true ]; then
+              major=$((major + 1))
+              minor=0
+              patch=0
+            elif [ "$has_minor" = true ]; then
+              minor=$((minor + 1))
+              patch=0
+            else
+              patch=$((patch + 1))
+            fi
+
+            version="$major.$minor.$patch"
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
       - name: Build and test release
-        run: ./gradlew --no-daemon clean test distZip -PreleaseVersion="$RELEASE_VERSION"
+        run: ./gradlew --no-daemon clean test distZip -PreleaseVersion="${{ steps.version.outputs.version }}"
 
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: |
-          tag="v$RELEASE_VERSION"
+          set -euo pipefail
 
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" build/distributions/*.zip --clobber
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" build/distributions/*.zip --clobber
 
-            if [ "$(gh release view "$tag" --json isDraft --jq '.isDraft')" = "true" ]; then
-              gh release edit "$tag" --draft=false --prerelease
+            if [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')" = "true" ]; then
+              gh release edit "$RELEASE_TAG" --draft=false
             fi
           else
-            gh release create "$tag" build/distributions/*.zip \
-              --target "$GITHUB_SHA" \
-              --title "$tag" \
-              --generate-notes \
-              --prerelease
+            gh release create "$RELEASE_TAG" build/distributions/*.zip \
+              --target "$TARGET_SHA" \
+              --title "$RELEASE_TAG" \
+              --generate-notes
           fi
