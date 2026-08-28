@@ -24,6 +24,7 @@ DNS_FIXTURE_PID=""
 SOCAT_PID=""
 YAME_PID=""
 DOSBOX_PID=""
+ORIGINAL_UNPRIVILEGED_PORT_START=""
 
 cleanup() {
     local status=$?
@@ -33,6 +34,10 @@ cleanup() {
             kill "$pid" 2>/dev/null || true
         fi
     done
+
+    if [[ -n "$ORIGINAL_UNPRIVILEGED_PORT_START" ]]; then
+        sudo sysctl -w             "net.ipv4.ip_unprivileged_port_start=$ORIGINAL_UNPRIVILEGED_PORT_START"             >/dev/null || true
+    fi
 
     if [[ $status -ne 0 ]]; then
         echo
@@ -134,7 +139,9 @@ YAMETEST.BAT
 EOF
 
 # Permit the unprivileged fixture process to bind the standard DNS port.
-if [[ "$(sysctl -n net.ipv4.ip_unprivileged_port_start)" -gt 53 ]]; then
+current_unprivileged_port_start="$(sysctl -n net.ipv4.ip_unprivileged_port_start)"
+if [[ "$current_unprivileged_port_start" -gt 53 ]]; then
+    ORIGINAL_UNPRIVILEGED_PORT_START="$current_unprivileged_port_start"
     sudo sysctl -w net.ipv4.ip_unprivileged_port_start=53 >/dev/null
 fi
 
