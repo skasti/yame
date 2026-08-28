@@ -48,27 +48,51 @@ jobs:
 
           lock_tag="release-version-lock"
           lock_acquired=false
+          owned_lock_oid=""
 
           release_lock() {
-            if [ "$lock_acquired" = true ]; then
-              git push origin ":refs/tags/$lock_tag" >/dev/null 2>&1 || true
+            if [ "$lock_acquired" = true ] && [ -n "$owned_lock_oid" ]; then
+              # Delete only the exact lock object this run created. If another run has
+              # replaced it, --force-with-lease refuses to remove the new owner's lock.
+              git push \
+                --force-with-lease="refs/tags/$lock_tag:$owned_lock_oid" \
+                origin ":refs/tags/$lock_tag" >/dev/null 2>&1 || true
               git tag -d "$lock_tag" >/dev/null 2>&1 || true
               lock_acquired=false
+              owned_lock_oid=""
             fi
           }
           trap release_lock EXIT
 
           while [ "$lock_acquired" = false ]; do
-            if git ls-remote --exit-code --tags origin "refs/tags/$lock_tag" >/dev/null 2>&1; then
-              git fetch --force origin "refs/tags/$lock_tag:refs/tags/$lock_tag"
+            observed_lock_oid="$(
+              git ls-remote --tags origin "refs/tags/$lock_tag" | awk '{print $1}'
+            )"
+
+            if [ -n "$observed_lock_oid" ]; then
+              # Fetch and verify the exact object we observed before considering it
+              # stale. The ref may have changed between ls-remote and fetch.
+              if ! git fetch --force origin "refs/tags/$lock_tag:refs/tags/$lock_tag" >/dev/null 2>&1; then
+                sleep 2
+                continue
+              fi
+
+              fetched_lock_oid="$(git rev-parse "refs/tags/$lock_tag")"
+              if [ "$fetched_lock_oid" != "$observed_lock_oid" ]; then
+                sleep 2
+                continue
+              fi
+
               lock_time="$(
                 git for-each-ref --format='%(taggerdate:unix)' "refs/tags/$lock_tag"
               )"
               now="$(date +%s)"
 
               if [ -n "$lock_time" ] && [ $((now - lock_time)) -gt 900 ]; then
-                echo "Removing stale release version lock"
-                git push origin ":refs/tags/$lock_tag" >/dev/null 2>&1 || true
+                echo "Removing stale release version lock $observed_lock_oid"
+                git push \
+                  --force-with-lease="refs/tags/$lock_tag:$observed_lock_oid" \
+                  origin ":refs/tags/$lock_tag" >/dev/null 2>&1 || true
                 git tag -d "$lock_tag" >/dev/null 2>&1 || true
               else
                 sleep 2
@@ -78,9 +102,11 @@ jobs:
 
             git tag -d "$lock_tag" >/dev/null 2>&1 || true
             git tag -a "$lock_tag" -m "Release version lock for workflow run $GITHUB_RUN_ID" "origin/main"
+            candidate_lock_oid="$(git rev-parse "refs/tags/$lock_tag")"
 
             if git push origin "refs/tags/$lock_tag" >/dev/null 2>&1; then
               lock_acquired=true
+              owned_lock_oid="$candidate_lock_oid"
             else
               git tag -d "$lock_tag" >/dev/null 2>&1 || true
               sleep 2
@@ -115,14 +141,29 @@ jobs:
           fi
 
           # First recover any already-reserved SemVer tags whose release publication
-          # previously failed. They are rebuilt after the lock is released.
+          # previously failed, remained a draft, or is missing its expected ZIP asset.
           while IFS= read -r tag; do
             [ -n "$tag" ] || continue
 
-            if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
-               [ "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' 2>/dev/null || echo false)" = "true" ]; then
+            version="${tag#v}"
+            expected_asset="serial-modem-emulator-$version.zip"
+            needs_recovery=false
+
+            if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              needs_recovery=true
+            else
+              if [ "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = "true" ]; then
+                needs_recovery=true
+              fi
+
+              if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
+                   grep -Fxq "$expected_asset"; then
+                needs_recovery=true
+              fi
+            fi
+
+            if [ "$needs_recovery" = true ]; then
               sha="$(git rev-list -n 1 "$tag")"
-              version="${tag#v}"
               printf '%s\t%s\t%s\n' "$tag" "$sha" "$version" >> "$RUNNER_TEMP/releases.tsv"
             fi
           done < <(
@@ -222,27 +263,36 @@ jobs:
 
             ./gradlew --no-daemon clean test distZip -PreleaseVersion="$version"
 
-            if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-              gh release upload "$tag" build/distributions/*.zip \
-                --repo "$GITHUB_REPOSITORY" \
-                --clobber
+            asset="build/distributions/serial-modem-emulator-$version.zip"
+            asset_name="$(basename "$asset")"
 
-              if [ "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = "true" ]; then
-                gh release edit "$tag" \
-                  --repo "$GITHUB_REPOSITORY" \
-                  --draft=false
-              fi
-            else
-              if ! gh release create "$tag" build/distributions/*.zip \
+            if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              # Create the release state explicitly. Assets are uploaded separately so
+              # a partial failure always leaves a recoverable draft.
+              if ! gh release create "$tag" \
                 --repo "$GITHUB_REPOSITORY" \
                 --target "$sha" \
                 --title "$tag" \
-                --generate-notes; then
-                # Another overlapping recovery run may have created the release
-                # after our existence check. In that case, finish idempotently.
-                gh release upload "$tag" build/distributions/*.zip \
-                  --repo "$GITHUB_REPOSITORY" \
-                  --clobber
+                --generate-notes \
+                --draft; then
+                # A concurrent recovery run may have created it after our check.
+                gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null
               fi
+            fi
+
+            # Never clobber a healthy asset. If upload failed previously, recovery
+            # planning detects the missing ZIP and retries it here.
+            if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
+                 grep -Fxq "$asset_name"; then
+              gh release upload "$tag" "$asset" \
+                --repo "$GITHUB_REPOSITORY"
+            fi
+
+            # Publish only after the expected asset is present. This covers both fresh
+            # drafts and drafts recovered from an earlier failed upload.
+            if [ "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = "true" ]; then
+              gh release edit "$tag" \
+                --repo "$GITHUB_REPOSITORY" \
+                --draft=false
             fi
           done < "$RUNNER_TEMP/releases.tsv"
