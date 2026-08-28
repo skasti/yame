@@ -107,7 +107,10 @@ class RetroPppHandlerTest {
 
     private fun decode(wire: ByteArray): List<PppFrame> {
         val frames = mutableListOf<PppFrame>()
-        PppFramer(frames::add).receive(wire)
+        PppFramer(
+            onFrame = frames::add,
+            receiveAccm = 0u,
+        ).receive(wire)
         return frames
     }
 }
