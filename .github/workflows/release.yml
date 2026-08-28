@@ -40,6 +40,10 @@ jobs:
 
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" build/distributions/*.zip --clobber
+
+            if [ "$(gh release view "$tag" --json isDraft --jq '.isDraft')" = "true" ]; then
+              gh release edit "$tag" --draft=false --prerelease
+            fi
           else
             gh release create "$tag" build/distributions/*.zip \
               --target "$GITHUB_SHA" \
