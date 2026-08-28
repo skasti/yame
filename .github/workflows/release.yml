@@ -16,16 +16,18 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
 
       - name: Build and test release
         run: ./gradlew --no-daemon clean test distZip -PreleaseVersion="$RELEASE_VERSION"
@@ -42,5 +44,6 @@ jobs:
             gh release create "$tag" build/distributions/*.zip \
               --target "$GITHUB_SHA" \
               --title "$tag" \
-              --generate-notes
+              --generate-notes \
+              --prerelease
           fi
