@@ -55,7 +55,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
                 flags = 0x8180
                 answer_count = 1
                 answer = (
-                    b"\\xc0\\x0c"
+                    bytes((0xC0, 0x0C))
                     + struct.pack("!HHIH", 1, 1, 60, 4)
                     + socket.inet_aton(ANSWER_ADDRESS)
                 )
