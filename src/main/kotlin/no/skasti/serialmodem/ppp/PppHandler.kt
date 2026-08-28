@@ -14,6 +14,7 @@ interface PppHandler : Closeable {
 class RetroPppHandler(
     private val logger: (String) -> Unit = ::println,
     private val ipConfig: PppIpConfig = PppIpConfig(),
+    private val dnsConfig: PppDnsConfig = PppDnsConfig(),
 ) : PppHandler {
     private var output: OutputStream? = null
     private var encoder = PppEncoder()
@@ -43,6 +44,7 @@ class RetroPppHandler(
             logger = logger,
             ipAddresses = addresses,
             selectPeerAddress = addressResolver::selectPeerAddress,
+            dnsConfig = dnsConfig,
         )
     }
 

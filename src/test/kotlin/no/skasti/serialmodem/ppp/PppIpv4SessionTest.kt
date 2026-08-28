@@ -185,10 +185,15 @@ class PppIpv4SessionTest {
                 payload = PppControlPacket(
                     code = PppControlPacket.CONFIGURE_REQUEST,
                     identifier = 10,
-                    data = PppControlOption(
-                        type = PppControlOption.IPCP_IP_ADDRESS,
-                        data = Ipv4Address.parse("10.0.0.2").toByteArray(),
-                    ).encode(),
+                    data =
+                        PppControlOption(
+                            type = PppControlOption.IPCP_IP_ADDRESS,
+                            data = Ipv4Address.parse("10.0.0.2").toByteArray(),
+                        ).encode() +
+                            PppControlOption(
+                                type = PppControlOption.IPCP_PRIMARY_DNS,
+                                data = Ipv4Address.parse("10.0.0.1").toByteArray(),
+                            ).encode(),
                 ).encode(),
             ),
         )
@@ -241,6 +246,60 @@ class PppIpv4SessionTest {
         proxy.complete(reachable = true)
 
         assertTrue(sent.isEmpty())
+    }
+
+    @Test
+    fun `local DNS datagram is proxied to configured upstream and returned from YAME address`() {
+        val sent = mutableListOf<PppFrame>()
+        val responsePayload = byteArrayOf(0x12, 0x34, 0x81.toByte(), 0x80.toByte())
+        val udpProxy = FakeUdpProxy(replyPayload = responsePayload)
+        val session = newSession(
+            sent = sent,
+            udpProxy = udpProxy,
+            dnsConfig = PppDnsConfig(
+                upstreamServer = Ipv4Address.parse("1.1.1.1"),
+            ),
+        )
+        openIpcp(session, sent)
+        sent.clear()
+
+        val peer = Ipv4Address.parse("10.0.0.2")
+        val yame = Ipv4Address.parse("10.0.0.1")
+        val queryPayload = byteArrayOf(0x12, 0x34, 0x01, 0x00)
+        val request = Ipv4Packet(
+            protocol = Ipv4Packet.UDP_PROTOCOL,
+            source = peer,
+            destination = yame,
+            payload = UdpPacket(
+                sourcePort = 1025,
+                destinationPort = 53,
+                payload = queryPayload,
+            ).encode(peer, yame),
+        )
+
+        session.receive(PppFrame(PppSession.IPV4_PROTOCOL, request.encode()))
+
+        val forwarded = udpProxy.sent.single()
+        assertEquals(Ipv4Address.parse("1.1.1.1"), forwarded.flow.destination)
+        assertEquals(53, forwarded.flow.destinationPort)
+        assertEquals(1025, forwarded.flow.peerPort)
+        assertContentEquals(queryPayload, forwarded.payload)
+
+        val frame = sent.single()
+        val reply = requireNotNull(Ipv4Packet.parse(frame.payload))
+        assertEquals(yame, reply.source)
+        assertEquals(peer, reply.destination)
+        val udp = requireNotNull(
+            UdpPacket.parse(
+                bytes = reply.payload,
+                source = reply.source,
+                destination = reply.destination,
+            ),
+        )
+        assertEquals(53, udp.sourcePort)
+        assertEquals(1025, udp.destinationPort)
+        assertContentEquals(responsePayload, udp.payload)
+        session.close()
     }
 
     @Test
@@ -353,10 +412,15 @@ class PppIpv4SessionTest {
                 payload = PppControlPacket(
                     code = PppControlPacket.CONFIGURE_REQUEST,
                     identifier = 10,
-                    data = PppControlOption(
-                        type = PppControlOption.IPCP_IP_ADDRESS,
-                        data = source.toByteArray(),
-                    ).encode(),
+                    data =
+                        PppControlOption(
+                            type = PppControlOption.IPCP_IP_ADDRESS,
+                            data = source.toByteArray(),
+                        ).encode() +
+                            PppControlOption(
+                                type = PppControlOption.IPCP_PRIMARY_DNS,
+                                data = Ipv4Address.parse("10.0.0.1").toByteArray(),
+                            ).encode(),
                 ).encode(),
             ),
         )
@@ -389,6 +453,7 @@ class PppIpv4SessionTest {
         logger: (String) -> Unit = {},
         icmpEchoProxy: IcmpEchoProxy = FakeIcmpEchoProxy(),
         udpProxy: UdpProxy = FakeUdpProxy(),
+        dnsConfig: PppDnsConfig = PppDnsConfig(),
     ): PppSession {
         val addresses = PppAddresses(
             localAddress = Ipv4Address.parse("10.0.0.1"),
@@ -404,6 +469,7 @@ class PppIpv4SessionTest {
             },
             icmpEchoProxy = icmpEchoProxy,
             udpProxy = udpProxy,
+            dnsConfig = dnsConfig,
         )
     }
 
@@ -468,10 +534,15 @@ class PppIpv4SessionTest {
                 payload = PppControlPacket(
                     code = PppControlPacket.CONFIGURE_REQUEST,
                     identifier = 9,
-                    data = PppControlOption(
-                        type = PppControlOption.IPCP_IP_ADDRESS,
-                        data = Ipv4Address.parse("10.0.0.2").toByteArray(),
-                    ).encode(),
+                    data =
+                        PppControlOption(
+                            type = PppControlOption.IPCP_IP_ADDRESS,
+                            data = Ipv4Address.parse("10.0.0.2").toByteArray(),
+                        ).encode() +
+                            PppControlOption(
+                                type = PppControlOption.IPCP_PRIMARY_DNS,
+                                data = Ipv4Address.parse("10.0.0.1").toByteArray(),
+                            ).encode(),
                 ).encode(),
             ),
         )
