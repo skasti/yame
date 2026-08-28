@@ -33,3 +33,11 @@ jobs:
 
       - name: Build and test
         run: ./gradlew --no-daemon clean build
+
+      - name: Install DOSBox integration-test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes dosbox socat xvfb xauth
+
+      - name: DOSBox dial-up PPP and DNS compatibility suite
+        run: bash scripts/dosbox-network-integration-test.sh
