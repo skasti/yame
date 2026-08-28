@@ -13,210 +13,236 @@ jobs:
   release:
     runs-on: ubuntu-latest
     env:
-      TARGET_SHA: ${{ github.sha }}
+      # main at the point automatic releases were introduced; this represents v0.1.0.
+      RELEASE_BOOTSTRAP_SHA: 5fd66e4a3580ed3667ec65b0675ac28e611132ce
 
     steps:
-      - name: Check out merged commit
+      - name: Check out main
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Resolve merged PR and reserve release version
-        id: release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          pr_number="$(
-            gh api \
-              -H "Accept: application/vnd.github+json" \
-              "/repos/$GITHUB_REPOSITORY/commits/$TARGET_SHA/pulls" \
-              --jq '[.[] | select(.merged_at != null and .base.ref == "main")] | sort_by(.merged_at) | last | .number // empty'
-          )"
-
-          if [ -z "$pr_number" ]; then
-            echo "No merged PR is associated with $TARGET_SHA; skipping release."
-            echo "should_release=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "Resolved merged PR #$pr_number"
-          labels="$(
-            gh pr view "$pr_number" \
-              --repo "$GITHUB_REPOSITORY" \
-              --json labels \
-              --jq '[.labels[].name] | join(",")'
-          )"
-
-          has_major=false
-          has_minor=false
-          case ",$labels," in
-            *",release:major,"*) has_major=true ;;
-          esac
-          case ",$labels," in
-            *",release:minor,"*) has_minor=true ;;
-          esac
-
-          if [ "$has_major" = true ] && [ "$has_minor" = true ]; then
-            echo "::error::PR #$pr_number must not have both release:major and release:minor labels"
-            exit 1
-          fi
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch --tags --force origin
-
-          existing_tag="$(
-            git tag --points-at "$TARGET_SHA" |
-              grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' |
-              sort -V |
-              tail -n 1 || true
-          )"
-
-          if [ -n "$existing_tag" ]; then
-            version="${existing_tag#v}"
-            echo "Reusing existing release tag $existing_tag for this merge commit"
-          else
-            lock_tag="release-version-lock"
-            lock_acquired=false
-
-            release_lock() {
-              if [ "$lock_acquired" = true ]; then
-                git push origin ":refs/tags/$lock_tag" >/dev/null 2>&1 || true
-                git tag -d "$lock_tag" >/dev/null 2>&1 || true
-                lock_acquired=false
-              fi
-            }
-            trap release_lock EXIT
-
-            while [ "$lock_acquired" = false ]; do
-              git fetch --tags --force origin
-
-              if git show-ref --verify --quiet "refs/tags/$lock_tag"; then
-                lock_time="$(
-                  git for-each-ref --format='%(taggerdate:unix)' "refs/tags/$lock_tag"
-                )"
-                now="$(date +%s)"
-
-                if [ -n "$lock_time" ] && [ $((now - lock_time)) -gt 300 ]; then
-                  echo "Removing stale release version lock"
-                  git push origin ":refs/tags/$lock_tag" >/dev/null 2>&1 || true
-                  git tag -d "$lock_tag" >/dev/null 2>&1 || true
-                else
-                  sleep 2
-                fi
-                continue
-              fi
-
-              git tag -a "$lock_tag" -m "Release version lock for workflow run $GITHUB_RUN_ID" "$TARGET_SHA"
-              if git push origin "refs/tags/$lock_tag" >/dev/null 2>&1; then
-                lock_acquired=true
-              else
-                git tag -d "$lock_tag" >/dev/null 2>&1 || true
-                sleep 2
-              fi
-            done
-
-            # Another run may have completed while this run was waiting for the lock.
-            git fetch --tags --force origin
-            existing_tag="$(
-              git tag --points-at "$TARGET_SHA" |
-                grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' |
-                sort -V |
-                tail -n 1 || true
-            )"
-
-            if [ -n "$existing_tag" ]; then
-              version="${existing_tag#v}"
-              echo "Reusing release tag $existing_tag created while waiting for the lock"
-            else
-              while true; do
-                latest_tag="$(
-                  git tag --list 'v*' |
-                    grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' |
-                    sort -V |
-                    tail -n 1 || true
-                )"
-
-                if [ -n "$latest_tag" ]; then
-                  current="${latest_tag#v}"
-                else
-                  current="0.1.0"
-                fi
-
-                IFS='.' read -r major minor patch <<< "$current"
-
-                if [ "$has_major" = true ]; then
-                  major=$((major + 1))
-                  minor=0
-                  patch=0
-                elif [ "$has_minor" = true ]; then
-                  minor=$((minor + 1))
-                  patch=0
-                else
-                  patch=$((patch + 1))
-                fi
-
-                version="$major.$minor.$patch"
-                tag="v$version"
-
-                git tag "$tag" "$TARGET_SHA"
-                if git push origin "refs/tags/$tag" >/dev/null 2>&1; then
-                  echo "Reserved $tag for PR #$pr_number"
-                  break
-                fi
-
-                echo "Tag $tag was claimed concurrently; recalculating"
-                git tag -d "$tag" >/dev/null 2>&1 || true
-                git fetch --tags --force origin
-              done
-            fi
-
-            release_lock
-            trap - EXIT
-          fi
-
-          echo "should_release=true" >> "$GITHUB_OUTPUT"
-          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=v$version" >> "$GITHUB_OUTPUT"
-
       - name: Set up JDK 21
-        if: steps.release.outputs.should_release == 'true'
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
 
       - name: Set up Gradle
-        if: steps.release.outputs.should_release == 'true'
         uses: gradle/actions/setup-gradle@v6
         with:
           cache-provider: basic
 
-      - name: Build and test release
-        if: steps.release.outputs.should_release == 'true'
-        run: ./gradlew --no-daemon clean test distZip -PreleaseVersion="${{ steps.release.outputs.version }}"
-
-      - name: Create GitHub release
-        if: steps.release.outputs.should_release == 'true'
+      - name: Plan releases in main history order
+        id: plan
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
         run: |
           set -euo pipefail
 
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" build/distributions/*.zip --clobber
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --force origin main
+          git fetch --force --tags origin
 
-            if [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')" = "true" ]; then
-              gh release edit "$RELEASE_TAG" --draft=false
+          lock_tag="release-version-lock"
+          lock_acquired=false
+
+          release_lock() {
+            if [ "$lock_acquired" = true ]; then
+              git push origin ":refs/tags/$lock_tag" >/dev/null 2>&1 || true
+              git tag -d "$lock_tag" >/dev/null 2>&1 || true
+              lock_acquired=false
             fi
+          }
+          trap release_lock EXIT
+
+          while [ "$lock_acquired" = false ]; do
+            if git ls-remote --exit-code --tags origin "refs/tags/$lock_tag" >/dev/null 2>&1; then
+              git fetch --force origin "refs/tags/$lock_tag:refs/tags/$lock_tag"
+              lock_time="$(
+                git for-each-ref --format='%(taggerdate:unix)' "refs/tags/$lock_tag"
+              )"
+              now="$(date +%s)"
+
+              if [ -n "$lock_time" ] && [ $((now - lock_time)) -gt 900 ]; then
+                echo "Removing stale release version lock"
+                git push origin ":refs/tags/$lock_tag" >/dev/null 2>&1 || true
+                git tag -d "$lock_tag" >/dev/null 2>&1 || true
+              else
+                sleep 2
+              fi
+              continue
+            fi
+
+            git tag -d "$lock_tag" >/dev/null 2>&1 || true
+            git tag -a "$lock_tag" -m "Release version lock for workflow run $GITHUB_RUN_ID" "origin/main"
+
+            if git push origin "refs/tags/$lock_tag" >/dev/null 2>&1; then
+              lock_acquired=true
+            else
+              git tag -d "$lock_tag" >/dev/null 2>&1 || true
+              sleep 2
+            fi
+          done
+
+          # Refresh after acquiring the lock. A previous run may have created release tags
+          # while this run was waiting.
+          git fetch --force origin main
+          git fetch --force --tags origin
+
+          : > "$RUNNER_TEMP/releases.tsv"
+
+          latest_tag="$(
+            git tag --merged origin/main --list 'v*' |
+              grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' |
+              sort -V |
+              tail -n 1 || true
+          )"
+
+          if [ -n "$latest_tag" ]; then
+            base_ref="$latest_tag"
+            current_version="${latest_tag#v}"
           else
-            gh release create "$RELEASE_TAG" build/distributions/*.zip \
-              --target "$TARGET_SHA" \
-              --title "$RELEASE_TAG" \
-              --generate-notes
+            base_ref="$RELEASE_BOOTSTRAP_SHA"
+            current_version="0.1.0"
           fi
+
+          if ! git merge-base --is-ancestor "$base_ref" origin/main; then
+            echo "::error::Release baseline $base_ref is not an ancestor of main"
+            exit 1
+          fi
+
+          # First recover any already-reserved SemVer tags whose release publication
+          # previously failed. They are rebuilt after the lock is released.
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+
+            if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
+               [ "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' 2>/dev/null || echo false)" = "true" ]; then
+              sha="$(git rev-list -n 1 "$tag")"
+              version="${tag#v}"
+              printf '%s\t%s\t%s\n' "$tag" "$sha" "$version" >> "$RUNNER_TEMP/releases.tsv"
+            fi
+          done < <(
+            git tag --merged origin/main --list 'v*' |
+              grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' |
+              sort -V
+          )
+
+          # Process every not-yet-versioned first-parent commit, oldest first. This
+          # preserves main history order even when workflow runs overlap or a single
+          # push contains multiple merged PRs.
+          while IFS= read -r sha; do
+            [ -n "$sha" ] || continue
+
+            pr_number="$(
+              gh api \
+                -H "Accept: application/vnd.github+json" \
+                "/repos/$GITHUB_REPOSITORY/commits/$sha/pulls" \
+                --jq ".[] | select(.merged_at != null and .base.ref == \"main\" and .merge_commit_sha == \"$sha\") | .number" |
+                tail -n 1
+            )"
+
+            if [ -z "$pr_number" ]; then
+              echo "Skipping $sha: no merged PR terminates at this commit"
+              continue
+            fi
+
+            labels="$(
+              gh pr view "$pr_number" \
+                --repo "$GITHUB_REPOSITORY" \
+                --json labels \
+                --jq '[.labels[].name] | join(",")'
+            )"
+
+            has_major=false
+            has_minor=false
+            case ",$labels," in
+              *",release:major,"*) has_major=true ;;
+            esac
+            case ",$labels," in
+              *",release:minor,"*) has_minor=true ;;
+            esac
+
+            if [ "$has_major" = true ] && [ "$has_minor" = true ]; then
+              echo "::error::PR #$pr_number must not have both release:major and release:minor labels"
+              exit 1
+            fi
+
+            IFS='.' read -r major minor patch <<< "$current_version"
+
+            if [ "$has_major" = true ]; then
+              major=$((major + 1))
+              minor=0
+              patch=0
+            elif [ "$has_minor" = true ]; then
+              minor=$((minor + 1))
+              patch=0
+            else
+              patch=$((patch + 1))
+            fi
+
+            version="$major.$minor.$patch"
+            tag="v$version"
+
+            git tag "$tag" "$sha"
+            git push origin "refs/tags/$tag"
+            current_version="$version"
+
+            echo "Reserved $tag for merged PR #$pr_number at $sha"
+            printf '%s\t%s\t%s\n' "$tag" "$sha" "$version" >> "$RUNNER_TEMP/releases.tsv"
+          done < <(git rev-list --reverse --first-parent "$base_ref..origin/main")
+
+          # Remove duplicate recovery/planning entries while preserving SemVer order.
+          sort -u -V -k1,1 "$RUNNER_TEMP/releases.tsv" > "$RUNNER_TEMP/releases.sorted.tsv"
+          mv "$RUNNER_TEMP/releases.sorted.tsv" "$RUNNER_TEMP/releases.tsv"
+
+          release_lock
+          trap - EXIT
+
+          if [ -s "$RUNNER_TEMP/releases.tsv" ]; then
+            echo "has_releases=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_releases=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and publish planned releases
+        if: steps.plan.outputs.has_releases == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          while IFS=$'\t' read -r tag sha version; do
+            echo "Building $tag from $sha"
+            git checkout --detach "$sha"
+
+            ./gradlew --no-daemon clean test distZip -PreleaseVersion="$version"
+
+            if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              gh release upload "$tag" build/distributions/*.zip \
+                --repo "$GITHUB_REPOSITORY" \
+                --clobber
+
+              if [ "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = "true" ]; then
+                gh release edit "$tag" \
+                  --repo "$GITHUB_REPOSITORY" \
+                  --draft=false
+              fi
+            else
+              if ! gh release create "$tag" build/distributions/*.zip \
+                --repo "$GITHUB_REPOSITORY" \
+                --target "$sha" \
+                --title "$tag" \
+                --generate-notes; then
+                # Another overlapping recovery run may have created the release
+                # after our existence check. In that case, finish idempotently.
+                gh release upload "$tag" build/distributions/*.zip \
+                  --repo "$GITHUB_REPOSITORY" \
+                  --clobber
+              fi
+            fi
+          done < "$RUNNER_TEMP/releases.tsv"
