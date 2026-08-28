@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "no.skasti.serialmodem"
-version = "0.1.0-SNAPSHOT"
+version = providers.gradleProperty("releaseVersion").getOrElse("0.1.0-SNAPSHOT")
 
 repositories {
     mavenCentral()
