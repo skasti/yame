@@ -10,6 +10,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class TcpProxyTest {
@@ -155,6 +156,62 @@ class TcpProxyTest {
             releaseWrite.countDown()
             releaseServer.countDown()
             sender.shutdownNow()
+            proxy.close()
+            runCatching { server.close() }
+            serverThread.join(2_000)
+        }
+    }
+
+    @Test
+    fun `paused host reads stop callbacks until the flow is resumed`() {
+        val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val serverThread = Thread {
+            server.use {
+                it.accept().use { accepted ->
+                    accepted.getOutputStream().write("abcdefgh".encodeToByteArray())
+                    accepted.getOutputStream().flush()
+                    accepted.shutdownOutput()
+                }
+            }
+        }.apply {
+            isDaemon = true
+            start()
+        }
+
+        val proxy = SystemTcpProxy(
+            connectTimeoutMillis = 1_000,
+            readBufferSize = 4,
+        )
+        val events = LinkedBlockingQueue<TcpProxyEvent>()
+        val flow = flow(peerPort = 2004, remotePort = server.localPort)
+
+        try {
+            proxy.connect(flow) { event ->
+                if (event is TcpProxyEvent.Connected) {
+                    proxy.pauseReads(flow)
+                }
+                events.offer(event)
+            }
+
+            assertIs<TcpProxyEvent.Connected>(
+                requireNotNull(events.poll(2, TimeUnit.SECONDS)),
+            )
+            assertNull(events.poll(200, TimeUnit.MILLISECONDS))
+
+            proxy.resumeReads(flow)
+
+            val first = assertIs<TcpProxyEvent.Payload>(
+                requireNotNull(events.poll(2, TimeUnit.SECONDS)),
+            )
+            val second = assertIs<TcpProxyEvent.Payload>(
+                requireNotNull(events.poll(2, TimeUnit.SECONDS)),
+            )
+            assertContentEquals("abcd".encodeToByteArray(), first.bytes)
+            assertContentEquals("efgh".encodeToByteArray(), second.bytes)
+            assertIs<TcpProxyEvent.EndOfStream>(
+                requireNotNull(events.poll(2, TimeUnit.SECONDS)),
+            )
+        } finally {
             proxy.close()
             runCatching { server.close() }
             serverThread.join(2_000)
