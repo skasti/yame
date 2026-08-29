@@ -57,13 +57,23 @@ class TcpProxyTest {
                 requireNotNull(serverReceived.poll(2, TimeUnit.SECONDS)),
             )
 
-            val payload = assertIs<TcpProxyEvent.Payload>(
-                requireNotNull(events.poll(2, TimeUnit.SECONDS)),
-            )
+            val firstAfterWrite = requireNotNull(events.poll(2, TimeUnit.SECONDS))
+            val payload = if (firstAfterWrite is TcpProxyEvent.WriteCompleted) {
+                assertEquals(4, firstAfterWrite.bytes)
+                assertIs<TcpProxyEvent.Payload>(
+                    requireNotNull(events.poll(2, TimeUnit.SECONDS)),
+                )
+            } else {
+                assertIs<TcpProxyEvent.Payload>(firstAfterWrite)
+            }
             assertContentEquals("pong".encodeToByteArray(), payload.bytes)
-            assertIs<TcpProxyEvent.EndOfStream>(
-                requireNotNull(events.poll(2, TimeUnit.SECONDS)),
-            )
+
+            var next = requireNotNull(events.poll(2, TimeUnit.SECONDS))
+            if (next is TcpProxyEvent.WriteCompleted) {
+                assertEquals(4, next.bytes)
+                next = requireNotNull(events.poll(2, TimeUnit.SECONDS))
+            }
+            assertIs<TcpProxyEvent.EndOfStream>(next)
         } finally {
             proxy.close()
             runCatching { server.close() }
