@@ -30,6 +30,8 @@ data class TcpFlowSnapshot(
     val peerNextSequence: UInt,
     val localNextSequence: UInt,
     val localAcknowledgedSequence: UInt,
+    val peerWindowSize: Int,
+    val availableSendWindow: Int,
 )
 
 sealed interface TcpFlowEvent {
@@ -69,6 +71,7 @@ class TcpFlowTable(
         var peerNextSequence: UInt,
         var localNextSequence: UInt,
         var localAcknowledgedSequence: UInt,
+        var peerWindowSize: Int,
         var state: TcpConnectionState,
     )
 
@@ -118,6 +121,8 @@ class TcpFlowTable(
             return null
         }
 
+        if (payload.size > availableSendWindow(flow)) return null
+
         val packet = packetToPeer(
             flow = flow,
             flags = TcpPacket.ACK or if (push) TcpPacket.PSH else 0,
@@ -135,6 +140,7 @@ class TcpFlowTable(
             TcpConnectionState.CLOSE_WAIT -> TcpConnectionState.LAST_ACK
             else -> return null
         }
+        if (availableSendWindow(flow) < 1) return null
 
         val packet = packetToPeer(flow, TcpPacket.FIN or TcpPacket.ACK)
         flow.localNextSequence += 1u
@@ -179,6 +185,7 @@ class TcpFlowTable(
                 peerNextSequence = packet.sequenceNumber + 1u,
                 localNextSequence = localInitialSequence + 1u,
                 localAcknowledgedSequence = localInitialSequence,
+                peerWindowSize = packet.windowSize,
                 state = TcpConnectionState.SYN_RECEIVED,
             )
             flows[key] = flow
@@ -200,6 +207,7 @@ class TcpFlowTable(
             !packet.hasFlag(TcpPacket.ACK) &&
             packet.sequenceNumber == flow.peerInitialSequence
         ) {
+            flow.peerWindowSize = packet.windowSize
             return TcpFlowResult(responses = listOf(synAck(flow)))
         }
 
@@ -217,6 +225,7 @@ class TcpFlowTable(
         }
 
         flow.localAcknowledgedSequence = packet.acknowledgmentNumber
+        flow.peerWindowSize = packet.windowSize
         flow.state = TcpConnectionState.ESTABLISHED
         val established = TcpFlowEvent.Established(flow.key)
 
@@ -243,6 +252,8 @@ class TcpFlowTable(
         if (packet.hasFlag(TcpPacket.SYN)) {
             return TcpFlowResult(responses = listOf(ack(flow)))
         }
+
+        flow.peerWindowSize = packet.windowSize
 
         if (packet.hasFlag(TcpPacket.ACK)) {
             acknowledgeLocal(flow, packet.acknowledgmentNumber)
@@ -310,10 +321,33 @@ class TcpFlowTable(
         flow: Flow,
         acknowledgmentNumber: UInt,
     ) {
-        if (acknowledgmentNumber == flow.localNextSequence) {
+        val outstanding = forwardDistance(
+            flow.localAcknowledgedSequence,
+            flow.localNextSequence,
+        )
+        val acknowledged = forwardDistance(
+            flow.localAcknowledgedSequence,
+            acknowledgmentNumber,
+        )
+        if (acknowledged <= outstanding) {
             flow.localAcknowledgedSequence = acknowledgmentNumber
         }
     }
+
+    private fun availableSendWindow(flow: Flow): Int {
+        val inFlight = forwardDistance(
+            flow.localAcknowledgedSequence,
+            flow.localNextSequence,
+        ).toLong()
+        return (flow.peerWindowSize.toLong() - inFlight)
+            .coerceAtLeast(0)
+            .toInt()
+    }
+
+    private fun forwardDistance(
+        from: UInt,
+        to: UInt,
+    ): UInt = to - from
 
     private fun synAck(flow: Flow): TcpPacket =
         TcpPacket(
@@ -373,5 +407,7 @@ class TcpFlowTable(
             peerNextSequence = peerNextSequence,
             localNextSequence = localNextSequence,
             localAcknowledgedSequence = localAcknowledgedSequence,
+            peerWindowSize = peerWindowSize,
+            availableSendWindow = availableSendWindow(this),
         )
 }
