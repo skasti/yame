@@ -26,6 +26,7 @@ class PppSession(
         var connected: Boolean = false,
         var established: Boolean = false,
         var hostEof: Boolean = false,
+        var hostFinSent: Boolean = false,
         val pendingHostPayloads: ArrayDeque<ByteArray> = ArrayDeque(),
         var pendingHostBytes: Int = 0,
     )
@@ -608,6 +609,7 @@ class PppSession(
         }
 
         handleTcpFlowEvents(key, result.events)
+        tcpContexts[key]?.let(::drainHostTcpPayloads)
     }
 
     private fun handleTcpFlowEvents(
@@ -625,14 +627,6 @@ class PppSession(
                         "TCP open ${key.peerAddress}:${key.peerPort} <-> " +
                             "${key.remoteAddress}:${key.remotePort}",
                     )
-                    while (context.pendingHostPayloads.isNotEmpty() && tcpContexts[key] === context) {
-                        val payload = context.pendingHostPayloads.removeFirst()
-                        context.pendingHostBytes -= payload.size
-                        sendHostTcpPayload(context, payload)
-                    }
-                    if (context.hostEof && tcpContexts[key] === context) {
-                        closeTcpFromHost(context)
-                    }
                 }
 
                 is TcpFlowEvent.PayloadReceived -> {
@@ -689,39 +683,43 @@ class PppSession(
                 }
             }
 
-            is TcpProxyEvent.Payload -> {
-                if (context.established) {
-                    sendHostTcpPayload(context, event.bytes)
-                } else {
-                    val newSize = context.pendingHostBytes + event.bytes.size
-                    if (newSize > MAX_PENDING_TCP_HOST_BYTES) {
-                        failTcpFlow(
-                            context,
-                            IllegalStateException("TCP host sent too much data before handshake completed"),
-                        )
-                    } else {
-                        context.pendingHostPayloads.addLast(event.bytes.copyOf())
-                        context.pendingHostBytes = newSize
-                    }
-                }
-            }
+            is TcpProxyEvent.Payload -> queueHostTcpPayload(context, event.bytes)
 
             TcpProxyEvent.EndOfStream -> {
                 context.hostEof = true
-                if (context.established) {
-                    closeTcpFromHost(context)
-                }
+                drainHostTcpPayloads(context)
             }
 
             is TcpProxyEvent.Failure -> failTcpFlow(context, event.error)
         }
     }
 
-    private fun sendHostTcpPayload(
+    private fun queueHostTcpPayload(
         context: TcpContext,
         payload: ByteArray,
     ) {
         if (payload.isEmpty()) return
+        val newSize = context.pendingHostBytes + payload.size
+        if (newSize > MAX_PENDING_TCP_HOST_BYTES) {
+            failTcpFlow(
+                context,
+                IllegalStateException("TCP host receive buffer limit reached"),
+            )
+            return
+        }
+
+        context.pendingHostPayloads.addLast(payload.copyOf())
+        context.pendingHostBytes = newSize
+        drainHostTcpPayloads(context)
+    }
+
+    private fun drainHostTcpPayloads(context: TcpContext) {
+        if (
+            !context.established ||
+            tcpContexts[context.proxyFlow.key] !== context
+        ) {
+            return
+        }
 
         val maximumPayload = transmitMru - IPV4_TCP_HEADER_LENGTH
         if (maximumPayload <= 0) {
@@ -732,25 +730,46 @@ class PppSession(
             return
         }
 
-        var offset = 0
-        while (offset < payload.size && tcpContexts[context.proxyFlow.key] === context) {
-            val count = minOf(maximumPayload, payload.size - offset)
-            val chunk = payload.copyOfRange(offset, offset + count)
-            val segment = tcpFlowTable.send(context.proxyFlow.key, chunk)
-            if (segment == null) {
-                failTcpFlow(
-                    context,
-                    IllegalStateException("TCP flow is not able to send host payload"),
-                )
-                return
-            }
+        while (
+            context.pendingHostPayloads.isNotEmpty() &&
+            tcpContexts[context.proxyFlow.key] === context
+        ) {
+            val snapshot = tcpFlowTable.snapshot(context.proxyFlow.key) ?: return
+            val availableWindow = snapshot.availableSendWindow
+            if (availableWindow <= 0) return
+
+            val payload = context.pendingHostPayloads.first()
+            val count = minOf(
+                maximumPayload,
+                availableWindow,
+                payload.size,
+            )
+            if (count <= 0) return
+
+            val chunk = payload.copyOfRange(0, count)
+            val segment = tcpFlowTable.send(context.proxyFlow.key, chunk) ?: return
             sendTcpPacket(context.proxyFlow.key, segment, context.dscpEcn)
-            offset += count
+
+            context.pendingHostPayloads.removeFirst()
+            if (count < payload.size) {
+                context.pendingHostPayloads.addFirst(payload.copyOfRange(count, payload.size))
+            }
+            context.pendingHostBytes -= count
+        }
+
+        if (
+            context.pendingHostPayloads.isEmpty() &&
+            context.hostEof &&
+            !context.hostFinSent &&
+            tcpContexts[context.proxyFlow.key] === context
+        ) {
+            closeTcpFromHost(context)
         }
     }
 
     private fun closeTcpFromHost(context: TcpContext) {
         val fin = tcpFlowTable.close(context.proxyFlow.key) ?: return
+        context.hostFinSent = true
         sendTcpPacket(context.proxyFlow.key, fin, context.dscpEcn)
         logger(
             "TCP host closed ${context.proxyFlow.key.remoteAddress}:" +
