@@ -6,7 +6,7 @@ import socket
 LISTEN_ADDRESS = "0.0.0.0"
 LISTEN_PORT = 18080
 EXPECTED_PATH = "/test.txt"
-BODY = b"YAME TCP integration OK\r\n"
+BODY = b"YAME TCP integration OK\r\n" + (b"x" * 20000) + b"\r\nYAME TCP window OK\r\n"
 
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
