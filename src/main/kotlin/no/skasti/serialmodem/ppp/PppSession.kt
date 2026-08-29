@@ -17,6 +17,7 @@ class PppSession(
     private val icmpEchoTimeoutMillis: Long = DEFAULT_ICMP_ECHO_TIMEOUT_MILLIS,
     private val udpProxy: UdpProxy = SystemUdpProxy(),
     private val tcpProxy: TcpProxy = SystemTcpProxy(),
+    private val tcpHandshakeTimeoutMillis: Long = DEFAULT_TCP_HANDSHAKE_TIMEOUT_MILLIS,
     private val dnsConfig: PppDnsConfig = PppDnsConfig(),
 ) : Closeable {
     private data class TcpContext(
@@ -27,11 +28,14 @@ class PppSession(
         var established: Boolean = false,
         var hostEof: Boolean = false,
         var hostFinSent: Boolean = false,
+        var hostReadsPaused: Boolean = false,
+        var handshakeTimeoutTask: TimerTask? = null,
         val pendingHostPayloads: ArrayDeque<ByteArray> = ArrayDeque(),
         var pendingHostBytes: Int = 0,
     )
 
     private val tcpFlowTable = TcpFlowTable()
+    private val tcpHandshakeTimer = Timer("ppp-tcp-handshake-timeout", true)
     private val tcpContexts = mutableMapOf<TcpFlowKey, TcpContext>()
 
     var transmitMru: Int = DEFAULT_MRU
@@ -83,6 +87,7 @@ class PppSession(
     init {
         require(restartIntervalMillis > 0) { "restartIntervalMillis must be positive" }
         require(icmpEchoTimeoutMillis > 0) { "icmpEchoTimeoutMillis must be positive" }
+        require(tcpHandshakeTimeoutMillis > 0) { "tcpHandshakeTimeoutMillis must be positive" }
     }
 
     @Synchronized
@@ -623,6 +628,7 @@ class PppSession(
                 is TcpFlowEvent.Established -> {
                     val context = tcpContexts[key] ?: continue
                     context.established = true
+                    cancelTcpHandshakeTimeout(context)
                     logger(
                         "TCP open ${key.peerAddress}:${key.peerPort} <-> " +
                             "${key.remoteAddress}:${key.remotePort}",
@@ -645,6 +651,7 @@ class PppSession(
                 is TcpFlowEvent.Closed,
                 -> {
                     tcpContexts.remove(key)?.let { context ->
+                        cancelTcpHandshakeTimeout(context)
                         tcpProxy.closeFlow(context.proxyFlow)
                     }
                 }
@@ -672,6 +679,8 @@ class PppSession(
         when (event) {
             TcpProxyEvent.Connected -> {
                 context.connected = true
+                updateHostReadBackpressure(context)
+                startTcpHandshakeTimeout(context)
                 val synAck = context.pendingSynAck
                 context.pendingSynAck = null
                 if (synAck != null) {
@@ -699,25 +708,16 @@ class PppSession(
         payload: ByteArray,
     ) {
         if (payload.isEmpty()) return
-        val newSize = context.pendingHostBytes + payload.size
-        if (newSize > MAX_PENDING_TCP_HOST_BYTES) {
-            failTcpFlow(
-                context,
-                IllegalStateException("TCP host receive buffer limit reached"),
-            )
-            return
-        }
 
         context.pendingHostPayloads.addLast(payload.copyOf())
-        context.pendingHostBytes = newSize
+        context.pendingHostBytes += payload.size
         drainHostTcpPayloads(context)
     }
 
     private fun drainHostTcpPayloads(context: TcpContext) {
-        if (
-            !context.established ||
-            tcpContexts[context.proxyFlow.key] !== context
-        ) {
+        if (tcpContexts[context.proxyFlow.key] !== context) return
+        if (!context.established) {
+            updateHostReadBackpressure(context)
             return
         }
 
@@ -736,7 +736,10 @@ class PppSession(
         ) {
             val snapshot = tcpFlowTable.snapshot(context.proxyFlow.key) ?: return
             val availableWindow = snapshot.availableSendWindow
-            if (availableWindow <= 0) return
+            if (availableWindow <= 0) {
+                updateHostReadBackpressure(context)
+                return
+            }
 
             val payload = context.pendingHostPayloads.first()
             val count = minOf(
@@ -745,7 +748,10 @@ class PppSession(
                 availableWindow,
                 payload.size,
             )
-            if (count <= 0) return
+            if (count <= 0) {
+                updateHostReadBackpressure(context)
+                return
+            }
 
             val chunk = payload.copyOfRange(0, count)
             val segment = tcpFlowTable.send(context.proxyFlow.key, chunk) ?: return
@@ -766,6 +772,70 @@ class PppSession(
         ) {
             closeTcpFromHost(context)
         }
+
+        if (tcpContexts[context.proxyFlow.key] === context) {
+            updateHostReadBackpressure(context)
+        }
+    }
+
+    private fun updateHostReadBackpressure(context: TcpContext) {
+        if (tcpContexts[context.proxyFlow.key] !== context) return
+
+        val availableWindow = tcpFlowTable.snapshot(context.proxyFlow.key)
+            ?.availableSendWindow
+            ?: 0
+        val shouldPause = when {
+            !context.established -> true
+            availableWindow <= 0 -> true
+            context.pendingHostBytes >= TCP_HOST_BUFFER_HIGH_WATER_BYTES -> true
+            context.hostReadsPaused &&
+                context.pendingHostBytes > TCP_HOST_BUFFER_LOW_WATER_BYTES -> true
+            else -> false
+        }
+        if (shouldPause == context.hostReadsPaused) return
+
+        context.hostReadsPaused = shouldPause
+        if (shouldPause) {
+            tcpProxy.pauseReads(context.proxyFlow)
+        } else {
+            tcpProxy.resumeReads(context.proxyFlow)
+        }
+    }
+
+    private fun startTcpHandshakeTimeout(context: TcpContext) {
+        cancelTcpHandshakeTimeout(context)
+        val flow = context.proxyFlow
+        val task = object : TimerTask() {
+            override fun run() {
+                expireTcpHandshake(flow)
+            }
+        }
+        context.handshakeTimeoutTask = task
+        tcpHandshakeTimer.schedule(task, tcpHandshakeTimeoutMillis)
+    }
+
+    @Synchronized
+    private fun expireTcpHandshake(flow: TcpProxyFlow) {
+        val context = tcpContexts[flow.key] ?: return
+        if (
+            context.proxyFlow != flow ||
+            context.established ||
+            closed ||
+            flow.generation != ipcpGeneration
+        ) {
+            return
+        }
+
+        context.handshakeTimeoutTask = null
+        failTcpFlow(
+            context,
+            IllegalStateException("TCP peer did not complete handshake before timeout"),
+        )
+    }
+
+    private fun cancelTcpHandshakeTimeout(context: TcpContext) {
+        context.handshakeTimeoutTask?.cancel()
+        context.handshakeTimeoutTask = null
     }
 
     private fun closeTcpFromHost(context: TcpContext) {
@@ -784,6 +854,7 @@ class PppSession(
     ) {
         if (tcpContexts[context.proxyFlow.key] !== context) return
 
+        cancelTcpHandshakeTimeout(context)
         val reason = error.message ?: error.javaClass.simpleName
         logger(
             "TCP !! ${context.proxyFlow.key.remoteAddress}:" +
@@ -1300,6 +1371,7 @@ class PppSession(
     private fun invalidateTransportFlows() {
         udpProxy.invalidateBefore(ipcpGeneration)
         tcpProxy.invalidateBefore(ipcpGeneration)
+        tcpContexts.values.forEach(::cancelTcpHandshakeTimeout)
         tcpFlowTable.clear()
         tcpContexts.clear()
     }
@@ -1327,8 +1399,10 @@ class PppSession(
         ipcpOpen = false
         stopLcpRestartTimer()
         stopIpcpRestartTimer()
+        tcpHandshakeTimer.cancel()
         icmpEchoProxy.close()
         udpProxy.close()
+        tcpContexts.values.forEach(::cancelTcpHandshakeTimeout)
         tcpFlowTable.clear()
         tcpContexts.clear()
         tcpProxy.close()
@@ -1342,9 +1416,11 @@ class PppSession(
         private const val REQUESTED_RECEIVE_ACCM: UInt = 0u
         private const val DEFAULT_RESTART_INTERVAL_MILLIS = 3_000L
         private const val DEFAULT_ICMP_ECHO_TIMEOUT_MILLIS = 2_000L
+        private const val DEFAULT_TCP_HANDSHAKE_TIMEOUT_MILLIS = 10_000L
         private const val DNS_PORT = 53
         private const val IPV4_TCP_HEADER_LENGTH = 40
-        private const val MAX_PENDING_TCP_HOST_BYTES = 65_536
+        private const val TCP_HOST_BUFFER_HIGH_WATER_BYTES = 32 * 1024
+        private const val TCP_HOST_BUFFER_LOW_WATER_BYTES = 16 * 1024
 
         private val DEFAULT_IP_ADDRESSES = PppAddresses(
             localAddress = Ipv4Address.parse("10.0.0.1"),
