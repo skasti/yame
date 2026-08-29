@@ -4,7 +4,7 @@ import java.io.Closeable
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.Semaphore
@@ -25,6 +25,8 @@ sealed interface TcpProxyEvent {
 
     data object EndOfStream : TcpProxyEvent
 
+    data class WriteCompleted(val bytes: Int) : TcpProxyEvent
+
     data class Failure(val error: Throwable) : TcpProxyEvent
 }
 
@@ -41,6 +43,8 @@ interface TcpProxy : Closeable {
 
     fun shutdownOutput(flow: TcpProxyFlow): Result<Unit>
 
+    fun availableWriteCapacity(flow: TcpProxyFlow): Int = 0xffff
+
     fun pauseReads(flow: TcpProxyFlow) = Unit
 
     fun resumeReads(flow: TcpProxyFlow) = Unit
@@ -56,7 +60,7 @@ class SystemTcpProxy(
     private val connectTimeoutMillis: Int = DEFAULT_CONNECT_TIMEOUT_MILLIS,
     private val readBufferSize: Int = DEFAULT_READ_BUFFER_SIZE,
     private val maxFlows: Int = DEFAULT_MAX_FLOWS,
-    private val maxQueuedWrites: Int = DEFAULT_MAX_QUEUED_WRITES,
+    private val maxQueuedWriteBytes: Int = DEFAULT_MAX_QUEUED_WRITE_BYTES,
     private val connectOperation: (Socket, TcpProxyFlow, Int) -> Unit = ::connectSocket,
     private val writeOperation: (Socket, ByteArray) -> Unit = ::writeSocket,
 ) : TcpProxy {
@@ -70,7 +74,8 @@ class SystemTcpProxy(
         val flow: TcpProxyFlow,
         val socket: Socket,
         val onEvent: (TcpProxyEvent) -> Unit,
-        val writes: ArrayBlockingQueue<WriteCommand>,
+        val writes: LinkedBlockingQueue<WriteCommand>,
+        val queuedWriteBytes: AtomicInteger = AtomicInteger(),
         val readMonitor: java.lang.Object = java.lang.Object(),
         @Volatile var connected: Boolean = false,
         @Volatile var readsPaused: Boolean = false,
@@ -80,7 +85,9 @@ class SystemTcpProxy(
         require(connectTimeoutMillis > 0) { "connectTimeoutMillis must be positive" }
         require(readBufferSize > 0) { "readBufferSize must be positive" }
         require(maxFlows > 0) { "maxFlows must be positive" }
-        require(maxQueuedWrites > 0) { "maxQueuedWrites must be positive" }
+        require(maxQueuedWriteBytes in 1..0xffff) {
+            "maxQueuedWriteBytes must be 1..65535"
+        }
     }
 
     private val threadNumber = AtomicInteger()
@@ -124,7 +131,7 @@ class SystemTcpProxy(
                 flow = flow,
                 socket = Socket(),
                 onEvent = onEvent,
-                writes = ArrayBlockingQueue(maxQueuedWrites),
+                writes = LinkedBlockingQueue(),
             )
         } catch (error: Throwable) {
             flowSlots.release()
@@ -213,7 +220,14 @@ class SystemTcpProxy(
         try {
             while (!closed && flows[state.flow] === state) {
                 when (val command = state.writes.take()) {
-                    is WriteCommand.Payload -> writeOperation(state.socket, command.bytes)
+                    is WriteCommand.Payload -> {
+                        writeOperation(state.socket, command.bytes)
+                        state.queuedWriteBytes.addAndGet(-command.bytes.size)
+                        safeCallback(
+                            state.onEvent,
+                            TcpProxyEvent.WriteCompleted(command.bytes.size),
+                        )
+                    }
                     WriteCommand.ShutdownOutput -> {
                         if (!state.socket.isOutputShutdown) {
                             state.socket.shutdownOutput()
@@ -240,10 +254,14 @@ class SystemTcpProxy(
         val state = connectedState(flow)
             ?: return Result.failure(IllegalStateException("TCP flow is not connected"))
 
-        return if (state.writes.offer(WriteCommand.Payload(payload.copyOf()))) {
-            Result.success(Unit)
-        } else {
-            Result.failure(IllegalStateException("TCP write queue is full"))
+        if (!reserveWriteBytes(state, payload.size)) {
+            return Result.failure(IllegalStateException("TCP host write buffer is full"))
+        }
+
+        return runCatching {
+            state.writes.put(WriteCommand.Payload(payload.copyOf()))
+        }.onFailure {
+            state.queuedWriteBytes.addAndGet(-payload.size)
         }
     }
 
@@ -251,10 +269,28 @@ class SystemTcpProxy(
         val state = connectedState(flow)
             ?: return Result.failure(IllegalStateException("TCP flow is not connected"))
 
-        return if (state.writes.offer(WriteCommand.ShutdownOutput)) {
-            Result.success(Unit)
-        } else {
-            Result.failure(IllegalStateException("TCP write queue is full"))
+        return runCatching {
+            state.writes.put(WriteCommand.ShutdownOutput)
+        }
+    }
+
+    override fun availableWriteCapacity(flow: TcpProxyFlow): Int {
+        val state = connectedState(flow) ?: return 0
+        return (maxQueuedWriteBytes - state.queuedWriteBytes.get()).coerceAtLeast(0)
+    }
+
+    private fun reserveWriteBytes(
+        state: FlowState,
+        bytes: Int,
+    ): Boolean {
+        if (bytes <= 0 || bytes > maxQueuedWriteBytes) return false
+
+        while (true) {
+            val current = state.queuedWriteBytes.get()
+            if (current + bytes > maxQueuedWriteBytes) return false
+            if (state.queuedWriteBytes.compareAndSet(current, current + bytes)) {
+                return true
+            }
         }
     }
 
@@ -300,6 +336,7 @@ class SystemTcpProxy(
             }
             runCatching { state.socket.close() }
             state.writes.clear()
+            state.queuedWriteBytes.set(0)
             state.writes.offer(WriteCommand.Stop)
             flowSlots.release()
         }
@@ -340,7 +377,7 @@ class SystemTcpProxy(
         private const val DEFAULT_CONNECT_TIMEOUT_MILLIS = 5_000
         private const val DEFAULT_READ_BUFFER_SIZE = 4_096
         private const val DEFAULT_MAX_FLOWS = 64
-        private const val DEFAULT_MAX_QUEUED_WRITES = 128
+        private const val DEFAULT_MAX_QUEUED_WRITE_BYTES = 0xffff
         private const val CLOSE_JOIN_TIMEOUT_MILLIS = 1_000L
 
         private fun connectSocket(
