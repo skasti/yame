@@ -355,6 +355,11 @@ if ! grep -Fq "YAME TCP integration OK" "$DOS_DRIVE/TCP.OUT"; then
     exit 1
 fi
 
+if ! grep -Fq "YAME TCP window OK" "$DOS_DRIVE/TCP.OUT"; then
+    echo "mTCP did not receive the complete multi-window HTTP payload through YAME" >&2
+    exit 1
+fi
+
 if ! grep -Fq "MODEM dialing 1" "$YAME_LOG"; then
     echo "YAME did not observe the DOS dial command" >&2
     exit 1
@@ -416,4 +421,4 @@ echo "  - PPP LCP and IPCP opened with 10.64.0.1 <-> 10.64.0.2"
 echo "  - mTCP DNSTEST resolved ci.yame.test through YAME's DNS proxy"
 echo "  - the deterministic upstream answer 203.0.113.42 reached DOS"
 echo "  - mTCP HTGet connected through YAME's host TCP proxy"
-echo "  - the HTTP fixture response reached DOS over the emulated TCP flow"
+echo "  - the multi-window HTTP fixture response reached DOS over the emulated TCP flow"
