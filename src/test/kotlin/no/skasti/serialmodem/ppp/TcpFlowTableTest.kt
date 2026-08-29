@@ -220,6 +220,70 @@ class TcpFlowTableTest {
     }
 
     @Test
+    fun `unacknowledged payload is retained retransmitted and trimmed by cumulative ACK`() {
+        var now = 0L
+        val table = TcpFlowTable(
+            initialSequenceNumber = { 5000u },
+            receiveWindow = 4096,
+            nanoTime = { now },
+        )
+        establish(table)
+
+        val segment = requireNotNull(table.send(key, byteArrayOf(1, 2, 3, 4)))
+        table.markSent(key, segment)
+        assertEquals(1, table.snapshot(key)?.unacknowledgedSegments)
+        assertNull(table.retransmissionDue(key, 1000))
+
+        now = 1_000_000_000L
+        val retransmission = requireNotNull(table.retransmissionDue(key, 1000))
+        assertEquals(segment.sequenceNumber, retransmission.sequenceNumber)
+        assertContentEquals(segment.payload, retransmission.payload)
+        table.markSent(key, retransmission)
+
+        table.receive(
+            key,
+            peerPacket(
+                sequence = 1001u,
+                acknowledgment = 5003u,
+                flags = TcpPacket.ACK,
+            ),
+        )
+        assertEquals(5003u, table.snapshot(key)?.localAcknowledgedSequence)
+        assertEquals(1, table.snapshot(key)?.unacknowledgedSegments)
+
+        now = 2_000_000_000L
+        val remainder = requireNotNull(table.retransmissionDue(key, 1000))
+        assertEquals(5003u, remainder.sequenceNumber)
+        assertContentEquals(byteArrayOf(3, 4), remainder.payload)
+
+        table.receive(
+            key,
+            peerPacket(
+                sequence = 1001u,
+                acknowledgment = 5005u,
+                flags = TcpPacket.ACK,
+            ),
+        )
+        assertEquals(0, table.snapshot(key)?.unacknowledgedSegments)
+        assertNull(table.retransmissionDue(key, 1000))
+    }
+
+    @Test
+    fun `local receive window can shrink and reopen without advancing peer sequence`() {
+        val table = table()
+        establish(table)
+
+        assertTrue(table.setReceiveWindow(key, 0))
+        val closed = requireNotNull(table.acknowledgment(key))
+        assertEquals(0, closed.windowSize)
+        assertEquals(1001u, closed.acknowledgmentNumber)
+
+        assertTrue(table.setReceiveWindow(key, 2048))
+        val reopened = requireNotNull(table.acknowledgment(key))
+        assertEquals(2048, reopened.windowSize)
+        assertEquals(1001u, reopened.acknowledgmentNumber)
+    }
+    @Test
     fun `peer FIN enters close-wait and local FIN completes last-ack`() {
         val table = table()
         establish(table)
