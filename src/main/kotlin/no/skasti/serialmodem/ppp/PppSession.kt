@@ -721,8 +721,8 @@ class PppSession(
             return
         }
 
-        val maximumPayload = transmitMru - IPV4_TCP_HEADER_LENGTH
-        if (maximumPayload <= 0) {
+        val maximumIpv4Payload = transmitMru - IPV4_TCP_HEADER_LENGTH
+        if (maximumIpv4Payload <= 0) {
             failTcpFlow(
                 context,
                 IllegalStateException("peer MRU $transmitMru is too small for IPv4/TCP"),
@@ -740,7 +740,8 @@ class PppSession(
 
             val payload = context.pendingHostPayloads.first()
             val count = minOf(
-                maximumPayload,
+                maximumIpv4Payload,
+                snapshot.peerMaximumSegmentSize,
                 availableWindow,
                 payload.size,
             )
