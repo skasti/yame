@@ -109,6 +109,85 @@ class TcpFlowTableTest {
     }
 
     @Test
+    fun `outbound data is limited by latest peer receive window and cumulative ACKs`() {
+        val table = table()
+
+        table.receive(
+            key,
+            peerPacket(
+                sequence = 1000u,
+                flags = TcpPacket.SYN,
+                windowSize = 4,
+            ),
+        )
+        table.receive(
+            key,
+            peerPacket(
+                sequence = 1001u,
+                acknowledgment = 5001u,
+                flags = TcpPacket.ACK,
+                windowSize = 4,
+            ),
+        )
+
+        assertEquals(4, table.snapshot(key)?.peerWindowSize)
+        assertEquals(4, table.snapshot(key)?.availableSendWindow)
+
+        val first = requireNotNull(table.send(key, byteArrayOf(1, 2, 3, 4)))
+        assertContentEquals(byteArrayOf(1, 2, 3, 4), first.payload)
+        assertEquals(0, table.snapshot(key)?.availableSendWindow)
+        assertNull(table.send(key, byteArrayOf(5)))
+
+        table.receive(
+            key,
+            peerPacket(
+                sequence = 1001u,
+                acknowledgment = 5003u,
+                flags = TcpPacket.ACK,
+                windowSize = 4,
+            ),
+        )
+
+        assertEquals(5003u, table.snapshot(key)?.localAcknowledgedSequence)
+        assertEquals(2, table.snapshot(key)?.availableSendWindow)
+        assertContentEquals(
+            byteArrayOf(5, 6),
+            requireNotNull(table.send(key, byteArrayOf(5, 6))).payload,
+        )
+        assertEquals(0, table.snapshot(key)?.availableSendWindow)
+
+        table.receive(
+            key,
+            peerPacket(
+                sequence = 1001u,
+                acknowledgment = 5005u,
+                flags = TcpPacket.ACK,
+                windowSize = 0,
+            ),
+        )
+
+        assertEquals(0, table.snapshot(key)?.peerWindowSize)
+        assertEquals(0, table.snapshot(key)?.availableSendWindow)
+        assertNull(table.send(key, byteArrayOf(7)))
+
+        table.receive(
+            key,
+            peerPacket(
+                sequence = 1001u,
+                acknowledgment = 5007u,
+                flags = TcpPacket.ACK,
+                windowSize = 3,
+            ),
+        )
+
+        assertEquals(3, table.snapshot(key)?.availableSendWindow)
+        assertContentEquals(
+            byteArrayOf(7, 8, 9),
+            requireNotNull(table.send(key, byteArrayOf(7, 8, 9))).payload,
+        )
+    }
+
+    @Test
     fun `peer FIN enters close-wait and local FIN completes last-ack`() {
         val table = table()
         establish(table)
@@ -271,6 +350,7 @@ class TcpFlowTableTest {
         sequence: UInt,
         acknowledgment: UInt = 0u,
         flags: Int,
+        windowSize: Int = 8192,
         payload: ByteArray = ByteArray(0),
     ): TcpPacket =
         TcpPacket(
@@ -279,7 +359,7 @@ class TcpFlowTableTest {
             sequenceNumber = sequence,
             acknowledgmentNumber = acknowledgment,
             flags = flags,
-            windowSize = 8192,
+            windowSize = windowSize,
             payload = payload,
         )
 }
