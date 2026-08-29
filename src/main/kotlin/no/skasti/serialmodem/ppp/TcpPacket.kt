@@ -16,6 +16,27 @@ data class TcpPacket(
 
     fun hasFlag(flag: Int): Boolean = flags and flag != 0
 
+    fun maximumSegmentSizeOption(): Int? {
+        var offset = 0
+        while (offset < options.size) {
+            when (val kind = options[offset].toInt() and 0xff) {
+                OPTION_END_OF_LIST -> return null
+                OPTION_NO_OPERATION -> offset++
+                else -> {
+                    if (offset + 1 >= options.size) return null
+                    val length = options[offset + 1].toInt() and 0xff
+                    if (length < 2 || offset + length > options.size) return null
+                    if (kind == OPTION_MAXIMUM_SEGMENT_SIZE && length == 4) {
+                        return ((options[offset + 2].toInt() and 0xff) shl 8) or
+                            (options[offset + 3].toInt() and 0xff)
+                    }
+                    offset += length
+                }
+            }
+        }
+        return null
+    }
+
     fun encode(
         source: Ipv4Address,
         destination: Ipv4Address,
@@ -62,6 +83,10 @@ data class TcpPacket(
         const val ALL_FLAGS = 0x1ff
         const val DEFAULT_WINDOW_SIZE = 0xffff
         const val MIN_HEADER_LENGTH = 20
+        const val DEFAULT_IPV4_MAXIMUM_SEGMENT_SIZE = 536
+        private const val OPTION_END_OF_LIST = 0
+        private const val OPTION_NO_OPERATION = 1
+        private const val OPTION_MAXIMUM_SEGMENT_SIZE = 2
         private const val MAX_OPTIONS_LENGTH = 40
 
         fun parse(
