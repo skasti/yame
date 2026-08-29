@@ -71,7 +71,7 @@ class SystemTcpProxy(
         val socket: Socket,
         val onEvent: (TcpProxyEvent) -> Unit,
         val writes: ArrayBlockingQueue<WriteCommand>,
-        val readMonitor: Object = Object(),
+        val readMonitor: java.lang.Object = java.lang.Object(),
         @Volatile var connected: Boolean = false,
         @Volatile var readsPaused: Boolean = false,
     )
