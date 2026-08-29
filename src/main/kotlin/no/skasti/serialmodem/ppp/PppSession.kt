@@ -18,6 +18,7 @@ class PppSession(
     private val udpProxy: UdpProxy = SystemUdpProxy(),
     private val tcpProxy: TcpProxy = SystemTcpProxy(),
     private val tcpHandshakeTimeoutMillis: Long = DEFAULT_TCP_HANDSHAKE_TIMEOUT_MILLIS,
+    private val tcpRetransmitTimeoutMillis: Long = DEFAULT_TCP_RETRANSMIT_TIMEOUT_MILLIS,
     private val dnsConfig: PppDnsConfig = PppDnsConfig(),
 ) : Closeable {
     private data class TcpContext(
@@ -36,6 +37,7 @@ class PppSession(
 
     private val tcpFlowTable = TcpFlowTable()
     private val tcpHandshakeTimer = Timer("ppp-tcp-handshake-timeout", true)
+    private val tcpRetransmitTimer = Timer("ppp-tcp-retransmit", true)
     private val tcpContexts = mutableMapOf<TcpFlowKey, TcpContext>()
 
     var transmitMru: Int = DEFAULT_MRU
@@ -88,6 +90,21 @@ class PppSession(
         require(restartIntervalMillis > 0) { "restartIntervalMillis must be positive" }
         require(icmpEchoTimeoutMillis > 0) { "icmpEchoTimeoutMillis must be positive" }
         require(tcpHandshakeTimeoutMillis > 0) { "tcpHandshakeTimeoutMillis must be positive" }
+        require(tcpRetransmitTimeoutMillis > 0) { "tcpRetransmitTimeoutMillis must be positive" }
+
+        val retransmitScanInterval = maxOf(
+            MIN_TCP_RETRANSMIT_SCAN_MILLIS,
+            tcpRetransmitTimeoutMillis / 2,
+        )
+        tcpRetransmitTimer.schedule(
+            object : TimerTask() {
+                override fun run() {
+                    retransmitDueTcpSegments()
+                }
+            },
+            retransmitScanInterval,
+            retransmitScanInterval,
+        )
     }
 
     @Synchronized
@@ -573,6 +590,35 @@ class PppSession(
             remoteAddress = packet.destination,
             remotePort = tcp.destinationPort,
         )
+
+        val existingContext = tcpContexts[key]
+        if (
+            existingContext?.connected == true &&
+            tcp.payload.isNotEmpty()
+        ) {
+            val snapshot = tcpFlowTable.snapshot(key)
+            if (snapshot != null && tcp.sequenceNumber == snapshot.peerNextSequence) {
+                val writeCapacity = tcpProxy
+                    .availableWriteCapacity(existingContext.proxyFlow)
+                    .coerceIn(0, 0xffff)
+                if (tcp.payload.size > writeCapacity) {
+                    tcpFlowTable.setReceiveWindow(key, writeCapacity)
+                    tcpFlowTable.acknowledgment(key)?.let { ack ->
+                        sendTcpPacket(key, ack, existingContext.dscpEcn)
+                    }
+                    logger(
+                        "TCP .. host write buffer has $writeCapacity bytes free; " +
+                            "deferring ${tcp.payload.size}-byte peer segment",
+                    )
+                    return
+                }
+                tcpFlowTable.setReceiveWindow(
+                    key,
+                    writeCapacity - tcp.payload.size,
+                )
+            }
+        }
+
         val result = tcpFlowTable.receive(key, tcp)
         val connectionRequested = result.events.any { it is TcpFlowEvent.ConnectionRequested }
 
@@ -681,7 +727,11 @@ class PppSession(
                 context.connected = true
                 updateHostReadBackpressure(context)
                 startTcpHandshakeTimeout(context)
-                val synAck = context.pendingSynAck
+                val writeCapacity = tcpProxy
+                    .availableWriteCapacity(flow)
+                    .coerceIn(0, 0xffff)
+                tcpFlowTable.setReceiveWindow(flow.key, writeCapacity)
+                val synAck = context.pendingSynAck?.copy(windowSize = writeCapacity)
                 context.pendingSynAck = null
                 if (synAck != null) {
                     sendTcpPacket(flow.key, synAck, context.dscpEcn)
@@ -699,7 +749,25 @@ class PppSession(
                 drainHostTcpPayloads(context)
             }
 
+            is TcpProxyEvent.WriteCompleted -> refreshPeerReceiveWindow(context)
+
             is TcpProxyEvent.Failure -> failTcpFlow(context, event.error)
+        }
+    }
+
+    private fun refreshPeerReceiveWindow(context: TcpContext) {
+        if (tcpContexts[context.proxyFlow.key] !== context) return
+
+        val snapshot = tcpFlowTable.snapshot(context.proxyFlow.key) ?: return
+        val writeCapacity = tcpProxy
+            .availableWriteCapacity(context.proxyFlow)
+            .coerceIn(0, 0xffff)
+        if (!tcpFlowTable.setReceiveWindow(context.proxyFlow.key, writeCapacity)) return
+
+        if (context.established && writeCapacity > snapshot.localReceiveWindow) {
+            tcpFlowTable.acknowledgment(context.proxyFlow.key)?.let { ack ->
+                sendTcpPacket(context.proxyFlow.key, ack, context.dscpEcn)
+            }
         }
     }
 
@@ -799,6 +867,31 @@ class PppSession(
             tcpProxy.pauseReads(context.proxyFlow)
         } else {
             tcpProxy.resumeReads(context.proxyFlow)
+        }
+    }
+
+    @Synchronized
+    private fun retransmitDueTcpSegments() {
+        if (closed || !ipcpOpen) return
+
+        for (context in tcpContexts.values.toList()) {
+            if (context.proxyFlow.generation != ipcpGeneration) continue
+            val packet = tcpFlowTable.retransmissionDue(
+                context.proxyFlow.key,
+                tcpRetransmitTimeoutMillis,
+            ) ?: continue
+
+            logger(
+                "TCP .. retransmitting ${context.proxyFlow.key.remoteAddress}:" +
+                    "${packet.sourcePort} -> ${context.proxyFlow.key.peerAddress}:" +
+                    "${packet.destinationPort} seq=${packet.sequenceNumber} " +
+                    "payload=${packet.payload.size} bytes",
+            )
+            sendTcpPacket(
+                context.proxyFlow.key,
+                packet,
+                context.dscpEcn,
+            )
         }
     }
 
@@ -912,6 +1005,7 @@ class PppSession(
                 payload = encoded,
             ),
         )
+        tcpFlowTable.markSent(key, packet)
         logger(
             "TCP => ${key.remoteAddress}:${packet.sourcePort} -> " +
                 "${key.peerAddress}:${packet.destinationPort} " +
@@ -1400,6 +1494,7 @@ class PppSession(
         stopLcpRestartTimer()
         stopIpcpRestartTimer()
         tcpHandshakeTimer.cancel()
+        tcpRetransmitTimer.cancel()
         icmpEchoProxy.close()
         udpProxy.close()
         tcpContexts.values.forEach(::cancelTcpHandshakeTimeout)
@@ -1417,6 +1512,8 @@ class PppSession(
         private const val DEFAULT_RESTART_INTERVAL_MILLIS = 3_000L
         private const val DEFAULT_ICMP_ECHO_TIMEOUT_MILLIS = 2_000L
         private const val DEFAULT_TCP_HANDSHAKE_TIMEOUT_MILLIS = 10_000L
+        private const val DEFAULT_TCP_RETRANSMIT_TIMEOUT_MILLIS = 3_000L
+        private const val MIN_TCP_RETRANSMIT_SCAN_MILLIS = 25L
         private const val DNS_PORT = 53
         private const val IPV4_TCP_HEADER_LENGTH = 40
         private const val TCP_HOST_BUFFER_HIGH_WATER_BYTES = 32 * 1024
