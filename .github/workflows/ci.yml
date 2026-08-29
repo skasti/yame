@@ -39,5 +39,5 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes dosbox socat xvfb xauth
 
-      - name: DOSBox dial-up PPP and DNS compatibility suite
+      - name: DOSBox dial-up PPP, DNS and TCP compatibility suite
         run: bash scripts/dosbox-network-integration-test.sh
