@@ -303,7 +303,7 @@ class TcpFlowTable(
             )
         }
 
-        flow.localAcknowledgedSequence = packet.acknowledgmentNumber
+        acknowledgeLocal(flow, packet.acknowledgmentNumber)
         flow.peerWindowSize = packet.windowSize
         flow.state = TcpConnectionState.ESTABLISHED
         val established = TcpFlowEvent.Established(flow.key)
