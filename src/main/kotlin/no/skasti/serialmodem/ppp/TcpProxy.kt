@@ -41,6 +41,10 @@ interface TcpProxy : Closeable {
 
     fun shutdownOutput(flow: TcpProxyFlow): Result<Unit>
 
+    fun pauseReads(flow: TcpProxyFlow) = Unit
+
+    fun resumeReads(flow: TcpProxyFlow) = Unit
+
     fun closeFlow(flow: TcpProxyFlow)
 
     fun invalidateBefore(generation: Long) = Unit
@@ -67,7 +71,9 @@ class SystemTcpProxy(
         val socket: Socket,
         val onEvent: (TcpProxyEvent) -> Unit,
         val writes: ArrayBlockingQueue<WriteCommand>,
+        val readMonitor: Object = Object(),
         @Volatile var connected: Boolean = false,
+        @Volatile var readsPaused: Boolean = false,
     )
 
     init {
@@ -182,6 +188,8 @@ class SystemTcpProxy(
         try {
             val input = state.socket.getInputStream()
             while (!closed && flows[state.flow] === state) {
+                awaitReadsEnabled(state)
+                if (closed || flows[state.flow] !== state) return
                 val count = input.read(buffer)
                 if (count < 0) {
                     safeCallback(state.onEvent, TcpProxyEvent.EndOfStream)
@@ -253,12 +261,43 @@ class SystemTcpProxy(
     private fun connectedState(flow: TcpProxyFlow): FlowState? =
         flows[flow]?.takeIf { it.connected }
 
+    override fun pauseReads(flow: TcpProxyFlow) {
+        val state = flows[flow] ?: return
+        synchronized(state.readMonitor) {
+            state.readsPaused = true
+        }
+    }
+
+    override fun resumeReads(flow: TcpProxyFlow) {
+        val state = flows[flow] ?: return
+        synchronized(state.readMonitor) {
+            state.readsPaused = false
+            state.readMonitor.notifyAll()
+        }
+    }
+
+    private fun awaitReadsEnabled(state: FlowState) {
+        synchronized(state.readMonitor) {
+            while (
+                state.readsPaused &&
+                !closed &&
+                flows[state.flow] === state
+            ) {
+                state.readMonitor.wait()
+            }
+        }
+    }
+
     override fun closeFlow(flow: TcpProxyFlow) {
         flows[flow]?.let(::removeFlow)
     }
 
     private fun removeFlow(state: FlowState) {
         if (flows.remove(state.flow, state)) {
+            synchronized(state.readMonitor) {
+                state.readsPaused = false
+                state.readMonitor.notifyAll()
+            }
             runCatching { state.socket.close() }
             state.writes.clear()
             state.writes.offer(WriteCommand.Stop)
