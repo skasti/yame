@@ -27,7 +27,9 @@ echo OK>DNS.OK
 
 echo Fetching tcp.yame.test through YAME TCP proxy...
 HTGET.EXE -quiet -o TCP.OUT http://tcp.yame.test:18080/test.txt
-if errorlevel 1 goto tcp_failed
+rem mTCP HTGet maps HTTP 200 OK to DOS return code 21.
+if errorlevel 22 goto tcp_failed
+if not errorlevel 21 goto tcp_failed
 echo OK>TCP.OK
 
 echo OK>SUITE.OK
