@@ -32,6 +32,7 @@ data class TcpFlowSnapshot(
     val localAcknowledgedSequence: UInt,
     val peerWindowSize: Int,
     val availableSendWindow: Int,
+    val peerMaximumSegmentSize: Int,
 )
 
 sealed interface TcpFlowEvent {
@@ -72,6 +73,7 @@ class TcpFlowTable(
         var localNextSequence: UInt,
         var localAcknowledgedSequence: UInt,
         var peerWindowSize: Int,
+        var peerMaximumSegmentSize: Int,
         var state: TcpConnectionState,
     )
 
@@ -121,7 +123,12 @@ class TcpFlowTable(
             return null
         }
 
-        if (payload.size > availableSendWindow(flow)) return null
+        if (
+            payload.size > availableSendWindow(flow) ||
+            payload.size > flow.peerMaximumSegmentSize
+        ) {
+            return null
+        }
 
         val packet = packetToPeer(
             flow = flow,
@@ -186,6 +193,7 @@ class TcpFlowTable(
                 localNextSequence = localInitialSequence + 1u,
                 localAcknowledgedSequence = localInitialSequence,
                 peerWindowSize = packet.windowSize,
+                peerMaximumSegmentSize = peerMaximumSegmentSize(packet),
                 state = TcpConnectionState.SYN_RECEIVED,
             )
             flows[key] = flow
@@ -208,6 +216,7 @@ class TcpFlowTable(
             packet.sequenceNumber == flow.peerInitialSequence
         ) {
             flow.peerWindowSize = packet.windowSize
+            flow.peerMaximumSegmentSize = peerMaximumSegmentSize(packet)
             return TcpFlowResult(responses = listOf(synAck(flow)))
         }
 
@@ -339,6 +348,11 @@ class TcpFlowTable(
         return true
     }
 
+    private fun peerMaximumSegmentSize(packet: TcpPacket): Int =
+        packet.maximumSegmentSizeOption()
+            ?.takeIf { it > 0 }
+            ?: TcpPacket.DEFAULT_IPV4_MAXIMUM_SEGMENT_SIZE
+
     private fun availableSendWindow(flow: Flow): Int {
         val inFlight = forwardDistance(
             flow.localAcknowledgedSequence,
@@ -414,5 +428,6 @@ class TcpFlowTable(
             localAcknowledgedSequence = localAcknowledgedSequence,
             peerWindowSize = peerWindowSize,
             availableSendWindow = availableSendWindow(this),
+            peerMaximumSegmentSize = peerMaximumSegmentSize,
         )
 }
