@@ -9,10 +9,12 @@ SOCAT_LOG="$WORK_DIR/socat.log"
 YAME_LOG="$WORK_DIR/yame.log"
 DOSBOX_LOG="$WORK_DIR/dosbox.log"
 DNS_FIXTURE_LOG="$WORK_DIR/dns-fixture.log"
+HTTP_FIXTURE_LOG="$WORK_DIR/http-fixture.log"
 DOSBOX_CONF="$WORK_DIR/dosbox.conf"
 LS_PPP_ZIP="$WORK_DIR/lsppp.zip"
 MTCP_ZIP="$WORK_DIR/mtcp.zip"
 PORT=50453
+HTTP_PORT=18080
 BAUD=19200
 
 LS_PPP_URL="https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.4/net/lsppp.zip"
@@ -21,6 +23,7 @@ MTCP_URL="https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/
 MTCP_SHA1="c6a319ae44ef49d03616968bd330b9c64cfab167"
 
 DNS_FIXTURE_PID=""
+HTTP_FIXTURE_PID=""
 SOCAT_PID=""
 YAME_PID=""
 DOSBOX_PID=""
@@ -29,14 +32,16 @@ ORIGINAL_UNPRIVILEGED_PORT_START=""
 cleanup() {
     local status=$?
 
-    for pid in "$DOSBOX_PID" "$YAME_PID" "$SOCAT_PID" "$DNS_FIXTURE_PID"; do
+    for pid in "$DOSBOX_PID" "$YAME_PID" "$SOCAT_PID" "$HTTP_FIXTURE_PID" "$DNS_FIXTURE_PID"; do
         if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
             kill "$pid" 2>/dev/null || true
         fi
     done
 
     if [[ -n "$ORIGINAL_UNPRIVILEGED_PORT_START" ]]; then
-        sudo sysctl -w             "net.ipv4.ip_unprivileged_port_start=$ORIGINAL_UNPRIVILEGED_PORT_START"             >/dev/null || true
+        sudo sysctl -w \
+            "net.ipv4.ip_unprivileged_port_start=$ORIGINAL_UNPRIVILEGED_PORT_START" \
+            >/dev/null || true
     fi
 
     if [[ $status -ne 0 ]]; then
@@ -47,6 +52,9 @@ cleanup() {
         echo "=== DNS fixture log ==="
         cat "$DNS_FIXTURE_LOG" 2>/dev/null || true
         echo
+        echo "=== HTTP fixture log ==="
+        cat "$HTTP_FIXTURE_LOG" 2>/dev/null || true
+        echo
         echo "=== socat log ==="
         cat "$SOCAT_LOG" 2>/dev/null || true
         echo
@@ -54,7 +62,13 @@ cleanup() {
         cat "$DOSBOX_LOG" 2>/dev/null || true
         echo
         echo "=== DOS suite outputs ==="
-        for result in "$DOS_DRIVE/PPP.OK" "$DOS_DRIVE/DNS.OK" "$DOS_DRIVE/SUITE.OK" "$DOS_DRIVE/DNS.OUT"; do
+        for result in \
+            "$DOS_DRIVE/PPP.OK" \
+            "$DOS_DRIVE/DNS.OK" \
+            "$DOS_DRIVE/TCP.OK" \
+            "$DOS_DRIVE/SUITE.OK" \
+            "$DOS_DRIVE/DNS.OUT" \
+            "$DOS_DRIVE/TCP.OUT"; do
             echo "--- $(basename "$result") ---"
             cat "$result" 2>/dev/null || echo "<missing>"
         done
@@ -117,6 +131,7 @@ PY
 
 extract_executable "$LS_PPP_ZIP" "LSPPP.EXE" "$DOS_DRIVE/LSPPP.EXE"
 extract_executable "$MTCP_ZIP" "DNSTEST.EXE" "$DOS_DRIVE/DNSTEST.EXE"
+extract_executable "$MTCP_ZIP" "HTGET.EXE" "$DOS_DRIVE/HTGET.EXE"
 
 "$ROOT/gradlew" --no-daemon installDist >/dev/null
 YAME="$ROOT/build/install/serial-modem-emulator/bin/serial-modem-emulator"
@@ -138,6 +153,23 @@ c:
 YAMETEST.BAT
 EOF
 
+HOST_ADDRESS="$(python3 - <<'PY'
+import socket
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+try:
+    sock.connect(("192.0.2.1", 9))
+    print(sock.getsockname()[0])
+finally:
+    sock.close()
+PY
+)"
+
+if [[ -z "$HOST_ADDRESS" || "$HOST_ADDRESS" == "0.0.0.0" ]]; then
+    echo "Could not determine the host IPv4 address for the TCP fixture" >&2
+    exit 1
+fi
+
 # Permit the unprivileged fixture process to bind the standard DNS port.
 current_unprivileged_port_start="$(sysctl -n net.ipv4.ip_unprivileged_port_start)"
 if [[ "$current_unprivileged_port_start" -gt 53 ]]; then
@@ -145,7 +177,29 @@ if [[ "$current_unprivileged_port_start" -gt 53 ]]; then
     sudo sysctl -w net.ipv4.ip_unprivileged_port_start=53 >/dev/null
 fi
 
-python3 "$ROOT/scripts/dns-fixture.py" >"$DNS_FIXTURE_LOG" 2>&1 &
+python3 "$ROOT/scripts/http-fixture.py" >"$HTTP_FIXTURE_LOG" 2>&1 &
+HTTP_FIXTURE_PID=$!
+
+for _ in $(seq 1 50); do
+    if grep -Fq "HTTP fixture listening" "$HTTP_FIXTURE_LOG" 2>/dev/null; then
+        break
+    fi
+    if ! kill -0 "$HTTP_FIXTURE_PID" 2>/dev/null; then
+        wait "$HTTP_FIXTURE_PID" || true
+        HTTP_FIXTURE_PID=""
+        echo "HTTP fixture exited before becoming ready" >&2
+        exit 1
+    fi
+    sleep 0.1
+done
+
+if ! grep -Fq "HTTP fixture listening" "$HTTP_FIXTURE_LOG" 2>/dev/null; then
+    echo "HTTP fixture did not become ready" >&2
+    exit 1
+fi
+
+YAME_TCP_FIXTURE_ADDRESS="$HOST_ADDRESS" \
+    python3 "$ROOT/scripts/dns-fixture.py" >"$DNS_FIXTURE_LOG" 2>&1 &
 DNS_FIXTURE_PID=$!
 
 for _ in $(seq 1 50); do
@@ -219,7 +273,7 @@ fi
 xvfb-run -a dosbox -conf "$DOSBOX_CONF" >"$DOSBOX_LOG" 2>&1 &
 DOSBOX_PID=$!
 
-deadline=$((SECONDS + 60))
+deadline=$((SECONDS + 75))
 while [[ $SECONDS -lt $deadline ]]; do
     if [[ -f "$DOS_DRIVE/SUITE.OK" ]]; then
         result="$(tr -d '\r\n' < "$DOS_DRIVE/SUITE.OK")"
@@ -227,7 +281,7 @@ while [[ $SECONDS -lt $deadline ]]; do
             break
         fi
         if [[ "$result" == "FAIL" ]]; then
-            echo "DOS PPP/DNS compatibility suite reported a failure" >&2
+            echo "DOS PPP/DNS/TCP compatibility suite reported a failure" >&2
             exit 1
         fi
     fi
@@ -253,6 +307,13 @@ while [[ $SECONDS -lt $deadline ]]; do
         exit 1
     fi
 
+    if ! kill -0 "$HTTP_FIXTURE_PID" 2>/dev/null; then
+        wait "$HTTP_FIXTURE_PID" || true
+        HTTP_FIXTURE_PID=""
+        echo "HTTP fixture exited before the compatibility suite completed" >&2
+        exit 1
+    fi
+
     if ! kill -0 "$DOSBOX_PID" 2>/dev/null; then
         wait "$DOSBOX_PID" || true
         DOSBOX_PID=""
@@ -265,7 +326,7 @@ done
 
 if [[ ! -f "$DOS_DRIVE/SUITE.OK" ]] ||
     [[ "$(tr -d '\r\n' < "$DOS_DRIVE/SUITE.OK")" != "OK" ]]; then
-    echo "Timed out waiting for the DOS PPP/DNS compatibility suite" >&2
+    echo "Timed out waiting for the DOS PPP/DNS/TCP compatibility suite" >&2
     exit 1
 fi
 
@@ -279,8 +340,18 @@ if [[ "$(tr -d '\r\n' < "$DOS_DRIVE/DNS.OK")" != "OK" ]]; then
     exit 1
 fi
 
+if [[ "$(tr -d '\r\n' < "$DOS_DRIVE/TCP.OK")" != "OK" ]]; then
+    echo "mTCP HTGet reported a TCP/HTTP failure" >&2
+    exit 1
+fi
+
 if ! grep -Fq "203.0.113.42" "$DOS_DRIVE/DNS.OUT"; then
     echo "mTCP did not receive the deterministic DNS answer" >&2
+    exit 1
+fi
+
+if ! grep -Fq "YAME TCP integration OK" "$DOS_DRIVE/TCP.OUT"; then
+    echo "mTCP did not receive the deterministic HTTP payload through YAME" >&2
     exit 1
 fi
 
@@ -310,7 +381,32 @@ if ! grep -Fq "DNS <= 10.64.0.2:" "$YAME_LOG"; then
 fi
 
 if ! grep -Fq "query ci.yame.test type=1 class=1" "$DNS_FIXTURE_LOG"; then
-    echo "DNS fixture did not receive the expected upstream query" >&2
+    echo "DNS fixture did not receive the expected deterministic DNS query" >&2
+    exit 1
+fi
+
+if ! grep -Fq "query tcp.yame.test type=1 class=1" "$DNS_FIXTURE_LOG"; then
+    echo "DNS fixture did not resolve the TCP fixture hostname" >&2
+    exit 1
+fi
+
+if ! grep -Fq "request GET /test.txt " "$HTTP_FIXTURE_LOG"; then
+    echo "HTTP fixture did not receive mTCP's request" >&2
+    exit 1
+fi
+
+if ! grep -Fq "TCP <= SYN 10.64.0.2:" "$YAME_LOG"; then
+    echo "YAME did not observe the DOS TCP SYN" >&2
+    exit 1
+fi
+
+if ! grep -Fq "TCP host connected $HOST_ADDRESS:$HTTP_PORT" "$YAME_LOG"; then
+    echo "YAME did not open the host TCP socket for the DOS flow" >&2
+    exit 1
+fi
+
+if ! grep -Fq "TCP open 10.64.0.2:" "$YAME_LOG"; then
+    echo "YAME TCP state machine did not complete the three-way handshake" >&2
     exit 1
 fi
 
@@ -319,3 +415,5 @@ echo "  - LSppp dialed YAME and received CONNECT $BAUD"
 echo "  - PPP LCP and IPCP opened with 10.64.0.1 <-> 10.64.0.2"
 echo "  - mTCP DNSTEST resolved ci.yame.test through YAME's DNS proxy"
 echo "  - the deterministic upstream answer 203.0.113.42 reached DOS"
+echo "  - mTCP HTGet connected through YAME's host TCP proxy"
+echo "  - the HTTP fixture response reached DOS over the emulated TCP flow"
