@@ -109,6 +109,38 @@ class TcpFlowTableTest {
     }
 
     @Test
+    fun `outbound data is limited by peer MSS advertised in SYN`() {
+        val table = table()
+
+        table.receive(
+            key,
+            peerPacket(
+                sequence = 1000u,
+                flags = TcpPacket.SYN,
+                windowSize = 8192,
+                options = byteArrayOf(2, 4, 5, 0xb4.toByte()),
+            ),
+        )
+        table.receive(
+            key,
+            peerPacket(
+                sequence = 1001u,
+                acknowledgment = 5001u,
+                flags = TcpPacket.ACK,
+                windowSize = 8192,
+            ),
+        )
+
+        assertEquals(1460, table.snapshot(key)?.peerMaximumSegmentSize)
+        assertNull(table.send(key, ByteArray(1461)))
+        assertEquals(5001u, table.snapshot(key)?.localNextSequence)
+
+        val segment = requireNotNull(table.send(key, ByteArray(1460) { 7 }))
+        assertEquals(1460, segment.payload.size)
+        assertEquals(6461u, table.snapshot(key)?.localNextSequence)
+    }
+
+    @Test
     fun `outbound data is limited by latest peer receive window and cumulative ACKs`() {
         val table = table()
 
@@ -351,6 +383,7 @@ class TcpFlowTableTest {
         acknowledgment: UInt = 0u,
         flags: Int,
         windowSize: Int = 8192,
+        options: ByteArray = ByteArray(0),
         payload: ByteArray = ByteArray(0),
     ): TcpPacket =
         TcpPacket(
@@ -360,6 +393,7 @@ class TcpFlowTableTest {
             acknowledgmentNumber = acknowledgment,
             flags = flags,
             windowSize = windowSize,
+            options = options,
             payload = payload,
         )
 }
