@@ -1,6 +1,7 @@
 package no.skasti.serialmodem.ppp
 
 import java.io.Closeable
+import java.util.ArrayDeque
 import java.util.Timer
 import java.util.TimerTask
 
@@ -15,8 +16,23 @@ class PppSession(
     private val icmpEchoProxy: IcmpEchoProxy = SystemPingIcmpEchoProxy(),
     private val icmpEchoTimeoutMillis: Long = DEFAULT_ICMP_ECHO_TIMEOUT_MILLIS,
     private val udpProxy: UdpProxy = SystemUdpProxy(),
+    private val tcpProxy: TcpProxy = SystemTcpProxy(),
     private val dnsConfig: PppDnsConfig = PppDnsConfig(),
 ) : Closeable {
+    private data class TcpContext(
+        val proxyFlow: TcpProxyFlow,
+        val dscpEcn: Int,
+        var pendingSynAck: TcpPacket?,
+        var connected: Boolean = false,
+        var established: Boolean = false,
+        var hostEof: Boolean = false,
+        val pendingHostPayloads: ArrayDeque<ByteArray> = ArrayDeque(),
+        var pendingHostBytes: Int = 0,
+    )
+
+    private val tcpFlowTable = TcpFlowTable()
+    private val tcpContexts = mutableMapOf<TcpFlowKey, TcpContext>()
+
     var transmitMru: Int = DEFAULT_MRU
         private set
 
@@ -430,6 +446,7 @@ class PppSession(
 
         when (packet.protocol) {
             Ipv4Packet.ICMP_PROTOCOL -> receiveExternalIcmp(packet)
+            Ipv4Packet.TCP_PROTOCOL -> receiveExternalTcp(packet)
             Ipv4Packet.UDP_PROTOCOL -> receiveExternalUdp(packet)
             else -> logger(
                 "IPv4 .. ${packet.source} -> ${packet.destination} " +
@@ -530,6 +547,286 @@ class PppSession(
                 },
             )
         }
+    }
+
+
+    private fun receiveExternalTcp(packet: Ipv4Packet) {
+        val tcp = TcpPacket.parse(
+            bytes = packet.payload,
+            source = packet.source,
+            destination = packet.destination,
+        )
+        if (tcp == null) {
+            logger("TCP !! malformed segment or invalid checksum")
+            return
+        }
+
+        val key = TcpFlowKey(
+            peerAddress = packet.source,
+            peerPort = tcp.sourcePort,
+            remoteAddress = packet.destination,
+            remotePort = tcp.destinationPort,
+        )
+        val result = tcpFlowTable.receive(key, tcp)
+        val connectionRequested = result.events.any { it is TcpFlowEvent.ConnectionRequested }
+
+        if (connectionRequested) {
+            val synAck = result.responses.singleOrNull()
+            if (synAck == null) {
+                logger("TCP !! SYN did not produce exactly one SYN-ACK")
+                tcpFlowTable.reset(key)
+                return
+            }
+
+            val proxyFlow = TcpProxyFlow(
+                key = key,
+                generation = ipcpGeneration,
+            )
+            val context = TcpContext(
+                proxyFlow = proxyFlow,
+                dscpEcn = packet.dscpEcn,
+                pendingSynAck = synAck,
+            )
+            tcpContexts[key] = context
+            logger(
+                "TCP <= SYN ${packet.source}:${tcp.sourcePort} -> " +
+                    "${packet.destination}:${tcp.destinationPort}; connecting via host",
+            )
+            tcpProxy.connect(proxyFlow) { event ->
+                receiveTcpProxyEvent(proxyFlow, event)
+            }
+        } else {
+            val context = tcpContexts[key]
+            val reset = result.events.any { it is TcpFlowEvent.Reset }
+            if (context == null || context.connected || reset) {
+                sendTcpResponses(
+                    key = key,
+                    responses = result.responses,
+                    dscpEcn = context?.dscpEcn ?: packet.dscpEcn,
+                )
+            }
+        }
+
+        handleTcpFlowEvents(key, result.events)
+    }
+
+    private fun handleTcpFlowEvents(
+        key: TcpFlowKey,
+        events: List<TcpFlowEvent>,
+    ) {
+        for (event in events) {
+            when (event) {
+                is TcpFlowEvent.ConnectionRequested -> Unit
+
+                is TcpFlowEvent.Established -> {
+                    val context = tcpContexts[key] ?: continue
+                    context.established = true
+                    logger(
+                        "TCP open ${key.peerAddress}:${key.peerPort} <-> " +
+                            "${key.remoteAddress}:${key.remotePort}",
+                    )
+                    while (context.pendingHostPayloads.isNotEmpty() && tcpContexts[key] === context) {
+                        val payload = context.pendingHostPayloads.removeFirst()
+                        context.pendingHostBytes -= payload.size
+                        sendHostTcpPayload(context, payload)
+                    }
+                    if (context.hostEof && tcpContexts[key] === context) {
+                        closeTcpFromHost(context)
+                    }
+                }
+
+                is TcpFlowEvent.PayloadReceived -> {
+                    val context = tcpContexts[key] ?: continue
+                    tcpProxy.send(context.proxyFlow, event.payload)
+                        .onFailure { error -> failTcpFlow(context, error) }
+                }
+
+                is TcpFlowEvent.PeerClosed -> {
+                    val context = tcpContexts[key] ?: continue
+                    tcpProxy.shutdownOutput(context.proxyFlow)
+                        .onFailure { error -> failTcpFlow(context, error) }
+                }
+
+                is TcpFlowEvent.Reset,
+                is TcpFlowEvent.Closed,
+                -> {
+                    tcpContexts.remove(key)?.let { context ->
+                        tcpProxy.closeFlow(context.proxyFlow)
+                    }
+                }
+            }
+        }
+    }
+
+    @Synchronized
+    private fun receiveTcpProxyEvent(
+        flow: TcpProxyFlow,
+        event: TcpProxyEvent,
+    ) {
+        val context = tcpContexts[flow.key]
+        if (
+            context == null ||
+            context.proxyFlow != flow ||
+            closed ||
+            !ipcpOpen ||
+            flow.generation != ipcpGeneration
+        ) {
+            tcpProxy.closeFlow(flow)
+            return
+        }
+
+        when (event) {
+            TcpProxyEvent.Connected -> {
+                context.connected = true
+                val synAck = context.pendingSynAck
+                context.pendingSynAck = null
+                if (synAck != null) {
+                    sendTcpPacket(flow.key, synAck, context.dscpEcn)
+                    logger(
+                        "TCP host connected ${flow.key.remoteAddress}:${flow.key.remotePort}; " +
+                            "sent SYN-ACK to ${flow.key.peerAddress}:${flow.key.peerPort}",
+                    )
+                }
+            }
+
+            is TcpProxyEvent.Payload -> {
+                if (context.established) {
+                    sendHostTcpPayload(context, event.bytes)
+                } else {
+                    val newSize = context.pendingHostBytes + event.bytes.size
+                    if (newSize > MAX_PENDING_TCP_HOST_BYTES) {
+                        failTcpFlow(
+                            context,
+                            IllegalStateException("TCP host sent too much data before handshake completed"),
+                        )
+                    } else {
+                        context.pendingHostPayloads.addLast(event.bytes.copyOf())
+                        context.pendingHostBytes = newSize
+                    }
+                }
+            }
+
+            TcpProxyEvent.EndOfStream -> {
+                context.hostEof = true
+                if (context.established) {
+                    closeTcpFromHost(context)
+                }
+            }
+
+            is TcpProxyEvent.Failure -> failTcpFlow(context, event.error)
+        }
+    }
+
+    private fun sendHostTcpPayload(
+        context: TcpContext,
+        payload: ByteArray,
+    ) {
+        if (payload.isEmpty()) return
+
+        val maximumPayload = transmitMru - IPV4_TCP_HEADER_LENGTH
+        if (maximumPayload <= 0) {
+            failTcpFlow(
+                context,
+                IllegalStateException("peer MRU $transmitMru is too small for IPv4/TCP"),
+            )
+            return
+        }
+
+        var offset = 0
+        while (offset < payload.size && tcpContexts[context.proxyFlow.key] === context) {
+            val count = minOf(maximumPayload, payload.size - offset)
+            val chunk = payload.copyOfRange(offset, offset + count)
+            val segment = tcpFlowTable.send(context.proxyFlow.key, chunk)
+            if (segment == null) {
+                failTcpFlow(
+                    context,
+                    IllegalStateException("TCP flow is not able to send host payload"),
+                )
+                return
+            }
+            sendTcpPacket(context.proxyFlow.key, segment, context.dscpEcn)
+            offset += count
+        }
+    }
+
+    private fun closeTcpFromHost(context: TcpContext) {
+        val fin = tcpFlowTable.close(context.proxyFlow.key) ?: return
+        sendTcpPacket(context.proxyFlow.key, fin, context.dscpEcn)
+        logger(
+            "TCP host closed ${context.proxyFlow.key.remoteAddress}:" +
+                "${context.proxyFlow.key.remotePort}; sent FIN",
+        )
+    }
+
+    private fun failTcpFlow(
+        context: TcpContext,
+        error: Throwable,
+    ) {
+        if (tcpContexts[context.proxyFlow.key] !== context) return
+
+        val reason = error.message ?: error.javaClass.simpleName
+        logger(
+            "TCP !! ${context.proxyFlow.key.remoteAddress}:" +
+                "${context.proxyFlow.key.remotePort} failed: $reason",
+        )
+        val reset = tcpFlowTable.reset(context.proxyFlow.key)
+        tcpContexts.remove(context.proxyFlow.key)
+        tcpProxy.closeFlow(context.proxyFlow)
+        if (
+            reset != null &&
+            !closed &&
+            ipcpOpen &&
+            context.proxyFlow.generation == ipcpGeneration
+        ) {
+            sendTcpPacket(context.proxyFlow.key, reset, context.dscpEcn)
+        }
+    }
+
+    private fun sendTcpResponses(
+        key: TcpFlowKey,
+        responses: List<TcpPacket>,
+        dscpEcn: Int,
+    ) {
+        responses.forEach { response ->
+            sendTcpPacket(key, response, dscpEcn)
+        }
+    }
+
+    private fun sendTcpPacket(
+        key: TcpFlowKey,
+        packet: TcpPacket,
+        dscpEcn: Int,
+    ) {
+        val ipv4 = Ipv4Packet(
+            dscpEcn = dscpEcn,
+            protocol = Ipv4Packet.TCP_PROTOCOL,
+            source = key.remoteAddress,
+            destination = key.peerAddress,
+            payload = packet.encode(
+                source = key.remoteAddress,
+                destination = key.peerAddress,
+            ),
+        )
+        val encoded = ipv4.encode()
+        if (encoded.size > transmitMru) {
+            logger(
+                "TCP .. segment ${encoded.size} bytes exceeds peer MRU $transmitMru; not sent",
+            )
+            return
+        }
+
+        sendFrame(
+            PppFrame(
+                protocol = IPV4_PROTOCOL,
+                payload = encoded,
+            ),
+        )
+        logger(
+            "TCP => ${key.remoteAddress}:${packet.sourcePort} -> " +
+                "${key.peerAddress}:${packet.destinationPort} " +
+                "flags=0x${packet.flags.toString(16)} seq=${packet.sequenceNumber} " +
+                "ack=${packet.acknowledgmentNumber} payload=${packet.payload.size} bytes",
+        )
     }
 
 
@@ -731,7 +1028,7 @@ class PppSession(
             ipcpDnsPrompted = false
             ipcpDnsPromptRequestIdentifier = null
             ipcpDnsPromptRequestData = null
-            udpProxy.invalidateBefore(ipcpGeneration)
+            invalidateTransportFlows()
             restartLocalIpcpNegotiation()
         }
 
@@ -980,12 +1277,19 @@ class PppSession(
         }
     }
 
+    private fun invalidateTransportFlows() {
+        udpProxy.invalidateBefore(ipcpGeneration)
+        tcpProxy.invalidateBefore(ipcpGeneration)
+        tcpFlowTable.clear()
+        tcpContexts.clear()
+    }
+
     private fun resetIpcp() {
         ipcpGeneration++
         ipcpDnsPrompted = false
         ipcpDnsPromptRequestIdentifier = null
         ipcpDnsPromptRequestData = null
-        udpProxy.invalidateBefore(ipcpGeneration)
+        invalidateTransportFlows()
         ipcpStarted = false
         ipcpPeerConfigured = false
         ipcpLocalConfigured = false
@@ -1005,6 +1309,9 @@ class PppSession(
         stopIpcpRestartTimer()
         icmpEchoProxy.close()
         udpProxy.close()
+        tcpFlowTable.clear()
+        tcpContexts.clear()
+        tcpProxy.close()
     }
 
     companion object {
@@ -1016,6 +1323,8 @@ class PppSession(
         private const val DEFAULT_RESTART_INTERVAL_MILLIS = 3_000L
         private const val DEFAULT_ICMP_ECHO_TIMEOUT_MILLIS = 2_000L
         private const val DNS_PORT = 53
+        private const val IPV4_TCP_HEADER_LENGTH = 40
+        private const val MAX_PENDING_TCP_HOST_BYTES = 65_536
 
         private val DEFAULT_IP_ADDRESSES = PppAddresses(
             localAddress = Ipv4Address.parse("10.0.0.1"),
