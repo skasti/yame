@@ -1,8 +1,10 @@
 @echo off
 del PPP.OK >NUL 2>NUL
 del DNS.OK >NUL 2>NUL
+del TCP.OK >NUL 2>NUL
 del SUITE.OK >NUL 2>NUL
 del DNS.OUT >NUL 2>NUL
+del TCP.OUT >NUL 2>NUL
 
 rem DOSBox's transparent nullmodem carries bytes but not DCD.  Let LSppp
 rem perform the real Hayes dial first; after CONNECT it exits because it
@@ -21,8 +23,13 @@ set MTCPCFG=C:\MTCP.CFG
 echo Resolving ci.yame.test through YAME...
 DNSTEST.EXE -name ci.yame.test -timeout 10 > DNS.OUT
 if errorlevel 1 goto dns_failed
-
 echo OK>DNS.OK
+
+echo Fetching tcp.yame.test through YAME TCP proxy...
+HTGET.EXE -quiet -o TCP.OUT http://tcp.yame.test:18080/test.txt
+if errorlevel 1 goto tcp_failed
+echo OK>TCP.OK
+
 echo OK>SUITE.OK
 goto done
 
@@ -33,6 +40,11 @@ goto done
 
 :dns_failed
 echo FAIL>DNS.OK
+echo FAIL>SUITE.OK
+goto done
+
+:tcp_failed
+echo FAIL>TCP.OK
 echo FAIL>SUITE.OK
 
 :done
