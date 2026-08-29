@@ -253,10 +253,14 @@ class TcpFlowTable(
             return TcpFlowResult(responses = listOf(ack(flow)))
         }
 
-        flow.peerWindowSize = packet.windowSize
-
         if (packet.hasFlag(TcpPacket.ACK)) {
-            acknowledgeLocal(flow, packet.acknowledgmentNumber)
+            val acknowledgmentAccepted = acknowledgeLocal(
+                flow,
+                packet.acknowledgmentNumber,
+            )
+            if (acknowledgmentAccepted) {
+                flow.peerWindowSize = packet.windowSize
+            }
         }
 
         val events = mutableListOf<TcpFlowEvent>()
@@ -320,7 +324,7 @@ class TcpFlowTable(
     private fun acknowledgeLocal(
         flow: Flow,
         acknowledgmentNumber: UInt,
-    ) {
+    ): Boolean {
         val outstanding = forwardDistance(
             flow.localAcknowledgedSequence,
             flow.localNextSequence,
@@ -329,9 +333,10 @@ class TcpFlowTable(
             flow.localAcknowledgedSequence,
             acknowledgmentNumber,
         )
-        if (acknowledged <= outstanding) {
-            flow.localAcknowledgedSequence = acknowledgmentNumber
-        }
+        if (acknowledged > outstanding) return false
+
+        flow.localAcknowledgedSequence = acknowledgmentNumber
+        return true
     }
 
     private fun availableSendWindow(flow: Flow): Int {
