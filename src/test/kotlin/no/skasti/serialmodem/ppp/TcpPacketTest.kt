@@ -78,6 +78,47 @@ class TcpPacketTest {
     }
 
     @Test
+    fun `maximum segment size option is parsed through padding and NOPs`() {
+        val packet = TcpPacket(
+            sourcePort = 1025,
+            destinationPort = 80,
+            sequenceNumber = 100u,
+            flags = TcpPacket.SYN,
+            options = byteArrayOf(
+                1,
+                2, 4, 5, 0xb4.toByte(),
+                1,
+                0,
+                0,
+            ),
+        )
+
+        assertEquals(1460, packet.maximumSegmentSizeOption())
+    }
+
+    @Test
+    fun `missing or malformed maximum segment size option returns null`() {
+        assertNull(
+            TcpPacket(
+                sourcePort = 1025,
+                destinationPort = 80,
+                sequenceNumber = 100u,
+                flags = TcpPacket.SYN,
+                options = byteArrayOf(1, 1, 0, 0),
+            ).maximumSegmentSizeOption(),
+        )
+        assertNull(
+            TcpPacket(
+                sourcePort = 1025,
+                destinationPort = 80,
+                sequenceNumber = 100u,
+                flags = TcpPacket.SYN,
+                options = byteArrayOf(2, 5, 5, 0xb4.toByte()),
+            ).maximumSegmentSizeOption(),
+        )
+    }
+
+    @Test
     fun `invalid TCP checksum is rejected`() {
         val encoded = TcpPacket(
             sourcePort = 1025,
