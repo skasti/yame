@@ -9,6 +9,7 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
+import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -129,6 +130,7 @@ class TcpProxyTest {
         val releaseWrite = CountDownLatch(1)
         val proxy = SystemTcpProxy(
             connectTimeoutMillis = 1_000,
+            maxQueuedWriteBytes = 1024,
             writeOperation = { _, _ ->
                 writeStarted.countDown()
                 releaseWrite.await(3, TimeUnit.SECONDS)
@@ -151,7 +153,15 @@ class TcpProxyTest {
             result.getOrThrow()
 
             assertTrue(writeStarted.await(1, TimeUnit.SECONDS))
+            assertEquals(0, proxy.availableWriteCapacity(flow))
             assertTrue(releaseWrite.count == 1L)
+
+            releaseWrite.countDown()
+            val completed = assertIs<TcpProxyEvent.WriteCompleted>(
+                requireNotNull(events.poll(2, TimeUnit.SECONDS)),
+            )
+            assertEquals(1024, completed.bytes)
+            assertEquals(1024, proxy.availableWriteCapacity(flow))
         } finally {
             releaseWrite.countDown()
             releaseServer.countDown()
