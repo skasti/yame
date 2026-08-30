@@ -372,6 +372,7 @@ class PppSession(
 
         when (packet.protocol) {
             Ipv4Packet.ICMP_PROTOCOL -> receiveLocalIcmp(packet)
+            Ipv4Packet.TCP_PROTOCOL -> receiveLocalTcp(packet)
             Ipv4Packet.UDP_PROTOCOL -> receiveLocalUdp(packet)
             else -> logger("IPv4 .. local protocol=${packet.protocol} not handled")
         }
@@ -435,13 +436,14 @@ class PppSession(
         val flow = UdpFlow(
             peerPort = udp.sourcePort,
             destination = dnsConfig.upstreamServer,
-            destinationPort = DNS_PORT,
+            destinationPort = dnsConfig.upstreamPort,
             generation = generation,
             namespace = UdpFlowNamespace.LOCAL_DNS,
         )
         logger(
             "DNS <= ${packet.source}:${udp.sourcePort} -> " +
-                "$localIpAddress:$DNS_PORT; forwarding to ${dnsConfig.upstreamServer}:$DNS_PORT",
+                "$localIpAddress:$DNS_PORT; forwarding to " +
+                "${dnsConfig.upstreamServer}:${dnsConfig.upstreamPort}",
         )
 
         udpProxy.send(flow, udp.payload) { result ->
@@ -455,10 +457,38 @@ class PppSession(
                 },
                 onFailure = { error ->
                     val reason = error.message ?: error.javaClass.simpleName
-                    logger("DNS !! upstream ${dnsConfig.upstreamServer}:$DNS_PORT failed: $reason")
+                    logger(
+                        "DNS !! upstream ${dnsConfig.upstreamServer}:" +
+                            "${dnsConfig.upstreamPort} failed: $reason",
+                    )
                 },
             )
         }
+    }
+
+    private fun receiveLocalTcp(packet: Ipv4Packet) {
+        val tcp = TcpPacket.parse(
+            bytes = packet.payload,
+            source = packet.source,
+            destination = packet.destination,
+        )
+        if (tcp == null) {
+            logger("TCP !! malformed local segment or invalid checksum")
+            return
+        }
+
+        if (tcp.destinationPort != DNS_PORT) {
+            logger("TCP .. local port=${tcp.destinationPort} not handled")
+            return
+        }
+
+        receiveTcp(
+            packet = packet,
+            tcp = tcp,
+            connectAddress = dnsConfig.upstreamServer,
+            connectPort = dnsConfig.upstreamPort,
+            readTimeoutMillis = DNS_TCP_IDLE_TIMEOUT_MILLIS,
+        )
     }
 
     private fun receiveExternalIpv4(packet: Ipv4Packet) {
@@ -572,7 +602,6 @@ class PppSession(
         }
     }
 
-
     private fun receiveExternalTcp(packet: Ipv4Packet) {
         val tcp = TcpPacket.parse(
             bytes = packet.payload,
@@ -584,6 +613,21 @@ class PppSession(
             return
         }
 
+        receiveTcp(
+            packet = packet,
+            tcp = tcp,
+            connectAddress = packet.destination,
+            connectPort = tcp.destinationPort,
+        )
+    }
+
+    private fun receiveTcp(
+        packet: Ipv4Packet,
+        tcp: TcpPacket,
+        connectAddress: Ipv4Address,
+        connectPort: Int,
+        readTimeoutMillis: Int = 0,
+    ) {
         val key = TcpFlowKey(
             peerAddress = packet.source,
             peerPort = tcp.sourcePort,
@@ -633,6 +677,9 @@ class PppSession(
             val proxyFlow = TcpProxyFlow(
                 key = key,
                 generation = ipcpGeneration,
+                connectAddress = connectAddress,
+                connectPort = connectPort,
+                readTimeoutMillis = readTimeoutMillis,
             )
             val context = TcpContext(
                 proxyFlow = proxyFlow,
@@ -642,7 +689,8 @@ class PppSession(
             tcpContexts[key] = context
             logger(
                 "TCP <= SYN ${packet.source}:${tcp.sourcePort} -> " +
-                    "${packet.destination}:${tcp.destinationPort}; connecting via host",
+                    "${packet.destination}:${tcp.destinationPort}; connecting via host to " +
+                    "$connectAddress:$connectPort",
             )
             tcpProxy.connect(proxyFlow) { event ->
                 receiveTcpProxyEvent(proxyFlow, event)
@@ -736,7 +784,7 @@ class PppSession(
                 if (synAck != null) {
                     sendTcpPacket(flow.key, synAck, context.dscpEcn)
                     logger(
-                        "TCP host connected ${flow.key.remoteAddress}:${flow.key.remotePort}; " +
+                        "TCP host connected ${flow.connectAddress}:${flow.connectPort}; " +
                             "sent SYN-ACK to ${flow.key.peerAddress}:${flow.key.peerPort}",
                     )
                 }
@@ -1013,7 +1061,6 @@ class PppSession(
                 "ack=${packet.acknowledgmentNumber} payload=${packet.payload.size} bytes",
         )
     }
-
 
     @Synchronized
     private fun sendExternalEchoReply(
@@ -1514,7 +1561,8 @@ class PppSession(
         private const val DEFAULT_TCP_HANDSHAKE_TIMEOUT_MILLIS = 10_000L
         private const val DEFAULT_TCP_RETRANSMIT_TIMEOUT_MILLIS = 3_000L
         private const val MIN_TCP_RETRANSMIT_SCAN_MILLIS = 25L
-        private const val DNS_PORT = 53
+        private const val DNS_PORT = PppDnsConfig.DNS_PORT
+        private const val DNS_TCP_IDLE_TIMEOUT_MILLIS = 30_000
         private const val IPV4_TCP_HEADER_LENGTH = 40
         private const val TCP_HOST_BUFFER_HIGH_WATER_BYTES = 32 * 1024
         private const val TCP_HOST_BUFFER_LOW_WATER_BYTES = 16 * 1024
