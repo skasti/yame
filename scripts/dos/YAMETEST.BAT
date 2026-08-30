@@ -2,9 +2,11 @@
 del PPP.OK >NUL 2>NUL
 del DNS.OK >NUL 2>NUL
 del TCP.OK >NUL 2>NUL
+del HTTP.OK >NUL 2>NUL
 del SUITE.OK >NUL 2>NUL
 del DNS.OUT >NUL 2>NUL
 del TCP.OUT >NUL 2>NUL
+del HTTP.OUT >NUL 2>NUL
 
 rem DOSBox's transparent nullmodem carries bytes but not DCD.  Let LSppp
 rem perform the real Hayes dial first; after CONNECT it exits because it
@@ -32,6 +34,13 @@ if errorlevel 22 goto tcp_failed
 if not errorlevel 21 goto tcp_failed
 echo OK>TCP.OK
 
+echo Fetching real-world HTTP page from example.com through YAME...
+HTGET.EXE -quiet -o HTTP.OUT http://example.com/
+if errorlevel 22 goto http_failed
+if not errorlevel 21 goto http_failed
+if not exist HTTP.OUT goto http_failed
+echo OK>HTTP.OK
+
 echo OK>SUITE.OK
 goto done
 
@@ -47,6 +56,11 @@ goto done
 
 :tcp_failed
 echo FAIL>TCP.OK
+echo FAIL>SUITE.OK
+goto done
+
+:http_failed
+echo FAIL>HTTP.OK
 echo FAIL>SUITE.OK
 
 :done

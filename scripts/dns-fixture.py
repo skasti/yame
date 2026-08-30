@@ -12,6 +12,7 @@ EXPECTED_NAME = "ci.yame.test"
 ANSWER_ADDRESS = "203.0.113.42"
 TCP_NAME = "tcp.yame.test"
 TCP_ANSWER_ADDRESS = os.environ.get("YAME_TCP_FIXTURE_ADDRESS", "127.0.0.1")
+EXTERNAL_HTTP_NAME = "example.com"
 
 
 def question_end(packet: bytes) -> int:
@@ -42,6 +43,13 @@ def question_name(packet: bytes) -> str:
     return ".".join(labels).lower()
 
 
+def resolve_external_ipv4(name: str) -> str:
+    addresses = socket.getaddrinfo(name, 80, socket.AF_INET, socket.SOCK_STREAM)
+    if not addresses:
+        raise OSError(f"no IPv4 address found for {name}")
+    return addresses[0][4][0]
+
+
 with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
     sock.bind((LISTEN_ADDRESS, LISTEN_PORT))
     print(f"DNS fixture listening on {LISTEN_ADDRESS}:{LISTEN_PORT}", flush=True)
@@ -54,10 +62,16 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             qtype, qclass = struct.unpack("!HH", packet[end - 4:end])
             print(f"query {name} type={qtype} class={qclass} from {peer[0]}:{peer[1]}", flush=True)
 
-            if qtype == 1 and qclass == 1 and name in (EXPECTED_NAME, TCP_NAME):
+            if qtype == 1 and qclass == 1 and name in (EXPECTED_NAME, TCP_NAME, EXTERNAL_HTTP_NAME):
                 flags = 0x8180
                 answer_count = 1
-                address = ANSWER_ADDRESS if name == EXPECTED_NAME else TCP_ANSWER_ADDRESS
+                if name == EXPECTED_NAME:
+                    address = ANSWER_ADDRESS
+                elif name == TCP_NAME:
+                    address = TCP_ANSWER_ADDRESS
+                else:
+                    address = resolve_external_ipv4(name)
+                    print(f"resolved external {name} to {address}", flush=True)
                 answer = (
                     bytes((0xC0, 0x0C))
                     + struct.pack("!HHIH", 1, 1, 60, 4)
