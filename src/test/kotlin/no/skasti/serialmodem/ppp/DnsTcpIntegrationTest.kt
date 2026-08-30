@@ -326,7 +326,7 @@ class DnsTcpIntegrationTest {
                 val query = request.data.copyOfRange(request.offset, request.offset + request.length)
                 val response = dnsResponse(query, truncated = true)
                 udpSocket.send(DatagramPacket(response, response.size, request.socketAddress))
-            }.onFailure(failure::compareAndSetNull)
+            }.onFailure { error -> failure.compareAndSet(null, error) }
         }, "dns-tcp-test-udp").apply {
             isDaemon = true
             start()
@@ -351,7 +351,7 @@ class DnsTcpIntegrationTest {
                         output.flush()
                     }
                 }
-            }.onFailure(failure::compareAndSetNull)
+            }.onFailure { error -> failure.compareAndSet(null, error) }
         }, "dns-tcp-test-tcp").apply {
             isDaemon = true
             start()
@@ -362,10 +362,6 @@ class DnsTcpIntegrationTest {
             runCatching { tcpSocket.close() }
             runCatching { udpThread.join(1_000) }
             runCatching { tcpThread.join(1_000) }
-        }
-
-        private fun AtomicReference<Throwable?>.compareAndSetNull(error: Throwable) {
-            compareAndSet(null, error)
         }
     }
 
