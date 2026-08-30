@@ -72,9 +72,9 @@ class HttpCompatibilityProxyTest {
     fun `compatibility proxy enforces redirect limit with legacy HTTP error`() {
         val server = ServerSocket(0, 8, InetAddress.getLoopbackAddress())
         val serverThread = Thread {
-            server.use {
+            server.use { listening ->
                 repeat(2) {
-                    val socket = it.accept()
+                    val socket = listening.accept()
                     socket.use { accepted ->
                         readRequest(accepted)
                         val response =
@@ -179,8 +179,8 @@ class HttpCompatibilityProxyTest {
 
     private fun serveOnce(server: ServerSocket, response: (String) -> String): Thread =
         Thread {
-            server.use {
-                val socket = it.accept()
+            server.use { listening ->
+                val socket = listening.accept()
                 socket.use { accepted ->
                     val request = readRequest(accepted)
                     val wire = response(request).toByteArray(StandardCharsets.ISO_8859_1)
