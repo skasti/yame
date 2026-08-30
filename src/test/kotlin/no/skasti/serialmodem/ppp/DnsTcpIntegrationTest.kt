@@ -1,7 +1,6 @@
 package no.skasti.serialmodem.ppp
 
 import java.io.DataInputStream
-import java.io.DataOutputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -338,7 +337,7 @@ class DnsTcpIntegrationTest {
                     tcpConnections++
                     socket.soTimeout = 5_000
                     val input = DataInputStream(socket.getInputStream())
-                    val output = DataOutputStream(socket.getOutputStream())
+                    val output = socket.getOutputStream()
                     repeat(2) {
                         val length = input.readUnsignedShort()
                         require(length in 1..0xffff)
@@ -346,8 +345,7 @@ class DnsTcpIntegrationTest {
                         input.readFully(query)
                         tcpQueries += query
                         val response = dnsResponse(query, truncated = false)
-                        output.writeShort(response.size)
-                        output.write(response)
+                        output.write(dnsTcpFrame(response))
                         output.flush()
                     }
                 }
