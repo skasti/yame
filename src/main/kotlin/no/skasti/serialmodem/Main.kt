@@ -7,7 +7,6 @@ import no.skasti.serialmodem.ppp.Ipv4Cidr
 import no.skasti.serialmodem.ppp.PppDnsConfig
 import no.skasti.serialmodem.ppp.PppHttpCompatibilityConfig
 import no.skasti.serialmodem.ppp.PppIpConfig
-import no.skasti.serialmodem.ppp.RetroPppHandler
 import no.skasti.serialmodem.serial.SerialConnection
 import no.skasti.serialmodem.tone.DialString
 import no.skasti.serialmodem.tone.HandshakeProfile
@@ -22,12 +21,6 @@ fun main(args: Array<String>) {
     val modem = HayesModem(
         baudRate = options.baudRate,
         config = options.modemConfig,
-        pppHandler = RetroPppHandler(
-            logger = ::println,
-            ipConfig = options.modemConfig.pppIpConfig,
-            dnsConfig = options.modemConfig.pppDnsConfig,
-            httpCompatibilityConfig = options.modemConfig.pppHttpCompatibilityConfig,
-        ),
     )
 
     if (options.testNumber != null) {
