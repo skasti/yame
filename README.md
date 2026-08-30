@@ -37,9 +37,10 @@ The emulator currently:
 - negotiates RFC 1877 primary/secondary DNS options and advertises YAME's local PPP address
 - proxies DNS queries sent to YAME's PPP address to a configurable upstream DNS server
 - parses and encodes TCP headers with IPv4 pseudo-header checksum validation
-- tracks TCP flows through SYN/SYN-ACK/ACK, sequence/acknowledgment numbers, FIN and RST without using host sockets yet
+- tracks TCP flows through SYN/SYN-ACK/ACK, sequence/acknowledgment numbers, FIN and RST
+- forwards external TCP connections through per-flow host sockets, including bidirectional payloads and graceful close
 
-The current networking milestone provides IPv4, ICMP, UDP and DNS over PPP without requiring host routing/NAT configuration. TCP packet handling and a userspace connection state machine are now implemented as groundwork; host TCP socket forwarding remains future work.
+The current networking milestone provides IPv4, ICMP, UDP, DNS and TCP over PPP without requiring host routing/NAT configuration. External TCP SYNs are only acknowledged after the corresponding host socket connects successfully, and payloads are proxied in both directions through YAME's userspace TCP state machine.
 
 ## Telephone and modem tone simulation
 

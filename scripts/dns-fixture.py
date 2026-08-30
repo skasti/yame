@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Minimal deterministic DNS server used by the DOSBox integration test."""
 
+import os
 import socket
 import struct
 import sys
@@ -9,6 +10,8 @@ LISTEN_ADDRESS = "127.0.0.1"
 LISTEN_PORT = 53
 EXPECTED_NAME = "ci.yame.test"
 ANSWER_ADDRESS = "203.0.113.42"
+TCP_NAME = "tcp.yame.test"
+TCP_ANSWER_ADDRESS = os.environ.get("YAME_TCP_FIXTURE_ADDRESS", "127.0.0.1")
 
 
 def question_end(packet: bytes) -> int:
@@ -51,13 +54,14 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             qtype, qclass = struct.unpack("!HH", packet[end - 4:end])
             print(f"query {name} type={qtype} class={qclass} from {peer[0]}:{peer[1]}", flush=True)
 
-            if name == EXPECTED_NAME and qtype == 1 and qclass == 1:
+            if qtype == 1 and qclass == 1 and name in (EXPECTED_NAME, TCP_NAME):
                 flags = 0x8180
                 answer_count = 1
+                address = ANSWER_ADDRESS if name == EXPECTED_NAME else TCP_ANSWER_ADDRESS
                 answer = (
                     bytes((0xC0, 0x0C))
                     + struct.pack("!HHIH", 1, 1, 60, 4)
-                    + socket.inet_aton(ANSWER_ADDRESS)
+                    + socket.inet_aton(address)
                 )
             else:
                 flags = 0x8183

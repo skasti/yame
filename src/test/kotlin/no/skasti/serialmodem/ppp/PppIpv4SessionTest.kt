@@ -1,5 +1,6 @@
 package no.skasti.serialmodem.ppp
 
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -448,11 +449,411 @@ class PppIpv4SessionTest {
         session.close()
     }
 
+    @Test
+    fun `external TCP host reads pause at peer window and resume after acknowledgments`() {
+        val sent = CopyOnWriteArrayList<PppFrame>()
+        val tcpProxy = FakeTcpProxy()
+        val session = newSession(
+            sent = sent,
+            tcpProxy = tcpProxy,
+        )
+        openIpcp(session, sent)
+        sent.clear()
+
+        val peer = Ipv4Address.parse("10.0.0.2")
+        val remote = Ipv4Address.parse("203.0.113.10")
+        val peerPort = 2048
+        val remotePort = 80
+
+        fun receiveTcp(packet: TcpPacket) {
+            val ipv4 = Ipv4Packet(
+                protocol = Ipv4Packet.TCP_PROTOCOL,
+                source = peer,
+                destination = remote,
+                payload = packet.encode(peer, remote),
+            )
+            session.receive(PppFrame(PppSession.IPV4_PROTOCOL, ipv4.encode()))
+        }
+
+        receiveTcp(
+            TcpPacket(
+                sourcePort = peerPort,
+                destinationPort = remotePort,
+                sequenceNumber = 1000u,
+                flags = TcpPacket.SYN,
+                windowSize = 4,
+            ),
+        )
+
+        assertEquals(1, tcpProxy.pauseCount)
+        val synAckIpv4 = requireNotNull(Ipv4Packet.parse(sent.single().payload))
+        val synAck = requireNotNull(
+            TcpPacket.parse(
+                synAckIpv4.payload,
+                synAckIpv4.source,
+                synAckIpv4.destination,
+            ),
+        )
+
+        receiveTcp(
+            TcpPacket(
+                sourcePort = peerPort,
+                destinationPort = remotePort,
+                sequenceNumber = 1001u,
+                acknowledgmentNumber = synAck.sequenceNumber + 1u,
+                flags = TcpPacket.ACK,
+                windowSize = 4,
+            ),
+        )
+        assertEquals(1, tcpProxy.resumeCount)
+
+        sent.clear()
+        tcpProxy.emitPayload(ByteArray(8) { it.toByte() })
+
+        assertEquals(1, sent.size)
+        val firstIpv4 = requireNotNull(Ipv4Packet.parse(sent.single().payload))
+        val firstPayload = requireNotNull(
+            TcpPacket.parse(
+                firstIpv4.payload,
+                firstIpv4.source,
+                firstIpv4.destination,
+            ),
+        )
+        assertEquals(4, firstPayload.payload.size)
+        assertEquals(2, tcpProxy.pauseCount)
+
+        sent.clear()
+        receiveTcp(
+            TcpPacket(
+                sourcePort = peerPort,
+                destinationPort = remotePort,
+                sequenceNumber = 1001u,
+                acknowledgmentNumber = synAck.sequenceNumber + 5u,
+                flags = TcpPacket.ACK,
+                windowSize = 4,
+            ),
+        )
+
+        assertEquals(1, sent.size)
+        val secondIpv4 = requireNotNull(Ipv4Packet.parse(sent.single().payload))
+        val secondPayload = requireNotNull(
+            TcpPacket.parse(
+                secondIpv4.payload,
+                secondIpv4.source,
+                secondIpv4.destination,
+            ),
+        )
+        assertEquals(4, secondPayload.payload.size)
+
+        sent.clear()
+        receiveTcp(
+            TcpPacket(
+                sourcePort = peerPort,
+                destinationPort = remotePort,
+                sequenceNumber = 1001u,
+                acknowledgmentNumber = synAck.sequenceNumber + 9u,
+                flags = TcpPacket.ACK,
+                windowSize = 4,
+            ),
+        )
+        assertEquals(2, tcpProxy.resumeCount)
+
+        session.close()
+    }
+
+    @Test
+    fun `external TCP host connection expires when peer never completes handshake`() {
+        val sent = CopyOnWriteArrayList<PppFrame>()
+        val logs = CopyOnWriteArrayList<String>()
+        val tcpProxy = FakeTcpProxy()
+        val session = newSession(
+            sent = sent,
+            logger = logs::add,
+            tcpProxy = tcpProxy,
+            tcpHandshakeTimeoutMillis = 50,
+        )
+        openIpcp(session, sent)
+        sent.clear()
+
+        val peer = Ipv4Address.parse("10.0.0.2")
+        val remote = Ipv4Address.parse("203.0.113.11")
+        val syn = TcpPacket(
+            sourcePort = 2049,
+            destinationPort = 80,
+            sequenceNumber = 3000u,
+            flags = TcpPacket.SYN,
+            windowSize = 8192,
+        )
+        session.receive(
+            PppFrame(
+                protocol = PppSession.IPV4_PROTOCOL,
+                payload = Ipv4Packet(
+                    protocol = Ipv4Packet.TCP_PROTOCOL,
+                    source = peer,
+                    destination = remote,
+                    payload = syn.encode(peer, remote),
+                ).encode(),
+            ),
+        )
+
+        val deadline = System.nanoTime() + 2_000_000_000L
+        while (tcpProxy.closedFlows.isEmpty() && System.nanoTime() < deadline) {
+            Thread.sleep(10)
+        }
+
+        assertTrue(tcpProxy.closedFlows.isNotEmpty())
+        assertTrue(logs.any { it.contains("did not complete handshake") })
+
+        val tcpReplies = sent
+            .filter { it.protocol == PppSession.IPV4_PROTOCOL }
+            .mapNotNull { frame ->
+                Ipv4Packet.parse(frame.payload)?.let { ipv4 ->
+                    if (ipv4.protocol != Ipv4Packet.TCP_PROTOCOL) {
+                        null
+                    } else {
+                        TcpPacket.parse(ipv4.payload, ipv4.source, ipv4.destination)
+                    }
+                }
+            }
+        assertTrue(tcpReplies.any { it.hasFlag(TcpPacket.RST) })
+
+        session.close()
+    }
+
+    @Test
+    fun `external TCP retransmits unacknowledged host payload after timeout`() {
+        val sent = CopyOnWriteArrayList<PppFrame>()
+        val tcpProxy = FakeTcpProxy()
+        val session = newSession(
+            sent = sent,
+            tcpProxy = tcpProxy,
+            tcpRetransmitTimeoutMillis = 60,
+        )
+        openIpcp(session, sent)
+        sent.clear()
+
+        val peer = Ipv4Address.parse("10.0.0.2")
+        val remote = Ipv4Address.parse("203.0.113.12")
+        val peerPort = 2050
+        val remotePort = 80
+
+        fun receiveTcp(packet: TcpPacket) {
+            session.receive(
+                PppFrame(
+                    protocol = PppSession.IPV4_PROTOCOL,
+                    payload = Ipv4Packet(
+                        protocol = Ipv4Packet.TCP_PROTOCOL,
+                        source = peer,
+                        destination = remote,
+                        payload = packet.encode(peer, remote),
+                    ).encode(),
+                ),
+            )
+        }
+
+        receiveTcp(
+            TcpPacket(
+                sourcePort = peerPort,
+                destinationPort = remotePort,
+                sequenceNumber = 4000u,
+                flags = TcpPacket.SYN,
+                windowSize = 8192,
+                options = byteArrayOf(2, 4, 5, 0xb4.toByte()),
+            ),
+        )
+        val synAckIpv4 = requireNotNull(Ipv4Packet.parse(sent.single().payload))
+        val synAck = requireNotNull(
+            TcpPacket.parse(
+                synAckIpv4.payload,
+                synAckIpv4.source,
+                synAckIpv4.destination,
+            ),
+        )
+        receiveTcp(
+            TcpPacket(
+                sourcePort = peerPort,
+                destinationPort = remotePort,
+                sequenceNumber = 4001u,
+                acknowledgmentNumber = synAck.sequenceNumber + 1u,
+                flags = TcpPacket.ACK,
+                windowSize = 8192,
+            ),
+        )
+
+        sent.clear()
+        tcpProxy.emitPayload("lost-once".encodeToByteArray())
+        val firstIpv4 = requireNotNull(Ipv4Packet.parse(sent.single().payload))
+        val first = requireNotNull(
+            TcpPacket.parse(firstIpv4.payload, firstIpv4.source, firstIpv4.destination),
+        )
+        assertContentEquals("lost-once".encodeToByteArray(), first.payload)
+
+        val deadline = System.nanoTime() + 2_000_000_000L
+        while (sent.size < 2 && System.nanoTime() < deadline) {
+            Thread.sleep(10)
+        }
+
+        assertTrue(sent.size >= 2)
+        val retransmittedIpv4 = requireNotNull(Ipv4Packet.parse(sent[1].payload))
+        val retransmitted = requireNotNull(
+            TcpPacket.parse(
+                retransmittedIpv4.payload,
+                retransmittedIpv4.source,
+                retransmittedIpv4.destination,
+            ),
+        )
+        assertEquals(first.sequenceNumber, retransmitted.sequenceNumber)
+        assertContentEquals(first.payload, retransmitted.payload)
+
+        receiveTcp(
+            TcpPacket(
+                sourcePort = peerPort,
+                destinationPort = remotePort,
+                sequenceNumber = 4001u,
+                acknowledgmentNumber = first.sequenceNumber + first.payload.size.toUInt(),
+                flags = TcpPacket.ACK,
+                windowSize = 8192,
+            ),
+        )
+
+        val countAfterAck = sent.size
+        Thread.sleep(150)
+        assertEquals(countAfterAck, sent.size)
+        session.close()
+    }
+
+    @Test
+    fun `external TCP shrinks receive window when host write buffer fills and reopens it on completion`() {
+        val sent = CopyOnWriteArrayList<PppFrame>()
+        val tcpProxy = FakeTcpProxy(initialWriteCapacity = 4)
+        val session = newSession(sent = sent, tcpProxy = tcpProxy)
+        openIpcp(session, sent)
+        sent.clear()
+
+        val peer = Ipv4Address.parse("10.0.0.2")
+        val remote = Ipv4Address.parse("203.0.113.13")
+        val peerPort = 2051
+        val remotePort = 80
+
+        fun receiveTcp(packet: TcpPacket) {
+            session.receive(
+                PppFrame(
+                    protocol = PppSession.IPV4_PROTOCOL,
+                    payload = Ipv4Packet(
+                        protocol = Ipv4Packet.TCP_PROTOCOL,
+                        source = peer,
+                        destination = remote,
+                        payload = packet.encode(peer, remote),
+                    ).encode(),
+                ),
+            )
+        }
+
+        receiveTcp(
+            TcpPacket(
+                sourcePort = peerPort,
+                destinationPort = remotePort,
+                sequenceNumber = 5000u,
+                flags = TcpPacket.SYN,
+                windowSize = 8192,
+            ),
+        )
+        val synAckIpv4 = requireNotNull(Ipv4Packet.parse(sent.single().payload))
+        val synAck = requireNotNull(
+            TcpPacket.parse(synAckIpv4.payload, synAckIpv4.source, synAckIpv4.destination),
+        )
+        assertEquals(4, synAck.windowSize)
+
+        receiveTcp(
+            TcpPacket(
+                sourcePort = peerPort,
+                destinationPort = remotePort,
+                sequenceNumber = 5001u,
+                acknowledgmentNumber = synAck.sequenceNumber + 1u,
+                flags = TcpPacket.ACK,
+                windowSize = 8192,
+            ),
+        )
+
+        sent.clear()
+        receiveTcp(
+            TcpPacket(
+                sourcePort = peerPort,
+                destinationPort = remotePort,
+                sequenceNumber = 5001u,
+                acknowledgmentNumber = synAck.sequenceNumber + 1u,
+                flags = TcpPacket.ACK or TcpPacket.PSH,
+                windowSize = 8192,
+                payload = byteArrayOf(1, 2, 3, 4),
+            ),
+        )
+
+        assertEquals(1, tcpProxy.sentPayloads.size)
+        assertContentEquals(byteArrayOf(1, 2, 3, 4), tcpProxy.sentPayloads.single())
+        val zeroWindowIpv4 = requireNotNull(Ipv4Packet.parse(sent.single().payload))
+        val zeroWindowAck = requireNotNull(
+            TcpPacket.parse(
+                zeroWindowIpv4.payload,
+                zeroWindowIpv4.source,
+                zeroWindowIpv4.destination,
+            ),
+        )
+        assertEquals(0, zeroWindowAck.windowSize)
+        assertEquals(5005u, zeroWindowAck.acknowledgmentNumber)
+
+        sent.clear()
+        receiveTcp(
+            TcpPacket(
+                sourcePort = peerPort,
+                destinationPort = remotePort,
+                sequenceNumber = 5005u,
+                acknowledgmentNumber = synAck.sequenceNumber + 1u,
+                flags = TcpPacket.ACK or TcpPacket.PSH,
+                windowSize = 8192,
+                payload = byteArrayOf(5, 6, 7, 8),
+            ),
+        )
+        assertEquals(1, tcpProxy.sentPayloads.size)
+        val rejectedIpv4 = requireNotNull(Ipv4Packet.parse(sent.single().payload))
+        val rejectedAck = requireNotNull(
+            TcpPacket.parse(rejectedIpv4.payload, rejectedIpv4.source, rejectedIpv4.destination),
+        )
+        assertEquals(0, rejectedAck.windowSize)
+        assertEquals(5005u, rejectedAck.acknowledgmentNumber)
+
+        sent.clear()
+        tcpProxy.completeWrite(4)
+        val reopenedIpv4 = requireNotNull(Ipv4Packet.parse(sent.single().payload))
+        val reopenedAck = requireNotNull(
+            TcpPacket.parse(reopenedIpv4.payload, reopenedIpv4.source, reopenedIpv4.destination),
+        )
+        assertEquals(4, reopenedAck.windowSize)
+        assertEquals(5005u, reopenedAck.acknowledgmentNumber)
+
+        sent.clear()
+        receiveTcp(
+            TcpPacket(
+                sourcePort = peerPort,
+                destinationPort = remotePort,
+                sequenceNumber = 5005u,
+                acknowledgmentNumber = synAck.sequenceNumber + 1u,
+                flags = TcpPacket.ACK or TcpPacket.PSH,
+                windowSize = 8192,
+                payload = byteArrayOf(5, 6, 7, 8),
+            ),
+        )
+        assertEquals(2, tcpProxy.sentPayloads.size)
+        assertContentEquals(byteArrayOf(5, 6, 7, 8), tcpProxy.sentPayloads.last())
+        session.close()
+    }
     private fun newSession(
         sent: MutableList<PppFrame>,
         logger: (String) -> Unit = {},
         icmpEchoProxy: IcmpEchoProxy = FakeIcmpEchoProxy(),
         udpProxy: UdpProxy = FakeUdpProxy(),
+        tcpProxy: TcpProxy = FakeTcpProxy(),
+        tcpHandshakeTimeoutMillis: Long = 10_000,
+        tcpRetransmitTimeoutMillis: Long = 3_000,
         dnsConfig: PppDnsConfig = PppDnsConfig(),
     ): PppSession {
         val addresses = PppAddresses(
@@ -469,6 +870,9 @@ class PppIpv4SessionTest {
             },
             icmpEchoProxy = icmpEchoProxy,
             udpProxy = udpProxy,
+            tcpProxy = tcpProxy,
+            tcpHandshakeTimeoutMillis = tcpHandshakeTimeoutMillis,
+            tcpRetransmitTimeoutMillis = tcpRetransmitTimeoutMillis,
             dnsConfig = dnsConfig,
         )
     }
@@ -609,6 +1013,68 @@ class PppIpv4SessionTest {
         ) {
             sent += SentUdp(flow, payload.copyOf())
             replyPayload?.let { onReply(Result.success(it.copyOf())) }
+        }
+    }
+
+    private class FakeTcpProxy(
+        initialWriteCapacity: Int = 0xffff,
+    ) : TcpProxy {
+        private var callback: ((TcpProxyEvent) -> Unit)? = null
+        private var flow: TcpProxyFlow? = null
+        private var writeCapacity: Int = initialWriteCapacity
+
+        var pauseCount: Int = 0
+            private set
+        var resumeCount: Int = 0
+            private set
+        val closedFlows = CopyOnWriteArrayList<TcpProxyFlow>()
+        val sentPayloads = CopyOnWriteArrayList<ByteArray>()
+
+        override fun connect(
+            flow: TcpProxyFlow,
+            onEvent: (TcpProxyEvent) -> Unit,
+        ) {
+            this.flow = flow
+            callback = onEvent
+            onEvent(TcpProxyEvent.Connected)
+        }
+
+        override fun send(
+            flow: TcpProxyFlow,
+            payload: ByteArray,
+        ): Result<Unit> {
+            if (payload.size > writeCapacity) {
+                return Result.failure(IllegalStateException("synthetic host write buffer full"))
+            }
+            writeCapacity -= payload.size
+            sentPayloads += payload.copyOf()
+            return Result.success(Unit)
+        }
+
+        override fun availableWriteCapacity(flow: TcpProxyFlow): Int = writeCapacity
+
+        override fun shutdownOutput(flow: TcpProxyFlow): Result<Unit> =
+            Result.success(Unit)
+
+        override fun pauseReads(flow: TcpProxyFlow) {
+            pauseCount++
+        }
+
+        override fun resumeReads(flow: TcpProxyFlow) {
+            resumeCount++
+        }
+
+        override fun closeFlow(flow: TcpProxyFlow) {
+            closedFlows += flow
+        }
+
+        fun emitPayload(payload: ByteArray) {
+            requireNotNull(callback)(TcpProxyEvent.Payload(payload.copyOf()))
+        }
+
+        fun completeWrite(bytes: Int) {
+            writeCapacity = (writeCapacity + bytes).coerceAtMost(0xffff)
+            requireNotNull(callback)(TcpProxyEvent.WriteCompleted(bytes))
         }
     }
 

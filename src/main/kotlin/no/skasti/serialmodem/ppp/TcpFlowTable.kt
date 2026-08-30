@@ -1,5 +1,6 @@
 package no.skasti.serialmodem.ppp
 
+import java.util.ArrayDeque
 import java.util.concurrent.ThreadLocalRandom
 
 data class TcpFlowKey(
@@ -30,6 +31,11 @@ data class TcpFlowSnapshot(
     val peerNextSequence: UInt,
     val localNextSequence: UInt,
     val localAcknowledgedSequence: UInt,
+    val peerWindowSize: Int,
+    val availableSendWindow: Int,
+    val peerMaximumSegmentSize: Int,
+    val localReceiveWindow: Int,
+    val unacknowledgedSegments: Int,
 )
 
 sealed interface TcpFlowEvent {
@@ -61,7 +67,13 @@ class TcpFlowTable(
         ThreadLocalRandom.current().nextInt().toUInt()
     },
     private val receiveWindow: Int = TcpPacket.DEFAULT_WINDOW_SIZE,
+    private val nanoTime: () -> Long = System::nanoTime,
 ) {
+    private data class OutstandingSegment(
+        var packet: TcpPacket,
+        var lastSentNanos: Long,
+    )
+
     private data class Flow(
         val key: TcpFlowKey,
         val peerInitialSequence: UInt,
@@ -69,6 +81,10 @@ class TcpFlowTable(
         var peerNextSequence: UInt,
         var localNextSequence: UInt,
         var localAcknowledgedSequence: UInt,
+        var peerWindowSize: Int,
+        var peerMaximumSegmentSize: Int,
+        var localReceiveWindow: Int,
+        val outstanding: ArrayDeque<OutstandingSegment> = ArrayDeque(),
         var state: TcpConnectionState,
     )
 
@@ -118,6 +134,13 @@ class TcpFlowTable(
             return null
         }
 
+        if (
+            payload.size > availableSendWindow(flow) ||
+            payload.size > flow.peerMaximumSegmentSize
+        ) {
+            return null
+        }
+
         val packet = packetToPeer(
             flow = flow,
             flags = TcpPacket.ACK or if (push) TcpPacket.PSH else 0,
@@ -135,6 +158,7 @@ class TcpFlowTable(
             TcpConnectionState.CLOSE_WAIT -> TcpConnectionState.LAST_ACK
             else -> return null
         }
+        if (availableSendWindow(flow) < 1) return null
 
         val packet = packetToPeer(flow, TcpPacket.FIN or TcpPacket.ACK)
         flow.localNextSequence += 1u
@@ -159,6 +183,64 @@ class TcpFlowTable(
         flows.clear()
     }
 
+    @Synchronized
+    fun setReceiveWindow(
+        key: TcpFlowKey,
+        windowSize: Int,
+    ): Boolean {
+        require(windowSize in 0..0xffff) { "TCP receive window must be 0..65535" }
+        val flow = flows[key] ?: return false
+        flow.localReceiveWindow = windowSize
+        return true
+    }
+
+    @Synchronized
+    fun acknowledgment(key: TcpFlowKey): TcpPacket? =
+        flows[key]?.let(::ack)
+
+    @Synchronized
+    fun markSent(
+        key: TcpFlowKey,
+        packet: TcpPacket,
+    ) {
+        if (packet.sequenceSpaceLength <= 0) return
+        val flow = flows[key] ?: return
+        val now = nanoTime()
+        val existing = flow.outstanding.firstOrNull { outstanding ->
+            outstanding.packet.sequenceNumber == packet.sequenceNumber &&
+                outstanding.packet.sequenceSpaceLength == packet.sequenceSpaceLength
+        }
+        if (existing != null) {
+            existing.packet = packet.copy(payload = packet.payload.copyOf())
+            existing.lastSentNanos = now
+            return
+        }
+        flow.outstanding.addLast(
+            OutstandingSegment(
+                packet = packet.copy(payload = packet.payload.copyOf()),
+                lastSentNanos = now,
+            ),
+        )
+    }
+
+    @Synchronized
+    fun retransmissionDue(
+        key: TcpFlowKey,
+        timeoutMillis: Long,
+    ): TcpPacket? {
+        require(timeoutMillis > 0) { "TCP retransmission timeout must be positive" }
+        val flow = flows[key] ?: return null
+        val outstanding = flow.outstanding.firstOrNull() ?: return null
+        val timeoutNanos = timeoutMillis * NANOS_PER_MILLISECOND
+        if (nanoTime() - outstanding.lastSentNanos < timeoutNanos) return null
+
+        return outstanding.packet.copy(
+            acknowledgmentNumber = flow.peerNextSequence,
+            windowSize = flow.localReceiveWindow,
+            payload = outstanding.packet.payload.copyOf(),
+        )
+    }
+
     private fun receiveWithoutFlow(
         key: TcpFlowKey,
         packet: TcpPacket,
@@ -179,6 +261,9 @@ class TcpFlowTable(
                 peerNextSequence = packet.sequenceNumber + 1u,
                 localNextSequence = localInitialSequence + 1u,
                 localAcknowledgedSequence = localInitialSequence,
+                peerWindowSize = packet.windowSize,
+                peerMaximumSegmentSize = peerMaximumSegmentSize(packet),
+                localReceiveWindow = receiveWindow,
                 state = TcpConnectionState.SYN_RECEIVED,
             )
             flows[key] = flow
@@ -200,6 +285,8 @@ class TcpFlowTable(
             !packet.hasFlag(TcpPacket.ACK) &&
             packet.sequenceNumber == flow.peerInitialSequence
         ) {
+            flow.peerWindowSize = packet.windowSize
+            flow.peerMaximumSegmentSize = peerMaximumSegmentSize(packet)
             return TcpFlowResult(responses = listOf(synAck(flow)))
         }
 
@@ -216,7 +303,8 @@ class TcpFlowTable(
             )
         }
 
-        flow.localAcknowledgedSequence = packet.acknowledgmentNumber
+        acknowledgeLocal(flow, packet.acknowledgmentNumber)
+        flow.peerWindowSize = packet.windowSize
         flow.state = TcpConnectionState.ESTABLISHED
         val established = TcpFlowEvent.Established(flow.key)
 
@@ -245,7 +333,17 @@ class TcpFlowTable(
         }
 
         if (packet.hasFlag(TcpPacket.ACK)) {
-            acknowledgeLocal(flow, packet.acknowledgmentNumber)
+            if (isSequenceAfter(packet.acknowledgmentNumber, flow.localNextSequence)) {
+                return TcpFlowResult(responses = listOf(ack(flow)))
+            }
+
+            val acknowledgmentAccepted = acknowledgeLocal(
+                flow,
+                packet.acknowledgmentNumber,
+            )
+            if (acknowledgmentAccepted) {
+                flow.peerWindowSize = packet.windowSize
+            }
         }
 
         val events = mutableListOf<TcpFlowEvent>()
@@ -309,11 +407,108 @@ class TcpFlowTable(
     private fun acknowledgeLocal(
         flow: Flow,
         acknowledgmentNumber: UInt,
+    ): Boolean {
+        val outstanding = forwardDistance(
+            flow.localAcknowledgedSequence,
+            flow.localNextSequence,
+        )
+        val acknowledged = forwardDistance(
+            flow.localAcknowledgedSequence,
+            acknowledgmentNumber,
+        )
+        if (acknowledged > outstanding) return false
+
+        acknowledgeOutstandingSegments(flow, acknowledged.toLong())
+        flow.localAcknowledgedSequence = acknowledgmentNumber
+        return true
+    }
+
+    private fun peerMaximumSegmentSize(packet: TcpPacket): Int =
+        packet.maximumSegmentSizeOption()
+            ?.takeIf { it > 0 }
+            ?: TcpPacket.DEFAULT_IPV4_MAXIMUM_SEGMENT_SIZE
+
+    private fun acknowledgeOutstandingSegments(
+        flow: Flow,
+        acknowledgedSequenceSpace: Long,
     ) {
-        if (acknowledgmentNumber == flow.localNextSequence) {
-            flow.localAcknowledgedSequence = acknowledgmentNumber
+        var remaining = acknowledgedSequenceSpace
+        while (remaining > 0 && flow.outstanding.isNotEmpty()) {
+            val outstanding = flow.outstanding.first()
+            val length = outstanding.packet.sequenceSpaceLength
+            if (remaining >= length) {
+                flow.outstanding.removeFirst()
+                remaining -= length
+                continue
+            }
+
+            outstanding.packet = trimAcknowledgedPrefix(
+                outstanding.packet,
+                remaining.toInt(),
+            )
+            remaining = 0
         }
     }
+
+    private fun trimAcknowledgedPrefix(
+        packet: TcpPacket,
+        acknowledged: Int,
+    ): TcpPacket {
+        var remaining = acknowledged
+        var sequence = packet.sequenceNumber
+        var flags = packet.flags
+        var payload = packet.payload
+
+        if (remaining > 0 && flags and TcpPacket.SYN != 0) {
+            flags = flags and TcpPacket.SYN.inv()
+            sequence += 1u
+            remaining--
+        }
+
+        if (remaining > 0 && payload.isNotEmpty()) {
+            val consumed = minOf(remaining, payload.size)
+            payload = payload.copyOfRange(consumed, payload.size)
+            sequence += consumed.toUInt()
+            remaining -= consumed
+        }
+
+        if (remaining > 0 && flags and TcpPacket.FIN != 0) {
+            flags = flags and TcpPacket.FIN.inv()
+            sequence += 1u
+            remaining--
+        }
+
+        check(remaining == 0) { "ACK exceeds tracked TCP segment sequence space" }
+        return packet.copy(
+            sequenceNumber = sequence,
+            flags = flags,
+            payload = payload,
+        )
+    }
+
+    private fun availableSendWindow(flow: Flow): Int {
+        val inFlight = forwardDistance(
+            flow.localAcknowledgedSequence,
+            flow.localNextSequence,
+        ).toLong()
+        return (flow.peerWindowSize.toLong() - inFlight)
+            .coerceAtLeast(0)
+            .toInt()
+    }
+
+    private fun forwardDistance(
+        from: UInt,
+        to: UInt,
+    ): UInt = to - from
+
+    private fun isSequenceAfter(
+        candidate: UInt,
+        reference: UInt,
+    ): Boolean {
+        val distance = candidate - reference
+        return distance != 0u && distance < HALF_SEQUENCE_SPACE
+    }
+
 
     private fun synAck(flow: Flow): TcpPacket =
         TcpPacket(
@@ -322,7 +517,7 @@ class TcpFlowTable(
             sequenceNumber = flow.localInitialSequence,
             acknowledgmentNumber = flow.peerNextSequence,
             flags = TcpPacket.SYN or TcpPacket.ACK,
-            windowSize = receiveWindow,
+            windowSize = flow.localReceiveWindow,
         )
 
     private fun ack(flow: Flow): TcpPacket =
@@ -339,7 +534,7 @@ class TcpFlowTable(
             sequenceNumber = flow.localNextSequence,
             acknowledgmentNumber = flow.peerNextSequence,
             flags = flags,
-            windowSize = receiveWindow,
+            windowSize = flow.localReceiveWindow,
             payload = payload,
         )
 
@@ -373,5 +568,15 @@ class TcpFlowTable(
             peerNextSequence = peerNextSequence,
             localNextSequence = localNextSequence,
             localAcknowledgedSequence = localAcknowledgedSequence,
+            peerWindowSize = peerWindowSize,
+            availableSendWindow = availableSendWindow(this),
+            peerMaximumSegmentSize = peerMaximumSegmentSize,
+            localReceiveWindow = localReceiveWindow,
+            unacknowledgedSegments = outstanding.size,
         )
+    private companion object {
+        const val NANOS_PER_MILLISECOND = 1_000_000L
+        const val HALF_SEQUENCE_SPACE = 0x80000000u
+    }
+
 }

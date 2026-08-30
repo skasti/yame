@@ -109,6 +109,239 @@ class TcpFlowTableTest {
     }
 
     @Test
+    fun `outbound data is limited by peer MSS advertised in SYN`() {
+        val table = table()
+
+        table.receive(
+            key,
+            peerPacket(
+                sequence = 1000u,
+                flags = TcpPacket.SYN,
+                windowSize = 8192,
+                options = byteArrayOf(2, 4, 5, 0xb4.toByte()),
+            ),
+        )
+        table.receive(
+            key,
+            peerPacket(
+                sequence = 1001u,
+                acknowledgment = 5001u,
+                flags = TcpPacket.ACK,
+                windowSize = 8192,
+            ),
+        )
+
+        assertEquals(1460, table.snapshot(key)?.peerMaximumSegmentSize)
+        assertNull(table.send(key, ByteArray(1461)))
+        assertEquals(5001u, table.snapshot(key)?.localNextSequence)
+
+        val segment = requireNotNull(table.send(key, ByteArray(1460) { 7 }))
+        assertEquals(1460, segment.payload.size)
+        assertEquals(6461u, table.snapshot(key)?.localNextSequence)
+    }
+
+    @Test
+    fun `outbound data is limited by latest peer receive window and cumulative ACKs`() {
+        val table = table()
+
+        table.receive(
+            key,
+            peerPacket(
+                sequence = 1000u,
+                flags = TcpPacket.SYN,
+                windowSize = 4,
+            ),
+        )
+        table.receive(
+            key,
+            peerPacket(
+                sequence = 1001u,
+                acknowledgment = 5001u,
+                flags = TcpPacket.ACK,
+                windowSize = 4,
+            ),
+        )
+
+        assertEquals(4, table.snapshot(key)?.peerWindowSize)
+        assertEquals(4, table.snapshot(key)?.availableSendWindow)
+
+        val first = requireNotNull(table.send(key, byteArrayOf(1, 2, 3, 4)))
+        assertContentEquals(byteArrayOf(1, 2, 3, 4), first.payload)
+        assertEquals(0, table.snapshot(key)?.availableSendWindow)
+        assertNull(table.send(key, byteArrayOf(5)))
+
+        table.receive(
+            key,
+            peerPacket(
+                sequence = 1001u,
+                acknowledgment = 5003u,
+                flags = TcpPacket.ACK,
+                windowSize = 4,
+            ),
+        )
+
+        assertEquals(5003u, table.snapshot(key)?.localAcknowledgedSequence)
+        assertEquals(2, table.snapshot(key)?.availableSendWindow)
+        assertContentEquals(
+            byteArrayOf(5, 6),
+            requireNotNull(table.send(key, byteArrayOf(5, 6))).payload,
+        )
+        assertEquals(0, table.snapshot(key)?.availableSendWindow)
+
+        table.receive(
+            key,
+            peerPacket(
+                sequence = 1001u,
+                acknowledgment = 5005u,
+                flags = TcpPacket.ACK,
+                windowSize = 0,
+            ),
+        )
+
+        assertEquals(0, table.snapshot(key)?.peerWindowSize)
+        assertEquals(0, table.snapshot(key)?.availableSendWindow)
+        assertNull(table.send(key, byteArrayOf(7)))
+
+        table.receive(
+            key,
+            peerPacket(
+                sequence = 1001u,
+                acknowledgment = 5007u,
+                flags = TcpPacket.ACK,
+                windowSize = 3,
+            ),
+        )
+
+        assertEquals(3, table.snapshot(key)?.availableSendWindow)
+        assertContentEquals(
+            byteArrayOf(7, 8, 9),
+            requireNotNull(table.send(key, byteArrayOf(7, 8, 9))).payload,
+        )
+    }
+
+    @Test
+    fun `unacknowledged payload is retained retransmitted and trimmed by cumulative ACK`() {
+        var now = 0L
+        val table = TcpFlowTable(
+            initialSequenceNumber = { 5000u },
+            receiveWindow = 4096,
+            nanoTime = { now },
+        )
+        establish(table)
+
+        val segment = requireNotNull(table.send(key, byteArrayOf(1, 2, 3, 4)))
+        table.markSent(key, segment)
+        assertEquals(1, table.snapshot(key)?.unacknowledgedSegments)
+        assertNull(table.retransmissionDue(key, 1000))
+
+        now = 1_000_000_000L
+        val retransmission = requireNotNull(table.retransmissionDue(key, 1000))
+        assertEquals(segment.sequenceNumber, retransmission.sequenceNumber)
+        assertContentEquals(segment.payload, retransmission.payload)
+        table.markSent(key, retransmission)
+
+        table.receive(
+            key,
+            peerPacket(
+                sequence = 1001u,
+                acknowledgment = 5003u,
+                flags = TcpPacket.ACK,
+            ),
+        )
+        assertEquals(5003u, table.snapshot(key)?.localAcknowledgedSequence)
+        assertEquals(1, table.snapshot(key)?.unacknowledgedSegments)
+
+        now = 2_000_000_000L
+        val remainder = requireNotNull(table.retransmissionDue(key, 1000))
+        assertEquals(5003u, remainder.sequenceNumber)
+        assertContentEquals(byteArrayOf(3, 4), remainder.payload)
+
+        table.receive(
+            key,
+            peerPacket(
+                sequence = 1001u,
+                acknowledgment = 5005u,
+                flags = TcpPacket.ACK,
+            ),
+        )
+        assertEquals(0, table.snapshot(key)?.unacknowledgedSegments)
+        assertNull(table.retransmissionDue(key, 1000))
+    }
+
+    @Test
+    fun `local receive window can shrink and reopen without advancing peer sequence`() {
+        val table = table()
+        establish(table)
+
+        assertTrue(table.setReceiveWindow(key, 0))
+        val closed = requireNotNull(table.acknowledgment(key))
+        assertEquals(0, closed.windowSize)
+        assertEquals(1001u, closed.acknowledgmentNumber)
+
+        assertTrue(table.setReceiveWindow(key, 2048))
+        val reopened = requireNotNull(table.acknowledgment(key))
+        assertEquals(2048, reopened.windowSize)
+        assertEquals(1001u, reopened.acknowledgmentNumber)
+    }
+    @Test
+    fun `ACK beyond sent sequence space is rejected without forwarding payload`() {
+        val table = table()
+        establish(table)
+
+        val result = table.receive(
+            key,
+            peerPacket(
+                sequence = 1001u,
+                acknowledgment = 6000u,
+                flags = TcpPacket.ACK or TcpPacket.PSH,
+                payload = byteArrayOf(9, 8, 7),
+            ),
+        )
+
+        assertTrue(result.events.isEmpty())
+        assertEquals(1, result.responses.size)
+        val ack = result.responses.single()
+        assertEquals(TcpPacket.ACK, ack.flags)
+        assertEquals(5001u, ack.sequenceNumber)
+        assertEquals(1001u, ack.acknowledgmentNumber)
+
+        val snapshot = requireNotNull(table.snapshot(key))
+        assertEquals(1001u, snapshot.peerNextSequence)
+        assertEquals(5001u, snapshot.localAcknowledgedSequence)
+    }
+
+    @Test
+    fun `stale ACK does not block otherwise valid peer payload`() {
+        val table = table()
+        establish(table)
+
+        val sent = requireNotNull(table.send(key, byteArrayOf(1, 2, 3, 4)))
+        table.markSent(key, sent)
+        table.receive(
+            key,
+            peerPacket(
+                sequence = 1001u,
+                acknowledgment = 5005u,
+                flags = TcpPacket.ACK,
+            ),
+        )
+
+        val result = table.receive(
+            key,
+            peerPacket(
+                sequence = 1001u,
+                acknowledgment = 5001u,
+                flags = TcpPacket.ACK or TcpPacket.PSH,
+                payload = byteArrayOf(9, 8, 7),
+            ),
+        )
+
+        assertIs<TcpFlowEvent.PayloadReceived>(result.events.single())
+        assertEquals(1004u, table.snapshot(key)?.peerNextSequence)
+        assertEquals(5005u, table.snapshot(key)?.localAcknowledgedSequence)
+    }
+
+    @Test
     fun `peer FIN enters close-wait and local FIN completes last-ack`() {
         val table = table()
         establish(table)
@@ -271,6 +504,8 @@ class TcpFlowTableTest {
         sequence: UInt,
         acknowledgment: UInt = 0u,
         flags: Int,
+        windowSize: Int = 8192,
+        options: ByteArray = ByteArray(0),
         payload: ByteArray = ByteArray(0),
     ): TcpPacket =
         TcpPacket(
@@ -279,7 +514,8 @@ class TcpFlowTableTest {
             sequenceNumber = sequence,
             acknowledgmentNumber = acknowledgment,
             flags = flags,
-            windowSize = 8192,
+            windowSize = windowSize,
+            options = options,
             payload = payload,
         )
 }
