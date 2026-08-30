@@ -16,7 +16,15 @@ import java.util.concurrent.atomic.AtomicLong
 data class TcpProxyFlow(
     val key: TcpFlowKey,
     val generation: Long,
-)
+    val connectAddress: Ipv4Address = key.remoteAddress,
+    val connectPort: Int = key.remotePort,
+    val readTimeoutMillis: Int = 0,
+) {
+    init {
+        require(connectPort in 1..0xffff) { "TCP connect port must be 1..65535" }
+        require(readTimeoutMillis >= 0) { "TCP read timeout must not be negative" }
+    }
+}
 
 sealed interface TcpProxyEvent {
     data object Connected : TcpProxyEvent
@@ -164,6 +172,9 @@ class SystemTcpProxy(
         try {
             connectOperation(state.socket, state.flow, connectTimeoutMillis)
             state.socket.tcpNoDelay = true
+            if (state.flow.readTimeoutMillis > 0) {
+                state.socket.soTimeout = state.flow.readTimeoutMillis
+            }
 
             if (
                 closed ||
@@ -385,9 +396,9 @@ class SystemTcpProxy(
             flow: TcpProxyFlow,
             timeoutMillis: Int,
         ) {
-            val address = InetAddress.getByAddress(flow.key.remoteAddress.toByteArray())
+            val address = InetAddress.getByAddress(flow.connectAddress.toByteArray())
             socket.connect(
-                InetSocketAddress(address, flow.key.remotePort),
+                InetSocketAddress(address, flow.connectPort),
                 timeoutMillis,
             )
         }
