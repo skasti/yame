@@ -1,5 +1,6 @@
 package no.skasti.serialmodem.ppp
 
+import java.io.ByteArrayOutputStream
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.nio.charset.StandardCharsets
