@@ -231,10 +231,15 @@ class HttpCompatibilityPppIntegrationTest {
                 payload = PppControlPacket(
                     code = PppControlPacket.CONFIGURE_REQUEST,
                     identifier = 9,
-                    data = PppControlOption(
-                        type = PppControlOption.IPCP_IP_ADDRESS,
-                        data = PEER.toByteArray(),
-                    ).encode(),
+                    data =
+                        PppControlOption(
+                            type = PppControlOption.IPCP_IP_ADDRESS,
+                            data = PEER.toByteArray(),
+                        ).encode() +
+                            PppControlOption(
+                                type = PppControlOption.IPCP_PRIMARY_DNS,
+                                data = YAME.toByteArray(),
+                            ).encode(),
                 ).encode(),
             ),
         )
