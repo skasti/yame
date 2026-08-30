@@ -333,6 +333,10 @@ class TcpFlowTable(
         }
 
         if (packet.hasFlag(TcpPacket.ACK)) {
+            if (isSequenceAfter(packet.acknowledgmentNumber, flow.localNextSequence)) {
+                return TcpFlowResult(responses = listOf(ack(flow)))
+            }
+
             val acknowledgmentAccepted = acknowledgeLocal(
                 flow,
                 packet.acknowledgmentNumber,
@@ -497,6 +501,15 @@ class TcpFlowTable(
         to: UInt,
     ): UInt = to - from
 
+    private fun isSequenceAfter(
+        candidate: UInt,
+        reference: UInt,
+    ): Boolean {
+        val distance = candidate - reference
+        return distance != 0u && distance < HALF_SEQUENCE_SPACE
+    }
+
+
     private fun synAck(flow: Flow): TcpPacket =
         TcpPacket(
             sourcePort = flow.key.remotePort,
@@ -563,6 +576,7 @@ class TcpFlowTable(
         )
     private companion object {
         const val NANOS_PER_MILLISECOND = 1_000_000L
+        const val HALF_SEQUENCE_SPACE = 0x80000000u
     }
 
 }
