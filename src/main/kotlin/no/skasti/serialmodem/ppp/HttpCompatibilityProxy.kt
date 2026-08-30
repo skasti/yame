@@ -151,6 +151,7 @@ class SystemHttpCompatibilityProxy(
         val statusCode: Int,
         val headers: Map<String, List<String>>,
         val body: ByteArray,
+        val contentLength: Long,
     )
 
     private val executor = Executors.newFixedThreadPool(config.maxFlows) { runnable ->
@@ -321,6 +322,7 @@ class SystemHttpCompatibilityProxy(
         var body = request.body
         var redirects = 0
         var forwardSensitiveHeaders = true
+        val requestConnectionHeadersToStrip = connectionNominatedHeaders(request.headers)
 
         while (true) {
             ensureActive(state)
@@ -334,6 +336,7 @@ class SystemHttpCompatibilityProxy(
                 val normalizedName = name.lowercase(Locale.ROOT)
                 if (
                     normalizedName !in REQUEST_HEADERS_TO_STRIP &&
+                    normalizedName !in requestConnectionHeadersToStrip &&
                     (forwardSensitiveHeaders || normalizedName !in SENSITIVE_REQUEST_HEADERS)
                 ) {
                     builder.header(name, value)
@@ -383,13 +386,14 @@ class SystemHttpCompatibilityProxy(
             }
 
             response.body().use { input ->
-                val contentLength = response.headers().firstValueAsLong("content-length").orElse(-1L)
-                if (contentLength > config.maxResponseBytes.toLong()) {
+                val isHead = request.method.equals("HEAD", ignoreCase = true)
+                val upstreamContentLength = response.headers().firstValueAsLong("content-length").orElse(-1L)
+                if (!isHead && upstreamContentLength > config.maxResponseBytes.toLong()) {
                     throw ResponseTooLarge(
-                        "Upstream response is $contentLength bytes; limit is ${config.maxResponseBytes}",
+                        "Upstream response is $upstreamContentLength bytes; limit is ${config.maxResponseBytes}",
                     )
                 }
-                val responseBody = if (request.method.equals("HEAD", ignoreCase = true)) {
+                val responseBody = if (isHead) {
                     ByteArray(0)
                 } else {
                     readBounded(state, input, config.maxResponseBytes)
@@ -399,12 +403,20 @@ class SystemHttpCompatibilityProxy(
                     statusCode = status,
                     headers = response.headers().map(),
                     body = responseBody,
+                    contentLength = if (isHead && upstreamContentLength >= 0L) {
+                        upstreamContentLength
+                    } else {
+                        responseBody.size.toLong()
+                    },
                 )
             }
         }
     }
 
     private fun emitFinalResponse(state: FlowState, response: FinalResponse) {
+        val responseConnectionHeadersToStrip = connectionNominatedHeaders(
+            response.headers.flatMap { (name, values) -> values.map { value -> name to value } },
+        )
         val head = buildString {
             append("HTTP/1.0 ")
             append(response.statusCode)
@@ -413,7 +425,11 @@ class SystemHttpCompatibilityProxy(
             append("\r\n")
 
             response.headers.forEach { (name, values) ->
-                if (name.lowercase(Locale.ROOT) !in RESPONSE_HEADERS_TO_STRIP) {
+                val normalizedName = name.lowercase(Locale.ROOT)
+                if (
+                    normalizedName !in RESPONSE_HEADERS_TO_STRIP &&
+                    normalizedName !in responseConnectionHeadersToStrip
+                ) {
                     values.forEach { value ->
                         append(name)
                         append(": ")
@@ -422,7 +438,7 @@ class SystemHttpCompatibilityProxy(
                     }
                 }
             }
-            append("Content-Length: ${response.body.size}\r\n")
+            append("Content-Length: ${response.contentLength}\r\n")
             append("Connection: close\r\n")
             append("\r\n")
         }.toByteArray(StandardCharsets.ISO_8859_1)
@@ -607,6 +623,17 @@ class SystemHttpCompatibilityProxy(
             throw IllegalStateException("HTTP upstream URI has no host")
         }
     }
+
+    private fun connectionNominatedHeaders(headers: Iterable<Pair<String, String>>): Set<String> =
+        headers
+            .filter { (name, _) ->
+                name.equals("Connection", ignoreCase = true) ||
+                    name.equals("Proxy-Connection", ignoreCase = true)
+            }
+            .flatMap { (_, value) -> value.split(',') }
+            .map { it.trim().lowercase(Locale.ROOT) }
+            .filter { it.isNotEmpty() && HEADER_NAME_PATTERN.matches(it) }
+            .toSet()
 
     private fun sameOrigin(first: URI, second: URI): Boolean =
         first.scheme.equals(second.scheme, ignoreCase = true) &&
