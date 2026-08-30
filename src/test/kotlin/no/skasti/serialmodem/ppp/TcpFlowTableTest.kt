@@ -284,6 +284,64 @@ class TcpFlowTableTest {
         assertEquals(1001u, reopened.acknowledgmentNumber)
     }
     @Test
+    fun `ACK beyond sent sequence space is rejected without forwarding payload`() {
+        val table = table()
+        establish(table)
+
+        val result = table.receive(
+            key,
+            peerPacket(
+                sequence = 1001u,
+                acknowledgment = 6000u,
+                flags = TcpPacket.ACK or TcpPacket.PSH,
+                payload = byteArrayOf(9, 8, 7),
+            ),
+        )
+
+        assertTrue(result.events.isEmpty())
+        assertEquals(1, result.responses.size)
+        val ack = result.responses.single()
+        assertEquals(TcpPacket.ACK, ack.flags)
+        assertEquals(5001u, ack.sequenceNumber)
+        assertEquals(1001u, ack.acknowledgmentNumber)
+
+        val snapshot = requireNotNull(table.snapshot(key))
+        assertEquals(1001u, snapshot.peerNextSequence)
+        assertEquals(5001u, snapshot.localAcknowledgedSequence)
+    }
+
+    @Test
+    fun `stale ACK does not block otherwise valid peer payload`() {
+        val table = table()
+        establish(table)
+
+        val sent = requireNotNull(table.send(key, byteArrayOf(1, 2, 3, 4)))
+        table.markSent(key, sent)
+        table.receive(
+            key,
+            peerPacket(
+                sequence = 1001u,
+                acknowledgment = 5005u,
+                flags = TcpPacket.ACK,
+            ),
+        )
+
+        val result = table.receive(
+            key,
+            peerPacket(
+                sequence = 1001u,
+                acknowledgment = 5001u,
+                flags = TcpPacket.ACK or TcpPacket.PSH,
+                payload = byteArrayOf(9, 8, 7),
+            ),
+        )
+
+        assertIs<TcpFlowEvent.PayloadReceived>(result.events.single())
+        assertEquals(1004u, table.snapshot(key)?.peerNextSequence)
+        assertEquals(5005u, table.snapshot(key)?.localAcknowledgedSequence)
+    }
+
+    @Test
     fun `peer FIN enters close-wait and local FIN completes last-ack`() {
         val table = table()
         establish(table)
