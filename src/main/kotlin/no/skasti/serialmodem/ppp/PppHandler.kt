@@ -67,7 +67,7 @@ class RetroPppHandler(
         PppFramer(
             onFrame = ::receiveFrame,
             onInvalidFrame = { frame ->
-                val hex = frame.payload.joinToString(" ") { "%02X".format(it.toInt() and 0xff) }
+                val hex = frame.joinToString(" ") { "%02X".format(it.toInt() and 0xff) }
                 logger("PPP !! invalid frame (${frame.size} bytes): $hex")
             },
         )
