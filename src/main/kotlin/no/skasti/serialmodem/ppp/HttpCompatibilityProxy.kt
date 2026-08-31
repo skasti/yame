@@ -1,5 +1,8 @@
 package no.skasti.serialmodem.ppp
 
+import no.skasti.serialmodem.observer.HttpProxyActionKind
+import no.skasti.serialmodem.observer.YameEvent
+
 import java.io.ByteArrayOutputStream
 import java.net.CookieManager
 import java.net.CookiePolicy
@@ -40,14 +43,22 @@ data class PppHttpCompatibilityConfig(
 class SystemRoutingTcpProxy(
     private val httpConfig: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig(),
     private val logger: (String) -> Unit = {},
+    private val eventSink: (YameEvent) -> Unit = {},
     private val directProxy: TcpProxy = SystemTcpProxy(),
-    private val httpProxy: TcpProxy = SystemHttpCompatibilityProxy(httpConfig, logger),
+    private val httpProxy: TcpProxy = SystemHttpCompatibilityProxy(httpConfig, logger, eventSink = eventSink),
 ) : TcpProxy {
     private val routes = ConcurrentHashMap<TcpProxyFlow, TcpProxy>()
 
     override fun connect(flow: TcpProxyFlow, onEvent: (TcpProxyEvent) -> Unit) {
         val proxy = if (httpConfig.enabled && flow.key.remotePort == HTTP_PORT) {
             logger("HTTP compatibility <= ${flow.key.peerAddress}:${flow.key.peerPort} -> ${flow.key.remoteAddress}:${flow.key.remotePort}")
+            emitEvent(
+                YameEvent.HttpProxyAction(
+                    flowId = flowId(flow),
+                    kind = HttpProxyActionKind.ROUTED,
+                    message = "${flow.key.peerAddress}:${flow.key.peerPort} -> ${flow.key.remoteAddress}:${flow.key.remotePort}",
+                ),
+            )
             httpProxy
         } else directProxy
         val previous = routes.putIfAbsent(flow, proxy)
@@ -77,12 +88,16 @@ class SystemRoutingTcpProxy(
         if (httpProxy !== directProxy) httpProxy.close()
     }
     private fun route(flow: TcpProxyFlow): TcpProxy? = routes[flow]
+    private fun emitEvent(event: YameEvent) { runCatching { eventSink(event) } }
+    private fun flowId(flow: TcpProxyFlow): String =
+        "${flow.key.peerAddress}:${flow.key.peerPort}->${flow.key.remoteAddress}:${flow.key.remotePort}"
     private companion object { const val HTTP_PORT = 80 }
 }
 
 class SystemHttpCompatibilityProxy(
     private val config: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig(enabled = true),
     private val logger: (String) -> Unit = {},
+    private val eventSink: (YameEvent) -> Unit = {},
     private val httpClient: HttpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofMillis(config.requestTimeoutMillis))
         .followRedirects(HttpClient.Redirect.NEVER)
@@ -304,12 +319,15 @@ class SystemHttpCompatibilityProxy(
             Thread.currentThread().interrupt()
         } catch (error: BadLegacyRequest) {
             logger("HTTP compatibility !! bad request: ${error.message}")
+            emitEvent(state, HttpProxyActionKind.ERROR, error.message ?: "Invalid HTTP request")
             emitErrorResponse(state, 400, "Bad Request", error.message ?: "Invalid HTTP request")
         } catch (error: ResponseTooLarge) {
             logger("HTTP compatibility !! ${error.message}")
+            emitEvent(state, HttpProxyActionKind.ERROR, error.message ?: "Upstream response too large")
             emitErrorResponse(state, 502, "Bad Gateway", error.message ?: "Upstream response too large")
         } catch (error: Throwable) {
             logger("HTTP compatibility !! upstream failed: ${error.message ?: error.javaClass.simpleName}")
+            emitEvent(state, HttpProxyActionKind.ERROR, error.message ?: error.javaClass.simpleName)
             emitErrorResponse(state, 502, "Bad Gateway", "YAME could not fetch the upstream resource")
         } finally {
             synchronized(state) { state.processing = false; state.task = null }
@@ -330,6 +348,11 @@ class SystemHttpCompatibilityProxy(
             ensureActive(state)
             requireSupportedScheme(uri)
             logger("HTTP compatibility => $method $uri")
+            emitEvent(
+                state,
+                HttpProxyActionKind.REQUEST,
+                "$method $uri",
+            )
             val builder = HttpRequest.newBuilder(uri).timeout(Duration.ofMillis(config.requestTimeoutMillis))
             request.headers.forEach { (name, value) ->
                 val normalizedName = name.lowercase(Locale.ROOT)
@@ -354,6 +377,11 @@ class SystemHttpCompatibilityProxy(
                 if (!sameOrigin(uri, next)) forwardSensitiveHeaders = false
                 redirects++
                 logger("HTTP compatibility .. redirect $status $uri -> $next")
+                emitEvent(
+                    state,
+                    HttpProxyActionKind.REDIRECT,
+                    "$status $uri -> $next",
+                )
                 uri = next
                 if ((status == 303 && !method.equals("HEAD", true)) || ((status == 301 || status == 302) && method.equals("POST", true))) {
                     method = "GET"
@@ -395,6 +423,11 @@ class SystemHttpCompatibilityProxy(
             append("Content-Length: ${response.contentLength}\r\nConnection: close\r\n\r\n")
         }.toByteArray(StandardCharsets.ISO_8859_1)
         logger("HTTP compatibility <= ${response.statusCode} ${response.uri} (${response.body.size} bytes, TLS hidden from peer)")
+        emitEvent(
+            state,
+            HttpProxyActionKind.RESPONSE,
+            "${response.statusCode} ${response.uri} · ${response.body.size} bytes · TLS hidden",
+        )
         emitBytes(state, head)
         var offset = 0
         while (offset < response.body.size) {
@@ -643,6 +676,21 @@ class SystemHttpCompatibilityProxy(
         flows.values.toList().forEach(::removeFlow)
         executor.shutdownNow()
         runCatching { executor.awaitTermination(CLOSE_JOIN_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS) }
+    }
+    private fun emitEvent(
+        state: FlowState,
+        kind: HttpProxyActionKind,
+        message: String,
+    ) {
+        runCatching {
+            eventSink(
+                YameEvent.HttpProxyAction(
+                    flowId = "${state.flow.key.peerAddress}:${state.flow.key.peerPort}->${state.flow.key.remoteAddress}:${state.flow.key.remotePort}",
+                    kind = kind,
+                    message = message,
+                ),
+            )
+        }
     }
     private fun safeCallback(callback: (TcpProxyEvent) -> Unit, event: TcpProxyEvent) { runCatching { callback(event) } }
     private class BadLegacyRequest(message: String) : IllegalArgumentException(message)
