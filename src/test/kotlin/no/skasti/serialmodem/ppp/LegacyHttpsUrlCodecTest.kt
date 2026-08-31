@@ -3,58 +3,63 @@ package no.skasti.serialmodem.ppp
 import java.net.URI
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNull
 
-class LegacyHttpsUrlCodecTest {
+class LegacyOriginRouteTableTest {
     @Test
-    fun `encodes default HTTPS port onto legacy HTTP port 80`() {
-        assertEquals(
-            "http://example.test/.yame/https/443/path?q=1#fragment",
-            LegacyHttpsUrlCodec.encode(URI("https://example.test/path?q=1#fragment")),
+    fun `HTTPS references are exposed as clean HTTP URLs and remembered exactly`() {
+        val routes = LegacyOriginRouteTable()
+        val flow = httpFlow(generation = 1)
+
+        val legacy = routes.rememberHttpsReference(
+            flow,
+            URI("https://example.test/path?q=1#fragment"),
         )
-        assertEquals(
-            "http://example.test/.yame/https/443/path",
-            LegacyHttpsUrlCodec.encode(URI("https://example.test:443/path")),
-        )
-    }
 
-    @Test
-    fun `preserves non-default HTTPS port inside compatibility marker`() {
-        assertEquals(
-            "http://example.test/.yame/https/8443/path",
-            LegacyHttpsUrlCodec.encode(URI("https://example.test:8443/path")),
-        )
-    }
-
-    @Test
-    fun `encodes and decodes IPv6 HTTPS authorities`() {
-        val target = URI("https://[2001:db8::1]:8443/path")
-        val legacy = URI(LegacyHttpsUrlCodec.encode(target))
-
-        assertEquals("http://[2001:db8::1]/.yame/https/8443/path", legacy.toString())
-        assertEquals(target, LegacyHttpsUrlCodec.decodeLegacyUri(legacy))
-    }
-
-    @Test
-    fun `decodes compatibility marker back to original HTTPS target`() {
+        assertEquals("http://example.test/path?q=1#fragment", legacy)
         assertEquals(
             URI("https://example.test/path?q=1"),
-            LegacyHttpsUrlCodec.decodeLegacyUri(
-                URI("http://example.test/.yame/https/443/path?q=1"),
-            ),
+            routes.resolve(flow, URI("http://example.test/path?q=1")),
         )
+    }
+
+    @Test
+    fun `clean HTTP reference preserves a non-default HTTPS port internally`() {
+        val routes = LegacyOriginRouteTable()
+        val flow = httpFlow(generation = 2)
+
+        val legacy = routes.rememberHttpsReference(
+            flow,
+            URI("https://example.test:8443/path"),
+        )
+
+        assertEquals("http://example.test/path", legacy)
         assertEquals(
             URI("https://example.test:8443/path"),
-            LegacyHttpsUrlCodec.decodeLegacyUri(
-                URI("http://example.test/.yame/https/8443/path"),
-            ),
+            routes.resolve(flow, URI("http://example.test/path")),
+        )
+    }
+
+    @Test
+    fun `clean HTTP reference supports IPv6 HTTPS authorities`() {
+        val routes = LegacyOriginRouteTable()
+        val flow = httpFlow(generation = 3)
+
+        val legacy = routes.rememberHttpsReference(
+            flow,
+            URI("https://[2001:db8::1]:8443/path"),
+        )
+
+        assertEquals("http://[2001:db8::1]/path", legacy)
+        assertEquals(
+            URI("https://[2001:db8::1]:8443/path"),
+            routes.resolve(flow, URI("http://[2001:db8::1]/path")),
         )
     }
 
     @Test
     fun `session route keeps root-relative requests on hidden HTTPS origin`() {
         val routes = LegacyOriginRouteTable()
-        val flow = httpFlow(generation = 1)
+        val flow = httpFlow(generation = 4)
         val legacyPage = URI("http://example.test/app")
         val upstreamPage = URI("https://example.test:8443/app")
 
@@ -66,49 +71,56 @@ class LegacyHttpsUrlCodecTest {
             URI("https://example.test:8443/assets/logo.gif?size=2"),
             routes.resolve(flow, URI("http://example.test/assets/logo.gif?size=2")),
         )
-        assertEquals(
-            "http://example.test/next",
-            routes.cleanHttpReference(flow, URI("https://example.test:8443/next")),
-        )
     }
 
     @Test
-    fun `bootstrap request establishes clean session route after first HTTPS navigation`() {
+    fun `following a clean rewritten URL establishes its origin route`() {
         val routes = LegacyOriginRouteTable()
-        val flow = httpFlow(generation = 4)
-        val target = URI("https://example.test:8443/app")
-        val bootstrap = URI(LegacyHttpsUrlCodec.encode(target))
+        val flow = httpFlow(generation = 5)
+        val upstream = URI("https://example.test:8443/app")
+        val legacy = URI(routes.rememberHttpsReference(flow, upstream))
 
-        assertEquals(target, routes.resolve(flow, bootstrap))
-        routes.remember(flow, bootstrap, target)
+        assertEquals(URI("https://example.test:8443/app"), routes.resolve(flow, legacy))
+
+        routes.remember(flow, legacy, upstream)
 
         assertEquals(
             URI("https://example.test:8443/assets/site.css"),
             routes.resolve(flow, URI("http://example.test/assets/site.css")),
         )
+    }
+
+    @Test
+    fun `exact clean mappings can distinguish HTTPS ports until navigation establishes the origin`() {
+        val routes = LegacyOriginRouteTable()
+        val flow = httpFlow(generation = 6)
+
+        routes.rememberHttpsReference(flow, URI("https://example.test:443/standard"))
+        routes.rememberHttpsReference(flow, URI("https://example.test:8443/alternate"))
+
         assertEquals(
-            "http://example.test/other",
-            routes.cleanHttpReference(flow, URI("https://example.test:8443/other")),
+            URI("https://example.test/standard"),
+            routes.resolve(flow, URI("http://example.test/standard")),
+        )
+        assertEquals(
+            URI("https://example.test:8443/alternate"),
+            routes.resolve(flow, URI("http://example.test/alternate")),
         )
     }
 
     @Test
     fun `session mappings are isolated by PPP generation and cleaned on reconnect`() {
         val routes = LegacyOriginRouteTable()
-        val legacy = URI("http://example.test/app")
-        val upstream = URI("https://example.test/app")
         val firstSession = httpFlow(generation = 7)
         val nextSession = httpFlow(generation = 8)
+        val clean = URI(routes.rememberHttpsReference(firstSession, URI("https://example.test/next")))
 
-        routes.remember(firstSession, legacy, upstream)
-
-        assertEquals(URI("https://example.test/next"), routes.resolve(firstSession, URI("http://example.test/next")))
-        assertEquals(URI("http://example.test/next"), routes.resolve(nextSession, URI("http://example.test/next")))
+        assertEquals(URI("https://example.test/next"), routes.resolve(firstSession, clean))
+        assertEquals(clean, routes.resolve(nextSession, clean))
 
         routes.invalidateBefore(8)
 
-        assertEquals(URI("http://example.test/next"), routes.resolve(firstSession, URI("http://example.test/next")))
-        assertNull(routes.cleanHttpReference(firstSession, URI("https://example.test/next")))
+        assertEquals(clean, routes.resolve(firstSession, clean))
     }
 
     private fun httpFlow(generation: Long): TcpProxyFlow =
