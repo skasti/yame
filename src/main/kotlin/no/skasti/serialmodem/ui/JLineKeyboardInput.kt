@@ -28,21 +28,32 @@ internal class JLineKeyboardInput private constructor(
                 .system(true)
                 .provider("jni")
                 .build()
-            val originalAttributes = terminal.enterRawMode()
+            val originalAttributes = try {
+                terminal.enterRawMode()
+            } catch (error: Throwable) {
+                runCatching { terminal.close() }
+                throw error
+            }
 
-            // Terminfo cursor-key capabilities describe application-keypad mode.
-            // Enable that mode so those sequences match on Windows and Unix.
-            terminal.puts(Capability.keypad_xmit)
-            terminal.flush()
+            return try {
+                // Terminfo cursor-key capabilities describe application-keypad mode.
+                // Enable that mode so those sequences match on Windows and Unix.
+                terminal.puts(Capability.keypad_xmit)
+                terminal.flush()
 
-            return JLineKeyboardInput(
-                terminal = terminal,
-                originalAttributes = originalAttributes,
-                decoder = TerminalKeyDecoder(
-                    reader = terminal.reader(),
-                    escapeBindings = escapeBindings(terminal),
-                ),
-            )
+                JLineKeyboardInput(
+                    terminal = terminal,
+                    originalAttributes = originalAttributes,
+                    decoder = TerminalKeyDecoder(
+                        reader = terminal.reader(),
+                        escapeBindings = escapeBindings(terminal),
+                    ),
+                )
+            } catch (error: Throwable) {
+                runCatching { terminal.setAttributes(originalAttributes) }
+                runCatching { terminal.close() }
+                throw error
+            }
         }
 
         private fun escapeBindings(terminal: Terminal): Map<String, String> =
