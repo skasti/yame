@@ -121,6 +121,113 @@ class HttpCompatibilityProxyTest {
     }
 
     @Test
+    fun `compatibility mode is enabled by default`() {
+        assertTrue(PppHttpCompatibilityConfig().enabled)
+
+        val direct = RecordingProxy()
+        val compatibility = RecordingProxy()
+        val proxy = SystemRoutingTcpProxy(
+            directProxy = direct,
+            httpProxy = compatibility,
+        )
+        val flow = httpFlow(peerPort = 2199)
+
+        try {
+            proxy.connect(flow) {}
+            assertEquals(listOf(flow), compatibility.connected)
+            assertTrue(direct.connected.isEmpty())
+        } finally {
+            proxy.close()
+        }
+    }
+
+    @Test
+    fun `compatibility proxy rewrites HTTPS references for legacy HTML navigation`() {
+        val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val originalBody =
+            "<html><a href=\"https://example.test/next\">next</a>" +
+                "<form action=\"HTTPS://example.test/post\"></form></html>"
+        val rewrittenBody =
+            "<html><a href=\"http://example.test/next\">next</a>" +
+                "<form action=\"http://example.test/post\"></form></html>"
+        val thread = serveOnce(server) {
+            "HTTP/1.1 200 OK\r\n" +
+                "Content-Type: text/html; charset=utf-8\r\n" +
+                "Refresh: 5; url=https://example.test/later\r\n" +
+                "Content-Length: ${originalBody.toByteArray(StandardCharsets.UTF_8).size}\r\n" +
+                "Connection: close\r\n\r\n" +
+                originalBody
+        }
+        val proxy = SystemHttpCompatibilityProxy(
+            config = PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000),
+        )
+        val events = LinkedBlockingQueue<TcpProxyEvent>()
+        val flow = httpFlow(peerPort = 2198)
+
+        try {
+            proxy.connect(flow, events::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(events.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                flow,
+                ("GET / HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\n\r\n")
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+
+            val response = collectResponse(events)
+            assertTrue(response.contains("Refresh: 5; url=http://example.test/later\r\n"), response)
+            assertTrue(response.contains(rewrittenBody), response)
+            assertTrue(!response.contains("https://example.test/next"), response)
+            assertTrue(!response.contains("HTTPS://example.test/post"), response)
+            assertTrue(
+                response.contains(
+                    "Content-Length: ${rewrittenBody.toByteArray(StandardCharsets.UTF_8).size}\r\n",
+                ),
+                response,
+            )
+        } finally {
+            proxy.close()
+            runCatching { server.close() }
+            thread.join(2_000)
+        }
+    }
+
+    @Test
+    fun `compatibility proxy does not rewrite HTTPS byte sequences in binary responses`() {
+        val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val body = "binary-prefix-https://example.test/resource-binary-suffix"
+        val thread = serveOnce(server) {
+            "HTTP/1.1 200 OK\r\n" +
+                "Content-Type: application/octet-stream\r\n" +
+                "Content-Length: ${body.toByteArray(StandardCharsets.ISO_8859_1).size}\r\n" +
+                "Connection: close\r\n\r\n" +
+                body
+        }
+        val proxy = SystemHttpCompatibilityProxy(
+            config = PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000),
+        )
+        val events = LinkedBlockingQueue<TcpProxyEvent>()
+        val flow = httpFlow(peerPort = 2197)
+
+        try {
+            proxy.connect(flow, events::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(events.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                flow,
+                ("GET /file.bin HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\n\r\n")
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+
+            val response = collectResponse(events)
+            assertTrue(response.endsWith(body), response)
+            assertTrue(response.contains("https://example.test/resource"), response)
+        } finally {
+            proxy.close()
+            runCatching { server.close() }
+            thread.join(2_000)
+        }
+    }
+
+    @Test
     fun `routing proxy intercepts only port 80 when compatibility mode is enabled`() {
         val direct = RecordingProxy()
         val compatibility = RecordingProxy()
