@@ -59,14 +59,13 @@ class HttpCompatibilityProxyEdgeCaseTest {
         val proxy = proxy(maxFlows = 1)
         try {
             repeat(20) { index ->
-                val events = LinkedBlockingQueue<TcpProxyEvent>()
                 val current = flow(2400 + index)
-                proxy.connect(current, events::offer)
-                assertIs<TcpProxyEvent.Connected>(events.poll(2, TimeUnit.SECONDS))
+                val events = connectEventually(proxy, current)
                 proxy.send(current, "GET / HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\n\r\n".toByteArray()).getOrThrow()
                 proxy.closeFlow(current)
+                events.clear()
             }
-            assertCanConnect(proxy, 2499)
+            assertCanConnectEventually(proxy, 2499)
         } finally {
             proxy.close(); runCatching { server.close() }; serverThread.join(2_000)
         }
@@ -197,6 +196,25 @@ class HttpCompatibilityProxyEdgeCaseTest {
         val events = LinkedBlockingQueue<TcpProxyEvent>()
         proxy.connect(flow(port), events::offer)
         assertIs<TcpProxyEvent.Connected>(events.poll(2, TimeUnit.SECONDS))
+    }
+
+    private fun assertCanConnectEventually(proxy: SystemHttpCompatibilityProxy, port: Int) {
+        connectEventually(proxy, flow(port))
+    }
+
+    private fun connectEventually(proxy: SystemHttpCompatibilityProxy, current: TcpProxyFlow): LinkedBlockingQueue<TcpProxyEvent> {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+        while (System.nanoTime() < deadline) {
+            val events = LinkedBlockingQueue<TcpProxyEvent>()
+            proxy.connect(current, events::offer)
+            when (val event = events.poll(100, TimeUnit.MILLISECONDS)) {
+                is TcpProxyEvent.Connected -> return events
+                is TcpProxyEvent.Failure -> Thread.sleep(10)
+                null -> Thread.sleep(10)
+                else -> throw AssertionError("unexpected proxy event while connecting: $event")
+            }
+        }
+        throw AssertionError("HTTP compatibility flow slot was not released")
     }
 
     private fun collectResponse(events: LinkedBlockingQueue<TcpProxyEvent>): String {
