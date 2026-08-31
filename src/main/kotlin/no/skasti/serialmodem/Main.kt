@@ -203,6 +203,7 @@ private fun parseArgs(args: Array<String>): Options {
                 dnsUpstream = Ipv4Address.parse(args[++i])
             }
             "--http-https-proxy" -> httpCompatibilityEnabled = true
+            "--no-http-https-proxy" -> httpCompatibilityEnabled = false
             "--ui" -> {
                 require(i + 1 < args.size) { "$arg requires auto, tui, or plain" }
                 uiMode = parseUiMode(args[++i])
@@ -290,7 +291,8 @@ private fun printUsage() {
               --password PASS         Terminal login password (requires --username)
               --subnet CIDR           PPP address pool, e.g. 10.0.0.0/30 (default: automatic)
               --dns-upstream IP       DNS server used by YAME's local DNS proxy (default: ${defaults.pppDnsConfig.upstreamServer})
-              --http-https-proxy      Follow HTTP redirects (including HTTPS) on behalf of legacy clients
+              --http-https-proxy      Enable HTTP/HTTPS compatibility proxy (default)
+              --no-http-https-proxy   Disable compatibility proxy and use normal TCP forwarding
               --ui MODE               UI mode: auto, tui, or plain (default: auto)
           -h, --help                  Show this help
 
@@ -300,8 +302,11 @@ private fun printUsage() {
         --port and lets you select the serial port, baud rate, DNS upstream, and HTTP proxy
         through the / command palette. Plain mode keeps the traditional line-oriented output.
         YAME advertises its local PPP address as DNS and forwards DNS queries to --dns-upstream.
-        With --http-https-proxy, TCP/80 requests are handled by YAME as HTTP: redirects are followed
-        on the host, modern HTTPS/TLS is terminated there, and the legacy peer receives plain HTTP.
+        HTTP/HTTPS compatibility mode is enabled by default. TCP/80 requests are handled by YAME as
+        HTTP: redirects are followed on the host, modern HTTPS/TLS is terminated there, and the legacy
+        peer receives plain HTTP. Absolute HTTPS references in compatible text responses are rewritten
+        to HTTP so subsequent navigation stays on the compatibility path. Use --no-http-https-proxy
+        for transparent TCP/80 forwarding instead.
         Durations accept milliseconds or seconds, e.g. 500ms, 2s, or 1.5s, up to 10s.
         Terminal login is only enabled when both --username and --password are provided.
         Tone progress is always logged while a dialing sequence is played.
