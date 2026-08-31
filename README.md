@@ -39,6 +39,8 @@ The emulator currently:
 - parses and encodes TCP headers with IPv4 pseudo-header checksum validation
 - tracks TCP flows through SYN/SYN-ACK/ACK, sequence/acknowledgment numbers, FIN and RST
 - forwards external TCP connections through per-flow host sockets, including bidirectional payloads and graceful close
+- provides an interactive terminal dashboard with separate log, DNS, transfer, and HTTP/HTTPS compatibility-proxy panels
+- provides a `/` command palette for serial connection settings, DNS upstream selection, proxy mode, reconnect/disconnect, and log control
 
 The current networking milestone provides IPv4, ICMP, UDP, DNS and TCP over PPP without requiring host routing/NAT configuration. External TCP SYNs are only acknowledged after the corresponding host socket connects successfully, and payloads are proxied in both directions through YAME's userspace TCP state machine.
 
@@ -129,11 +131,36 @@ List detected serial ports:
 ./gradlew run --args="--list"
 ```
 
-Start the emulator on a detected serial port:
+Start YAME in an interactive terminal:
+
+```shell
+./gradlew run
+```
+
+By default, YAME uses `--ui auto`. On an interactive ANSI terminal it opens the dashboard; if exactly one serial port is available it auto-selects and opens it, otherwise it stays disconnected until a port is selected from the command palette. Press `/` to open the palette.
+
+The dashboard contains:
+
+- **Log** — the existing modem/PPP diagnostic output
+- **DNS lookups** — recent UDP and TCP DNS requests, result codes, truncation, and answer counts
+- **Transfers** — TCP flows with connection state, bytes in both directions, and average transfer rate
+- **HTTP / HTTPS compatibility proxy** — routing decisions, upstream requests, redirects, responses, and failures
+
+Useful palette commands include `/port`, `/baud`, `/dns-upstream`, `/http-proxy`, `/reconnect`, `/disconnect`, `/refresh-ports`, `/clear-log`, and `/quit`.
+
+A port can still be selected explicitly:
 
 ```shell
 ./gradlew run --args="--port <port>"
 ```
+
+For scripts, redirected output, or the traditional line-oriented console, force plain mode:
+
+```shell
+./gradlew run --args="--ui plain --port <port>"
+```
+
+Use `--ui tui` to force the dashboard even when terminal capability detection would not enable it automatically.
 
 Dialing/handshake progress is logged automatically. Modem timing and handshake behavior can be overridden explicitly:
 
