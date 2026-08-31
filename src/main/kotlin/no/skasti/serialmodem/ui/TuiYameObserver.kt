@@ -379,9 +379,7 @@ class TuiYameObserver(
 
     @Synchronized
     private fun openBaudPalette() {
-        val rates = (COMMON_BAUD_RATES + baud)
-            .distinct()
-            .sorted()
+        val rates = baudPaletteRates(baud)
         commandPalette = TuiCommandPalette(
             mode = TuiPaletteMode.BAUD,
             input = "/baud",
@@ -610,6 +608,11 @@ class TuiYameObserver(
         )
     }
 }
+
+internal fun baudPaletteRates(currentBaud: Int): List<Int> =
+    (listOf(9_600, 19_200, 38_400, 57_600, 115_200) + currentBaud)
+        .distinct()
+        .sorted()
 
 internal data class DashboardDnsLookup(
     val key: String,
