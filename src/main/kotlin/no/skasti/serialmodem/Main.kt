@@ -1,5 +1,6 @@
 package no.skasti.serialmodem
 
+import com.github.ajalt.mordant.terminal.Terminal
 import no.skasti.serialmodem.modem.HayesModem
 import no.skasti.serialmodem.modem.HayesModemConfig
 import no.skasti.serialmodem.ppp.Ipv4Address
@@ -10,6 +11,7 @@ import no.skasti.serialmodem.ppp.PppIpConfig
 import no.skasti.serialmodem.serial.SerialConnection
 import no.skasti.serialmodem.tone.DialString
 import no.skasti.serialmodem.tone.HandshakeProfile
+import no.skasti.serialmodem.ui.InteractiveYameApplication
 import java.util.concurrent.CountDownLatch
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
@@ -18,12 +20,11 @@ import kotlin.time.Duration.Companion.seconds
 fun main(args: Array<String>) {
     val options = parseArgs(args)
 
-    val modem = HayesModem(
-        baudRate = options.baudRate,
-        config = options.modemConfig,
-    )
-
     if (options.testNumber != null) {
+        val modem = HayesModem(
+            baudRate = options.baudRate,
+            config = options.modemConfig,
+        )
         println(
             "Tone test. Dialing: ${options.testNumber} " +
                 "(pickup: ${options.modemConfig.pickupTime}, " +
@@ -38,23 +39,52 @@ fun main(args: Array<String>) {
     }
 
     if (options.listPorts) {
-        val ports = SerialConnection.availablePorts()
+        val ports = SerialConnection.availablePortDescriptors()
         if (ports.isEmpty()) {
             println("No serial ports found")
         } else {
             println("Available serial ports:")
-            ports.forEach { println("  $it") }
+            ports.forEach { port ->
+                println("  ${port.systemPortName}\t${port.descriptivePortName}")
+            }
         }
-        modem.close()
+        return
+    }
+
+    val detectedTerminal = Terminal()
+    val useTui = when (options.uiMode) {
+        UiMode.AUTO ->
+            detectedTerminal.terminalInfo.outputInteractive &&
+                detectedTerminal.terminalInfo.inputInteractive &&
+                detectedTerminal.terminalInfo.supportsAnsiCursor
+
+        UiMode.TUI -> true
+        UiMode.PLAIN -> false
+    }
+
+    if (useTui) {
+        InteractiveYameApplication(
+            initialPortName = options.portName,
+            initialBaud = options.baudRate,
+            initialModemConfig = options.modemConfig,
+            terminal = if (options.uiMode == UiMode.AUTO) {
+                detectedTerminal
+            } else {
+                Terminal(interactive = true)
+            },
+        ).run()
         return
     }
 
     val portName = options.portName ?: run {
-        modem.close()
         printUsage()
         return
     }
 
+    val modem = HayesModem(
+        baudRate = options.baudRate,
+        config = options.modemConfig,
+    )
     val connection = SerialConnection(portName, options.baudRate)
     val shutdown = CountDownLatch(1)
 
@@ -79,11 +109,18 @@ fun main(args: Array<String>) {
     shutdown.await()
 }
 
+private enum class UiMode {
+    AUTO,
+    TUI,
+    PLAIN,
+}
+
 private data class Options(
     val portName: String?,
     val baudRate: Int,
     val listPorts: Boolean,
     val testNumber: String?,
+    val uiMode: UiMode,
     val modemConfig: HayesModemConfig,
 )
 
@@ -101,6 +138,7 @@ private fun parseArgs(args: Array<String>): Options {
     var pppSubnet: Ipv4Cidr? = null
     var dnsUpstream = defaults.pppDnsConfig.upstreamServer
     var httpCompatibilityEnabled = defaults.pppHttpCompatibilityConfig.enabled
+    var uiMode = UiMode.AUTO
 
     var i = 0
     while (i < args.size) {
@@ -152,6 +190,10 @@ private fun parseArgs(args: Array<String>): Options {
                 dnsUpstream = Ipv4Address.parse(args[++i])
             }
             "--http-https-proxy" -> httpCompatibilityEnabled = true
+            "--ui" -> {
+                require(i + 1 < args.size) { "$arg requires auto, tui, or plain" }
+                uiMode = parseUiMode(args[++i])
+            }
             "--help", "-h" -> {
                 printUsage()
                 kotlin.system.exitProcess(0)
@@ -166,6 +208,7 @@ private fun parseArgs(args: Array<String>): Options {
         baudRate = baud,
         listPorts = list,
         testNumber = testNumber,
+        uiMode = uiMode,
         modemConfig = HayesModemConfig(
             pickupTime = pickupTime,
             dialToneTime = dialToneTime,
@@ -178,6 +221,14 @@ private fun parseArgs(args: Array<String>): Options {
         ),
     )
 }
+
+private fun parseUiMode(value: String): UiMode =
+    when (value.lowercase()) {
+        "auto" -> UiMode.AUTO
+        "tui" -> UiMode.TUI
+        "plain" -> UiMode.PLAIN
+        else -> error("--ui must be auto, tui, or plain, got '$value'")
+    }
 
 private fun parseDuration(value: String, argument: String): Duration {
     val match = DURATION_PATTERN.matchEntire(value.lowercase())
@@ -212,7 +263,7 @@ private fun printUsage() {
         Usage:
           serial-modem-emulator --list
           serial-modem-emulator --test-tone NUMBER [modem options]
-          serial-modem-emulator --port PORT [--baud 115200] [modem options]
+          serial-modem-emulator [--port PORT] [--baud 115200] [--ui auto|tui|plain] [modem options]
 
         Options:
           -l, --list                  List available serial ports
@@ -227,10 +278,14 @@ private fun printUsage() {
               --subnet CIDR           PPP address pool, e.g. 10.0.0.0/30 (default: automatic)
               --dns-upstream IP       DNS server used by YAME's local DNS proxy (default: ${defaults.pppDnsConfig.upstreamServer})
               --http-https-proxy      Follow HTTP redirects (including HTTPS) on behalf of legacy clients
+              --ui MODE               UI mode: auto, tui, or plain (default: auto)
           -h, --help                  Show this help
 
         The first usable address in --subnet is assigned to YAME and the second to the PPP client.
         Explicit PPP subnets must not overlap an active local IPv4 interface subnet.
+        On an interactive terminal, --ui auto starts the YAME dashboard. It can start without
+        --port and lets you select the serial port, baud rate, DNS upstream, and HTTP proxy
+        through the / command palette. Plain mode keeps the traditional line-oriented output.
         YAME advertises its local PPP address as DNS and forwards DNS queries to --dns-upstream.
         With --http-https-proxy, TCP/80 requests are handled by YAME as HTTP: redirects are followed
         on the host, modern HTTPS/TLS is terminated there, and the legacy peer receives plain HTTP.
