@@ -1,5 +1,11 @@
 package no.skasti.serialmodem.ppp
 
+import no.skasti.serialmodem.observer.DnsTransport
+import no.skasti.serialmodem.observer.TransferDirection
+import no.skasti.serialmodem.observer.TransferKind
+import no.skasti.serialmodem.observer.TransferState
+import no.skasti.serialmodem.observer.YameEvent
+
 import java.io.Closeable
 import java.util.ArrayDeque
 import java.util.Timer
@@ -8,6 +14,7 @@ import java.util.TimerTask
 class PppSession(
     private val sendFrame: (PppFrame) -> Unit,
     private val logger: (String) -> Unit = ::println,
+    private val eventSink: (YameEvent) -> Unit = {},
     private val restartIntervalMillis: Long = DEFAULT_RESTART_INTERVAL_MILLIS,
     private val ipAddresses: PppAddresses = DEFAULT_IP_ADDRESSES,
     private val selectPeerAddress: (Ipv4Address) -> Ipv4Address = { requested ->
@@ -33,6 +40,9 @@ class PppSession(
         var handshakeTimeoutTask: TimerTask? = null,
         val pendingHostPayloads: ArrayDeque<ByteArray> = ArrayDeque(),
         var pendingHostBytes: Int = 0,
+        val localDns: Boolean = false,
+        var dnsPeerBuffer: ByteArray = ByteArray(0),
+        var dnsHostBuffer: ByteArray = ByteArray(0),
     )
 
     private val tcpFlowTable = TcpFlowTable()
@@ -445,10 +455,36 @@ class PppSession(
                 "$localIpAddress:$DNS_PORT; forwarding to " +
                 "${dnsConfig.upstreamServer}:${dnsConfig.upstreamPort}",
         )
+        val dnsSummary = summarizeDnsMessage(udp.payload)
+        val dnsKey = dnsEventKey("udp", udp.sourcePort, dnsSummary?.id)
+        emitEvent(
+            YameEvent.DnsQuery(
+                key = dnsKey,
+                transport = DnsTransport.UDP,
+                id = dnsSummary?.id,
+                name = dnsSummary?.questionName,
+                type = dnsSummary?.questionTypeName,
+                upstream = "${dnsConfig.upstreamServer}:${dnsConfig.upstreamPort}",
+                bytes = udp.payload.size,
+            ),
+        )
 
         udpProxy.send(flow, udp.payload) { result ->
             result.fold(
                 onSuccess = { payload ->
+                    val responseSummary = summarizeDnsMessage(payload)
+                    emitEvent(
+                        YameEvent.DnsResponse(
+                            key = dnsKey,
+                            transport = DnsTransport.UDP,
+                            id = responseSummary?.id ?: dnsSummary?.id,
+                            name = responseSummary?.questionName ?: dnsSummary?.questionName,
+                            responseCode = responseSummary?.responseCode,
+                            answerCount = responseSummary?.answerCount,
+                            truncated = responseSummary?.truncated ?: false,
+                            bytes = payload.size,
+                        ),
+                    )
                     sendLocalDnsReply(
                         flow = flow,
                         payload = payload,
@@ -457,6 +493,13 @@ class PppSession(
                 },
                 onFailure = { error ->
                     val reason = error.message ?: error.javaClass.simpleName
+                    emitEvent(
+                        YameEvent.DnsFailure(
+                            key = dnsKey,
+                            transport = DnsTransport.UDP,
+                            message = reason,
+                        ),
+                    )
                     logger(
                         "DNS !! upstream ${dnsConfig.upstreamServer}:" +
                             "${dnsConfig.upstreamPort} failed: $reason",
@@ -488,6 +531,7 @@ class PppSession(
             connectAddress = dnsConfig.upstreamServer,
             connectPort = dnsConfig.upstreamPort,
             readTimeoutMillis = DNS_TCP_IDLE_TIMEOUT_MILLIS,
+            localDns = true,
         )
     }
 
@@ -627,6 +671,7 @@ class PppSession(
         connectAddress: Ipv4Address,
         connectPort: Int,
         readTimeoutMillis: Int = 0,
+        localDns: Boolean = false,
     ) {
         val key = TcpFlowKey(
             peerAddress = packet.source,
@@ -685,8 +730,17 @@ class PppSession(
                 proxyFlow = proxyFlow,
                 dscpEcn = packet.dscpEcn,
                 pendingSynAck = synAck,
+                localDns = localDns,
             )
             tcpContexts[key] = context
+            emitEvent(
+                YameEvent.TransferStarted(
+                    flowId = flowId(key),
+                    destination = "${key.remoteAddress}:${key.remotePort}",
+                    via = "$connectAddress:$connectPort",
+                    kind = if (localDns) TransferKind.DNS else TransferKind.TCP,
+                ),
+            )
             logger(
                 "TCP <= SYN ${packet.source}:${tcp.sourcePort} -> " +
                     "${packet.destination}:${tcp.destinationPort}; connecting via host to " +
@@ -723,6 +777,12 @@ class PppSession(
                     val context = tcpContexts[key] ?: continue
                     context.established = true
                     cancelTcpHandshakeTimeout(context)
+                    emitEvent(
+                        YameEvent.TransferStateChanged(
+                            flowId = flowId(key),
+                            state = TransferState.OPEN,
+                        ),
+                    )
                     logger(
                         "TCP open ${key.peerAddress}:${key.peerPort} <-> " +
                             "${key.remoteAddress}:${key.remotePort}",
@@ -731,6 +791,16 @@ class PppSession(
 
                 is TcpFlowEvent.PayloadReceived -> {
                     val context = tcpContexts[key] ?: continue
+                    emitEvent(
+                        YameEvent.TransferBytes(
+                            flowId = flowId(key),
+                            direction = TransferDirection.TO_HOST,
+                            bytes = event.payload.size,
+                        ),
+                    )
+                    if (context.localDns) {
+                        observeDnsTcpPayload(context, fromPeer = true, event.payload)
+                    }
                     tcpProxy.send(context.proxyFlow, event.payload)
                         .onFailure { error -> failTcpFlow(context, error) }
                 }
@@ -746,6 +816,12 @@ class PppSession(
                 -> {
                     tcpContexts.remove(key)?.let { context ->
                         cancelTcpHandshakeTimeout(context)
+                        emitEvent(
+                            YameEvent.TransferStateChanged(
+                                flowId = flowId(key),
+                                state = TransferState.CLOSED,
+                            ),
+                        )
                         tcpProxy.closeFlow(context.proxyFlow)
                     }
                 }
@@ -790,7 +866,19 @@ class PppSession(
                 }
             }
 
-            is TcpProxyEvent.Payload -> queueHostTcpPayload(context, event.bytes)
+            is TcpProxyEvent.Payload -> {
+                emitEvent(
+                    YameEvent.TransferBytes(
+                        flowId = flowId(flow.key),
+                        direction = TransferDirection.TO_PEER,
+                        bytes = event.bytes.size,
+                    ),
+                )
+                if (context.localDns) {
+                    observeDnsTcpPayload(context, fromPeer = false, event.bytes)
+                }
+                queueHostTcpPayload(context, event.bytes)
+            }
 
             TcpProxyEvent.EndOfStream -> {
                 context.hostEof = true
@@ -1000,6 +1088,13 @@ class PppSession(
         logger(
             "TCP !! ${context.proxyFlow.key.remoteAddress}:" +
                 "${context.proxyFlow.key.remotePort} failed: $reason",
+        )
+        emitEvent(
+            YameEvent.TransferStateChanged(
+                flowId = flowId(context.proxyFlow.key),
+                state = TransferState.FAILED,
+                detail = reason,
+            ),
         )
         val reset = tcpFlowTable.reset(context.proxyFlow.key)
         tcpContexts.remove(context.proxyFlow.key)
@@ -1501,6 +1596,77 @@ class PppSession(
         )
     }
 
+    private fun observeDnsTcpPayload(
+        context: TcpContext,
+        fromPeer: Boolean,
+        payload: ByteArray,
+    ) {
+        var buffer = (if (fromPeer) context.dnsPeerBuffer else context.dnsHostBuffer) + payload
+
+        while (buffer.size >= 2) {
+            val messageLength =
+                ((buffer[0].toInt() and 0xff) shl 8) or
+                    (buffer[1].toInt() and 0xff)
+            if (messageLength <= 0) {
+                buffer = buffer.copyOfRange(2, buffer.size)
+                continue
+            }
+            if (buffer.size < messageLength + 2) break
+
+            val message = buffer.copyOfRange(2, messageLength + 2)
+            val summary = summarizeDnsMessage(message)
+            val key = dnsEventKey("tcp", context.proxyFlow.key.peerPort, summary?.id)
+
+            if (fromPeer) {
+                emitEvent(
+                    YameEvent.DnsQuery(
+                        key = key,
+                        transport = DnsTransport.TCP,
+                        id = summary?.id,
+                        name = summary?.questionName,
+                        type = summary?.questionTypeName,
+                        upstream = "${context.proxyFlow.connectAddress}:${context.proxyFlow.connectPort}",
+                        bytes = message.size,
+                    ),
+                )
+            } else {
+                emitEvent(
+                    YameEvent.DnsResponse(
+                        key = key,
+                        transport = DnsTransport.TCP,
+                        id = summary?.id,
+                        name = summary?.questionName,
+                        responseCode = summary?.responseCode,
+                        answerCount = summary?.answerCount,
+                        truncated = summary?.truncated ?: false,
+                        bytes = message.size,
+                    ),
+                )
+            }
+
+            buffer = buffer.copyOfRange(messageLength + 2, buffer.size)
+        }
+
+        if (fromPeer) {
+            context.dnsPeerBuffer = buffer
+        } else {
+            context.dnsHostBuffer = buffer
+        }
+    }
+
+    private fun dnsEventKey(
+        protocol: String,
+        peerPort: Int,
+        id: Int?,
+    ): String = "$protocol:$ipcpGeneration:$peerPort:${id ?: -1}"
+
+    private fun flowId(key: TcpFlowKey): String =
+        "${key.peerAddress}:${key.peerPort}->${key.remoteAddress}:${key.remotePort}"
+
+    private fun emitEvent(event: YameEvent) {
+        runCatching { eventSink(event) }
+    }
+
     private fun updateIpcpState() {
         val open = ipcpPeerConfigured && ipcpLocalConfigured
         if (open && !ipcpOpen) {
@@ -1512,7 +1678,16 @@ class PppSession(
     private fun invalidateTransportFlows() {
         udpProxy.invalidateBefore(ipcpGeneration)
         tcpProxy.invalidateBefore(ipcpGeneration)
-        tcpContexts.values.forEach(::cancelTcpHandshakeTimeout)
+        tcpContexts.forEach { (key, context) ->
+            cancelTcpHandshakeTimeout(context)
+            emitEvent(
+                YameEvent.TransferStateChanged(
+                    flowId = flowId(key),
+                    state = TransferState.CLOSED,
+                    detail = "IPCP renegotiated",
+                ),
+            )
+        }
         tcpFlowTable.clear()
         tcpContexts.clear()
     }

@@ -1,5 +1,6 @@
 package no.skasti.serialmodem.ppp
 
+import no.skasti.serialmodem.observer.YameEvent
 import java.io.Closeable
 import java.io.OutputStream
 
@@ -13,6 +14,7 @@ interface PppHandler : Closeable {
 
 class RetroPppHandler(
     private val logger: (String) -> Unit = ::println,
+    private val eventSink: (YameEvent) -> Unit = {},
     private val ipConfig: PppIpConfig = PppIpConfig(),
     private val dnsConfig: PppDnsConfig = PppDnsConfig(),
     private val httpCompatibilityConfig: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig(),
@@ -43,12 +45,14 @@ class RetroPppHandler(
         session = PppSession(
             sendFrame = ::sendFrame,
             logger = logger,
+            eventSink = eventSink,
             ipAddresses = addresses,
             selectPeerAddress = addressResolver::selectPeerAddress,
             dnsConfig = dnsConfig,
             tcpProxy = SystemRoutingTcpProxy(
                 httpConfig = httpCompatibilityConfig,
                 logger = logger,
+                eventSink = eventSink,
             ),
         )
     }

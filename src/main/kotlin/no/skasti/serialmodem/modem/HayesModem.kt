@@ -2,6 +2,7 @@ package no.skasti.serialmodem.modem
 
 import no.skasti.serialmodem.ppp.PppHandler
 import no.skasti.serialmodem.ppp.RetroPppHandler
+import no.skasti.serialmodem.observer.YameEvent
 import no.skasti.serialmodem.tone.DialString
 import no.skasti.serialmodem.tone.JavaSoundTonePlayer
 import no.skasti.serialmodem.tone.TonePlayer
@@ -16,8 +17,10 @@ class HayesModem(
     private val config: HayesModemConfig = HayesModemConfig(),
     private val tonePlayer: TonePlayer = JavaSoundTonePlayer(),
     private val logger: (String) -> Unit = ::println,
+    private val eventSink: (YameEvent) -> Unit = {},
     private val pppHandler: PppHandler = RetroPppHandler(
         logger = logger,
+        eventSink = eventSink,
         ipConfig = config.pppIpConfig,
         dnsConfig = config.pppDnsConfig,
         httpCompatibilityConfig = config.pppHttpCompatibilityConfig,

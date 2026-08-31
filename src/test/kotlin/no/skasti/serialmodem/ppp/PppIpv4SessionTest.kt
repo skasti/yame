@@ -1,5 +1,7 @@
 package no.skasti.serialmodem.ppp
 
+import no.skasti.serialmodem.observer.TransferState
+import no.skasti.serialmodem.observer.YameEvent
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -846,6 +848,92 @@ class PppIpv4SessionTest {
         assertContentEquals(byteArrayOf(5, 6, 7, 8), tcpProxy.sentPayloads.last())
         session.close()
     }
+
+    @Test
+    fun `IPCP renegotiation closes active TCP transfer event`() {
+        val sent = mutableListOf<PppFrame>()
+        val events = mutableListOf<YameEvent>()
+        val tcpProxy = FakeTcpProxy()
+        val session = newSession(
+            sent = sent,
+            tcpProxy = tcpProxy,
+            eventSink = events::add,
+        )
+        openIpcp(session, sent)
+        sent.clear()
+
+        val peer = Ipv4Address.parse("10.0.0.2")
+        val remote = Ipv4Address.parse("203.0.113.20")
+        val peerPort = 2060
+        val remotePort = 80
+
+        fun receiveTcp(packet: TcpPacket) {
+            session.receive(
+                PppFrame(
+                    protocol = PppSession.IPV4_PROTOCOL,
+                    payload = Ipv4Packet(
+                        protocol = Ipv4Packet.TCP_PROTOCOL,
+                        source = peer,
+                        destination = remote,
+                        payload = packet.encode(peer, remote),
+                    ).encode(),
+                ),
+            )
+        }
+
+        receiveTcp(
+            TcpPacket(
+                sourcePort = peerPort,
+                destinationPort = remotePort,
+                sequenceNumber = 6000u,
+                flags = TcpPacket.SYN,
+                windowSize = 8192,
+            ),
+        )
+        val synAckIpv4 = requireNotNull(Ipv4Packet.parse(sent.single().payload))
+        val synAck = requireNotNull(
+            TcpPacket.parse(synAckIpv4.payload, synAckIpv4.source, synAckIpv4.destination),
+        )
+        receiveTcp(
+            TcpPacket(
+                sourcePort = peerPort,
+                destinationPort = remotePort,
+                sequenceNumber = 6001u,
+                acknowledgmentNumber = synAck.sequenceNumber + 1u,
+                flags = TcpPacket.ACK,
+                windowSize = 8192,
+            ),
+        )
+
+        events.clear()
+        session.receive(
+            PppFrame(
+                protocol = PppSession.IPCP_PROTOCOL,
+                payload = PppControlPacket(
+                    code = PppControlPacket.CONFIGURE_REQUEST,
+                    identifier = 11,
+                    data =
+                        PppControlOption(
+                            type = PppControlOption.IPCP_IP_ADDRESS,
+                            data = peer.toByteArray(),
+                        ).encode() +
+                            PppControlOption(
+                                type = PppControlOption.IPCP_PRIMARY_DNS,
+                                data = Ipv4Address.parse("10.0.0.1").toByteArray(),
+                            ).encode(),
+                ).encode(),
+            ),
+        )
+
+        val closed = events
+            .filterIsInstance<YameEvent.TransferStateChanged>()
+            .single { it.state == TransferState.CLOSED }
+        assertEquals("10.0.0.2:2060->203.0.113.20:80", closed.flowId)
+        assertEquals("IPCP renegotiated", closed.detail)
+
+        session.close()
+    }
+
     private fun newSession(
         sent: MutableList<PppFrame>,
         logger: (String) -> Unit = {},
@@ -855,6 +943,7 @@ class PppIpv4SessionTest {
         tcpHandshakeTimeoutMillis: Long = 10_000,
         tcpRetransmitTimeoutMillis: Long = 3_000,
         dnsConfig: PppDnsConfig = PppDnsConfig(),
+        eventSink: (YameEvent) -> Unit = {},
     ): PppSession {
         val addresses = PppAddresses(
             localAddress = Ipv4Address.parse("10.0.0.1"),
@@ -874,6 +963,7 @@ class PppIpv4SessionTest {
             tcpHandshakeTimeoutMillis = tcpHandshakeTimeoutMillis,
             tcpRetransmitTimeoutMillis = tcpRetransmitTimeoutMillis,
             dnsConfig = dnsConfig,
+            eventSink = eventSink,
         )
     }
 
