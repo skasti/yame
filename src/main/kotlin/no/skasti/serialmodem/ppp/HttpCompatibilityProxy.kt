@@ -88,6 +88,8 @@ class SystemHttpCompatibilityProxy(
         .followRedirects(HttpClient.Redirect.NEVER)
         .build(),
 ) : TcpProxy {
+    private data class ClientCookie(val name: String, val value: String)
+    private data class CookieOverride(val name: String, val domain: String, val path: String, val secure: Boolean)
     private data class FlowState(
         val flow: TcpProxyFlow,
         val onEvent: (TcpProxyEvent) -> Unit,
@@ -96,7 +98,8 @@ class SystemHttpCompatibilityProxy(
         val slotReleased: AtomicBoolean = AtomicBoolean(),
         val taskStarted: AtomicBoolean = AtomicBoolean(),
         val cookieManager: CookieManager = CookieManager(null, CookiePolicy.ACCEPT_ORIGINAL_SERVER),
-        val clientCookies: LinkedHashMap<String, String> = linkedMapOf(),
+        val clientCookies: MutableList<ClientCookie> = mutableListOf(),
+        val cookieOverrides: MutableList<CookieOverride> = mutableListOf(),
         @Volatile var processing: Boolean = false,
         @Volatile var readsPaused: Boolean = false,
         @Volatile var cancelled: Boolean = false,
@@ -181,10 +184,7 @@ class SystemHttpCompatibilityProxy(
         safeCallback(state.onEvent, TcpProxyEvent.WriteCompleted(payload.size))
         if (sendContinue) emitBytes(state, "HTTP/1.1 100 Continue\r\n\r\n".toByteArray(StandardCharsets.US_ASCII))
         if (rejectExpectation) {
-            emitErrorResponse(state, 417, "Expectation Failed", "Unsupported HTTP Expect header")
-            synchronized(state) { state.processing = false }
-            removeFlow(state)
-            return Result.success(Unit)
+            return scheduleErrorResponse(state, 417, "Expectation Failed", "Unsupported HTTP Expect header")
         }
         if (completeRequest != null) {
             try {
@@ -203,6 +203,28 @@ class SystemHttpCompatibilityProxy(
             }
         }
         return Result.success(Unit)
+    }
+
+    private fun scheduleErrorResponse(state: FlowState, status: Int, reason: String, message: String): Result<Unit> {
+        return try {
+            val task = FutureTask<Unit> {
+                state.taskStarted.set(true)
+                try {
+                    emitErrorResponse(state, status, reason, message)
+                } finally {
+                    synchronized(state) { state.processing = false; state.task = null }
+                    removeFlow(state)
+                }
+            }
+            state.task = task
+            executor.execute(task)
+            if (state.cancelled || flows[state.flow] !== state) cancelQueuedOrRunningTask(state)
+            Result.success(Unit)
+        } catch (error: Throwable) {
+            synchronized(state) { state.processing = false; state.task = null }
+            failFlow(state, error)
+            Result.failure(error)
+        }
     }
 
     override fun shutdownOutput(flow: TcpProxyFlow): Result<Unit> {
@@ -437,7 +459,7 @@ class SystemHttpCompatibilityProxy(
                 if (separator > 0) {
                     val name = pair.substring(0, separator).trim()
                     val cookieValue = pair.substring(separator + 1).trim()
-                    if (name.isNotEmpty() && !name.startsWith('$')) state.clientCookies[name] = cookieValue
+                    if (name.isNotEmpty() && !name.startsWith('$')) state.clientCookies += ClientCookie(name, cookieValue)
                 }
             }
         }
@@ -446,21 +468,74 @@ class SystemHttpCompatibilityProxy(
     private fun cookieHeaders(state: FlowState, uri: URI, includeClientCookies: Boolean): List<String> {
         val result = mutableListOf<String>()
         if (includeClientCookies && state.clientCookies.isNotEmpty()) {
-            result += state.clientCookies.entries.joinToString("; ") { (name, value) -> "$name=$value" }
+            val remaining = state.clientCookies.filterNot { client ->
+                state.cookieOverrides.any { replacement ->
+                    replacement.name.equals(client.name, true) && cookieOverrideApplies(replacement, uri)
+                }
+            }
+            if (remaining.isNotEmpty()) result += remaining.joinToString("; ") { "${it.name}=${it.value}" }
         }
         result += runCatching { state.cookieManager.get(uri, emptyMap())["Cookie"].orEmpty() }.getOrDefault(emptyList())
         return result
     }
 
     private fun storeCookies(state: FlowState, uri: URI, headers: Map<String, List<String>>) {
+        runCatching { state.cookieManager.put(uri, headers) }
         headers.entries
             .filter { (name, _) -> name.equals("Set-Cookie", true) || name.equals("Set-Cookie2", true) }
             .flatMap { it.value }
-            .forEach { value ->
-                val separator = value.indexOf('=')
-                if (separator > 0) state.clientCookies.remove(value.substring(0, separator).trim())
+            .mapNotNull { parseCookieOverride(uri, it) }
+            .forEach { state.cookieOverrides += it }
+    }
+
+    private fun parseCookieOverride(uri: URI, value: String): CookieOverride? {
+        val parts = value.split(';').map { it.trim() }
+        val pair = parts.firstOrNull() ?: return null
+        val separator = pair.indexOf('=')
+        if (separator <= 0) return null
+        val name = pair.substring(0, separator).trim()
+        if (name.isEmpty()) return null
+        var domain = uri.host ?: return null
+        var path = defaultCookiePath(uri.path)
+        var secure = false
+        parts.drop(1).forEach { attribute ->
+            val attrSeparator = attribute.indexOf('=')
+            val attrName = (if (attrSeparator >= 0) attribute.substring(0, attrSeparator) else attribute).trim()
+            val attrValue = if (attrSeparator >= 0) attribute.substring(attrSeparator + 1).trim() else ""
+            when {
+                attrName.equals("Domain", true) && attrValue.isNotEmpty() -> domain = attrValue.trimStart('.')
+                attrName.equals("Path", true) && attrValue.startsWith('/') -> path = attrValue
+                attrName.equals("Secure", true) -> secure = true
             }
-        runCatching { state.cookieManager.put(uri, headers) }
+        }
+        if (!domainMatches(uri.host ?: return null, domain)) return null
+        return CookieOverride(name, domain.lowercase(Locale.ROOT), path, secure)
+    }
+
+    private fun cookieOverrideApplies(override: CookieOverride, uri: URI): Boolean {
+        val host = uri.host ?: return false
+        if (!domainMatches(host, override.domain)) return false
+        if (!pathMatches(uri.path.ifEmpty { "/" }, override.path)) return false
+        if (override.secure && !uri.scheme.equals("https", true)) return false
+        return true
+    }
+
+    private fun domainMatches(host: String, domain: String): Boolean {
+        val normalizedHost = host.lowercase(Locale.ROOT)
+        val normalizedDomain = domain.trimStart('.').lowercase(Locale.ROOT)
+        return normalizedHost == normalizedDomain || normalizedHost.endsWith(".$normalizedDomain")
+    }
+
+    private fun pathMatches(requestPath: String, cookiePath: String): Boolean {
+        if (requestPath == cookiePath) return true
+        if (!requestPath.startsWith(cookiePath)) return false
+        return cookiePath.endsWith('/') || requestPath.getOrNull(cookiePath.length) == '/'
+    }
+
+    private fun defaultCookiePath(requestPath: String): String {
+        if (!requestPath.startsWith('/') || requestPath == "/") return "/"
+        val lastSlash = requestPath.lastIndexOf('/')
+        return if (lastSlash <= 0) "/" else requestPath.substring(0, lastSlash)
     }
 
     private fun requireSupportedScheme(uri: URI) {
