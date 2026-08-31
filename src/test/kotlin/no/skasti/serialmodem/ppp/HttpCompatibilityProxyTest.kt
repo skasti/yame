@@ -215,7 +215,7 @@ class HttpCompatibilityProxyTest {
                         }
                         val response =
                             "HTTP/1.1 200 OK\r\n" +
-                                "Content-Type: " + if (requestIndex == 0) "text/html" else "image/gif" + "\r\n" +
+                                "Content-Type: " + (if (requestIndex == 0) "text/html" else "image/gif") + "\r\n" +
                                 "Content-Length: ${body.toByteArray(StandardCharsets.ISO_8859_1).size}\r\n" +
                                 "Connection: close\r\n\r\n" +
                                 body
