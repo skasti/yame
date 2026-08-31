@@ -6,8 +6,10 @@ import kotlin.test.assertEquals
 
 class LegacyOriginRouteTableTest {
     @Test
-    fun `protocol-relative matcher accepts single-label hosts`() {
-        val source = "//localhost/next //router/status //example.test/path //127.0.0.1/x //[::1]/y"
+    fun `protocol-relative matcher accepts single-label hosts without matching path double slashes`() {
+        val source =
+            "//localhost/next href=\"//router/status\" //example.test/path //127.0.0.1/x //[::1]/y " +
+                "href=\"/files//server/share\""
         assertEquals(
             listOf(
                 "//localhost/next",
@@ -17,6 +19,27 @@ class LegacyOriginRouteTableTest {
                 "//[::1]/y",
             ),
             LEGACY_PROTOCOL_RELATIVE_URL_PATTERN.findAll(source).map { it.value }.toList(),
+        )
+    }
+
+    @Test
+    fun `seeing an HTTPS link does not reroute unrelated HTTP requests until it is followed`() {
+        val routes = LegacyOriginRouteTable()
+        val flow = httpFlow(generation = 10)
+        val upstream = URI("https://example.test/login")
+        val legacy = URI(routes.rememberHttpsReference(flow, upstream))
+
+        assertEquals(
+            URI("http://example.test/assets/site.css"),
+            routes.resolve(flow, URI("http://example.test/assets/site.css")),
+        )
+        assertEquals(upstream, routes.resolve(flow, legacy))
+
+        routes.remember(flow, legacy, upstream)
+
+        assertEquals(
+            URI("https://example.test/assets/site.css"),
+            routes.resolve(flow, URI("http://example.test/assets/site.css")),
         )
     }
 
@@ -124,11 +147,13 @@ class LegacyOriginRouteTableTest {
     }
 
     @Test
-    fun `specific HTTPS and plain HTTP references override the general origin route`() {
+    fun `specific HTTPS and plain HTTP references override the established origin route`() {
         val routes = LegacyOriginRouteTable()
         val flow = httpFlow(generation = 7)
+        val upstreamHome = URI("https://example.test/home")
+        val legacyHome = URI(routes.rememberHttpsReference(flow, upstreamHome))
 
-        routes.rememberHttpsReference(flow, URI("https://example.test/home"))
+        routes.remember(flow, legacyHome, upstreamHome)
         routes.rememberHttpsReference(flow, URI("https://example.test:8443/admin"))
         routes.rememberHttpReference(flow, URI("http://example.test/legacy"))
 
@@ -140,9 +165,14 @@ class LegacyOriginRouteTableTest {
             URI("https://example.test:8443/admin"),
             routes.resolve(flow, URI("http://example.test/admin")),
         )
+        val legacyException = URI("http://example.test/legacy")
+        assertEquals(legacyException, routes.resolve(flow, legacyException))
+
+        routes.remember(flow, legacyException, legacyException)
+
         assertEquals(
-            URI("http://example.test/legacy"),
-            routes.resolve(flow, URI("http://example.test/legacy")),
+            URI("https://example.test/other"),
+            routes.resolve(flow, URI("http://example.test/other")),
         )
     }
 
