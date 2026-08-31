@@ -40,6 +40,62 @@ data class PppHttpCompatibilityConfig(
     }
 }
 
+internal object LegacyHttpsUrlCodec {
+    private const val MARKER_PREFIX = "/.yame/https/"
+    private val HTTPS_URL_PATTERN = Regex("""https://[^\\s\"'<>\\)\\]]+""", RegexOption.IGNORE_CASE)
+
+    fun rewriteReferences(value: String): String =
+        HTTPS_URL_PATTERN.replace(value) { match ->
+            val uri = runCatching { URI(match.value) }.getOrNull()
+            if (uri != null && uri.scheme.equals("https", ignoreCase = true) && uri.host != null) {
+                encode(uri)
+            } else {
+                match.value
+            }
+        }
+
+    fun decodeLegacyUri(uri: URI): URI {
+        if (!uri.scheme.equals("http", ignoreCase = true)) return uri
+        val rawPath = uri.rawPath ?: return uri
+        if (!rawPath.startsWith(MARKER_PREFIX)) return uri
+
+        val encodedTarget = rawPath.removePrefix(MARKER_PREFIX)
+        val separator = encodedTarget.indexOf('/')
+        val portText = if (separator >= 0) encodedTarget.substring(0, separator) else encodedTarget
+        val port = portText.toIntOrNull()?.takeIf { it in 1..65535 } ?: return uri
+        val upstreamPath = if (separator >= 0) encodedTarget.substring(separator) else "/"
+        val host = uri.host ?: return uri
+        val authority = formatHost(host) + if (port == 443) "" else ":$port"
+
+        return URI(
+            buildString {
+                append("https://")
+                append(authority)
+                append(upstreamPath)
+                uri.rawQuery?.let { append('?').append(it) }
+                uri.rawFragment?.let { append('#').append(it) }
+            },
+        )
+    }
+
+    private fun encode(uri: URI): String {
+        val port = if (uri.port >= 0) uri.port else 443
+        val path = uri.rawPath?.takeIf { it.isNotEmpty() } ?: "/"
+        return buildString {
+            append("http://")
+            append(formatHost(requireNotNull(uri.host)))
+            append(MARKER_PREFIX)
+            append(port)
+            append(path)
+            uri.rawQuery?.let { append('?').append(it) }
+            uri.rawFragment?.let { append('#').append(it) }
+        }
+    }
+
+    private fun formatHost(host: String): String =
+        if (host.contains(':') && !host.startsWith('[')) "[$host]" else host
+}
+
 class SystemRoutingTcpProxy(
     private val httpConfig: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig(),
     private val logger: (String) -> Unit = {},
@@ -483,7 +539,7 @@ class SystemHttpCompatibilityProxy(
             ?.firstOrNull()
 
     private fun rewriteHttpsReferences(value: String): String =
-        HTTPS_SCHEME_PATTERN.replace(value, "http://")
+        LegacyHttpsUrlCodec.rewriteReferences(value)
 
     private fun emitErrorResponse(state: FlowState, status: Int, reason: String, message: String) {
         if (!isActive(state)) return
@@ -509,14 +565,17 @@ class SystemHttpCompatibilityProxy(
         val absolute = runCatching { URI(request.target) }.getOrNull()
         if (absolute?.isAbsolute == true) {
             if (!absolute.scheme.equals("http", true)) throw BadLegacyRequest("Port 80 compatibility requests must start as HTTP")
-            return absolute
+            return LegacyHttpsUrlCodec.decodeLegacyUri(absolute)
         }
         val host = request.headers.firstOrNull { it.first.equals("Host", true) }?.second?.trim()?.takeIf { it.isNotEmpty() }
             ?: flow.key.remoteAddress.toString()
         val target = if (request.target.startsWith('/')) request.target else "/${request.target}"
-        return try { URI("http://$host$target") } catch (_: Exception) { throw BadLegacyRequest("Invalid HTTP Host or request target") }
+        return try {
+            LegacyHttpsUrlCodec.decodeLegacyUri(URI("http://$host$target"))
+        } catch (_: Exception) {
+            throw BadLegacyRequest("Invalid HTTP Host or request target")
+        }
     }
-
     private fun parseRequest(bytes: ByteArray): LegacyRequest {
         val headerEnd = findHeaderEnd(bytes)
         if (headerEnd < 0) throw BadLegacyRequest("Incomplete HTTP request headers")
@@ -762,7 +821,6 @@ class SystemHttpCompatibilityProxy(
             "application/javascript",
             "application/x-javascript",
         )
-        val HTTPS_SCHEME_PATTERN = Regex("https://", RegexOption.IGNORE_CASE)
         const val RESPONSE_CHUNK_BYTES = 4 * 1024
         const val CLOSE_JOIN_TIMEOUT_MILLIS = 1_000L
         fun reasonPhrase(status: Int) = when (status) {
