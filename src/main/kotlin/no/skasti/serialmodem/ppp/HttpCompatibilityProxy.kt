@@ -288,12 +288,16 @@ class SystemHttpCompatibilityProxy(
     )
 
     private data class LegacyRequest(val method: String, val target: String, val headers: List<Pair<String, String>>, val body: ByteArray)
+    private sealed interface FinalResponseBody {
+        data class Buffered(val bytes: ByteArray) : FinalResponseBody
+        data class Streaming(val input: java.io.InputStream) : FinalResponseBody
+    }
     private data class FinalResponse(
         val uri: URI,
         val statusCode: Int,
         val headers: Map<String, List<String>>,
-        val body: ByteArray,
-        val contentLength: Long,
+        val body: FinalResponseBody,
+        val contentLength: Long?,
         val exposeCookies: Boolean,
     )
 
@@ -555,37 +559,63 @@ class SystemHttpCompatibilityProxy(
                 }
                 continue
             }
-            response.body().use { input ->
-                val isHead = request.method.equals("HEAD", true)
-                val preservesRepresentationLength = isHead || status == 304
-                val upstreamContentLength = response.headers().firstValueAsLong("content-length").orElse(-1L)
-                if (!preservesRepresentationLength && upstreamContentLength > config.maxResponseBytes.toLong()) {
-                    throw ResponseTooLarge("Upstream response is $upstreamContentLength bytes; limit is ${config.maxResponseBytes}")
+            val responseHeaders = response.headers().map()
+            val isHead = request.method.equals("HEAD", true)
+            val preservesRepresentationLength = isHead || status == 304
+            val upstreamContentLength = response.headers().firstValueAsLong("content-length").orElse(-1L)
+            val responseBody =
+                when {
+                    preservesRepresentationLength -> {
+                        response.body().close()
+                        FinalResponseBody.Buffered(ByteArray(0))
+                    }
+                    bodyCanContainNavigableUrls(responseHeaders) -> {
+                        if (upstreamContentLength > config.maxResponseBytes.toLong()) {
+                            response.body().close()
+                            throw ResponseTooLarge(
+                                "Rewritable upstream response is $upstreamContentLength bytes; limit is ${config.maxResponseBytes}",
+                            )
+                        }
+                        FinalResponseBody.Buffered(
+                            response.body().use { input -> readBounded(state, input, config.maxResponseBytes) },
+                        )
+                    }
+                    else -> FinalResponseBody.Streaming(response.body())
                 }
-                val responseBody = if (preservesRepresentationLength) ByteArray(0) else readBounded(state, input, config.maxResponseBytes)
-                originRoutes.remember(state.flow, legacyUri, uri)?.let { (legacyOrigin, upstreamOrigin) ->
-                    logger("HTTP compatibility .. session route $legacyOrigin -> $upstreamOrigin")
-                    emitEvent(state, HttpProxyActionKind.ROUTED, "session $legacyOrigin -> $upstreamOrigin")
-                }
-                return FinalResponse(
-                    uri = uri,
-                    statusCode = status,
-                    headers = response.headers().map(),
-                    body = responseBody,
-                    contentLength = if (preservesRepresentationLength && upstreamContentLength >= 0L) upstreamContentLength else responseBody.size.toLong(),
-                    exposeCookies = sameOrigin(originalUri, uri),
-                )
+            originRoutes.remember(state.flow, legacyUri, uri)?.let { (legacyOrigin, upstreamOrigin) ->
+                logger("HTTP compatibility .. session route $legacyOrigin -> $upstreamOrigin")
+                emitEvent(state, HttpProxyActionKind.ROUTED, "session $legacyOrigin -> $upstreamOrigin")
             }
+            return FinalResponse(
+                uri = uri,
+                statusCode = status,
+                headers = responseHeaders,
+                body = responseBody,
+                contentLength =
+                    when {
+                        preservesRepresentationLength && upstreamContentLength >= 0L -> upstreamContentLength
+                        responseBody is FinalResponseBody.Buffered -> responseBody.bytes.size.toLong()
+                        upstreamContentLength >= 0L -> upstreamContentLength
+                        else -> null
+                    },
+                exposeCookies = sameOrigin(originalUri, uri),
+            )
         }
     }
 
     private fun emitFinalResponse(state: FlowState, response: FinalResponse) {
         val legacyHeaders = rewriteLegacyHeaders(state.flow, response.uri, response.headers)
-        val legacyBody = rewriteLegacyBody(state.flow, response.uri, response.headers, response.body)
-        val rewritten = legacyHeaders != response.headers || legacyBody !== response.body
+        val bufferedBody = (response.body as? FinalResponseBody.Buffered)?.bytes
+        val legacyBody =
+            bufferedBody?.let { rewriteLegacyBody(state.flow, response.uri, response.headers, it) }
+        val rewritten = legacyHeaders != response.headers || (bufferedBody != null && legacyBody !== bufferedBody)
         val contentLength =
-            if (response.contentLength != response.body.size.toLong()) response.contentLength
-            else legacyBody.size.toLong()
+            when {
+                bufferedBody != null && response.contentLength != null &&
+                    response.contentLength != bufferedBody.size.toLong() -> response.contentLength
+                legacyBody != null -> legacyBody.size.toLong()
+                else -> response.contentLength
+            }
         val nominated = connectionNominatedHeaders(legacyHeaders.flatMap { (name, values) -> values.map { name to it } })
         val head = buildString {
             append("HTTP/1.0 ${response.statusCode} ${reasonPhrase(response.statusCode)}\r\n")
@@ -596,24 +626,44 @@ class SystemHttpCompatibilityProxy(
                     values.forEach { append("$name: $it\r\n") }
                 }
             }
-            append("Content-Length: $contentLength\r\nConnection: close\r\n\r\n")
+            contentLength?.let { append("Content-Length: $it\r\n") }
+            append("Connection: close\r\n\r\n")
         }.toByteArray(StandardCharsets.ISO_8859_1)
         val rewriteSuffix = if (rewritten) ", HTTPS references rewritten for legacy client" else ""
+        val sizeDescription = contentLength?.let { "$it bytes" } ?: "streaming response"
         logger(
             "HTTP compatibility <= ${response.statusCode} ${response.uri} " +
-                "(${legacyBody.size} bytes, TLS hidden from peer$rewriteSuffix)",
+                "($sizeDescription, TLS hidden from peer$rewriteSuffix)",
         )
         emitEvent(
             state,
             HttpProxyActionKind.RESPONSE,
-            "${response.statusCode} ${response.uri} · ${legacyBody.size} bytes · TLS hidden" +
+            "${response.statusCode} ${response.uri} · $sizeDescription · TLS hidden" +
                 if (rewritten) " · HTTPS links rewritten" else "",
         )
         emitBytes(state, head)
-        var offset = 0
-        while (offset < legacyBody.size) {
-            val end = minOf(offset + RESPONSE_CHUNK_BYTES, legacyBody.size)
-            emitBytes(state, legacyBody.copyOfRange(offset, end)); offset = end
+        when (val body = response.body) {
+            is FinalResponseBody.Buffered -> {
+                val bytes = requireNotNull(legacyBody)
+                var offset = 0
+                while (offset < bytes.size) {
+                    val end = minOf(offset + RESPONSE_CHUNK_BYTES, bytes.size)
+                    emitBytes(state, bytes.copyOfRange(offset, end))
+                    offset = end
+                }
+            }
+            is FinalResponseBody.Streaming -> {
+                body.input.use { input ->
+                    val buffer = ByteArray(RESPONSE_CHUNK_BYTES)
+                    while (true) {
+                        ensureActive(state)
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        if (count == 0) continue
+                        emitBytes(state, buffer.copyOf(count))
+                    }
+                }
+            }
         }
         finishFlow(state)
     }
