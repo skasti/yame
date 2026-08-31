@@ -258,14 +258,22 @@ class HttpCompatibilityProxyTest {
             assertIs<TcpProxyEvent.Connected>(requireNotNull(assetEvents.poll(2, TimeUnit.SECONDS)))
             proxy.send(
                 assetFlow,
-                ("GET /asset.gif HTTP/1.0\r\nHost: 127.0.0.1:${originServer.localPort}\r\n\r\n")
+                (
+                    "GET /asset.gif HTTP/1.0\r\n" +
+                        "Host: 127.0.0.1:${originServer.localPort}\r\n" +
+                        "Authorization: Basic bGVnYWN5OnNlY3JldA==\r\n" +
+                        "Cookie: legacy=session\r\n\r\n"
+                    )
                     .toByteArray(StandardCharsets.US_ASCII),
             ).getOrThrow()
             val assetResponse = collectResponse(assetEvents)
             assertTrue(assetResponse.endsWith("asset"), assetResponse)
 
             assertTrue(requireNotNull(upstreamRequests.poll(2, TimeUnit.SECONDS)).startsWith("GET /page HTTP/1.1"))
-            assertTrue(requireNotNull(upstreamRequests.poll(2, TimeUnit.SECONDS)).startsWith("GET /asset.gif HTTP/1.1"))
+            val mappedAssetRequest = requireNotNull(upstreamRequests.poll(2, TimeUnit.SECONDS))
+            assertTrue(mappedAssetRequest.startsWith("GET /asset.gif HTTP/1.1"))
+            assertTrue(!mappedAssetRequest.contains("Authorization:", ignoreCase = true), mappedAssetRequest)
+            assertTrue(!mappedAssetRequest.contains("Cookie:", ignoreCase = true), mappedAssetRequest)
         } finally {
             proxy.close()
             runCatching { originServer.close() }
