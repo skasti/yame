@@ -112,9 +112,33 @@ class TuiYameObserver(
 
     @Synchronized
     fun updateAvailablePorts(ports: List<SerialPortDescriptor>) {
+        val previousPalette = commandPalette
+        val selectedValue = previousPalette
+            ?.takeIf { it.mode == TuiPaletteMode.PORTS }
+            ?.options
+            ?.getOrNull(previousPalette.selectedIndex)
+            ?.value
+
         availablePorts = ports
-        if (commandPalette?.mode == TuiPaletteMode.PORTS) {
-            openPortPalette()
+
+        if (previousPalette?.mode == TuiPaletteMode.PORTS) {
+            val options = portPaletteOptions()
+            val selectedIndex = selectedValue
+                ?.let { value ->
+                    options.indexOfFirst { it.value.equals(value, ignoreCase = true) }
+                }
+                ?.takeIf { it >= 0 }
+                ?: options.indexOfFirst {
+                    it.value.equals(portName, ignoreCase = true)
+                }.takeIf { it >= 0 }
+                ?: previousPalette.selectedIndex
+                    .coerceIn(0, (options.size - 1).coerceAtLeast(0))
+
+            commandPalette = previousPalette.copy(
+                title = if (options.isEmpty()) "No serial ports found" else "Select serial port",
+                options = options,
+                selectedIndex = selectedIndex,
+            )
         }
         render()
     }
@@ -331,23 +355,27 @@ class TuiYameObserver(
 
     @Synchronized
     private fun openPortPalette() {
+        val options = portPaletteOptions()
         commandPalette = TuiCommandPalette(
             mode = TuiPaletteMode.PORTS,
             input = "/port",
-            title = if (availablePorts.isEmpty()) "No serial ports found" else "Select serial port",
-            options = availablePorts.map { port ->
-                TuiCommandOption(
-                    label = port.systemPortName,
-                    description = port.descriptivePortName,
-                    value = port.systemPortName,
-                )
-            },
-            selectedIndex = availablePorts
-                .indexOfFirst { it.systemPortName.equals(portName, ignoreCase = true) }
+            title = if (options.isEmpty()) "No serial ports found" else "Select serial port",
+            options = options,
+            selectedIndex = options
+                .indexOfFirst { it.value.equals(portName, ignoreCase = true) }
                 .coerceAtLeast(0),
         )
         render()
     }
+
+    private fun portPaletteOptions(): List<TuiCommandOption> =
+        availablePorts.map { port ->
+            TuiCommandOption(
+                label = port.systemPortName,
+                description = port.descriptivePortName,
+                value = port.systemPortName,
+            )
+        }
 
     @Synchronized
     private fun openBaudPalette() {
@@ -836,10 +864,25 @@ internal object YameDashboardRenderer {
         state.logs.lastOrNull()?.let {
             lines += DashboardLine(it)
         }
-        lines += DashboardLine(
-            if (state.commandPalette == null) "[/] commands  [q] quit" else "Palette: ${state.commandPalette.input}",
-            DashboardTone.MUTED,
-        )
+        val palette = state.commandPalette
+        if (palette == null) {
+            lines += DashboardLine("[/] commands  [q] quit", DashboardTone.MUTED)
+        } else {
+            val selected = palette.options.getOrNull(
+                palette.selectedIndex.coerceIn(
+                    0,
+                    (palette.options.size - 1).coerceAtLeast(0),
+                ),
+            )
+            val selection = selected?.let { "  › ${it.label}" }.orEmpty()
+            lines.add(
+                1,
+                DashboardLine(
+                    "Palette: ${palette.input}$selection",
+                    if (selected == null) DashboardTone.ACCENT else DashboardTone.SELECTED,
+                ),
+            )
+        }
 
         return (0 until height).joinToString("\n") { index ->
             val line = lines.getOrNull(index) ?: DashboardLine("")
