@@ -13,7 +13,7 @@ class InteractiveYameApplication(
     terminal: Terminal,
     private val portProvider: () -> List<no.skasti.serialmodem.serial.SerialPortDescriptor> =
         SerialConnection::availablePortDescriptors,
-) {
+) : AutoCloseable {
     private val lock = Any()
 
     @Volatile
@@ -108,7 +108,7 @@ class InteractiveYameApplication(
             desired != null ->
                 ports.firstOrNull {
                     it.systemPortName.equals(desired, ignoreCase = true)
-                }?.systemPortName
+                }?.systemPortName ?: desired
 
             ports.size == 1 -> ports.single().systemPortName
             else -> null
@@ -283,6 +283,7 @@ class InteractiveYameApplication(
 
         runCatching { modem.close() }
         runCatching { connection.close() }
+        observer.closeActiveTransfers("serial session stopped")
         observer.updateConnected(false)
         if (error != null) {
             observer.onLog(
@@ -306,6 +307,7 @@ class InteractiveYameApplication(
 
         runCatching { modem?.close() }
         runCatching { connection?.close() }
+        observer.closeActiveTransfers("serial session stopped")
         observer.updateConnected(false)
     }
 
@@ -328,6 +330,11 @@ class InteractiveYameApplication(
         running = false
         autoConnectEnabled = false
         stopActiveConnection()
+    }
+
+    override fun close() {
+        shutdown()
+        observer.close()
     }
 
     private companion object {
