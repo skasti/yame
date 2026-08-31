@@ -180,6 +180,22 @@ YAME advertises its local PPP address as DNS through RFC 1877 IPCP options and f
 ./gradlew run --args="--port <port> --dns-upstream 1.1.1.1"
 ```
 
+### HTTP / HTTPS compatibility
+
+HTTP compatibility mode is enabled by default. Requests that the legacy client sends to TCP port 80 are handled as HTTP by YAME instead of being forwarded transparently. YAME follows redirects on the modern host, including redirects to HTTPS, performs modern TLS there, and returns the final response to the old client as plain HTTP.
+
+To keep later navigation on that compatibility path, YAME rewrites absolute `https://...` references to `http://...` in HTML, XHTML, CSS, and common JavaScript response bodies, plus URL-bearing response headers such as `Location` and `Refresh`. Binary response bodies are left untouched. Relative links already remain on the original plain-HTTP URL and therefore continue through the proxy naturally.
+
+This does **not** make a directly entered `https://...` URL compatible. A browser that opens TCP port 443 expects a TLS handshake before any HTTP redirect can be exchanged. Supporting that case would require YAME to terminate the legacy browser's TLS itself, including certificate and legacy-cipher handling.
+
+Disable compatibility mode when transparent TCP/80 forwarding is desired:
+
+```shell
+./gradlew run --args="--port <port> --no-http-https-proxy"
+```
+
+In the dashboard, use `/http-proxy` to switch between compatibility and transparent forwarding.
+
 ## Test tone
 
 Play a complete dialing and default V.34 modem-handshake sequence without opening a serial port:
