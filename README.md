@@ -184,7 +184,7 @@ YAME advertises its local PPP address as DNS through RFC 1877 IPCP options and f
 
 HTTP compatibility mode is enabled by default. Requests that the legacy client sends to TCP port 80 are handled as HTTP by YAME instead of being forwarded transparently. YAME follows redirects on the modern host, including redirects to HTTPS, performs modern TLS there, and returns the final response to the old client as plain HTTP.
 
-To keep later navigation on that compatibility path, YAME rewrites absolute `https://...` references to `http://...` in HTML, XHTML, CSS, and common JavaScript response bodies, plus URL-bearing response headers such as `Location` and `Refresh`. Binary response bodies are left untouched. Relative links already remain on the original plain-HTTP URL and therefore continue through the proxy naturally.
+To keep later navigation on that compatibility path, YAME rewrites absolute `https://...` references into internal plain-HTTP compatibility URLs in HTML, XHTML, CSS, and common JavaScript response bodies, plus URL-bearing response headers such as `Location` and `Refresh`. The internal URL always sends the legacy browser to port 80 while preserving the original HTTPS target and port for YAME; for example, `https://example.test:8443/path` becomes `http://example.test/.yame/https/8443/path`, which YAME decodes back to the original HTTPS URL before fetching it. Binary response bodies are left untouched.
 
 This does **not** make a directly entered `https://...` URL compatible. A browser that opens TCP port 443 expects a TLS handshake before any HTTP redirect can be exchanged. Supporting that case would require YAME to terminate the legacy browser's TLS itself, including certificate and legacy-cipher handling.
 
