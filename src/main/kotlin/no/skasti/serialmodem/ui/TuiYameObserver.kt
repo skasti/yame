@@ -1,8 +1,6 @@
 package no.skasti.serialmodem.ui
 
 import com.github.ajalt.mordant.animation.textAnimation
-import com.github.ajalt.mordant.input.enterRawModeOrNull
-import com.github.ajalt.mordant.input.isCtrlC
 import com.github.ajalt.mordant.rendering.TextColors.Companion.gray
 import com.github.ajalt.mordant.rendering.TextColors.brightBlue
 import com.github.ajalt.mordant.rendering.TextColors.brightGreen
@@ -21,7 +19,6 @@ import no.skasti.serialmodem.ppp.dnsResponseCodeName
 import no.skasti.serialmodem.serial.SerialPortDescriptor
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
-import kotlin.time.Duration.Companion.milliseconds
 
 class TuiYameObserver(
     initialPortName: String?,
@@ -265,21 +262,25 @@ class TuiYameObserver(
         inputThread = Thread(
             {
                 try {
-                    val rawMode = terminal.enterRawModeOrNull() ?: return@Thread
-                    rawMode.use {
+                    JLineKeyboardInput.open().use { keyboard ->
                         while (!closed && !stopRequested) {
-                            val event = rawMode.readKeyOrNull(INPUT_POLL_MILLIS.milliseconds)
+                            val key = keyboard.readKey(INPUT_POLL_MILLIS)
                                 ?: continue
                             when {
-                                event.isCtrlC -> requestQuit()
-                                commandPalette != null -> handlePaletteKey(event.key)
-                                event.key == "/" -> openCommandPalette()
-                                event.key.equals("q", ignoreCase = true) -> requestQuit()
+                                key == "Ctrl+C" -> requestQuit()
+                                commandPalette != null -> handlePaletteKey(key)
+                                key == "/" -> openCommandPalette()
+                                key.equals("q", ignoreCase = true) -> requestQuit()
                             }
                         }
                     }
-                } catch (_: Exception) {
-                    // The dashboard remains useful as a read-only display.
+                } catch (error: Exception) {
+                    if (!closed && !stopRequested) {
+                        onLog(
+                            "Keyboard input unavailable: " +
+                                (error.message ?: error.javaClass.simpleName),
+                        )
+                    }
                 }
             },
             "yame-tui-input",
