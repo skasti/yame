@@ -15,6 +15,7 @@ import java.time.Duration
 import java.util.Locale
 import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.FutureTask
@@ -261,16 +262,20 @@ class SystemHttpCompatibilityProxy(
 ) : TcpProxy {
     private data class ClientCookie(val name: String, val value: String)
     private data class CookieOverride(val name: String, val domain: String, val path: String, val secure: Boolean)
+    private data class SessionKey(val generation: Long, val peerAddress: String)
+    private data class SessionState(
+        val cookieManager: CookieManager = CookieManager(null, CookiePolicy.ACCEPT_ORIGINAL_SERVER),
+        val cookieOverrides: CopyOnWriteArrayList<CookieOverride> = CopyOnWriteArrayList(),
+    )
     private data class FlowState(
         val flow: TcpProxyFlow,
         val onEvent: (TcpProxyEvent) -> Unit,
+        val session: SessionState,
         val request: ByteArrayOutputStream = ByteArrayOutputStream(),
         val readMonitor: java.lang.Object = java.lang.Object(),
         val slotReleased: AtomicBoolean = AtomicBoolean(),
         val taskStarted: AtomicBoolean = AtomicBoolean(),
-        val cookieManager: CookieManager = CookieManager(null, CookiePolicy.ACCEPT_ORIGINAL_SERVER),
         val clientCookies: MutableList<ClientCookie> = mutableListOf(),
-        val cookieOverrides: MutableList<CookieOverride> = mutableListOf(),
         @Volatile var processing: Boolean = false,
         @Volatile var readsPaused: Boolean = false,
         @Volatile var cancelled: Boolean = false,
@@ -300,6 +305,7 @@ class SystemHttpCompatibilityProxy(
     }
     private val flowSlots = Semaphore(config.maxFlows)
     private val flows = ConcurrentHashMap<TcpProxyFlow, FlowState>()
+    private val sessionStates = ConcurrentHashMap<SessionKey, SessionState>()
     private val originRoutes = LegacyOriginRouteTable()
     private val minimumGeneration = AtomicLong(Long.MIN_VALUE)
     @Volatile private var closed = false
@@ -317,7 +323,12 @@ class SystemHttpCompatibilityProxy(
             safeCallback(onEvent, TcpProxyEvent.Failure(IllegalStateException("HTTP compatibility flow limit reached")))
             return
         }
-        val state = FlowState(flow = flow, onEvent = onEvent)
+        val state =
+            FlowState(
+                flow = flow,
+                onEvent = onEvent,
+                session = sessionStates.computeIfAbsent(sessionKey(flow)) { SessionState() },
+            )
         if (flows.putIfAbsent(flow, state) != null) {
             releaseSlot(state)
             safeCallback(onEvent, TcpProxyEvent.Failure(IllegalStateException("HTTP compatibility flow already exists")))
@@ -822,6 +833,9 @@ class SystemHttpCompatibilityProxy(
         return -1
     }
 
+    private fun sessionKey(flow: TcpProxyFlow): SessionKey =
+        SessionKey(flow.generation, flow.key.peerAddress.toString())
+
     private fun seedClientCookies(state: FlowState, headers: List<Pair<String, String>>) {
         headers.filter { it.first.equals("Cookie", true) || it.first.equals("Cookie2", true) }.forEach { (_, value) ->
             value.split(';').map { it.trim() }.forEach { pair ->
@@ -839,23 +853,23 @@ class SystemHttpCompatibilityProxy(
         val result = mutableListOf<String>()
         if (includeClientCookies && state.clientCookies.isNotEmpty()) {
             val remaining = state.clientCookies.filterNot { client ->
-                state.cookieOverrides.any { replacement ->
+                state.session.cookieOverrides.any { replacement ->
                     replacement.name.equals(client.name, true) && cookieOverrideApplies(replacement, uri)
                 }
             }
             if (remaining.isNotEmpty()) result += remaining.joinToString("; ") { "${it.name}=${it.value}" }
         }
-        result += runCatching { state.cookieManager.get(uri, emptyMap())["Cookie"].orEmpty() }.getOrDefault(emptyList())
+        result += runCatching { state.session.cookieManager.get(uri, emptyMap())["Cookie"].orEmpty() }.getOrDefault(emptyList())
         return result
     }
 
     private fun storeCookies(state: FlowState, uri: URI, headers: Map<String, List<String>>) {
-        runCatching { state.cookieManager.put(uri, headers) }
+        runCatching { state.session.cookieManager.put(uri, headers) }
         headers.entries
             .filter { (name, _) -> name.equals("Set-Cookie", true) || name.equals("Set-Cookie2", true) }
             .flatMap { it.value }
             .mapNotNull { parseCookieOverride(uri, it) }
-            .forEach { state.cookieOverrides += it }
+            .forEach { state.session.cookieOverrides += it }
     }
 
     private fun parseCookieOverride(uri: URI, value: String): CookieOverride? {
@@ -962,12 +976,14 @@ class SystemHttpCompatibilityProxy(
     override fun invalidateBefore(generation: Long) {
         minimumGeneration.accumulateAndGet(generation, ::maxOf)
         originRoutes.invalidateBefore(generation)
+        sessionStates.keys.removeIf { it.generation < generation }
         flows.values.filter { it.flow.generation < generation }.forEach(::removeFlow)
     }
     override fun close() {
         if (closed) return
         closed = true
         originRoutes.clear()
+        sessionStates.clear()
         flows.values.toList().forEach(::removeFlow)
         executor.shutdownNow()
         runCatching { executor.awaitTermination(CLOSE_JOIN_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS) }
