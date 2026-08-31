@@ -167,8 +167,24 @@ internal class LegacyOriginRouteTable {
             "Compatibility reference target must be HTTPS"
         }
         val legacyUri = LegacyHttpUrl.mirrorOf(upstreamHttpsUri)
-        exactMappings[exactKey(flow, legacyUri)] = LegacyHttpUrl.withoutFragment(upstreamHttpsUri)
+        val originKey = originKey(flow, legacyUri)
+        val targetOrigin = Origin.from(upstreamHttpsUri)
+        val existingOrigin = originMappings.putIfAbsent(originKey, targetOrigin)
+        val exactKey = exactKey(flow, legacyUri)
+        if (existingOrigin == null || existingOrigin == targetOrigin) {
+            exactMappings.remove(exactKey)
+        } else {
+            exactMappings[exactKey] = LegacyHttpUrl.withoutFragment(upstreamHttpsUri)
+        }
         return legacyUri.toString()
+    }
+
+    fun rememberHttpReference(flow: TcpProxyFlow, upstreamHttpUri: URI): String {
+        require(upstreamHttpUri.scheme.equals("http", ignoreCase = true)) {
+            "Plain HTTP reference target must use HTTP"
+        }
+        exactMappings[exactKey(flow, upstreamHttpUri)] = LegacyHttpUrl.withoutFragment(upstreamHttpUri)
+        return upstreamHttpUri.toString()
     }
 
     fun invalidateBefore(generation: Long) {
@@ -715,21 +731,24 @@ class SystemHttpCompatibilityProxy(
             ?.firstOrNull()
 
     private fun rewriteHttpsReferences(flow: TcpProxyFlow, upstreamBase: URI, value: String): String {
-        var rewritten = HTTPS_URL_PATTERN.replace(value) { match ->
+        var rewritten = ABSOLUTE_HTTP_URL_PATTERN.replace(value) { match ->
             val target = runCatching { URI(match.value) }.getOrNull()
-            if (target != null && target.scheme.equals("https", ignoreCase = true) && target.host != null) {
-                originRoutes.rememberHttpsReference(flow, target)
-            } else {
-                match.value
+            when {
+                target?.host == null -> match.value
+                target.scheme.equals("https", ignoreCase = true) -> originRoutes.rememberHttpsReference(flow, target)
+                target.scheme.equals("http", ignoreCase = true) -> originRoutes.rememberHttpReference(flow, target)
+                else -> match.value
             }
         }
 
-        if (upstreamBase.scheme.equals("https", ignoreCase = true)) {
-            rewritten = PROTOCOL_RELATIVE_URL_PATTERN.replace(rewritten) { match ->
-                val target = runCatching { URI("https:${match.value}") }.getOrNull()
-                if (target != null && target.host != null) {
-                    originRoutes.rememberHttpsReference(flow, target)
-                } else {
+        rewritten = PROTOCOL_RELATIVE_URL_PATTERN.replace(rewritten) { match ->
+            val scheme = if (upstreamBase.scheme.equals("https", ignoreCase = true)) "https" else "http"
+            val target = runCatching { URI("$scheme:${match.value}") }.getOrNull()
+            when {
+                target?.host == null -> match.value
+                target.scheme.equals("https", ignoreCase = true) -> originRoutes.rememberHttpsReference(flow, target)
+                else -> {
+                    originRoutes.rememberHttpReference(flow, target)
                     match.value
                 }
             }
@@ -1017,8 +1036,8 @@ class SystemHttpCompatibilityProxy(
         val RESPONSE_HEADERS_TO_STRIP = setOf("connection", "proxy-connection", "keep-alive", "transfer-encoding", "trailer", "upgrade", "content-length")
         val RESPONSE_COOKIE_HEADERS = setOf("set-cookie", "set-cookie2")
         val URI_RESPONSE_HEADERS_TO_REWRITE = setOf("location", "content-location", "refresh", "link")
-        val HTTPS_URL_PATTERN =
-            Regex("""https://(?:\[[^\]]+\]|[^\s/:?#"'<>]+)(?::\d+)?(?:[/?#][^\s"'<>\)]*)?""", RegexOption.IGNORE_CASE)
+        val ABSOLUTE_HTTP_URL_PATTERN =
+            Regex("""https?://(?:\[[^\]]+\]|[^\s/:?#"'<>]+)(?::\d+)?(?:[/?#][^\s"'<>\)]*)?""", RegexOption.IGNORE_CASE)
         val PROTOCOL_RELATIVE_URL_PATTERN =
             Regex("""(?<!:)//(?:\[[^\]]+\]|(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9-]+|(?:\d{1,3}\.){3}\d{1,3})(?::\d+)?(?:[/?#][^\s"'<>\)]*)?""")
         val REWRITABLE_CONTENT_TYPES = setOf(
