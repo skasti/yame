@@ -3,7 +3,6 @@ package no.skasti.serialmodem.ppp
 import java.io.ByteArrayOutputStream
 import java.net.CookieManager
 import java.net.CookiePolicy
-import java.net.HttpCookie
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -96,6 +95,7 @@ class SystemHttpCompatibilityProxy(
         val slotReleased: AtomicBoolean = AtomicBoolean(),
         val taskStarted: AtomicBoolean = AtomicBoolean(),
         val cookieManager: CookieManager = CookieManager(null, CookiePolicy.ACCEPT_ORIGINAL_SERVER),
+        val clientCookies: LinkedHashMap<String, String> = linkedMapOf(),
         @Volatile var processing: Boolean = false,
         @Volatile var readsPaused: Boolean = false,
         @Volatile var cancelled: Boolean = false,
@@ -111,6 +111,8 @@ class SystemHttpCompatibilityProxy(
         val body: ByteArray,
         val contentLength: Long,
     )
+
+    private enum class ExpectationDisposition { NONE, CONTINUE, UNSUPPORTED }
 
     private val executor = Executors.newFixedThreadPool(config.maxFlows) { runnable ->
         Thread(runnable, "http-compatibility-proxy").apply { isDaemon = true }
@@ -147,6 +149,7 @@ class SystemHttpCompatibilityProxy(
         val state = flows[flow] ?: return Result.failure(IllegalStateException("HTTP compatibility flow is not connected"))
         var completeRequest: ByteArray? = null
         var sendContinue = false
+        var rejectExpectation = false
         synchronized(state) {
             if (state.cancelled) return Result.failure(IllegalStateException("HTTP compatibility flow is closed"))
             if (state.processing) return Result.failure(IllegalStateException("HTTP pipelining is not supported by compatibility mode"))
@@ -161,13 +164,29 @@ class SystemHttpCompatibilityProxy(
                 state.processing = true
                 completeRequest = buffered
                 state.request.reset()
-            } else if (!state.expectContinueSent && requestHeadersComplete(buffered) && expectsContinue(buffered)) {
-                state.expectContinueSent = true
-                sendContinue = true
+            } else if (requestHeadersComplete(buffered)) {
+                when (expectationDisposition(buffered)) {
+                    ExpectationDisposition.CONTINUE -> if (!state.expectContinueSent) {
+                        state.expectContinueSent = true
+                        sendContinue = true
+                    }
+                    ExpectationDisposition.UNSUPPORTED -> {
+                        state.processing = true
+                        state.request.reset()
+                        rejectExpectation = true
+                    }
+                    ExpectationDisposition.NONE -> Unit
+                }
             }
         }
         safeCallback(state.onEvent, TcpProxyEvent.WriteCompleted(payload.size))
         if (sendContinue) emitBytes(state, "HTTP/1.1 100 Continue\r\n\r\n".toByteArray(StandardCharsets.US_ASCII))
+        if (rejectExpectation) {
+            emitErrorResponse(state, 417, "Expectation Failed", "Unsupported HTTP Expect header")
+            synchronized(state) { state.processing = false }
+            removeFlow(state)
+            return Result.success(Unit)
+        }
         if (completeRequest != null) {
             try {
                 val task = executor.submit {
@@ -239,7 +258,7 @@ class SystemHttpCompatibilityProxy(
 
     private fun fetchFinalResponse(state: FlowState, request: LegacyRequest): FinalResponse {
         var uri = initialUri(state.flow, request)
-        seedClientCookies(state, uri, request.headers)
+        seedClientCookies(state, request.headers)
         var method = request.method
         var body = request.body
         var redirects = 0
@@ -257,7 +276,7 @@ class SystemHttpCompatibilityProxy(
                     builder.header(name, value)
                 }
             }
-            cookieHeaders(state, uri).forEach { builder.header("Cookie", it) }
+            cookieHeaders(state, uri, forwardSensitiveHeaders).forEach { builder.header("Cookie", it) }
             builder.header("Accept-Encoding", "identity")
             builder.method(method, if (body.isEmpty()) HttpRequest.BodyPublishers.noBody() else HttpRequest.BodyPublishers.ofByteArray(body))
             val response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream())
@@ -377,13 +396,18 @@ class SystemHttpCompatibilityProxy(
     }
 
     private fun requestHeadersComplete(bytes: ByteArray) = findHeaderEnd(bytes) >= 0
-    private fun expectsContinue(bytes: ByteArray): Boolean {
-        val headerEnd = findHeaderEnd(bytes); if (headerEnd < 0) return false
-        val values = String(bytes, 0, headerEnd, StandardCharsets.ISO_8859_1).split("\r\n").drop(1).mapNotNull { line ->
-            val separator = line.indexOf(':'); if (separator <= 0 || !line.substring(0, separator).trim().equals("Expect", true)) null
-            else line.substring(separator + 1).trim()
+    private fun expectationDisposition(bytes: ByteArray): ExpectationDisposition {
+        val headerEnd = findHeaderEnd(bytes); if (headerEnd < 0) return ExpectationDisposition.NONE
+        val values = String(bytes, 0, headerEnd, StandardCharsets.ISO_8859_1).split("\r\n").drop(1).flatMap { line ->
+            val separator = line.indexOf(':')
+            if (separator <= 0 || !line.substring(0, separator).trim().equals("Expect", true)) emptyList()
+            else line.substring(separator + 1).split(',').map { it.trim() }.filter { it.isNotEmpty() }
         }
-        return values.isNotEmpty() && values.all { it.equals("100-continue", true) }
+        return when {
+            values.isEmpty() -> ExpectationDisposition.NONE
+            values.all { it.equals("100-continue", true) } -> ExpectationDisposition.CONTINUE
+            else -> ExpectationDisposition.UNSUPPORTED
+        }
     }
     private fun requestLengthIfComplete(bytes: ByteArray): Int? {
         val headerEnd = findHeaderEnd(bytes); if (headerEnd < 0) return null
@@ -405,23 +429,38 @@ class SystemHttpCompatibilityProxy(
         return -1
     }
 
-    private fun seedClientCookies(state: FlowState, uri: URI, headers: List<Pair<String, String>>) {
+    private fun seedClientCookies(state: FlowState, headers: List<Pair<String, String>>) {
         headers.filter { it.first.equals("Cookie", true) || it.first.equals("Cookie2", true) }.forEach { (_, value) ->
-            value.split(';').map { it.trim() }.filter { it.contains('=') }.forEach { pair ->
-                runCatching {
-                    HttpCookie.parse(pair).forEach { cookie ->
-                        // These cookies were already selected by the legacy client for the initial request.
-                        // Keep them available across same-origin hidden redirects; a Set-Cookie with the
-                        // same name/path can still replace or expire them in the CookieManager.
-                        cookie.path = "/"
-                        state.cookieManager.cookieStore.add(uri, cookie)
-                    }
+            value.split(';').map { it.trim() }.forEach { pair ->
+                val separator = pair.indexOf('=')
+                if (separator > 0) {
+                    val name = pair.substring(0, separator).trim()
+                    val cookieValue = pair.substring(separator + 1).trim()
+                    if (name.isNotEmpty() && !name.startsWith('$')) state.clientCookies[name] = cookieValue
                 }
             }
         }
     }
-    private fun cookieHeaders(state: FlowState, uri: URI): List<String> = runCatching { state.cookieManager.get(uri, emptyMap())["Cookie"].orEmpty() }.getOrDefault(emptyList())
-    private fun storeCookies(state: FlowState, uri: URI, headers: Map<String, List<String>>) { runCatching { state.cookieManager.put(uri, headers) } }
+
+    private fun cookieHeaders(state: FlowState, uri: URI, includeClientCookies: Boolean): List<String> {
+        val result = mutableListOf<String>()
+        if (includeClientCookies && state.clientCookies.isNotEmpty()) {
+            result += state.clientCookies.entries.joinToString("; ") { (name, value) -> "$name=$value" }
+        }
+        result += runCatching { state.cookieManager.get(uri, emptyMap())["Cookie"].orEmpty() }.getOrDefault(emptyList())
+        return result
+    }
+
+    private fun storeCookies(state: FlowState, uri: URI, headers: Map<String, List<String>>) {
+        headers.entries
+            .filter { (name, _) -> name.equals("Set-Cookie", true) || name.equals("Set-Cookie2", true) }
+            .flatMap { it.value }
+            .forEach { value ->
+                val separator = value.indexOf('=')
+                if (separator > 0) state.clientCookies.remove(value.substring(0, separator).trim())
+            }
+        runCatching { state.cookieManager.put(uri, headers) }
+    }
 
     private fun requireSupportedScheme(uri: URI) {
         val scheme = uri.scheme?.lowercase(Locale.ROOT)
@@ -492,8 +531,8 @@ class SystemHttpCompatibilityProxy(
         val METHOD_PATTERN = Regex("[A-Z!#$%&'*+.^_`|~-]+")
         val HEADER_NAME_PATTERN = Regex("[!#$%&'*+.^_`|~0-9A-Za-z-]+")
         val REDIRECT_STATUS_CODES = setOf(301, 302, 303, 307, 308)
-        val REQUEST_HEADERS_TO_STRIP = setOf("host", "connection", "proxy-connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade", "content-length", "accept-encoding", "expect", "cookie", "cookie2")
-        val SENSITIVE_REQUEST_HEADERS = setOf("authorization", "proxy-authorization", "cookie", "cookie2")
+        val REQUEST_HEADERS_TO_STRIP = setOf("host", "connection", "proxy-connection", "proxy-authorization", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade", "content-length", "accept-encoding", "expect", "cookie", "cookie2")
+        val SENSITIVE_REQUEST_HEADERS = setOf("authorization", "cookie", "cookie2")
         val RESPONSE_HEADERS_TO_STRIP = setOf("connection", "proxy-connection", "keep-alive", "transfer-encoding", "trailer", "upgrade", "content-length")
         const val RESPONSE_CHUNK_BYTES = 4 * 1024
         const val CLOSE_JOIN_TIMEOUT_MILLIS = 1_000L
@@ -502,7 +541,7 @@ class SystemHttpCompatibilityProxy(
             300 -> "Multiple Choices"; 301 -> "Moved Permanently"; 302 -> "Found"; 303 -> "See Other"; 304 -> "Not Modified"
             307 -> "Temporary Redirect"; 308 -> "Permanent Redirect"; 400 -> "Bad Request"; 401 -> "Unauthorized"
             403 -> "Forbidden"; 404 -> "Not Found"; 405 -> "Method Not Allowed"; 408 -> "Request Timeout"
-            409 -> "Conflict"; 410 -> "Gone"; 413 -> "Content Too Large"; 429 -> "Too Many Requests"
+            409 -> "Conflict"; 410 -> "Gone"; 413 -> "Content Too Large"; 417 -> "Expectation Failed"; 429 -> "Too Many Requests"
             500 -> "Internal Server Error"; 501 -> "Not Implemented"; 502 -> "Bad Gateway"; 503 -> "Service Unavailable"
             504 -> "Gateway Timeout"; else -> "Upstream Response"
         }
