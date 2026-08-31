@@ -1055,7 +1055,7 @@ class SystemHttpCompatibilityProxy(
         val ABSOLUTE_HTTP_URL_PATTERN =
             Regex("""https?://(?:\[[^\]]+\]|[^\s/:?#"'<>]+)(?::\d+)?(?:[/?#][^\s"'<>\)]*)?""", RegexOption.IGNORE_CASE)
         val PROTOCOL_RELATIVE_URL_PATTERN =
-            Regex("""(?<!:)//(?:\[[^\]]+\]|(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9-]+|(?:\d{1,3}\.){3}\d{1,3})(?::\d+)?(?:[/?#][^\s"'<>\)]*)?""")
+            Regex("""(?<!:)//(?:\[[^\]]+\]|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)(?::\d+)?(?:[/?#][^\s"'<>\)]*)?""")
         val REWRITABLE_CONTENT_TYPES = setOf(
             "text/html",
             "application/xhtml+xml",
