@@ -42,7 +42,7 @@ data class PppHttpCompatibilityConfig(
 }
 
 internal val LEGACY_PROTOCOL_RELATIVE_URL_PATTERN =
-    Regex("""(?<!:)//(?:\[[^\]]+\]|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)(?::\d+)?(?:[/?#][^\s"'<>\)]*)?""")
+    Regex("""(?<![A-Za-z0-9_./:-])//(?:\[[^\]]+\]|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)(?::\d+)?(?:[/?#][^\s"'<>\)]*)?""")
 
 internal object LegacyHttpUrl {
     fun mirrorOf(uri: URI): URI =
@@ -149,15 +149,22 @@ internal class LegacyOriginRouteTable {
             ?: legacyUri
 
     fun remember(flow: TcpProxyFlow, legacyUri: URI, upstreamUri: URI): Pair<String, String>? {
-        val key = originKey(flow, legacyUri)
+        val originKey = originKey(flow, legacyUri)
+        val exactKey = exactKey(flow, legacyUri)
         val legacyOrigin = Origin.from(legacyUri)
         val upstreamOrigin = Origin.from(upstreamUri)
+        val exactTarget = exactMappings[exactKey]
         val previous =
-            if (legacyOrigin == upstreamOrigin) {
-                originMappings.remove(key)
-            } else {
-                originMappings.put(key, upstreamOrigin)
+            when {
+                legacyOrigin == upstreamOrigin && exactTarget != null -> originMappings[originKey]
+                legacyOrigin == upstreamOrigin -> originMappings.remove(originKey)
+                else -> originMappings.put(originKey, upstreamOrigin)
             }
+
+        if (legacyOrigin != upstreamOrigin && exactTarget == LegacyHttpUrl.withoutFragment(upstreamUri)) {
+            exactMappings.remove(exactKey, exactTarget)
+        }
+
         return if (previous == upstreamOrigin || (previous == null && legacyOrigin == upstreamOrigin)) {
             null
         } else {
@@ -170,11 +177,10 @@ internal class LegacyOriginRouteTable {
             "Compatibility reference target must be HTTPS"
         }
         val legacyUri = LegacyHttpUrl.mirrorOf(upstreamHttpsUri)
-        val originKey = originKey(flow, legacyUri)
         val targetOrigin = Origin.from(upstreamHttpsUri)
-        val existingOrigin = originMappings.putIfAbsent(originKey, targetOrigin)
+        val existingOrigin = originMappings[originKey(flow, legacyUri)]
         val exactKey = exactKey(flow, legacyUri)
-        if (existingOrigin == null || existingOrigin == targetOrigin) {
+        if (existingOrigin == targetOrigin) {
             exactMappings.remove(exactKey)
         } else {
             exactMappings[exactKey] = LegacyHttpUrl.withoutFragment(upstreamHttpsUri)
