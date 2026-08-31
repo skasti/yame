@@ -42,17 +42,21 @@ data class PppHttpCompatibilityConfig(
 
 internal object LegacyHttpsUrlCodec {
     private const val MARKER_PREFIX = "/.yame/https/"
-    private val HTTPS_URL_PATTERN = Regex("https://[^\\s\"'<>\\)\\]]+", RegexOption.IGNORE_CASE)
 
-    fun rewriteReferences(value: String): String =
-        HTTPS_URL_PATTERN.replace(value) { match ->
-            val uri = runCatching { URI(match.value) }.getOrNull()
-            if (uri != null && uri.scheme.equals("https", ignoreCase = true) && uri.host != null) {
-                encode(uri)
-            } else {
-                match.value
-            }
+    fun encode(uri: URI): String {
+        require(uri.scheme.equals("https", ignoreCase = true)) { "Compatibility bootstrap target must be HTTPS" }
+        val port = effectivePort(uri)
+        val path = uri.rawPath?.takeIf { it.isNotEmpty() } ?: "/"
+        return buildString {
+            append("http://")
+            append(formatHost(requireNotNull(uri.host)))
+            append(MARKER_PREFIX)
+            append(port)
+            append(path)
+            uri.rawQuery?.let { append('?').append(it) }
+            uri.rawFragment?.let { append('#').append(it) }
         }
+    }
 
     fun decodeLegacyUri(uri: URI): URI {
         if (!uri.scheme.equals("http", ignoreCase = true)) return uri
@@ -78,22 +82,126 @@ internal object LegacyHttpsUrlCodec {
         )
     }
 
-    private fun encode(uri: URI): String {
-        val port = if (uri.port >= 0) uri.port else 443
-        val path = uri.rawPath?.takeIf { it.isNotEmpty() } ?: "/"
-        return buildString {
-            append("http://")
-            append(formatHost(requireNotNull(uri.host)))
-            append(MARKER_PREFIX)
-            append(port)
-            append(path)
-            uri.rawQuery?.let { append('?').append(it) }
-            uri.rawFragment?.let { append('#').append(it) }
+    internal fun formatHost(host: String): String {
+        val normalized = host.removePrefix("[").removeSuffix("]")
+        return if (normalized.contains(':')) "[$normalized]" else normalized
+    }
+
+    internal fun effectivePort(uri: URI): Int =
+        when {
+            uri.port >= 0 -> uri.port
+            uri.scheme.equals("https", ignoreCase = true) -> 443
+            else -> 80
+        }
+}
+
+internal class LegacyOriginRouteTable {
+    private data class Key(
+        val generation: Long,
+        val peerAddress: String,
+        val legacyHost: String,
+        val legacyPort: Int,
+    )
+
+    private data class Origin(
+        val scheme: String,
+        val host: String,
+        val port: Int,
+    ) {
+        fun resolvePathFrom(uri: URI): URI =
+            URI(
+                buildString {
+                    append(scheme)
+                    append("://")
+                    append(LegacyHttpsUrlCodec.formatHost(host))
+                    if (!isDefaultPort()) append(':').append(port)
+                    append(uri.rawPath?.takeIf { it.isNotEmpty() } ?: "/")
+                    uri.rawQuery?.let { append('?').append(it) }
+                    uri.rawFragment?.let { append('#').append(it) }
+                },
+            )
+
+        fun asDisplayString(): String =
+            buildString {
+                append(scheme)
+                append("://")
+                append(LegacyHttpsUrlCodec.formatHost(host))
+                if (!isDefaultPort()) append(':').append(port)
+            }
+
+        private fun isDefaultPort(): Boolean =
+            (scheme == "http" && port == 80) || (scheme == "https" && port == 443)
+
+        companion object {
+            fun from(uri: URI): Origin =
+                Origin(
+                    scheme = requireNotNull(uri.scheme).lowercase(Locale.ROOT),
+                    host = normalizeHost(requireNotNull(uri.host)),
+                    port = LegacyHttpsUrlCodec.effectivePort(uri),
+                )
+
+            private fun normalizeHost(host: String): String =
+                host.removePrefix("[").removeSuffix("]").lowercase(Locale.ROOT)
         }
     }
 
-    private fun formatHost(host: String): String =
-        if (host.contains(':') && !host.startsWith('[')) "[$host]" else host
+    private val mappings = ConcurrentHashMap<Key, Origin>()
+
+    fun resolve(flow: TcpProxyFlow, legacyUri: URI): URI {
+        val bootstrapTarget = LegacyHttpsUrlCodec.decodeLegacyUri(legacyUri)
+        if (bootstrapTarget != legacyUri) return bootstrapTarget
+        return mappings[key(flow, legacyUri)]?.resolvePathFrom(legacyUri) ?: legacyUri
+    }
+
+    fun remember(flow: TcpProxyFlow, legacyUri: URI, upstreamUri: URI): Pair<String, String>? {
+        val key = key(flow, legacyUri)
+        val legacyOrigin = Origin.from(legacyUri)
+        val upstreamOrigin = Origin.from(upstreamUri)
+        val previous =
+            if (legacyOrigin == upstreamOrigin) {
+                mappings.remove(key)
+            } else {
+                mappings.put(key, upstreamOrigin)
+            }
+        return if (previous == upstreamOrigin || (previous == null && legacyOrigin == upstreamOrigin)) {
+            null
+        } else {
+            legacyOrigin.asDisplayString() to upstreamOrigin.asDisplayString()
+        }
+    }
+
+    fun cleanHttpReference(flow: TcpProxyFlow, upstreamHttpsUri: URI): String? {
+        val legacyUri = httpMirrorOf(upstreamHttpsUri)
+        val mapped = mappings[key(flow, legacyUri)] ?: return null
+        return if (mapped == Origin.from(upstreamHttpsUri)) legacyUri.toString() else null
+    }
+
+    fun invalidateBefore(generation: Long) {
+        mappings.keys.removeIf { it.generation < generation }
+    }
+
+    fun clear() {
+        mappings.clear()
+    }
+
+    private fun httpMirrorOf(uri: URI): URI =
+        URI(
+            buildString {
+                append("http://")
+                append(LegacyHttpsUrlCodec.formatHost(requireNotNull(uri.host)))
+                append(uri.rawPath?.takeIf { it.isNotEmpty() } ?: "/")
+                uri.rawQuery?.let { append('?').append(it) }
+                uri.rawFragment?.let { append('#').append(it) }
+            },
+        )
+
+    private fun key(flow: TcpProxyFlow, legacyUri: URI): Key =
+        Key(
+            generation = flow.generation,
+            peerAddress = flow.key.peerAddress.toString(),
+            legacyHost = requireNotNull(legacyUri.host).removePrefix("[").removeSuffix("]").lowercase(Locale.ROOT),
+            legacyPort = LegacyHttpsUrlCodec.effectivePort(legacyUri),
+        )
 }
 
 class SystemRoutingTcpProxy(
