@@ -64,7 +64,7 @@ class YameDashboardRendererTest {
         assertContains(rendered, "HTTP / HTTPS compatibility proxy")
         assertContains(rendered, "vg.no")
         assertContains(rendered, "93.184.216.34:80")
-        assertContains(rendered, "https://example.test/")
+        assertContains(rendered, "301 http://example.test/")
     }
 
     @Test
