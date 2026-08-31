@@ -6,6 +6,21 @@ import kotlin.test.assertEquals
 
 class LegacyOriginRouteTableTest {
     @Test
+    fun `protocol-relative matcher accepts single-label hosts`() {
+        val source = "//localhost/next //router/status //example.test/path //127.0.0.1/x //[::1]/y"
+        assertEquals(
+            listOf(
+                "//localhost/next",
+                "//router/status",
+                "//example.test/path",
+                "//127.0.0.1/x",
+                "//[::1]/y",
+            ),
+            LEGACY_PROTOCOL_RELATIVE_URL_PATTERN.findAll(source).map { it.value }.toList(),
+        )
+    }
+
+    @Test
     fun `HTTPS references are exposed as clean HTTP URLs and remembered exactly`() {
         val routes = LegacyOriginRouteTable()
         val flow = httpFlow(generation = 1)
