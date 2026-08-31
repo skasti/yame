@@ -100,14 +100,14 @@ class HttpCompatibilityProxyEdgeCaseTest {
     }
 
     @Test
-    fun `hidden redirect can replace client cookie without replaying stale value`() {
+    fun `hidden redirect can replace client cookie across paths without replaying stale value`() {
         val server = ServerSocket(0, 2, InetAddress.getLoopbackAddress())
         val finalRequest = LinkedBlockingQueue<String>()
         val thread = Thread {
             server.use { listening ->
                 listening.accept().use { socket ->
                     readRequest(socket)
-                    socket.getOutputStream().write(("HTTP/1.1 302 Found\r\nLocation: /final\r\nSet-Cookie: session=new; Path=/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").toByteArray())
+                    socket.getOutputStream().write(("HTTP/1.1 302 Found\r\nLocation: /dashboard\r\nSet-Cookie: session=new; Path=/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").toByteArray())
                 }
                 listening.accept().use { socket ->
                     finalRequest.offer(readRequest(socket))
@@ -121,7 +121,7 @@ class HttpCompatibilityProxyEdgeCaseTest {
         try {
             proxy.connect(current, events::offer)
             assertIs<TcpProxyEvent.Connected>(events.poll(2, TimeUnit.SECONDS))
-            proxy.send(current, "GET /start HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\nCookie: session=old\r\n\r\n".toByteArray()).getOrThrow()
+            proxy.send(current, "GET /login/start HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\nCookie: session=old\r\n\r\n".toByteArray()).getOrThrow()
             assertTrue(collectResponse(events).contains("ok"))
             val redirected = requireNotNull(finalRequest.poll(2, TimeUnit.SECONDS))
             assertTrue(redirected.contains("session=new"), redirected)
