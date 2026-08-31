@@ -32,6 +32,7 @@ class InteractiveYameApplication(
     private var modemConfig: HayesModemConfig = initialModemConfig
 
     private var generation = 0
+    private var connectionAttemptGeneration: Int? = null
     private var activeConnection: SerialConnection? = null
     private var activeModem: HayesModem? = null
     private var monitorThread: Thread? = null
@@ -198,9 +199,16 @@ class InteractiveYameApplication(
         val baud = selectedBaud
         val config = modemConfig
         synchronized(lock) {
-            if (activeConnection != null || activeModem != null) return
+            if (
+                activeConnection != null ||
+                activeModem != null ||
+                connectionAttemptGeneration != null
+            ) {
+                return
+            }
             generation++
             connectionGeneration = generation
+            connectionAttemptGeneration = connectionGeneration
         }
 
         val modem = HayesModem(
@@ -220,14 +228,27 @@ class InteractiveYameApplication(
             modem.attachOutput(connection.output)
             modem.attachCarrierPresent(connection::setCarrierPresent)
 
-            synchronized(lock) {
-                if (!running || generation != connectionGeneration) {
-                    runCatching { modem.close() }
-                    runCatching { connection.close() }
-                    return
+            val current = synchronized(lock) {
+                val isCurrent =
+                    running &&
+                        generation == connectionGeneration &&
+                        connectionAttemptGeneration == connectionGeneration
+
+                if (connectionAttemptGeneration == connectionGeneration) {
+                    connectionAttemptGeneration = null
                 }
-                activeModem = modem
-                activeConnection = connection
+
+                if (isCurrent) {
+                    activeModem = modem
+                    activeConnection = connection
+                }
+                isCurrent
+            }
+
+            if (!current) {
+                runCatching { modem.close() }
+                runCatching { connection.close() }
+                return
             }
 
             observer.updateConnected(true)
@@ -247,16 +268,29 @@ class InteractiveYameApplication(
         } catch (error: Exception) {
             runCatching { modem.close() }
             runCatching { connection.close() }
-            synchronized(lock) {
-                if (generation == connectionGeneration) {
+
+            val current = synchronized(lock) {
+                val isCurrent =
+                    generation == connectionGeneration &&
+                        connectionAttemptGeneration == connectionGeneration
+
+                if (connectionAttemptGeneration == connectionGeneration) {
+                    connectionAttemptGeneration = null
+                }
+
+                if (isCurrent) {
                     activeModem = null
                     activeConnection = null
                 }
+                isCurrent
             }
-            observer.updateConnected(false)
-            observer.onLog(
-                "Could not open $portName: ${error.message ?: error.javaClass.simpleName}",
-            )
+
+            if (current) {
+                observer.updateConnected(false)
+                observer.onLog(
+                    "Could not open $portName: ${error.message ?: error.javaClass.simpleName}",
+                )
+            }
         }
     }
 
@@ -322,7 +356,8 @@ class InteractiveYameApplication(
 
     private fun connectionIsActive(): Boolean =
         synchronized(lock) {
-            activeConnection != null && activeModem != null
+            connectionAttemptGeneration != null ||
+                (activeConnection != null && activeModem != null)
         }
 
     private fun shutdown() {
