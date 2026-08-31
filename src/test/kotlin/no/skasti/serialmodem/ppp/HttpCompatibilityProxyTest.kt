@@ -148,8 +148,8 @@ class HttpCompatibilityProxyTest {
             "<html><a href=\"https://example.test/next\">next</a>" +
                 "<form action=\"HTTPS://example.test/post\"></form></html>"
         val rewrittenBody =
-            "<html><a href=\"http://example.test/.yame/https/443/next\">next</a>" +
-                "<form action=\"http://example.test/.yame/https/443/post\"></form></html>"
+            "<html><a href=\"http://example.test/next\">next</a>" +
+                "<form action=\"http://example.test/post\"></form></html>"
         val thread = serveOnce(server) {
             "HTTP/1.1 200 OK\r\n" +
                 "Content-Type: text/html; charset=utf-8\r\n" +
@@ -175,13 +175,14 @@ class HttpCompatibilityProxyTest {
 
             val response = collectResponse(events)
             assertTrue(
-                response.contains("refresh: 5; url=http://example.test/.yame/https/443/later\r\n", ignoreCase = true),
+                response.contains("refresh: 5; url=http://example.test/later\r\n", ignoreCase = true),
                 response,
             )
             assertTrue(response.contains(rewrittenBody), response)
             assertTrue(!response.contains("https://example.test/next"), response)
             assertTrue(!response.contains("HTTPS://example.test/post"), response)
-            assertTrue(response.contains("http://example.test/.yame/https/443/next"), response)
+            assertTrue(response.contains("http://example.test/next"), response)
+            assertTrue(!response.contains(".yame/https"), response)
             assertTrue(
                 response.contains(
                     "Content-Length: ${rewrittenBody.toByteArray(StandardCharsets.UTF_8).size}\r\n",
