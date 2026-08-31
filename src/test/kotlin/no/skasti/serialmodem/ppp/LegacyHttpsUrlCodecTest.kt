@@ -44,6 +44,46 @@ class LegacyOriginRouteTableTest {
     }
 
     @Test
+    fun `clean HTTPS userinfo link maps an origin-form browser request`() {
+        val routes = LegacyOriginRouteTable()
+        val flow = httpFlow(generation = 11)
+        val upstream = URI("https://alice:secret@Example.TEST/private")
+
+        val legacy = routes.rememberHttpsReference(flow, upstream)
+
+        assertEquals("http://alice:secret@Example.TEST/private", legacy)
+        assertEquals(
+            URI("https://alice:secret@Example.TEST/private"),
+            routes.resolve(flow, URI("http://example.test/private")),
+        )
+    }
+
+    @Test
+    fun `exact mapping keys normalize hostname case`() {
+        val routes = LegacyOriginRouteTable()
+        val flow = httpFlow(generation = 12)
+        val upstream = URI("https://example.test/x")
+
+        routes.rememberExact(flow, URI("http://Example.TEST/x"), upstream)
+
+        assertEquals(upstream, routes.resolve(flow, URI("http://example.test/x")))
+    }
+
+    @Test
+    fun `rewritable text honors declared UTF-16 charset`() {
+        val body = "<a href=\"https://example.test/next\">next</a>".toByteArray(Charsets.UTF_16LE)
+        val rewritten = rewriteEncodedTextBody(
+            mapOf("Content-Type" to listOf("text/html; charset=UTF-16LE")),
+            body,
+        ) { it.replace("https://", "http://") }
+
+        assertEquals(
+            "<a href=\"http://example.test/next\">next</a>",
+            rewritten.toString(Charsets.UTF_16LE),
+        )
+    }
+
+    @Test
     fun `HTTPS references are exposed as clean HTTP URLs and remembered exactly`() {
         val routes = LegacyOriginRouteTable()
         val flow = httpFlow(generation = 1)

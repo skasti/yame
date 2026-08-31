@@ -10,6 +10,7 @@ import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets
 import java.time.Duration
 import java.util.Locale
@@ -85,7 +86,55 @@ internal object LegacyHttpUrl {
             uri.scheme.equals("https", ignoreCase = true) -> 443
             else -> 80
         }
+
+    fun requestObservableKey(uri: URI): String =
+        URI(
+            buildString {
+                val scheme = requireNotNull(uri.scheme).lowercase(Locale.ROOT)
+                append(scheme).append("://")
+                append(formatHost(requireNotNull(uri.host).lowercase(Locale.ROOT)))
+                val port = effectivePort(uri)
+                val defaultPort = (scheme == "http" && port == 80) || (scheme == "https" && port == 443)
+                if (!defaultPort) append(':').append(port)
+                append(uri.rawPath?.takeIf { it.isNotEmpty() } ?: "/")
+                uri.rawQuery?.let { append('?').append(it) }
+            },
+        ).toString()
 }
+
+internal fun rewriteEncodedTextBody(
+    headers: Map<String, List<String>>,
+    body: ByteArray,
+    transform: (String) -> String,
+): ByteArray {
+    val contentType = headers.entries
+        .firstOrNull { (name, _) -> name.equals("content-type", ignoreCase = true) }
+        ?.value
+        ?.firstOrNull()
+    val declaredCharset = contentType
+        ?.let { CHARSET_PARAMETER_PATTERN.find(it) }
+        ?.let { match -> match.groupValues.drop(1).firstOrNull { it.isNotEmpty() } }
+        ?.let { name -> runCatching { Charset.forName(name) }.getOrNull() }
+    val charset = declaredCharset ?: bomCharset(body) ?: StandardCharsets.ISO_8859_1
+    val source = body.toString(charset)
+    val rewritten = transform(source)
+    return if (rewritten == source) body else rewritten.toByteArray(charset)
+}
+
+private fun bomCharset(body: ByteArray): Charset? =
+    when {
+        body.size >= 4 && body[0] == 0x00.toByte() && body[1] == 0x00.toByte() &&
+            body[2] == 0xFE.toByte() && body[3] == 0xFF.toByte() -> Charset.forName("UTF-32BE")
+        body.size >= 4 && body[0] == 0xFF.toByte() && body[1] == 0xFE.toByte() &&
+            body[2] == 0x00.toByte() && body[3] == 0x00.toByte() -> Charset.forName("UTF-32LE")
+        body.size >= 3 && body[0] == 0xEF.toByte() && body[1] == 0xBB.toByte() && body[2] == 0xBF.toByte() -> StandardCharsets.UTF_8
+        body.size >= 2 && body[0] == 0xFE.toByte() && body[1] == 0xFF.toByte() -> StandardCharsets.UTF_16
+        body.size >= 2 && body[0] == 0xFF.toByte() && body[1] == 0xFE.toByte() -> StandardCharsets.UTF_16
+        else -> null
+    }
+
+private val CHARSET_PARAMETER_PATTERN =
+    Regex("""(?i)(?:^|;)\s*charset\s*=\s*(?:"([^"]+)"|'([^']+)'|([^;\s]+))""")
 
 internal class LegacyOriginRouteTable {
     private data class OriginKey(
@@ -227,7 +276,7 @@ internal class LegacyOriginRouteTable {
         ExactKey(
             generation = flow.generation,
             peerAddress = flow.key.peerAddress.toString(),
-            legacyUri = LegacyHttpUrl.withoutFragment(legacyUri).toString(),
+            legacyUri = LegacyHttpUrl.requestObservableKey(legacyUri),
         )
 }
 
@@ -742,9 +791,9 @@ class SystemHttpCompatibilityProxy(
         body: ByteArray,
     ): ByteArray {
         if (body.isEmpty() || !bodyCanContainNavigableUrls(headers)) return body
-        val source = body.toString(StandardCharsets.ISO_8859_1)
-        val rewritten = rewriteHttpsReferences(flow, upstreamBase, source)
-        return if (rewritten == source) body else rewritten.toByteArray(StandardCharsets.ISO_8859_1)
+        return rewriteEncodedTextBody(headers, body) { source ->
+            rewriteHttpsReferences(flow, upstreamBase, source)
+        }
     }
 
     private fun bodyCanContainNavigableUrls(headers: Map<String, List<String>>): Boolean {
