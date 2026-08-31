@@ -138,4 +138,36 @@ class YameDashboardRendererTest {
 
         assertContains(rendered, "/quit")
     }
+
+    @Test
+    fun compactRendererShowsSelectedPaletteOption() {
+        val rendered = YameDashboardRenderer.render(
+            state = DashboardState(
+                portName = "COM3",
+                baud = 115200,
+                connected = false,
+                dnsUpstream = "8.8.8.8",
+                httpProxyEnabled = false,
+                logs = emptyList(),
+                dnsLookups = emptyList(),
+                transfers = emptyList(),
+                httpActivity = emptyList(),
+                commandPalette = TuiCommandPalette(
+                    mode = TuiPaletteMode.PORTS,
+                    input = "/port",
+                    title = "Select serial port",
+                    options = listOf(
+                        TuiCommandOption("COM3", "current", "COM3"),
+                        TuiCommandOption("COM7", "USB Serial Port", "COM7"),
+                    ),
+                    selectedIndex = 1,
+                ),
+            ),
+            width = 60,
+            height = 10,
+        )
+
+        assertContains(rendered, "Palette: /port")
+        assertContains(rendered, "COM7")
+    }
 }
