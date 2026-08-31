@@ -964,17 +964,29 @@ internal object YameDashboardRenderer {
             return result.take(visibleRows)
         }
 
+        val optionRows = (visibleRows - 1).coerceAtLeast(0)
+        if (optionRows == 0) return result.take(visibleRows)
+
+        val selected = palette.selectedIndex.coerceIn(0, palette.options.lastIndex)
+        val start = viewportStart(
+            selectedIndex = selected,
+            itemCount = palette.options.size,
+            visibleRows = optionRows,
+        )
+
         palette.options
-            .take((visibleRows - 1).coerceAtLeast(0))
-            .forEachIndexed { index, option ->
-                val marker = if (index == palette.selectedIndex) "›" else " "
+            .drop(start)
+            .take(optionRows)
+            .forEachIndexed { offset, option ->
+                val index = start + offset
+                val marker = if (index == selected) "›" else " "
                 val description = option.description
                     .takeIf { it.isNotBlank() }
                     ?.let { "  $it" }
                     .orEmpty()
                 result += DashboardLine(
                     clip("$marker ${option.label}$description", contentWidth),
-                    if (index == palette.selectedIndex) DashboardTone.SELECTED else DashboardTone.NORMAL,
+                    if (index == selected) DashboardTone.SELECTED else DashboardTone.NORMAL,
                 )
             }
         return result
@@ -1018,6 +1030,17 @@ internal object YameDashboardRenderer {
                 styles.border("─".repeat(safeWidth - 2)) +
                 styles.border("┘")
         return result
+    }
+
+    private fun viewportStart(
+        selectedIndex: Int,
+        itemCount: Int,
+        visibleRows: Int,
+    ): Int {
+        if (itemCount <= visibleRows) return 0
+        val half = visibleRows / 2
+        return (selectedIndex - half)
+            .coerceIn(0, itemCount - visibleRows)
     }
 
     private fun transferSort(state: TransferState): Int =
