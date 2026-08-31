@@ -14,6 +14,7 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
+import java.util.concurrent.FutureTask
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -158,24 +159,22 @@ class SystemHttpCompatibilityProxy(
             }
             state.request.write(payload)
             val buffered = state.request.toByteArray()
-            val requestLength = requestLengthIfComplete(buffered)
-            if (requestLength != null) {
-                if (buffered.size != requestLength) return Result.failure(IllegalStateException("HTTP pipelining is not supported by compatibility mode"))
+            val headersComplete = requestHeadersComplete(buffered)
+            val expectation = if (headersComplete) expectationDisposition(buffered) else ExpectationDisposition.NONE
+            if (expectation == ExpectationDisposition.UNSUPPORTED) {
                 state.processing = true
-                completeRequest = buffered
                 state.request.reset()
-            } else if (requestHeadersComplete(buffered)) {
-                when (expectationDisposition(buffered)) {
-                    ExpectationDisposition.CONTINUE -> if (!state.expectContinueSent) {
-                        state.expectContinueSent = true
-                        sendContinue = true
-                    }
-                    ExpectationDisposition.UNSUPPORTED -> {
-                        state.processing = true
-                        state.request.reset()
-                        rejectExpectation = true
-                    }
-                    ExpectationDisposition.NONE -> Unit
+                rejectExpectation = true
+            } else {
+                val requestLength = requestLengthIfComplete(buffered)
+                if (requestLength != null) {
+                    if (buffered.size != requestLength) return Result.failure(IllegalStateException("HTTP pipelining is not supported by compatibility mode"))
+                    state.processing = true
+                    completeRequest = buffered
+                    state.request.reset()
+                } else if (expectation == ExpectationDisposition.CONTINUE && !state.expectContinueSent) {
+                    state.expectContinueSent = true
+                    sendContinue = true
                 }
             }
         }
@@ -189,14 +188,16 @@ class SystemHttpCompatibilityProxy(
         }
         if (completeRequest != null) {
             try {
-                val task = executor.submit {
+                val requestBytes = requireNotNull(completeRequest)
+                val task = FutureTask<Unit> {
                     state.taskStarted.set(true)
-                    processRequest(state, requireNotNull(completeRequest))
+                    processRequest(state, requestBytes)
                 }
                 state.task = task
+                executor.execute(task)
                 if (state.cancelled || flows[state.flow] !== state) cancelQueuedOrRunningTask(state)
             } catch (error: Throwable) {
-                synchronized(state) { state.processing = false }
+                synchronized(state) { state.processing = false; state.task = null }
                 failFlow(state, error)
                 return Result.failure(error)
             }
