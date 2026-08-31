@@ -109,16 +109,39 @@ class LegacyOriginRouteTableTest {
     }
 
     @Test
+    fun `specific HTTPS and plain HTTP references override the general origin route`() {
+        val routes = LegacyOriginRouteTable()
+        val flow = httpFlow(generation = 7)
+
+        routes.rememberHttpsReference(flow, URI("https://example.test/home"))
+        routes.rememberHttpsReference(flow, URI("https://example.test:8443/admin"))
+        routes.rememberHttpReference(flow, URI("http://example.test/legacy"))
+
+        assertEquals(
+            URI("https://example.test/other"),
+            routes.resolve(flow, URI("http://example.test/other")),
+        )
+        assertEquals(
+            URI("https://example.test:8443/admin"),
+            routes.resolve(flow, URI("http://example.test/admin")),
+        )
+        assertEquals(
+            URI("http://example.test/legacy"),
+            routes.resolve(flow, URI("http://example.test/legacy")),
+        )
+    }
+
+    @Test
     fun `session mappings are isolated by PPP generation and cleaned on reconnect`() {
         val routes = LegacyOriginRouteTable()
-        val firstSession = httpFlow(generation = 7)
-        val nextSession = httpFlow(generation = 8)
+        val firstSession = httpFlow(generation = 8)
+        val nextSession = httpFlow(generation = 9)
         val clean = URI(routes.rememberHttpsReference(firstSession, URI("https://example.test/next")))
 
         assertEquals(URI("https://example.test/next"), routes.resolve(firstSession, clean))
         assertEquals(clean, routes.resolve(nextSession, clean))
 
-        routes.invalidateBefore(8)
+        routes.invalidateBefore(9)
 
         assertEquals(clean, routes.resolve(firstSession, clean))
     }
