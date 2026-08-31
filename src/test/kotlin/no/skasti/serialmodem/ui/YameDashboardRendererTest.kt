@@ -6,6 +6,7 @@ import no.skasti.serialmodem.observer.TransferState
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 
 class YameDashboardRendererTest {
     @Test
@@ -178,5 +179,41 @@ class YameDashboardRendererTest {
 
         assertEquals(listOf(9_600, 19_200, 38_400, 57_600, 115_200, 230_400), rates)
         assertEquals(5, rates.indexOf(230_400))
+    }
+
+    @Test
+    fun runtimeTextCannotInjectTerminalControlSequences() {
+        val rendered = YameDashboardRenderer.render(
+            state = DashboardState(
+                portName = "COM3",
+                baud = 115200,
+                connected = true,
+                dnsUpstream = "8.8.8.8",
+                httpProxyEnabled = true,
+                logs = listOf("10:00:00  AT\u001B[2JHELLO"),
+                dnsLookups = listOf(
+                    DashboardDnsLookup(
+                        key = "udp:1:1024:7",
+                        time = "10:00:01",
+                        transport = "UDP",
+                        name = "evil\u001B]0;owned\u0007.test",
+                        type = "A",
+                        status = "NOERROR",
+                        answers = 1,
+                        bytes = 64,
+                    ),
+                ),
+                transfers = emptyList(),
+                httpActivity = emptyList(),
+                commandPalette = null,
+            ),
+            width = 120,
+            height = 34,
+        )
+
+        assertFalse(rendered.contains('\u001B'))
+        assertFalse(rendered.contains('\u0007'))
+        assertContains(rendered, "AT�[2JHELLO")
+        assertContains(rendered, "evil�]0;owned�.test")
     }
 }
