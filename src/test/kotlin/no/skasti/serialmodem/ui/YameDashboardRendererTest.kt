@@ -98,4 +98,44 @@ class YameDashboardRendererTest {
         assertContains(rendered, "/port")
         assertContains(rendered, "NOT CONNECTED")
     }
+
+    @Test
+    fun commandPaletteScrollsToSelectedOption() {
+        val options = listOf(
+            TuiCommandOption("/port", "", "/port"),
+            TuiCommandOption("/baud", "", "/baud"),
+            TuiCommandOption("/dns-upstream", "", "/dns-upstream"),
+            TuiCommandOption("/http-proxy", "", "/http-proxy"),
+            TuiCommandOption("/reconnect", "", "/reconnect"),
+            TuiCommandOption("/disconnect", "", "/disconnect"),
+            TuiCommandOption("/refresh-ports", "", "/refresh-ports"),
+            TuiCommandOption("/clear-log", "", "/clear-log"),
+            TuiCommandOption("/quit", "", "/quit"),
+        )
+
+        val rendered = YameDashboardRenderer.render(
+            state = DashboardState(
+                portName = null,
+                baud = 115200,
+                connected = false,
+                dnsUpstream = "8.8.8.8",
+                httpProxyEnabled = false,
+                logs = emptyList(),
+                dnsLookups = emptyList(),
+                transfers = emptyList(),
+                httpActivity = emptyList(),
+                commandPalette = TuiCommandPalette(
+                    mode = TuiPaletteMode.COMMANDS,
+                    input = "/",
+                    title = "Commands",
+                    options = options,
+                    selectedIndex = options.lastIndex,
+                ),
+            ),
+            width = 80,
+            height = 24,
+        )
+
+        assertContains(rendered, "/quit")
+    }
 }
