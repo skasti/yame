@@ -42,7 +42,7 @@ data class PppHttpCompatibilityConfig(
 
 internal object LegacyHttpsUrlCodec {
     private const val MARKER_PREFIX = "/.yame/https/"
-    private val HTTPS_URL_PATTERN = Regex("""https://[^\\s\"'<>\\)\\]]+""", RegexOption.IGNORE_CASE)
+    private val HTTPS_URL_PATTERN = Regex("https://[^\\s\"'<>\\)\\]]+", RegexOption.IGNORE_CASE)
 
     fun rewriteReferences(value: String): String =
         HTTPS_URL_PATTERN.replace(value) { match ->
