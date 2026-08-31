@@ -63,7 +63,7 @@ fun main(args: Array<String>) {
     }
 
     if (useTui) {
-        InteractiveYameApplication(
+        val application = InteractiveYameApplication(
             initialPortName = options.portName,
             initialBaud = options.baudRate,
             initialModemConfig = options.modemConfig,
@@ -72,7 +72,20 @@ fun main(args: Array<String>) {
             } else {
                 Terminal(interactive = true)
             },
-        ).run()
+        )
+        val shutdownHook = Thread(
+            application::close,
+            "yame-tui-shutdown",
+        )
+        Runtime.getRuntime().addShutdownHook(shutdownHook)
+        try {
+            application.run()
+        } finally {
+            application.close()
+            runCatching {
+                Runtime.getRuntime().removeShutdownHook(shutdownHook)
+            }
+        }
         return
     }
 
