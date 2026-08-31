@@ -5,6 +5,7 @@ import no.skasti.serialmodem.observer.TransferKind
 import no.skasti.serialmodem.observer.TransferState
 import kotlin.test.Test
 import kotlin.test.assertContains
+import kotlin.test.assertEquals
 
 class YameDashboardRendererTest {
     @Test
@@ -169,5 +170,13 @@ class YameDashboardRendererTest {
 
         assertContains(rendered, "Palette: /port")
         assertContains(rendered, "COM7")
+    }
+
+    @Test
+    fun customBaudRateIsPreservedInPaletteOptions() {
+        val rates = baudPaletteRates(230_400)
+
+        assertEquals(listOf(9_600, 19_200, 38_400, 57_600, 115_200, 230_400), rates)
+        assertEquals(5, rates.indexOf(230_400))
     }
 }
