@@ -6,6 +6,11 @@ import java.io.InputStream
 import java.io.OutputStream
 import kotlin.concurrent.thread
 
+data class SerialPortDescriptor(
+    val systemPortName: String,
+    val descriptivePortName: String,
+)
+
 class SerialConnection(
     portName: String,
     private val baudRate: Int,
@@ -37,7 +42,10 @@ class SerialConnection(
         logger("Opened ${port.systemPortName} at $baudRate baud, 8N1, no flow control")
     }
 
-    fun startReading(onBytes: (ByteArray) -> Unit) {
+    fun startReading(
+        onBytes: (ByteArray) -> Unit,
+        onStopped: (Throwable?) -> Unit = {},
+    ) {
         check(port.isOpen) { "Serial port must be open before starting the reader" }
         check(readerThread == null) { "Serial reader is already running" }
 
@@ -45,7 +53,7 @@ class SerialConnection(
             name = "serial-reader-${port.systemPortName}",
             isDaemon = false,
         ) {
-            readLoop(port.inputStream, onBytes)
+            readLoop(port.inputStream, onBytes, onStopped)
         }
     }
 
@@ -57,8 +65,13 @@ class SerialConnection(
         }
     }
 
-    private fun readLoop(input: InputStream, onBytes: (ByteArray) -> Unit) {
+    private fun readLoop(
+        input: InputStream,
+        onBytes: (ByteArray) -> Unit,
+        onStopped: (Throwable?) -> Unit,
+    ) {
         val buffer = ByteArray(4096)
+        var failure: Throwable? = null
         try {
             while (port.isOpen) {
                 val count = input.read(buffer)
@@ -68,8 +81,11 @@ class SerialConnection(
             }
         } catch (e: Exception) {
             if (port.isOpen) {
+                failure = e
                 logger("Serial reader stopped: ${e.message}")
             }
+        } finally {
+            runCatching { onStopped(failure) }
         }
     }
 
@@ -82,6 +98,14 @@ class SerialConnection(
 
     companion object {
         fun availablePorts(): List<String> =
-            SerialPort.getCommPorts().map { it.systemPortName }
+            availablePortDescriptors().map { it.systemPortName }
+
+        fun availablePortDescriptors(): List<SerialPortDescriptor> =
+            SerialPort.getCommPorts().map { port ->
+                SerialPortDescriptor(
+                    systemPortName = port.systemPortName,
+                    descriptivePortName = port.descriptivePortName,
+                )
+            }
     }
 }
