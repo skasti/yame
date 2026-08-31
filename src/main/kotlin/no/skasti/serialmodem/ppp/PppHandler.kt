@@ -15,6 +15,7 @@ class RetroPppHandler(
     private val logger: (String) -> Unit = ::println,
     private val ipConfig: PppIpConfig = PppIpConfig(),
     private val dnsConfig: PppDnsConfig = PppDnsConfig(),
+    private val httpCompatibilityConfig: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig(),
 ) : PppHandler {
     private var output: OutputStream? = null
     private var encoder = PppEncoder()
@@ -45,6 +46,10 @@ class RetroPppHandler(
             ipAddresses = addresses,
             selectPeerAddress = addressResolver::selectPeerAddress,
             dnsConfig = dnsConfig,
+            tcpProxy = SystemRoutingTcpProxy(
+                httpConfig = httpCompatibilityConfig,
+                logger = logger,
+            ),
         )
     }
 

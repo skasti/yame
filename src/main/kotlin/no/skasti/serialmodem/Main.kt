@@ -5,6 +5,7 @@ import no.skasti.serialmodem.modem.HayesModemConfig
 import no.skasti.serialmodem.ppp.Ipv4Address
 import no.skasti.serialmodem.ppp.Ipv4Cidr
 import no.skasti.serialmodem.ppp.PppDnsConfig
+import no.skasti.serialmodem.ppp.PppHttpCompatibilityConfig
 import no.skasti.serialmodem.ppp.PppIpConfig
 import no.skasti.serialmodem.serial.SerialConnection
 import no.skasti.serialmodem.tone.DialString
@@ -99,6 +100,7 @@ private fun parseArgs(args: Array<String>): Options {
     var password = defaults.password
     var pppSubnet: Ipv4Cidr? = null
     var dnsUpstream = defaults.pppDnsConfig.upstreamServer
+    var httpCompatibilityEnabled = defaults.pppHttpCompatibilityConfig.enabled
 
     var i = 0
     while (i < args.size) {
@@ -149,6 +151,7 @@ private fun parseArgs(args: Array<String>): Options {
                 require(i + 1 < args.size) { "$arg requires an IPv4 address, e.g. 8.8.8.8" }
                 dnsUpstream = Ipv4Address.parse(args[++i])
             }
+            "--http-https-proxy" -> httpCompatibilityEnabled = true
             "--help", "-h" -> {
                 printUsage()
                 kotlin.system.exitProcess(0)
@@ -171,6 +174,7 @@ private fun parseArgs(args: Array<String>): Options {
             password = password,
             pppIpConfig = PppIpConfig(configuredSubnet = pppSubnet),
             pppDnsConfig = PppDnsConfig(upstreamServer = dnsUpstream),
+            pppHttpCompatibilityConfig = PppHttpCompatibilityConfig(enabled = httpCompatibilityEnabled),
         ),
     )
 }
@@ -221,12 +225,15 @@ private fun printUsage() {
               --username USER         Enable terminal login with this username
               --password PASS         Terminal login password (requires --username)
               --subnet CIDR           PPP address pool, e.g. 10.0.0.0/30 (default: automatic)
-              --dns-upstream IP        DNS server used by YAME's local DNS proxy (default: ${defaults.pppDnsConfig.upstreamServer})
+              --dns-upstream IP       DNS server used by YAME's local DNS proxy (default: ${defaults.pppDnsConfig.upstreamServer})
+              --http-https-proxy      Follow HTTP redirects (including HTTPS) on behalf of legacy clients
           -h, --help                  Show this help
 
         The first usable address in --subnet is assigned to YAME and the second to the PPP client.
         Explicit PPP subnets must not overlap an active local IPv4 interface subnet.
         YAME advertises its local PPP address as DNS and forwards DNS queries to --dns-upstream.
+        With --http-https-proxy, TCP/80 requests are handled by YAME as HTTP: redirects are followed
+        on the host, modern HTTPS/TLS is terminated there, and the legacy peer receives plain HTTP.
         Durations accept milliseconds or seconds, e.g. 500ms, 2s, or 1.5s, up to 10s.
         Terminal login is only enabled when both --username and --password are provided.
         Tone progress is always logged while a dialing sequence is played.

@@ -20,6 +20,7 @@ class HayesModem(
         logger = logger,
         ipConfig = config.pppIpConfig,
         dnsConfig = config.pppDnsConfig,
+        httpCompatibilityConfig = config.pppHttpCompatibilityConfig,
     ),
     private var setCarrierPresent: (Boolean) -> Unit = { /* no-op */ }
 ) : Closeable {

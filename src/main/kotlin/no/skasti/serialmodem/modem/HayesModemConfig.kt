@@ -1,6 +1,7 @@
 package no.skasti.serialmodem.modem
 
 import no.skasti.serialmodem.ppp.PppDnsConfig
+import no.skasti.serialmodem.ppp.PppHttpCompatibilityConfig
 import no.skasti.serialmodem.ppp.PppIpConfig
 import no.skasti.serialmodem.tone.HandshakeProfile
 import no.skasti.serialmodem.tone.TonePlayer
@@ -16,6 +17,7 @@ data class HayesModemConfig(
     val password: String? = null,
     val pppIpConfig: PppIpConfig = PppIpConfig(),
     val pppDnsConfig: PppDnsConfig = PppDnsConfig(),
+    val pppHttpCompatibilityConfig: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig(),
 ) {
     init {
         require(pickupTime.isFinite()) { "pickupTime must be finite" }
