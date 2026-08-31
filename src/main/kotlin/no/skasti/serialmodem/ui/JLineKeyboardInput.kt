@@ -9,17 +9,13 @@ import org.jline.utils.NonBlockingReader
 internal class JLineKeyboardInput private constructor(
     private val terminal: Terminal,
     private val originalAttributes: Attributes,
+    private val keypadModeEntered: Boolean,
     private val decoder: TerminalKeyDecoder,
 ) : AutoCloseable {
     fun readKey(timeoutMillis: Long): String? = decoder.readKey(timeoutMillis)
 
     override fun close() {
-        runCatching {
-            terminal.puts(Capability.keypad_local)
-            terminal.flush()
-        }
-        runCatching { terminal.setAttributes(originalAttributes) }
-        runCatching { terminal.close() }
+        restoreTerminalState(terminal, originalAttributes, keypadModeEntered)
     }
 
     companion object {
@@ -35,23 +31,24 @@ internal class JLineKeyboardInput private constructor(
                 throw error
             }
 
+            var keypadModeEntered = false
             return try {
                 // Terminfo cursor-key capabilities describe application-keypad mode.
                 // Enable that mode so those sequences match on Windows and Unix.
-                terminal.puts(Capability.keypad_xmit)
+                keypadModeEntered = terminal.puts(Capability.keypad_xmit)
                 terminal.flush()
 
                 JLineKeyboardInput(
                     terminal = terminal,
                     originalAttributes = originalAttributes,
+                    keypadModeEntered = keypadModeEntered,
                     decoder = TerminalKeyDecoder(
                         reader = terminal.reader(),
                         escapeBindings = escapeBindings(terminal),
                     ),
                 )
             } catch (error: Throwable) {
-                runCatching { terminal.setAttributes(originalAttributes) }
-                runCatching { terminal.close() }
+                restoreTerminalState(terminal, originalAttributes, keypadModeEntered)
                 throw error
             }
         }
@@ -86,6 +83,21 @@ internal class JLineKeyboardInput private constructor(
 
         private const val ESCAPE_STRING = "\u001b"
     }
+}
+
+internal fun restoreTerminalState(
+    terminal: Terminal,
+    originalAttributes: Attributes,
+    keypadModeEntered: Boolean,
+) {
+    if (keypadModeEntered) {
+        runCatching {
+            terminal.puts(Capability.keypad_local)
+            terminal.flush()
+        }
+    }
+    runCatching { terminal.setAttributes(originalAttributes) }
+    runCatching { terminal.close() }
 }
 
 internal class TerminalKeyDecoder(
