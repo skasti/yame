@@ -379,18 +379,21 @@ class TuiYameObserver(
 
     @Synchronized
     private fun openBaudPalette() {
+        val rates = (COMMON_BAUD_RATES + baud)
+            .distinct()
+            .sorted()
         commandPalette = TuiCommandPalette(
             mode = TuiPaletteMode.BAUD,
             input = "/baud",
             title = "Select baud rate",
-            options = COMMON_BAUD_RATES.map { rate ->
+            options = rates.map { rate ->
                 TuiCommandOption(
                     label = rate.toString(),
                     description = if (rate == baud) "current" else "",
                     value = rate.toString(),
                 )
             },
-            selectedIndex = COMMON_BAUD_RATES.indexOf(baud).coerceAtLeast(0),
+            selectedIndex = rates.indexOf(baud),
         )
         render()
     }
