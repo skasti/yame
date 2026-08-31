@@ -565,7 +565,7 @@ class SystemHttpCompatibilityProxy(
                 val responseBody = if (preservesRepresentationLength) ByteArray(0) else readBounded(state, input, config.maxResponseBytes)
                 originRoutes.remember(state.flow, legacyUri, uri)?.let { (legacyOrigin, upstreamOrigin) ->
                     logger("HTTP compatibility .. session route $legacyOrigin -> $upstreamOrigin")
-                    emitEvent(state, HttpProxyActionKind.REDIRECT, "session $legacyOrigin -> $upstreamOrigin")
+                    emitEvent(state, HttpProxyActionKind.ROUTED, "session $legacyOrigin -> $upstreamOrigin")
                 }
                 return FinalResponse(
                     uri = uri,
