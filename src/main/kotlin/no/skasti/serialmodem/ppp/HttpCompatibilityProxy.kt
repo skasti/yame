@@ -503,12 +503,12 @@ class SystemHttpCompatibilityProxy(
     private fun fetchFinalResponse(state: FlowState, request: LegacyRequest): FinalResponse {
         val legacyUri = legacyUri(state.flow, request)
         var uri = originRoutes.resolve(state.flow, legacyUri)
-        val originalUri = uri
+        val originalUri = legacyUri
         seedClientCookies(state, request.headers)
         var method = request.method
         var body = request.body
         var redirects = 0
-        var forwardSensitiveHeaders = true
+        var forwardSensitiveHeaders = sameOrigin(legacyUri, uri)
         val requestConnectionHeadersToStrip = connectionNominatedHeaders(request.headers)
         while (true) {
             ensureActive(state)
