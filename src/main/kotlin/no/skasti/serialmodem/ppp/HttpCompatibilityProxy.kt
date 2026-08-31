@@ -1,6 +1,8 @@
 package no.skasti.serialmodem.ppp
 
 import java.io.ByteArrayOutputStream
+import java.net.CookieManager
+import java.net.CookiePolicy
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -43,11 +45,6 @@ data class PppHttpCompatibilityConfig(
     }
 }
 
-/**
- * Routes normal TCP flows through the transparent socket proxy and, when the
- * compatibility option is enabled, routes destination port 80 through the
- * application-level HTTP compatibility proxy instead.
- */
 class SystemRoutingTcpProxy(
     private val httpConfig: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig(),
     private val logger: (String) -> Unit = {},
@@ -133,9 +130,11 @@ class SystemHttpCompatibilityProxy(
         val request: ByteArrayOutputStream = ByteArrayOutputStream(),
         val readMonitor: java.lang.Object = java.lang.Object(),
         val slotReleased: AtomicBoolean = AtomicBoolean(),
+        val cookieManager: CookieManager = CookieManager(null, CookiePolicy.ACCEPT_ORIGINAL_SERVER),
         @Volatile var processing: Boolean = false,
         @Volatile var readsPaused: Boolean = false,
         @Volatile var cancelled: Boolean = false,
+        @Volatile var expectContinueSent: Boolean = false,
         @Volatile var task: Future<*>? = null,
     )
 
@@ -194,8 +193,6 @@ class SystemHttpCompatibilityProxy(
             return
         }
 
-        // There is deliberately no upstream TCP connection yet. We need the HTTP
-        // Host header before YAME can choose the modern HTTP/HTTPS endpoint.
         safeCallback(onEvent, TcpProxyEvent.Connected)
     }
 
@@ -205,6 +202,7 @@ class SystemHttpCompatibilityProxy(
             ?: return Result.failure(IllegalStateException("HTTP compatibility flow is not connected"))
 
         var completeRequest: ByteArray? = null
+        var sendContinue = false
         synchronized(state) {
             if (state.cancelled) {
                 return Result.failure(IllegalStateException("HTTP compatibility flow is closed"))
@@ -230,11 +228,18 @@ class SystemHttpCompatibilityProxy(
                 state.processing = true
                 completeRequest = buffered
                 state.request.reset()
+            } else if (!state.expectContinueSent && requestHeadersComplete(buffered) && expectsContinue(buffered)) {
+                state.expectContinueSent = true
+                sendContinue = true
             }
         }
 
+        safeCallback(state.onEvent, TcpProxyEvent.WriteCompleted(payload.size))
+        if (sendContinue) {
+            emitBytes(state, "HTTP/1.1 100 Continue\r\n\r\n".toByteArray(StandardCharsets.US_ASCII))
+        }
+
         if (completeRequest != null) {
-            safeCallback(state.onEvent, TcpProxyEvent.WriteCompleted(payload.size))
             try {
                 val task = executor.submit {
                     processRequest(state, requireNotNull(completeRequest))
@@ -254,12 +259,19 @@ class SystemHttpCompatibilityProxy(
         return Result.success(Unit)
     }
 
-    override fun shutdownOutput(flow: TcpProxyFlow): Result<Unit> =
-        if (flows.containsKey(flow)) {
-            Result.success(Unit)
-        } else {
-            Result.failure(IllegalStateException("HTTP compatibility flow is not connected"))
+    override fun shutdownOutput(flow: TcpProxyFlow): Result<Unit> {
+        val state = flows[flow]
+            ?: return Result.failure(IllegalStateException("HTTP compatibility flow is not connected"))
+
+        val incomplete = synchronized(state) {
+            !state.processing && state.request.size() > 0
         }
+        if (incomplete) {
+            emitErrorResponse(state, 400, "Bad Request", "Incomplete HTTP request")
+            removeFlow(state)
+        }
+        return Result.success(Unit)
+    }
 
     override fun availableWriteCapacity(flow: TcpProxyFlow): Int {
         val state = flows[flow] ?: return 0
@@ -342,6 +354,7 @@ class SystemHttpCompatibilityProxy(
                     builder.header(name, value)
                 }
             }
+            cookieHeaders(state, uri).forEach { value -> builder.header("Cookie", value) }
             builder.header("Accept-Encoding", "identity")
             builder.method(
                 method,
@@ -357,6 +370,7 @@ class SystemHttpCompatibilityProxy(
                 HttpResponse.BodyHandlers.ofInputStream(),
             )
             ensureActiveOrClose(state, response)
+            storeCookies(state, uri, response.headers().map())
             val status = response.statusCode()
             val location = response.headers().firstValue("location").orElse(null)
 
@@ -575,6 +589,23 @@ class SystemHttpCompatibilityProxy(
         )
     }
 
+    private fun requestHeadersComplete(bytes: ByteArray): Boolean = findHeaderEnd(bytes) >= 0
+
+    private fun expectsContinue(bytes: ByteArray): Boolean {
+        val headerEnd = findHeaderEnd(bytes)
+        if (headerEnd < 0) return false
+        val text = String(bytes, 0, headerEnd, StandardCharsets.ISO_8859_1)
+        val headers = text.split("\r\n").drop(1)
+        val expectValues = headers.mapNotNull { line ->
+            val separator = line.indexOf(':')
+            if (separator <= 0) return@mapNotNull null
+            if (!line.substring(0, separator).trim().equals("Expect", ignoreCase = true)) return@mapNotNull null
+            line.substring(separator + 1).trim()
+        }
+        if (expectValues.isEmpty()) return false
+        return expectValues.all { it.equals("100-continue", ignoreCase = true) }
+    }
+
     private fun requestLengthIfComplete(bytes: ByteArray): Int? {
         val headerEnd = findHeaderEnd(bytes)
         if (headerEnd < 0) return null
@@ -612,6 +643,14 @@ class SystemHttpCompatibilityProxy(
             }
         }
         return -1
+    }
+
+    private fun cookieHeaders(state: FlowState, uri: URI): List<String> =
+        runCatching { state.cookieManager.get(uri, emptyMap())["Cookie"].orEmpty() }
+            .getOrDefault(emptyList())
+
+    private fun storeCookies(state: FlowState, uri: URI, headers: Map<String, List<String>>) {
+        runCatching { state.cookieManager.put(uri, headers) }
     }
 
     private fun requireSupportedScheme(uri: URI) {
