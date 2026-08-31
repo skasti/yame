@@ -3,10 +3,6 @@ from pathlib import Path
 main = Path('src/main/kotlin/no/skasti/serialmodem/ppp/HttpCompatibilityProxy.kt')
 s = main.read_text()
 s = s.replace('import java.nio.charset.StandardCharsets\n', 'import java.nio.charset.Charset\nimport java.nio.charset.StandardCharsets\n')
-s = s.replace('''                append("http://")
-                uri.rawUserInfo?.let { append(it).append('@') }
-                append(formatHost(requireNotNull(uri.host)))''', '''                append("http://")
-                append(formatHost(requireNotNull(uri.host).lowercase(Locale.ROOT)))''', 1)
 old = '''    fun effectivePort(uri: URI): Int =
         when {
             uri.port >= 0 -> uri.port
@@ -93,14 +89,14 @@ t = test.read_text()
 marker = '''    @Test
     fun `HTTPS references are exposed as clean HTTP URLs and remembered exactly`() {'''
 additions = '''    @Test
-    fun `clean HTTPS userinfo link is keyed by the browser observable URL`() {
+    fun `clean HTTPS userinfo link maps an origin-form browser request`() {
         val routes = LegacyOriginRouteTable()
         val flow = httpFlow(generation = 11)
         val upstream = URI("https://alice:secret@Example.TEST/private")
 
         val legacy = routes.rememberHttpsReference(flow, upstream)
 
-        assertEquals("http://example.test/private", legacy)
+        assertEquals("http://alice:secret@Example.TEST/private", legacy)
         assertEquals(
             URI("https://alice:secret@Example.TEST/private"),
             routes.resolve(flow, URI("http://example.test/private")),
