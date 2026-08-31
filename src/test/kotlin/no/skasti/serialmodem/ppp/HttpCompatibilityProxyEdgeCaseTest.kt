@@ -112,7 +112,27 @@ class HttpCompatibilityProxyEdgeCaseTest {
             ).getOrThrow()
             val response = collectResponse(events)
             assertTrue(response.startsWith("HTTP/1.0 417 Expectation Failed\r\n"), response)
-            assertCanConnect(proxy, 2505)
+            assertCanConnectEventually(proxy, 2505)
+        } finally { proxy.close() }
+    }
+
+    @Test
+    fun `unsupported expectation does not block receive thread while reads are paused`() {
+        val proxy = proxy(maxFlows = 1)
+        val events = LinkedBlockingQueue<TcpProxyEvent>()
+        val current = flow(2507)
+        try {
+            proxy.connect(current, events::offer)
+            assertIs<TcpProxyEvent.Connected>(events.poll(2, TimeUnit.SECONDS))
+            proxy.pauseReads(current)
+            val started = System.nanoTime()
+            proxy.send(
+                current,
+                "POST / HTTP/1.1\r\nHost: example.test\r\nContent-Length: 4\r\nExpect: unsupported\r\n\r\n".toByteArray(),
+            ).getOrThrow()
+            assertTrue(System.nanoTime() - started < TimeUnit.MILLISECONDS.toNanos(500))
+            proxy.resumeReads(current)
+            assertTrue(collectResponse(events).startsWith("HTTP/1.0 417 Expectation Failed\r\n"))
         } finally { proxy.close() }
     }
 
@@ -137,6 +157,30 @@ class HttpCompatibilityProxyEdgeCaseTest {
             assertTrue(collectResponse(events).contains("ok"))
             val forwarded = requireNotNull(upstreamRequest.poll(2, TimeUnit.SECONDS))
             assertTrue(!forwarded.contains("Proxy-Authorization", ignoreCase = true), forwarded)
+        } finally { proxy.close(); runCatching { server.close() }; thread.join(2_000) }
+    }
+
+    @Test
+    fun `duplicate client cookie names are preserved on initial request`() {
+        val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val upstreamRequest = LinkedBlockingQueue<String>()
+        val thread = serveOnce(server) { request ->
+            upstreamRequest.offer(request)
+            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+        }
+        val proxy = proxy()
+        val events = LinkedBlockingQueue<TcpProxyEvent>()
+        val current = flow(2508)
+        try {
+            proxy.connect(current, events::offer)
+            assertIs<TcpProxyEvent.Connected>(events.poll(2, TimeUnit.SECONDS))
+            proxy.send(
+                current,
+                "GET / HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\nCookie: session=narrow; session=root\r\n\r\n".toByteArray(),
+            ).getOrThrow()
+            assertTrue(collectResponse(events).contains("ok"))
+            val forwarded = requireNotNull(upstreamRequest.poll(2, TimeUnit.SECONDS))
+            assertTrue(forwarded.contains("Cookie: session=narrow; session=root", ignoreCase = true), forwarded)
         } finally { proxy.close(); runCatching { server.close() }; thread.join(2_000) }
     }
 
@@ -167,6 +211,36 @@ class HttpCompatibilityProxyEdgeCaseTest {
             val redirected = requireNotNull(finalRequest.poll(2, TimeUnit.SECONDS))
             assertTrue(redirected.contains("session=new"), redirected)
             assertTrue(!redirected.contains("session=old"), redirected)
+        } finally { proxy.close(); runCatching { server.close() }; thread.join(2_000) }
+    }
+
+    @Test
+    fun `unrelated set cookie path does not retire client cookie`() {
+        val server = ServerSocket(0, 2, InetAddress.getLoopbackAddress())
+        val finalRequest = LinkedBlockingQueue<String>()
+        val thread = Thread {
+            server.use { listening ->
+                listening.accept().use { socket ->
+                    readRequest(socket)
+                    socket.getOutputStream().write(("HTTP/1.1 302 Found\r\nLocation: /dashboard\r\nSet-Cookie: session=new; Path=/admin\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").toByteArray())
+                }
+                listening.accept().use { socket ->
+                    finalRequest.offer(readRequest(socket))
+                    socket.getOutputStream().write("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".toByteArray())
+                }
+            }
+        }.apply { isDaemon = true; start() }
+        val proxy = proxy()
+        val events = LinkedBlockingQueue<TcpProxyEvent>()
+        val current = flow(2509)
+        try {
+            proxy.connect(current, events::offer)
+            assertIs<TcpProxyEvent.Connected>(events.poll(2, TimeUnit.SECONDS))
+            proxy.send(current, "GET /start HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\nCookie: session=old\r\n\r\n".toByteArray()).getOrThrow()
+            assertTrue(collectResponse(events).contains("ok"))
+            val redirected = requireNotNull(finalRequest.poll(2, TimeUnit.SECONDS))
+            assertTrue(redirected.contains("session=old"), redirected)
+            assertTrue(!redirected.contains("session=new"), redirected)
         } finally { proxy.close(); runCatching { server.close() }; thread.join(2_000) }
     }
 
