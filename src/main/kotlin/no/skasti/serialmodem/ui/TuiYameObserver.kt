@@ -423,39 +423,56 @@ class TuiYameObserver(
         render()
     }
 
-    @Synchronized
     private fun handlePaletteKey(key: String) {
-        val palette = commandPalette ?: return
+        val action = synchronized(this) {
+            val palette = commandPalette ?: return
 
-        when {
-            key == "Escape" -> commandPalette = null
-            key == "ArrowUp" && palette.mode != TuiPaletteMode.DNS ->
-                movePaletteSelection(-1)
-            key == "ArrowDown" && palette.mode != TuiPaletteMode.DNS ->
-                movePaletteSelection(1)
-            key == "Enter" -> executePaletteSelection()
-            key == "Backspace" -> {
-                when (palette.mode) {
-                    TuiPaletteMode.COMMANDS -> {
-                        val next = palette.input.dropLast(1).ifEmpty { "/" }
-                        commandPalette = commandPaletteFor(next)
-                    }
-                    TuiPaletteMode.DNS ->
-                        commandPalette = palette.copy(input = palette.input.dropLast(1))
-                    else -> Unit
+            val pendingAction = when {
+                key == "Escape" -> {
+                    commandPalette = null
+                    null
                 }
+                key == "ArrowUp" && palette.mode != TuiPaletteMode.DNS -> {
+                    movePaletteSelection(-1)
+                    null
+                }
+                key == "ArrowDown" && palette.mode != TuiPaletteMode.DNS -> {
+                    movePaletteSelection(1)
+                    null
+                }
+                key == "Enter" -> executePaletteSelection()
+                key == "Backspace" -> {
+                    when (palette.mode) {
+                        TuiPaletteMode.COMMANDS -> {
+                            val next = palette.input.dropLast(1).ifEmpty { "/" }
+                            commandPalette = commandPaletteFor(next)
+                        }
+                        TuiPaletteMode.DNS ->
+                            commandPalette = palette.copy(input = palette.input.dropLast(1))
+                        else -> Unit
+                    }
+                    null
+                }
+                palette.mode == TuiPaletteMode.COMMANDS &&
+                    key.length == 1 &&
+                    !key[0].isISOControl() -> {
+                    commandPalette = commandPaletteFor(palette.input + key)
+                    null
+                }
+                palette.mode == TuiPaletteMode.DNS &&
+                    key.length == 1 &&
+                    (key[0].isDigit() || key[0] == '.') -> {
+                    commandPalette = palette.copy(input = palette.input + key)
+                    null
+                }
+                else -> null
             }
-            palette.mode == TuiPaletteMode.COMMANDS &&
-                key.length == 1 &&
-                !key[0].isISOControl() ->
-                commandPalette = commandPaletteFor(palette.input + key)
-            palette.mode == TuiPaletteMode.DNS &&
-                key.length == 1 &&
-                (key[0].isDigit() || key[0] == '.') ->
-                commandPalette = palette.copy(input = palette.input + key)
+
+            render()
+            pendingAction
         }
 
-        render()
+        action?.invoke()
     }
 
     private fun movePaletteSelection(delta: Int) {
@@ -467,65 +484,78 @@ class TuiYameObserver(
         )
     }
 
-    private fun executePaletteSelection() {
-        val palette = commandPalette ?: return
+    private fun executePaletteSelection(): (() -> Unit)? {
+        val palette = commandPalette ?: return null
 
         if (palette.mode == TuiPaletteMode.DNS) {
-            if (palette.input.isNotBlank()) {
-                commandPalette = null
-                onDnsUpstreamSelected(palette.input)
-            }
-            return
+            if (palette.input.isBlank()) return null
+            commandPalette = null
+            val value = palette.input
+            return { onDnsUpstreamSelected(value) }
         }
 
-        val selected = palette.options.getOrNull(palette.selectedIndex) ?: return
-        when (palette.mode) {
+        val selected = palette.options.getOrNull(palette.selectedIndex) ?: return null
+        return when (palette.mode) {
             TuiPaletteMode.COMMANDS -> when (selected.value) {
                 "/port" -> {
-                    onRefreshPorts()
-                    openPortPalette()
+                    { onRefreshPorts(); openPortPalette() }
                 }
-                "/baud" -> openBaudPalette()
-                "/dns-upstream" -> openDnsPalette()
-                "/http-proxy" -> openHttpPalette()
+                "/baud" -> {
+                    openBaudPalette()
+                    null
+                }
+                "/dns-upstream" -> {
+                    openDnsPalette()
+                    null
+                }
+                "/http-proxy" -> {
+                    openHttpPalette()
+                    null
+                }
                 "/reconnect" -> {
                     commandPalette = null
-                    onReconnect()
+                    onReconnect
                 }
                 "/disconnect" -> {
                     commandPalette = null
-                    onDisconnect()
+                    onDisconnect
                 }
                 "/refresh-ports" -> {
                     commandPalette = null
-                    onRefreshPorts()
+                    onRefreshPorts
                 }
                 "/clear-log" -> {
                     logs.clear()
                     commandPalette = null
+                    null
                 }
                 "/quit" -> {
                     commandPalette = null
-                    requestQuit()
+                    ::requestQuit
                 }
+                else -> null
             }
 
             TuiPaletteMode.PORTS -> {
                 commandPalette = null
-                onPortSelected(selected.value)
+                val value = selected.value
+                { onPortSelected(value) }
             }
 
             TuiPaletteMode.BAUD -> {
                 commandPalette = null
-                selected.value.toIntOrNull()?.let(onBaudSelected)
+                selected.value.toIntOrNull()?.let { value ->
+                    { onBaudSelected(value) }
+                }
             }
 
             TuiPaletteMode.HTTP -> {
                 commandPalette = null
-                onHttpProxySelected(selected.value.toBoolean())
+                val value = selected.value.toBoolean()
+                { onHttpProxySelected(value) }
             }
 
-            TuiPaletteMode.DNS -> Unit
+            TuiPaletteMode.DNS -> null
         }
     }
 
@@ -543,9 +573,15 @@ class TuiYameObserver(
     }
 
     private fun requestQuit() {
-        if (stopRequested) return
-        stopRequested = true
-        onQuit()
+        val notify = synchronized(this) {
+            if (stopRequested) {
+                false
+            } else {
+                stopRequested = true
+                true
+            }
+        }
+        if (notify) onQuit()
     }
 
     private fun render() {
