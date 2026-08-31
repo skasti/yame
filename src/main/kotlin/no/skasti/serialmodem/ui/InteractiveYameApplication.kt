@@ -272,15 +272,19 @@ class InteractiveYameApplication(
             runCatching { connection.close() }
 
             val current = synchronized(lock) {
+                val ownsAttempt =
+                    connectionAttemptGeneration == connectionGeneration
+                val ownsActiveConnection =
+                    activeConnection === connection &&
+                        activeModem === modem
                 val isCurrent =
                     generation == connectionGeneration &&
-                        connectionAttemptGeneration == connectionGeneration
+                        (ownsAttempt || ownsActiveConnection)
 
-                if (connectionAttemptGeneration == connectionGeneration) {
+                if (ownsAttempt) {
                     connectionAttemptGeneration = null
                 }
-
-                if (isCurrent) {
+                if (ownsActiveConnection) {
                     activeModem = null
                     activeConnection = null
                 }
