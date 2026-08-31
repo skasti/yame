@@ -196,6 +196,86 @@ class HttpCompatibilityProxyTest {
     }
 
     @Test
+    fun `session route preserves hidden origin for root-relative requests across TCP flows`() {
+        val originServer = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val upstreamServer = ServerSocket(0, 2, InetAddress.getLoopbackAddress())
+        val upstreamRequests = LinkedBlockingQueue<String>()
+
+        val upstreamThread = Thread {
+            upstreamServer.use { listening ->
+                repeat(2) { requestIndex ->
+                    val socket = listening.accept()
+                    socket.use { accepted ->
+                        val request = readRequest(accepted)
+                        upstreamRequests.offer(request)
+                        val body = if (requestIndex == 0) {
+                            "<html><img src=\"/asset.gif\"></html>"
+                        } else {
+                            "asset"
+                        }
+                        val response =
+                            "HTTP/1.1 200 OK\r\n" +
+                                "Content-Type: " + if (requestIndex == 0) "text/html" else "image/gif" + "\r\n" +
+                                "Content-Length: ${body.toByteArray(StandardCharsets.ISO_8859_1).size}\r\n" +
+                                "Connection: close\r\n\r\n" +
+                                body
+                        accepted.getOutputStream().write(response.toByteArray(StandardCharsets.ISO_8859_1))
+                        accepted.getOutputStream().flush()
+                    }
+                }
+            }
+        }.apply {
+            isDaemon = true
+            start()
+        }
+        val originThread = serveOnce(originServer) {
+            "HTTP/1.1 302 Found\r\n" +
+                "Location: http://127.0.0.1:${upstreamServer.localPort}/page\r\n" +
+                "Content-Length: 0\r\n" +
+                "Connection: close\r\n\r\n"
+        }
+
+        val proxy = SystemHttpCompatibilityProxy(
+            config = PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000),
+        )
+        val pageEvents = LinkedBlockingQueue<TcpProxyEvent>()
+        val assetEvents = LinkedBlockingQueue<TcpProxyEvent>()
+        val pageFlow = httpFlow(peerPort = 2196)
+        val assetFlow = httpFlow(peerPort = 2195)
+
+        try {
+            proxy.connect(pageFlow, pageEvents::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(pageEvents.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                pageFlow,
+                ("GET /start HTTP/1.0\r\nHost: 127.0.0.1:${originServer.localPort}\r\n\r\n")
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+            val pageResponse = collectResponse(pageEvents)
+            assertTrue(pageResponse.contains("<img src=\"/asset.gif\">"), pageResponse)
+
+            proxy.connect(assetFlow, assetEvents::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(assetEvents.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                assetFlow,
+                ("GET /asset.gif HTTP/1.0\r\nHost: 127.0.0.1:${originServer.localPort}\r\n\r\n")
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+            val assetResponse = collectResponse(assetEvents)
+            assertTrue(assetResponse.endsWith("asset"), assetResponse)
+
+            assertTrue(requireNotNull(upstreamRequests.poll(2, TimeUnit.SECONDS)).startsWith("GET /page HTTP/1.1"))
+            assertTrue(requireNotNull(upstreamRequests.poll(2, TimeUnit.SECONDS)).startsWith("GET /asset.gif HTTP/1.1"))
+        } finally {
+            proxy.close()
+            runCatching { originServer.close() }
+            runCatching { upstreamServer.close() }
+            originThread.join(2_000)
+            upstreamThread.join(2_000)
+        }
+    }
+
+    @Test
     fun `compatibility proxy does not rewrite HTTPS byte sequences in binary responses`() {
         val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
         val body = "binary-prefix-https://example.test/resource-binary-suffix"
