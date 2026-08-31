@@ -41,6 +41,9 @@ data class PppHttpCompatibilityConfig(
     }
 }
 
+internal val LEGACY_PROTOCOL_RELATIVE_URL_PATTERN =
+    Regex("""(?<!:)//(?:\[[^\]]+\]|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)(?::\d+)?(?:[/?#][^\s"'<>\)]*)?""")
+
 internal object LegacyHttpUrl {
     fun mirrorOf(uri: URI): URI =
         URI(
@@ -743,7 +746,7 @@ class SystemHttpCompatibilityProxy(
             }
         }
 
-        rewritten = PROTOCOL_RELATIVE_URL_PATTERN.replace(rewritten) { match ->
+        rewritten = LEGACY_PROTOCOL_RELATIVE_URL_PATTERN.replace(rewritten) { match ->
             val scheme = if (upstreamBase.scheme.equals("https", ignoreCase = true)) "https" else "http"
             val target = runCatching { URI("$scheme:${match.value}") }.getOrNull()
             when {
@@ -1054,8 +1057,6 @@ class SystemHttpCompatibilityProxy(
         val URI_RESPONSE_HEADERS_TO_REWRITE = setOf("location", "content-location", "refresh", "link")
         val ABSOLUTE_HTTP_URL_PATTERN =
             Regex("""https?://(?:\[[^\]]+\]|[^\s/:?#"'<>]+)(?::\d+)?(?:[/?#][^\s"'<>\)]*)?""", RegexOption.IGNORE_CASE)
-        val PROTOCOL_RELATIVE_URL_PATTERN =
-            Regex("""(?<!:)//(?:\[[^\]]+\]|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)(?::\d+)?(?:[/?#][^\s"'<>\)]*)?""")
         val REWRITABLE_CONTENT_TYPES = setOf(
             "text/html",
             "application/xhtml+xml",
