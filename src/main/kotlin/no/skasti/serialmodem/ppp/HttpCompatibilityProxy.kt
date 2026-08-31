@@ -410,17 +410,15 @@ class SystemHttpCompatibilityProxy(
             value.split(';').map { it.trim() }.filter { it.contains('=') }.forEach { pair ->
                 runCatching {
                     HttpCookie.parse(pair).forEach { cookie ->
-                        cookie.path = defaultCookiePath(uri.path)
+                        // These cookies were already selected by the legacy client for the initial request.
+                        // Keep them available across same-origin hidden redirects; a Set-Cookie with the
+                        // same name/path can still replace or expire them in the CookieManager.
+                        cookie.path = "/"
                         state.cookieManager.cookieStore.add(uri, cookie)
                     }
                 }
             }
         }
-    }
-    private fun defaultCookiePath(path: String?): String {
-        if (path.isNullOrEmpty() || !path.startsWith('/')) return "/"
-        val lastSlash = path.lastIndexOf('/')
-        return if (lastSlash <= 0) "/" else path.substring(0, lastSlash)
     }
     private fun cookieHeaders(state: FlowState, uri: URI): List<String> = runCatching { state.cookieManager.get(uri, emptyMap())["Cookie"].orEmpty() }.getOrDefault(emptyList())
     private fun storeCookies(state: FlowState, uri: URI, headers: Map<String, List<String>>) { runCatching { state.cookieManager.put(uri, headers) } }
