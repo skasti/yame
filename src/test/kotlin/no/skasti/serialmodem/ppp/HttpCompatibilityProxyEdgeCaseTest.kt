@@ -22,7 +22,26 @@ class HttpCompatibilityProxyEdgeCaseTest {
             proxy.send(first, "GET / HTTP/1.0\r\nHost: example.test".toByteArray()).getOrThrow()
             proxy.shutdownOutput(first).getOrThrow()
             assertTrue(collectResponse(events).startsWith("HTTP/1.0 400 Bad Request\r\n"))
-            assertCanConnect(proxy, 2302)
+            assertCanConnectEventually(proxy, 2302)
+        } finally { proxy.close() }
+    }
+
+    @Test
+    fun `incomplete half close does not block receive thread while reads are paused`() {
+        val proxy = proxy(maxFlows = 1)
+        val events = LinkedBlockingQueue<TcpProxyEvent>()
+        val first = flow(2305)
+        try {
+            proxy.connect(first, events::offer)
+            assertIs<TcpProxyEvent.Connected>(events.poll(2, TimeUnit.SECONDS))
+            proxy.send(first, "GET / HTTP/1.0\r\nHost: example.test".toByteArray()).getOrThrow()
+            proxy.pauseReads(first)
+            val started = System.nanoTime()
+            proxy.shutdownOutput(first).getOrThrow()
+            assertTrue(System.nanoTime() - started < TimeUnit.MILLISECONDS.toNanos(500))
+            proxy.resumeReads(first)
+            assertTrue(collectResponse(events).startsWith("HTTP/1.0 400 Bad Request\r\n"))
+            assertCanConnectEventually(proxy, 2306)
         } finally { proxy.close() }
     }
 
@@ -96,6 +115,35 @@ class HttpCompatibilityProxyEdgeCaseTest {
             proxy.send(current, "data".toByteArray()).getOrThrow()
             assertTrue(collectResponse(events).contains("ok"))
         } finally { proxy.close(); runCatching { server.close() }; thread.join(2_000) }
+    }
+
+    @Test
+    fun `expect 100 continue does not block receive thread while reads are paused`() {
+        val proxy = proxy()
+        val events = LinkedBlockingQueue<TcpProxyEvent>()
+        val current = flow(2510)
+        try {
+            proxy.connect(current, events::offer)
+            assertIs<TcpProxyEvent.Connected>(events.poll(2, TimeUnit.SECONDS))
+            proxy.pauseReads(current)
+            val started = System.nanoTime()
+            proxy.send(
+                current,
+                "POST / HTTP/1.1\r\nHost: example.test\r\nContent-Length: 4\r\nExpect: 100-continue\r\n\r\n".toByteArray(),
+            ).getOrThrow()
+            assertTrue(System.nanoTime() - started < TimeUnit.MILLISECONDS.toNanos(500))
+            proxy.resumeReads(current)
+            var interim = ""
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+            while (!interim.contains("100 Continue") && System.nanoTime() < deadline) {
+                when (val event = events.poll(100, TimeUnit.MILLISECONDS)) {
+                    is TcpProxyEvent.Payload -> interim += event.bytes.toString(StandardCharsets.ISO_8859_1)
+                    is TcpProxyEvent.Failure -> throw AssertionError("proxy failed", event.error)
+                    else -> Unit
+                }
+            }
+            assertTrue(interim.contains("HTTP/1.1 100 Continue\r\n\r\n"), interim)
+        } finally { proxy.close() }
     }
 
     @Test
@@ -242,6 +290,33 @@ class HttpCompatibilityProxyEdgeCaseTest {
             assertTrue(redirected.contains("session=old"), redirected)
             assertTrue(!redirected.contains("session=new"), redirected)
         } finally { proxy.close(); runCatching { server.close() }; thread.join(2_000) }
+    }
+
+    @Test
+    fun `final cookies are hidden when redirect changes origin`() {
+        val first = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val second = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val firstThread = serveOnce(first) {
+            "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:${second.localPort}/final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        }
+        val secondThread = serveOnce(second) {
+            "HTTP/1.1 200 OK\r\nSet-Cookie: planted=1; Path=/\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+        }
+        val proxy = proxy()
+        val events = LinkedBlockingQueue<TcpProxyEvent>()
+        val current = flow(2511)
+        try {
+            proxy.connect(current, events::offer)
+            assertIs<TcpProxyEvent.Connected>(events.poll(2, TimeUnit.SECONDS))
+            proxy.send(current, "GET / HTTP/1.0\r\nHost: 127.0.0.1:${first.localPort}\r\n\r\n".toByteArray()).getOrThrow()
+            val response = collectResponse(events)
+            assertTrue(response.contains("ok"), response)
+            assertTrue(!response.contains("Set-Cookie", ignoreCase = true), response)
+        } finally {
+            proxy.close()
+            runCatching { first.close() }; runCatching { second.close() }
+            firstThread.join(2_000); secondThread.join(2_000)
+        }
     }
 
     @Test
