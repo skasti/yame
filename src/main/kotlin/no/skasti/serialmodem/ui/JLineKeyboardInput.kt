@@ -10,6 +10,8 @@ internal class JLineKeyboardInput private constructor(
     private val originalAttributes: Attributes,
     private val reader: NonBlockingReader,
 ) : AutoCloseable {
+    @Volatile
+    private var closed = false
     fun readKey(timeoutMillis: Long): String? {
         val first = reader.read(timeoutMillis)
         if (first == NonBlockingReader.READ_EXPIRED || first < 0) return null
@@ -41,7 +43,10 @@ internal class JLineKeyboardInput private constructor(
         }
     }
 
+    @Synchronized
     override fun close() {
+        if (closed) return
+        closed = true
         runCatching { terminal.setAttributes(originalAttributes) }
         runCatching { terminal.close() }
     }
