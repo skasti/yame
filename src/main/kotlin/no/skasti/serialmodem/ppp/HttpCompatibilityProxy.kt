@@ -105,6 +105,7 @@ class SystemHttpCompatibilityProxy(
         @Volatile var cancelled: Boolean = false,
         @Volatile var expectContinueSent: Boolean = false,
         @Volatile var task: Future<*>? = null,
+        @Volatile var interimTask: Future<*>? = null,
     )
 
     private data class LegacyRequest(val method: String, val target: String, val headers: List<Pair<String, String>>, val body: ByteArray)
@@ -114,6 +115,7 @@ class SystemHttpCompatibilityProxy(
         val headers: Map<String, List<String>>,
         val body: ByteArray,
         val contentLength: Long,
+        val exposeCookies: Boolean,
     )
 
     private enum class ExpectationDisposition { NONE, CONTINUE, UNSUPPORTED }
@@ -182,7 +184,10 @@ class SystemHttpCompatibilityProxy(
             }
         }
         safeCallback(state.onEvent, TcpProxyEvent.WriteCompleted(payload.size))
-        if (sendContinue) emitBytes(state, "HTTP/1.1 100 Continue\r\n\r\n".toByteArray(StandardCharsets.US_ASCII))
+        if (sendContinue) {
+            val scheduled = scheduleInterimResponse(state, "HTTP/1.1 100 Continue\r\n\r\n".toByteArray(StandardCharsets.US_ASCII))
+            if (scheduled.isFailure) return scheduled
+        }
         if (rejectExpectation) {
             return scheduleErrorResponse(state, 417, "Expectation Failed", "Unsupported HTTP Expect header")
         }
@@ -191,6 +196,7 @@ class SystemHttpCompatibilityProxy(
                 val requestBytes = requireNotNull(completeRequest)
                 val task = FutureTask<Unit> {
                     state.taskStarted.set(true)
+                    state.interimTask?.let { runCatching { it.get() } }
                     processRequest(state, requestBytes)
                 }
                 state.task = task
@@ -203,6 +209,26 @@ class SystemHttpCompatibilityProxy(
             }
         }
         return Result.success(Unit)
+    }
+
+    private fun scheduleInterimResponse(state: FlowState, payload: ByteArray): Result<Unit> {
+        return try {
+            val task = FutureTask<Unit> {
+                try {
+                    emitBytes(state, payload)
+                } finally {
+                    if (state.interimTask === state.interimTask) state.interimTask = null
+                }
+            }
+            state.interimTask = task
+            executor.execute(task)
+            if (state.cancelled || flows[state.flow] !== state) task.cancel(true)
+            Result.success(Unit)
+        } catch (error: Throwable) {
+            state.interimTask = null
+            failFlow(state, error)
+            Result.failure(error)
+        }
     }
 
     private fun scheduleErrorResponse(state: FlowState, status: Int, reason: String, message: String): Result<Unit> {
@@ -229,10 +255,22 @@ class SystemHttpCompatibilityProxy(
 
     override fun shutdownOutput(flow: TcpProxyFlow): Result<Unit> {
         val state = flows[flow] ?: return Result.failure(IllegalStateException("HTTP compatibility flow is not connected"))
-        val idle = synchronized(state) { !state.processing }
-        if (idle) {
-            val hasBytes = synchronized(state) { state.request.size() > 0 }
-            if (hasBytes) emitErrorResponse(state, 400, "Bad Request", "Incomplete HTTP request") else finishFlow(state)
+        var incomplete = false
+        var empty = false
+        synchronized(state) {
+            if (!state.processing) {
+                if (state.request.size() > 0) {
+                    state.processing = true
+                    state.request.reset()
+                    incomplete = true
+                } else {
+                    empty = true
+                }
+            }
+        }
+        if (incomplete) return scheduleErrorResponse(state, 400, "Bad Request", "Incomplete HTTP request")
+        if (empty) {
+            finishFlow(state)
             removeFlow(state)
         }
         return Result.success(Unit)
@@ -281,6 +319,7 @@ class SystemHttpCompatibilityProxy(
 
     private fun fetchFinalResponse(state: FlowState, request: LegacyRequest): FinalResponse {
         var uri = initialUri(state.flow, request)
+        val originalUri = uri
         seedClientCookies(state, request.headers)
         var method = request.method
         var body = request.body
@@ -331,8 +370,12 @@ class SystemHttpCompatibilityProxy(
                 }
                 val responseBody = if (preservesRepresentationLength) ByteArray(0) else readBounded(state, input, config.maxResponseBytes)
                 return FinalResponse(
-                    uri, status, response.headers().map(), responseBody,
-                    if (preservesRepresentationLength && upstreamContentLength >= 0L) upstreamContentLength else responseBody.size.toLong(),
+                    uri = uri,
+                    statusCode = status,
+                    headers = response.headers().map(),
+                    body = responseBody,
+                    contentLength = if (preservesRepresentationLength && upstreamContentLength >= 0L) upstreamContentLength else responseBody.size.toLong(),
+                    exposeCookies = sameOrigin(originalUri, uri),
                 )
             }
         }
@@ -344,7 +387,8 @@ class SystemHttpCompatibilityProxy(
             append("HTTP/1.0 ${response.statusCode} ${reasonPhrase(response.statusCode)}\r\n")
             response.headers.forEach { (name, values) ->
                 val normalized = name.lowercase(Locale.ROOT)
-                if (normalized !in RESPONSE_HEADERS_TO_STRIP && normalized !in nominated) {
+                val hiddenCrossOriginCookie = !response.exposeCookies && normalized in RESPONSE_COOKIE_HEADERS
+                if (normalized !in RESPONSE_HEADERS_TO_STRIP && normalized !in nominated && !hiddenCrossOriginCookie) {
                     values.forEach { append("$name: $it\r\n") }
                 }
             }
@@ -581,6 +625,8 @@ class SystemHttpCompatibilityProxy(
     private fun removeFlow(state: FlowState): Boolean {
         if (!flows.remove(state.flow, state)) return false
         state.cancelled = true
+        state.interimTask?.cancel(true)
+        state.interimTask = null
         cancelQueuedOrRunningTask(state)
         synchronized(state.readMonitor) { state.readsPaused = false; state.readMonitor.notifyAll() }
         if (!state.processing) releaseSlot(state)
@@ -610,6 +656,7 @@ class SystemHttpCompatibilityProxy(
         val REQUEST_HEADERS_TO_STRIP = setOf("host", "connection", "proxy-connection", "proxy-authorization", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade", "content-length", "accept-encoding", "expect", "cookie", "cookie2")
         val SENSITIVE_REQUEST_HEADERS = setOf("authorization", "cookie", "cookie2")
         val RESPONSE_HEADERS_TO_STRIP = setOf("connection", "proxy-connection", "keep-alive", "transfer-encoding", "trailer", "upgrade", "content-length")
+        val RESPONSE_COOKIE_HEADERS = setOf("set-cookie", "set-cookie2")
         const val RESPONSE_CHUNK_BYTES = 4 * 1024
         const val CLOSE_JOIN_TIMEOUT_MILLIS = 1_000L
         fun reasonPhrase(status: Int) = when (status) {
