@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 data class PppHttpCompatibilityConfig(
-    val enabled: Boolean = false,
+    val enabled: Boolean = true,
     val maxRedirects: Int = 8,
     val requestTimeoutMillis: Long = 30_000,
     val maxRequestBytes: Int = 0xffff,
@@ -410,32 +410,80 @@ class SystemHttpCompatibilityProxy(
     }
 
     private fun emitFinalResponse(state: FlowState, response: FinalResponse) {
-        val nominated = connectionNominatedHeaders(response.headers.flatMap { (name, values) -> values.map { name to it } })
+        val legacyHeaders = rewriteLegacyHeaders(response.headers)
+        val legacyBody = rewriteLegacyBody(response.headers, response.body)
+        val rewritten = legacyHeaders != response.headers || legacyBody !== response.body
+        val contentLength =
+            if (response.contentLength != response.body.size.toLong()) response.contentLength
+            else legacyBody.size.toLong()
+        val nominated = connectionNominatedHeaders(legacyHeaders.flatMap { (name, values) -> values.map { name to it } })
         val head = buildString {
             append("HTTP/1.0 ${response.statusCode} ${reasonPhrase(response.statusCode)}\r\n")
-            response.headers.forEach { (name, values) ->
+            legacyHeaders.forEach { (name, values) ->
                 val normalized = name.lowercase(Locale.ROOT)
                 val hiddenCrossOriginCookie = !response.exposeCookies && normalized in RESPONSE_COOKIE_HEADERS
                 if (normalized !in RESPONSE_HEADERS_TO_STRIP && normalized !in nominated && !hiddenCrossOriginCookie) {
                     values.forEach { append("$name: $it\r\n") }
                 }
             }
-            append("Content-Length: ${response.contentLength}\r\nConnection: close\r\n\r\n")
+            append("Content-Length: $contentLength\r\nConnection: close\r\n\r\n")
         }.toByteArray(StandardCharsets.ISO_8859_1)
-        logger("HTTP compatibility <= ${response.statusCode} ${response.uri} (${response.body.size} bytes, TLS hidden from peer)")
+        val rewriteSuffix = if (rewritten) ", HTTPS references rewritten for legacy client" else ""
+        logger(
+            "HTTP compatibility <= ${response.statusCode} ${response.uri} " +
+                "(${legacyBody.size} bytes, TLS hidden from peer$rewriteSuffix)",
+        )
         emitEvent(
             state,
             HttpProxyActionKind.RESPONSE,
-            "${response.statusCode} ${response.uri} · ${response.body.size} bytes · TLS hidden",
+            "${response.statusCode} ${response.uri} · ${legacyBody.size} bytes · TLS hidden" +
+                if (rewritten) " · HTTPS links rewritten" else "",
         )
         emitBytes(state, head)
         var offset = 0
-        while (offset < response.body.size) {
-            val end = minOf(offset + RESPONSE_CHUNK_BYTES, response.body.size)
-            emitBytes(state, response.body.copyOfRange(offset, end)); offset = end
+        while (offset < legacyBody.size) {
+            val end = minOf(offset + RESPONSE_CHUNK_BYTES, legacyBody.size)
+            emitBytes(state, legacyBody.copyOfRange(offset, end)); offset = end
         }
         finishFlow(state)
     }
+
+    private fun rewriteLegacyHeaders(headers: Map<String, List<String>>): Map<String, List<String>> =
+        headers.mapValues { (name, values) ->
+            if (name.lowercase(Locale.ROOT) in URI_RESPONSE_HEADERS_TO_REWRITE) {
+                values.map(::rewriteHttpsReferences)
+            } else {
+                values
+            }
+        }
+
+    private fun rewriteLegacyBody(headers: Map<String, List<String>>, body: ByteArray): ByteArray {
+        if (body.isEmpty() || !bodyCanContainNavigableUrls(headers)) return body
+        val source = body.toString(StandardCharsets.ISO_8859_1)
+        val rewritten = rewriteHttpsReferences(source)
+        return if (rewritten == source) body else rewritten.toByteArray(StandardCharsets.ISO_8859_1)
+    }
+
+    private fun bodyCanContainNavigableUrls(headers: Map<String, List<String>>): Boolean {
+        val contentEncoding = firstHeader(headers, "content-encoding")
+        if (contentEncoding != null && !contentEncoding.equals("identity", ignoreCase = true)) return false
+
+        val contentType = firstHeader(headers, "content-type")
+            ?.substringBefore(';')
+            ?.trim()
+            ?.lowercase(Locale.ROOT)
+            ?: return false
+        return contentType in REWRITABLE_CONTENT_TYPES
+    }
+
+    private fun firstHeader(headers: Map<String, List<String>>, name: String): String? =
+        headers.entries
+            .firstOrNull { (headerName, _) -> headerName.equals(name, ignoreCase = true) }
+            ?.value
+            ?.firstOrNull()
+
+    private fun rewriteHttpsReferences(value: String): String =
+        HTTPS_SCHEME_PATTERN.replace(value, "http://")
 
     private fun emitErrorResponse(state: FlowState, status: Int, reason: String, message: String) {
         if (!isActive(state)) return
@@ -705,6 +753,16 @@ class SystemHttpCompatibilityProxy(
         val SENSITIVE_REQUEST_HEADERS = setOf("authorization", "cookie", "cookie2")
         val RESPONSE_HEADERS_TO_STRIP = setOf("connection", "proxy-connection", "keep-alive", "transfer-encoding", "trailer", "upgrade", "content-length")
         val RESPONSE_COOKIE_HEADERS = setOf("set-cookie", "set-cookie2")
+        val URI_RESPONSE_HEADERS_TO_REWRITE = setOf("location", "content-location", "refresh", "link")
+        val REWRITABLE_CONTENT_TYPES = setOf(
+            "text/html",
+            "application/xhtml+xml",
+            "text/css",
+            "text/javascript",
+            "application/javascript",
+            "application/x-javascript",
+        )
+        val HTTPS_SCHEME_PATTERN = Regex("https://", RegexOption.IGNORE_CASE)
         const val RESPONSE_CHUNK_BYTES = 4 * 1024
         const val CLOSE_JOIN_TIMEOUT_MILLIS = 1_000L
         fun reasonPhrase(status: Int) = when (status) {
