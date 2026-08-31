@@ -217,6 +217,7 @@ class HttpCompatibilityProxyTest {
                         val response =
                             "HTTP/1.1 200 OK\r\n" +
                                 "Content-Type: " + (if (requestIndex == 0) "text/html" else "image/gif") + "\r\n" +
+                                (if (requestIndex == 0) "Set-Cookie: upstream=session; Path=/\r\n" else "") +
                                 "Content-Length: ${body.toByteArray(StandardCharsets.ISO_8859_1).size}\r\n" +
                                 "Connection: close\r\n\r\n" +
                                 body
@@ -274,7 +275,8 @@ class HttpCompatibilityProxyTest {
             val mappedAssetRequest = requireNotNull(upstreamRequests.poll(2, TimeUnit.SECONDS))
             assertTrue(mappedAssetRequest.startsWith("GET /asset.gif HTTP/1.1"))
             assertTrue(!mappedAssetRequest.contains("Authorization:", ignoreCase = true), mappedAssetRequest)
-            assertTrue(!mappedAssetRequest.contains("Cookie:", ignoreCase = true), mappedAssetRequest)
+            assertTrue(!mappedAssetRequest.contains("legacy=session", ignoreCase = true), mappedAssetRequest)
+            assertTrue(mappedAssetRequest.contains("Cookie: upstream=session", ignoreCase = true), mappedAssetRequest)
         } finally {
             proxy.close()
             runCatching { originServer.close() }
@@ -316,6 +318,55 @@ class HttpCompatibilityProxyTest {
             val response = collectResponse(events)
             assertTrue(response.endsWith(body), response)
             assertTrue(response.contains("https://example.test/resource"), response)
+        } finally {
+            proxy.close()
+            runCatching { server.close() }
+            thread.join(2_000)
+        }
+    }
+
+    @Test
+    fun `partial streamed response closes without appending a second HTTP response`() {
+        val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val thread = Thread {
+            server.use { listening ->
+                listening.accept().use { socket ->
+                    readRequest(socket)
+                    socket.getOutputStream().write(
+                        (
+                            "HTTP/1.1 200 OK\r\n" +
+                                "Content-Type: application/octet-stream\r\n" +
+                                "Content-Length: 100\r\n" +
+                                "Connection: close\r\n\r\n" +
+                                "partial"
+                            ).toByteArray(StandardCharsets.ISO_8859_1),
+                    )
+                    socket.getOutputStream().flush()
+                }
+            }
+        }.apply {
+            isDaemon = true
+            start()
+        }
+        val proxy = SystemHttpCompatibilityProxy(
+            config = PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000),
+        )
+        val events = LinkedBlockingQueue<TcpProxyEvent>()
+        val flow = httpFlow(peerPort = 2193)
+
+        try {
+            proxy.connect(flow, events::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(events.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                flow,
+                ("GET /file.bin HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\n\r\n")
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+
+            val response = collectResponse(events)
+            assertTrue(response.startsWith("HTTP/1.0 200 OK\r\n"), response)
+            assertEquals(1, Regex("HTTP/1\\.0 ").findAll(response).count(), response)
+            assertTrue(!response.contains("502 Bad Gateway"), response)
         } finally {
             proxy.close()
             runCatching { server.close() }
