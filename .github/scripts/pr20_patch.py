@@ -120,14 +120,14 @@ additions = '''    @Test
 
     @Test
     fun `rewritable text honors declared UTF-16 charset`() {
-        val body = "<a href=\"https://example.test/next\">next</a>".toByteArray(Charsets.UTF_16LE)
+        val body = "<a href=\\\"https://example.test/next\\\">next</a>".toByteArray(Charsets.UTF_16LE)
         val rewritten = rewriteEncodedTextBody(
             mapOf("Content-Type" to listOf("text/html; charset=UTF-16LE")),
             body,
         ) { it.replace("https://", "http://") }
 
         assertEquals(
-            "<a href=\"http://example.test/next\">next</a>",
+            "<a href=\\\"http://example.test/next\\\">next</a>",
             rewritten.toString(Charsets.UTF_16LE),
         )
     }
