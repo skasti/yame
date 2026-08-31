@@ -295,7 +295,10 @@ class HttpCompatibilityProxyTest {
                 body
         }
         val proxy = SystemHttpCompatibilityProxy(
-            config = PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000),
+            config = PppHttpCompatibilityConfig(
+                requestTimeoutMillis = 2_000,
+                maxResponseBytes = 16,
+            ),
         )
         val events = LinkedBlockingQueue<TcpProxyEvent>()
         val flow = httpFlow(peerPort = 2197)
@@ -312,6 +315,44 @@ class HttpCompatibilityProxyTest {
             val response = collectResponse(events)
             assertTrue(response.endsWith(body), response)
             assertTrue(response.contains("https://example.test/resource"), response)
+        } finally {
+            proxy.close()
+            runCatching { server.close() }
+            thread.join(2_000)
+        }
+    }
+
+    @Test
+    fun `compatibility proxy keeps rewrite cap for navigable text responses`() {
+        val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val body = "<html><a href=\"https://example.test/path\">link</a></html>"
+        val thread = serveOnce(server) {
+            "HTTP/1.1 200 OK\r\n" +
+                "Content-Type: text/html\r\n" +
+                "Content-Length: ${body.toByteArray(StandardCharsets.ISO_8859_1).size}\r\n" +
+                "Connection: close\r\n\r\n" +
+                body
+        }
+        val proxy = SystemHttpCompatibilityProxy(
+            config = PppHttpCompatibilityConfig(
+                requestTimeoutMillis = 2_000,
+                maxResponseBytes = 16,
+            ),
+        )
+        val events = LinkedBlockingQueue<TcpProxyEvent>()
+        val flow = httpFlow(peerPort = 2194)
+
+        try {
+            proxy.connect(flow, events::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(events.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                flow,
+                ("GET /page HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\n\r\n")
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+
+            val response = collectResponse(events)
+            assertTrue(response.startsWith("HTTP/1.0 502 Bad Gateway\r\n"), response)
         } finally {
             proxy.close()
             runCatching { server.close() }
