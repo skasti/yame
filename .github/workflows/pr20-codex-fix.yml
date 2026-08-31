@@ -31,3 +31,4 @@ jobs:
           git add src/main/kotlin/no/skasti/serialmodem/ppp/HttpCompatibilityProxy.kt src/test/kotlin/no/skasti/serialmodem/ppp/LegacyHttpsUrlCodecTest.kt
           git commit -m "Address Codex URL mapping and charset review"
           git push origin HEAD:fix/http-compatibility-default-and-links
+# retry after fixing generated Kotlin quoting
