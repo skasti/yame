@@ -42,13 +42,14 @@ data class PppHttpCompatibilityConfig(
 }
 
 internal val LEGACY_PROTOCOL_RELATIVE_URL_PATTERN =
-    Regex("""(?<![A-Za-z0-9_./:-])//(?:\[[^\]]+\]|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)(?::\d+)?(?:[/?#][^\s"'<>\)]*)?""")
+    Regex("""(?<![A-Za-z0-9_./:-])//(?:[^\s/?#"'<>@]+@)?(?:\[[^\]]+\]|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)(?::\d+)?(?:[/?#][^\s"'<>\)]*)?""")
 
 internal object LegacyHttpUrl {
     fun mirrorOf(uri: URI): URI =
         URI(
             buildString {
                 append("http://")
+                uri.rawUserInfo?.let { append(it).append('@') }
                 append(formatHost(requireNotNull(uri.host)))
                 append(uri.rawPath?.takeIf { it.isNotEmpty() } ?: "/")
                 uri.rawQuery?.let { append('?').append(it) }
@@ -61,6 +62,7 @@ internal object LegacyHttpUrl {
             buildString {
                 append(requireNotNull(uri.scheme))
                 append("://")
+                uri.rawUserInfo?.let { append(it).append('@') }
                 append(formatHost(requireNotNull(uri.host)))
                 val port = effectivePort(uri)
                 val defaultPort =
@@ -147,6 +149,13 @@ internal class LegacyOriginRouteTable {
         exactMappings[exactKey(flow, legacyUri)]
             ?: originMappings[originKey(flow, legacyUri)]?.resolvePathFrom(legacyUri)
             ?: legacyUri
+
+    fun isExactMapping(flow: TcpProxyFlow, legacyUri: URI, upstreamUri: URI): Boolean =
+        exactMappings[exactKey(flow, legacyUri)] == LegacyHttpUrl.withoutFragment(upstreamUri)
+
+    fun rememberExact(flow: TcpProxyFlow, legacyUri: URI, upstreamUri: URI) {
+        exactMappings[exactKey(flow, legacyUri)] = LegacyHttpUrl.withoutFragment(upstreamUri)
+    }
 
     fun remember(flow: TcpProxyFlow, legacyUri: URI, upstreamUri: URI): Pair<String, String>? {
         val originKey = originKey(flow, legacyUri)
@@ -536,6 +545,8 @@ class SystemHttpCompatibilityProxy(
     private fun fetchFinalResponse(state: FlowState, request: LegacyRequest): FinalResponse {
         val legacyUri = legacyUri(state.flow, request)
         var uri = originRoutes.resolve(state.flow, legacyUri)
+        val initialUpstreamUri = uri
+        val followedExactMapping = originRoutes.isExactMapping(state.flow, legacyUri, uri)
         val originalUri = legacyUri
         seedClientCookies(state, request.headers)
         var method = request.method
@@ -598,7 +609,7 @@ class SystemHttpCompatibilityProxy(
                         response.body().close()
                         FinalResponseBody.Buffered(ByteArray(0))
                     }
-                    bodyCanContainNavigableUrls(responseHeaders) -> {
+                    status != 206 && bodyCanContainNavigableUrls(responseHeaders) -> {
                         if (upstreamContentLength > config.maxResponseBytes.toLong()) {
                             response.body().close()
                             throw ResponseTooLarge(
@@ -611,9 +622,19 @@ class SystemHttpCompatibilityProxy(
                     }
                     else -> FinalResponseBody.Streaming(response.body())
                 }
-            originRoutes.remember(state.flow, legacyUri, uri)?.let { (legacyOrigin, upstreamOrigin) ->
-                logger("HTTP compatibility .. session route $legacyOrigin -> $upstreamOrigin")
-                emitEvent(state, HttpProxyActionKind.ROUTED, "session $legacyOrigin -> $upstreamOrigin")
+            val navigationLikeResponse = responseEstablishesNavigationOrigin(request.method, status, responseHeaders)
+            when {
+                followedExactMapping || navigationLikeResponse -> {
+                    originRoutes.remember(state.flow, legacyUri, uri)?.let { (legacyOrigin, upstreamOrigin) ->
+                        logger("HTTP compatibility .. session route $legacyOrigin -> $upstreamOrigin")
+                        emitEvent(state, HttpProxyActionKind.ROUTED, "session $legacyOrigin -> $upstreamOrigin")
+                    }
+                }
+                redirects > 0 && uri != initialUpstreamUri -> {
+                    originRoutes.rememberExact(state.flow, legacyUri, uri)
+                    logger("HTTP compatibility .. exact route $legacyUri -> $uri")
+                    emitEvent(state, HttpProxyActionKind.ROUTED, "exact $legacyUri -> $uri")
+                }
             }
             return FinalResponse(
                 uri = uri,
@@ -637,7 +658,8 @@ class SystemHttpCompatibilityProxy(
         val bufferedBody = (response.body as? FinalResponseBody.Buffered)?.bytes
         val legacyBody =
             bufferedBody?.let { rewriteLegacyBody(state.flow, response.uri, response.headers, it) }
-        val rewritten = legacyHeaders != response.headers || (bufferedBody != null && legacyBody !== bufferedBody)
+        val bodyRewritten = bufferedBody != null && legacyBody !== bufferedBody
+        val rewritten = legacyHeaders != response.headers || bodyRewritten
         val contentLength =
             when {
                 bufferedBody != null && response.contentLength != null &&
@@ -651,7 +673,9 @@ class SystemHttpCompatibilityProxy(
             legacyHeaders.forEach { (name, values) ->
                 val normalized = name.lowercase(Locale.ROOT)
                 val hiddenCrossOriginCookie = !response.exposeCookies && normalized in RESPONSE_COOKIE_HEADERS
-                if (normalized !in RESPONSE_HEADERS_TO_STRIP && normalized !in nominated && !hiddenCrossOriginCookie) {
+                val staleRepresentationMetadata = bodyRewritten && normalized in RESPONSE_HEADERS_TO_STRIP_WHEN_BODY_REWRITTEN
+                if (normalized !in RESPONSE_HEADERS_TO_STRIP && normalized !in nominated &&
+                    !hiddenCrossOriginCookie && !staleRepresentationMetadata) {
                     values.forEach { append("$name: $it\r\n") }
                 }
             }
@@ -733,6 +757,20 @@ class SystemHttpCompatibilityProxy(
             ?.lowercase(Locale.ROOT)
             ?: return false
         return contentType in REWRITABLE_CONTENT_TYPES
+    }
+
+    private fun responseEstablishesNavigationOrigin(
+        method: String,
+        status: Int,
+        headers: Map<String, List<String>>,
+    ): Boolean {
+        if (!method.equals("GET", ignoreCase = true) || status !in 200..299 || status == 206) return false
+        val contentType = firstHeader(headers, "content-type")
+            ?.substringBefore(';')
+            ?.trim()
+            ?.lowercase(Locale.ROOT)
+            ?: return false
+        return contentType in NAVIGATION_CONTENT_TYPES
     }
 
     private fun firstHeader(headers: Map<String, List<String>>, name: String): String? =
@@ -1059,10 +1097,11 @@ class SystemHttpCompatibilityProxy(
         val REQUEST_HEADERS_TO_STRIP = setOf("host", "connection", "proxy-connection", "proxy-authorization", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade", "content-length", "accept-encoding", "expect", "cookie", "cookie2")
         val SENSITIVE_REQUEST_HEADERS = setOf("authorization", "cookie", "cookie2")
         val RESPONSE_HEADERS_TO_STRIP = setOf("connection", "proxy-connection", "keep-alive", "transfer-encoding", "trailer", "upgrade", "content-length")
+        val RESPONSE_HEADERS_TO_STRIP_WHEN_BODY_REWRITTEN = setOf("etag", "content-md5", "digest", "content-digest", "repr-digest", "content-range", "accept-ranges")
         val RESPONSE_COOKIE_HEADERS = setOf("set-cookie", "set-cookie2")
         val URI_RESPONSE_HEADERS_TO_REWRITE = setOf("location", "content-location", "refresh", "link")
         val ABSOLUTE_HTTP_URL_PATTERN =
-            Regex("""https?://(?:\[[^\]]+\]|[^\s/:?#"'<>]+)(?::\d+)?(?:[/?#][^\s"'<>\)]*)?""", RegexOption.IGNORE_CASE)
+            Regex("""https?://(?:[^\s/?#"'<>@]+@)?(?:\[[^\]]+\]|[^\s/:?#"'<>]+)(?::\d+)?(?:[/?#][^\s"'<>\)]*)?""", RegexOption.IGNORE_CASE)
         val REWRITABLE_CONTENT_TYPES = setOf(
             "text/html",
             "application/xhtml+xml",
@@ -1071,6 +1110,7 @@ class SystemHttpCompatibilityProxy(
             "application/javascript",
             "application/x-javascript",
         )
+        val NAVIGATION_CONTENT_TYPES = setOf("text/html", "application/xhtml+xml")
         const val RESPONSE_CHUNK_BYTES = 4 * 1024
         const val CLOSE_JOIN_TIMEOUT_MILLIS = 1_000L
         fun reasonPhrase(status: Int) = when (status) {
