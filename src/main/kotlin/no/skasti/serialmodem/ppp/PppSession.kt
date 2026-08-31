@@ -1678,7 +1678,16 @@ class PppSession(
     private fun invalidateTransportFlows() {
         udpProxy.invalidateBefore(ipcpGeneration)
         tcpProxy.invalidateBefore(ipcpGeneration)
-        tcpContexts.values.forEach(::cancelTcpHandshakeTimeout)
+        tcpContexts.forEach { (key, context) ->
+            cancelTcpHandshakeTimeout(context)
+            emitEvent(
+                YameEvent.TransferStateChanged(
+                    flowId = flowId(key),
+                    state = TransferState.CLOSED,
+                    detail = "IPCP renegotiated",
+                ),
+            )
+        }
         tcpFlowTable.clear()
         tcpContexts.clear()
     }
