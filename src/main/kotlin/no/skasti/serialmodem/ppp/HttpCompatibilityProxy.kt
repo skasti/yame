@@ -295,6 +295,7 @@ class SystemHttpCompatibilityProxy(
         @Volatile var processing: Boolean = false,
         @Volatile var readsPaused: Boolean = false,
         @Volatile var cancelled: Boolean = false,
+        @Volatile var responseStarted: Boolean = false,
         @Volatile var expectContinueSent: Boolean = false,
         @Volatile var task: Future<*>? = null,
         @Volatile var interimTask: Future<*>? = null,
@@ -508,15 +509,15 @@ class SystemHttpCompatibilityProxy(
         } catch (error: BadLegacyRequest) {
             logger("HTTP compatibility !! bad request: ${error.message}")
             emitEvent(state, HttpProxyActionKind.ERROR, error.message ?: "Invalid HTTP request")
-            emitErrorResponse(state, 400, "Bad Request", error.message ?: "Invalid HTTP request")
+            emitErrorUnlessStarted(state, 400, "Bad Request", error.message ?: "Invalid HTTP request")
         } catch (error: ResponseTooLarge) {
             logger("HTTP compatibility !! ${error.message}")
             emitEvent(state, HttpProxyActionKind.ERROR, error.message ?: "Upstream response too large")
-            emitErrorResponse(state, 502, "Bad Gateway", error.message ?: "Upstream response too large")
+            emitErrorUnlessStarted(state, 502, "Bad Gateway", error.message ?: "Upstream response too large")
         } catch (error: Throwable) {
             logger("HTTP compatibility !! upstream failed: ${error.message ?: error.javaClass.simpleName}")
             emitEvent(state, HttpProxyActionKind.ERROR, error.message ?: error.javaClass.simpleName)
-            emitErrorResponse(state, 502, "Bad Gateway", "YAME could not fetch the upstream resource")
+            emitErrorUnlessStarted(state, 502, "Bad Gateway", "YAME could not fetch the upstream resource")
         } finally {
             synchronized(state) { state.processing = false; state.task = null }
             if (flows[state.flow] !== state) releaseSlot(state)
@@ -660,6 +661,7 @@ class SystemHttpCompatibilityProxy(
             "${response.statusCode} ${response.uri} · $sizeDescription · TLS hidden" +
                 if (rewritten) " · HTTPS links rewritten" else "",
         )
+        state.responseStarted = true
         emitBytes(state, head)
         when (val body = response.body) {
             is FinalResponseBody.Buffered -> {
@@ -754,6 +756,20 @@ class SystemHttpCompatibilityProxy(
             }
         }
         return rewritten
+    }
+
+    private fun emitErrorUnlessStarted(
+        state: FlowState,
+        status: Int,
+        reason: String,
+        message: String,
+    ) {
+        if (state.responseStarted) {
+            logger("HTTP compatibility .. response already started; closing partial response")
+            finishFlow(state)
+        } else {
+            emitErrorResponse(state, status, reason, message)
+        }
     }
 
     private fun emitErrorResponse(state: FlowState, status: Int, reason: String, message: String) {
