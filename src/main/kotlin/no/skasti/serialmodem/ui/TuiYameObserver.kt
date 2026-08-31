@@ -1205,8 +1205,16 @@ internal object YameDashboardRenderer {
         maxLength: Int,
     ): String {
         if (maxLength <= 0) return ""
-        if (value.length <= maxLength) return value
-        if (maxLength == 1) return value.take(1)
-        return value.take(maxLength - 1) + "…"
+        val safeValue = sanitizeTerminalText(value)
+        if (safeValue.length <= maxLength) return safeValue
+        if (maxLength == 1) return safeValue.take(1)
+        return safeValue.take(maxLength - 1) + "…"
     }
+
+    private fun sanitizeTerminalText(value: String): String =
+        buildString(value.length) {
+            value.forEach { character ->
+                append(if (character.isISOControl()) '�' else character)
+            }
+        }
 }
