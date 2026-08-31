@@ -47,6 +47,7 @@ class TuiYameObserver(
     private val transfers = linkedMapOf<String, DashboardTransfer>()
     private val httpActivity = ArrayDeque<DashboardHttpActivity>()
     private var commandPalette: TuiCommandPalette? = null
+    private var keyboardInput: JLineKeyboardInput? = null
 
     private val animation = terminal.textAnimation<String> { it }
     private var inputThread: Thread? = null
@@ -85,6 +86,27 @@ class TuiYameObserver(
     @Synchronized
     fun updateConnected(value: Boolean) {
         connected = value
+        render()
+    }
+
+    @Synchronized
+    fun closeActiveTransfers(detail: String? = null) {
+        if (transfers.isEmpty()) return
+        val now = System.nanoTime()
+        transfers.replaceAll { _, transfer ->
+            if (
+                transfer.state == TransferState.OPEN ||
+                transfer.state == TransferState.CONNECTING
+            ) {
+                transfer.copy(
+                    state = TransferState.CLOSED,
+                    updatedNanos = now,
+                    detail = detail ?: transfer.detail,
+                )
+            } else {
+                transfer
+            }
+        }
         render()
     }
 
@@ -263,14 +285,25 @@ class TuiYameObserver(
             {
                 try {
                     JLineKeyboardInput.open().use { keyboard ->
-                        while (!closed && !stopRequested) {
-                            val key = keyboard.readKey(INPUT_POLL_MILLIS)
-                                ?: continue
-                            when {
-                                key == "Ctrl+C" -> requestQuit()
-                                commandPalette != null -> handlePaletteKey(key)
-                                key == "/" -> openCommandPalette()
-                                key.equals("q", ignoreCase = true) -> requestQuit()
+                        synchronized(this) {
+                            keyboardInput = keyboard
+                        }
+                        try {
+                            while (!closed && !stopRequested) {
+                                val key = keyboard.readKey(INPUT_POLL_MILLIS)
+                                    ?: continue
+                                when {
+                                    key == "Ctrl+C" -> requestQuit()
+                                    commandPalette != null -> handlePaletteKey(key)
+                                    key == "/" -> openCommandPalette()
+                                    key.equals("q", ignoreCase = true) -> requestQuit()
+                                }
+                            }
+                        } finally {
+                            synchronized(this) {
+                                if (keyboardInput === keyboard) {
+                                    keyboardInput = null
+                                }
                             }
                         }
                     }
@@ -513,6 +546,8 @@ class TuiYameObserver(
     override fun close() {
         if (closed) return
         closed = true
+        keyboardInput?.close()
+        keyboardInput = null
         animation.stop()
         if (screenStarted) {
             leaveScreen()
