@@ -234,13 +234,10 @@ class InteractiveYameApplication(
                         generation == connectionGeneration &&
                         connectionAttemptGeneration == connectionGeneration
 
-                if (connectionAttemptGeneration == connectionGeneration) {
-                    connectionAttemptGeneration = null
-                }
-
                 if (isCurrent) {
                     activeModem = modem
                     activeConnection = connection
+                    connectionAttemptGeneration = null
                 }
                 isCurrent
             }
@@ -248,6 +245,11 @@ class InteractiveYameApplication(
             if (!current) {
                 runCatching { modem.close() }
                 runCatching { connection.close() }
+                synchronized(lock) {
+                    if (connectionAttemptGeneration == connectionGeneration) {
+                        connectionAttemptGeneration = null
+                    }
+                }
                 return
             }
 
