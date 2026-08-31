@@ -3,6 +3,7 @@ package no.skasti.serialmodem.ppp
 import java.io.ByteArrayOutputStream
 import java.net.CookieManager
 import java.net.CookiePolicy
+import java.net.HttpCookie
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -19,15 +20,6 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
-/**
- * Optional compatibility layer for HTTP-only legacy clients.
- *
- * The PPP peer still opens an ordinary TCP connection to port 80 and sends an
- * ordinary HTTP request. YAME consumes that request on the host side, follows
- * redirects itself (including HTTP -> HTTPS), and returns only the final HTTP
- * response to the peer. TLS therefore exists only between YAME and the modern
- * upstream server.
- */
 data class PppHttpCompatibilityConfig(
     val enabled: Boolean = false,
     val maxRedirects: Int = 8,
@@ -55,15 +47,9 @@ class SystemRoutingTcpProxy(
 
     override fun connect(flow: TcpProxyFlow, onEvent: (TcpProxyEvent) -> Unit) {
         val proxy = if (httpConfig.enabled && flow.key.remotePort == HTTP_PORT) {
-            logger(
-                "HTTP compatibility <= ${flow.key.peerAddress}:${flow.key.peerPort} -> " +
-                    "${flow.key.remoteAddress}:${flow.key.remotePort}",
-            )
+            logger("HTTP compatibility <= ${flow.key.peerAddress}:${flow.key.peerPort} -> ${flow.key.remoteAddress}:${flow.key.remotePort}")
             httpProxy
-        } else {
-            directProxy
-        }
-
+        } else directProxy
         val previous = routes.putIfAbsent(flow, proxy)
         if (previous != null) {
             onEvent(TcpProxyEvent.Failure(IllegalStateException("TCP flow is already routed")))
@@ -73,47 +59,25 @@ class SystemRoutingTcpProxy(
     }
 
     override fun send(flow: TcpProxyFlow, payload: ByteArray): Result<Unit> =
-        route(flow)?.send(flow, payload)
-            ?: Result.failure(IllegalStateException("TCP flow is not routed"))
-
+        route(flow)?.send(flow, payload) ?: Result.failure(IllegalStateException("TCP flow is not routed"))
     override fun shutdownOutput(flow: TcpProxyFlow): Result<Unit> =
-        route(flow)?.shutdownOutput(flow)
-            ?: Result.failure(IllegalStateException("TCP flow is not routed"))
-
-    override fun availableWriteCapacity(flow: TcpProxyFlow): Int =
-        route(flow)?.availableWriteCapacity(flow) ?: 0
-
-    override fun pauseReads(flow: TcpProxyFlow) {
-        route(flow)?.pauseReads(flow)
-    }
-
-    override fun resumeReads(flow: TcpProxyFlow) {
-        route(flow)?.resumeReads(flow)
-    }
-
-    override fun closeFlow(flow: TcpProxyFlow) {
-        routes.remove(flow)?.closeFlow(flow)
-    }
-
+        route(flow)?.shutdownOutput(flow) ?: Result.failure(IllegalStateException("TCP flow is not routed"))
+    override fun availableWriteCapacity(flow: TcpProxyFlow): Int = route(flow)?.availableWriteCapacity(flow) ?: 0
+    override fun pauseReads(flow: TcpProxyFlow) { route(flow)?.pauseReads(flow) }
+    override fun resumeReads(flow: TcpProxyFlow) { route(flow)?.resumeReads(flow) }
+    override fun closeFlow(flow: TcpProxyFlow) { routes.remove(flow)?.closeFlow(flow) }
     override fun invalidateBefore(generation: Long) {
         directProxy.invalidateBefore(generation)
         httpProxy.invalidateBefore(generation)
         routes.keys.removeIf { it.generation < generation }
     }
-
     override fun close() {
         routes.clear()
         directProxy.close()
-        if (httpProxy !== directProxy) {
-            httpProxy.close()
-        }
+        if (httpProxy !== directProxy) httpProxy.close()
     }
-
     private fun route(flow: TcpProxyFlow): TcpProxy? = routes[flow]
-
-    private companion object {
-        const val HTTP_PORT = 80
-    }
+    private companion object { const val HTTP_PORT = 80 }
 }
 
 class SystemHttpCompatibilityProxy(
@@ -130,6 +94,7 @@ class SystemHttpCompatibilityProxy(
         val request: ByteArrayOutputStream = ByteArrayOutputStream(),
         val readMonitor: java.lang.Object = java.lang.Object(),
         val slotReleased: AtomicBoolean = AtomicBoolean(),
+        val taskStarted: AtomicBoolean = AtomicBoolean(),
         val cookieManager: CookieManager = CookieManager(null, CookiePolicy.ACCEPT_ORIGINAL_SERVER),
         @Volatile var processing: Boolean = false,
         @Volatile var readsPaused: Boolean = false,
@@ -138,13 +103,7 @@ class SystemHttpCompatibilityProxy(
         @Volatile var task: Future<*>? = null,
     )
 
-    private data class LegacyRequest(
-        val method: String,
-        val target: String,
-        val headers: List<Pair<String, String>>,
-        val body: ByteArray,
-    )
-
+    private data class LegacyRequest(val method: String, val target: String, val headers: List<Pair<String, String>>, val body: ByteArray)
     private data class FinalResponse(
         val uri: URI,
         val statusCode: Int,
@@ -159,9 +118,7 @@ class SystemHttpCompatibilityProxy(
     private val flowSlots = Semaphore(config.maxFlows)
     private val flows = ConcurrentHashMap<TcpProxyFlow, FlowState>()
     private val minimumGeneration = AtomicLong(Long.MIN_VALUE)
-
-    @Volatile
-    private var closed = false
+    @Volatile private var closed = false
 
     override fun connect(flow: TcpProxyFlow, onEvent: (TcpProxyEvent) -> Unit) {
         if (closed) {
@@ -169,62 +126,38 @@ class SystemHttpCompatibilityProxy(
             return
         }
         if (flow.generation < minimumGeneration.get()) {
-            safeCallback(
-                onEvent,
-                TcpProxyEvent.Failure(IllegalStateException("TCP flow belongs to an old IPCP generation")),
-            )
+            safeCallback(onEvent, TcpProxyEvent.Failure(IllegalStateException("TCP flow belongs to an old IPCP generation")))
             return
         }
         if (!flowSlots.tryAcquire()) {
-            safeCallback(
-                onEvent,
-                TcpProxyEvent.Failure(IllegalStateException("HTTP compatibility flow limit reached")),
-            )
+            safeCallback(onEvent, TcpProxyEvent.Failure(IllegalStateException("HTTP compatibility flow limit reached")))
             return
         }
-
         val state = FlowState(flow = flow, onEvent = onEvent)
         if (flows.putIfAbsent(flow, state) != null) {
             releaseSlot(state)
-            safeCallback(
-                onEvent,
-                TcpProxyEvent.Failure(IllegalStateException("HTTP compatibility flow already exists")),
-            )
+            safeCallback(onEvent, TcpProxyEvent.Failure(IllegalStateException("HTTP compatibility flow already exists")))
             return
         }
-
         safeCallback(onEvent, TcpProxyEvent.Connected)
     }
 
     override fun send(flow: TcpProxyFlow, payload: ByteArray): Result<Unit> {
         if (payload.isEmpty()) return Result.success(Unit)
-        val state = flows[flow]
-            ?: return Result.failure(IllegalStateException("HTTP compatibility flow is not connected"))
-
+        val state = flows[flow] ?: return Result.failure(IllegalStateException("HTTP compatibility flow is not connected"))
         var completeRequest: ByteArray? = null
         var sendContinue = false
         synchronized(state) {
-            if (state.cancelled) {
-                return Result.failure(IllegalStateException("HTTP compatibility flow is closed"))
-            }
-            if (state.processing) {
-                return Result.failure(
-                    IllegalStateException("HTTP pipelining is not supported by compatibility mode"),
-                )
-            }
+            if (state.cancelled) return Result.failure(IllegalStateException("HTTP compatibility flow is closed"))
+            if (state.processing) return Result.failure(IllegalStateException("HTTP pipelining is not supported by compatibility mode"))
             if (state.request.size() + payload.size > config.maxRequestBytes) {
                 return Result.failure(IllegalStateException("HTTP request exceeds compatibility limit"))
             }
-
             state.request.write(payload)
             val buffered = state.request.toByteArray()
             val requestLength = requestLengthIfComplete(buffered)
             if (requestLength != null) {
-                if (buffered.size != requestLength) {
-                    return Result.failure(
-                        IllegalStateException("HTTP pipelining is not supported by compatibility mode"),
-                    )
-                }
+                if (buffered.size != requestLength) return Result.failure(IllegalStateException("HTTP pipelining is not supported by compatibility mode"))
                 state.processing = true
                 completeRequest = buffered
                 state.request.reset()
@@ -233,25 +166,18 @@ class SystemHttpCompatibilityProxy(
                 sendContinue = true
             }
         }
-
         safeCallback(state.onEvent, TcpProxyEvent.WriteCompleted(payload.size))
-        if (sendContinue) {
-            emitBytes(state, "HTTP/1.1 100 Continue\r\n\r\n".toByteArray(StandardCharsets.US_ASCII))
-        }
-
+        if (sendContinue) emitBytes(state, "HTTP/1.1 100 Continue\r\n\r\n".toByteArray(StandardCharsets.US_ASCII))
         if (completeRequest != null) {
             try {
                 val task = executor.submit {
+                    state.taskStarted.set(true)
                     processRequest(state, requireNotNull(completeRequest))
                 }
                 state.task = task
-                if (state.cancelled || flows[state.flow] !== state) {
-                    task.cancel(true)
-                }
+                if (state.cancelled || flows[state.flow] !== state) cancelQueuedOrRunningTask(state)
             } catch (error: Throwable) {
-                synchronized(state) {
-                    state.processing = false
-                }
+                synchronized(state) { state.processing = false }
                 failFlow(state, error)
                 return Result.failure(error)
             }
@@ -260,14 +186,11 @@ class SystemHttpCompatibilityProxy(
     }
 
     override fun shutdownOutput(flow: TcpProxyFlow): Result<Unit> {
-        val state = flows[flow]
-            ?: return Result.failure(IllegalStateException("HTTP compatibility flow is not connected"))
-
-        val incomplete = synchronized(state) {
-            !state.processing && state.request.size() > 0
-        }
-        if (incomplete) {
-            emitErrorResponse(state, 400, "Bad Request", "Incomplete HTTP request")
+        val state = flows[flow] ?: return Result.failure(IllegalStateException("HTTP compatibility flow is not connected"))
+        val idle = synchronized(state) { !state.processing }
+        if (idle) {
+            val hasBytes = synchronized(state) { state.request.size() > 0 }
+            if (hasBytes) emitErrorResponse(state, 400, "Bad Request", "Incomplete HTTP request") else finishFlow(state)
             removeFlow(state)
         }
         return Result.success(Unit)
@@ -280,20 +203,13 @@ class SystemHttpCompatibilityProxy(
             return (config.maxRequestBytes - state.request.size()).coerceAtLeast(0)
         }
     }
-
     override fun pauseReads(flow: TcpProxyFlow) {
         val state = flows[flow] ?: return
-        synchronized(state.readMonitor) {
-            state.readsPaused = true
-        }
+        synchronized(state.readMonitor) { state.readsPaused = true }
     }
-
     override fun resumeReads(flow: TcpProxyFlow) {
         val state = flows[flow] ?: return
-        synchronized(state.readMonitor) {
-            state.readsPaused = false
-            state.readMonitor.notifyAll()
-        }
+        synchronized(state.readMonitor) { state.readsPaused = false; state.readMonitor.notifyAll() }
     }
 
     private fun processRequest(state: FlowState, bytes: ByteArray) {
@@ -304,7 +220,6 @@ class SystemHttpCompatibilityProxy(
             ensureActive(state)
             emitFinalResponse(state, response)
         } catch (_: CancellationException) {
-            // The peer closed/reset the TCP flow while this request was queued or in flight.
         } catch (error: InterruptedException) {
             Thread.currentThread().interrupt()
         } catch (error: BadLegacyRequest) {
@@ -314,159 +229,91 @@ class SystemHttpCompatibilityProxy(
             logger("HTTP compatibility !! ${error.message}")
             emitErrorResponse(state, 502, "Bad Gateway", error.message ?: "Upstream response too large")
         } catch (error: Throwable) {
-            val reason = error.message ?: error.javaClass.simpleName
-            logger("HTTP compatibility !! upstream failed: $reason")
+            logger("HTTP compatibility !! upstream failed: ${error.message ?: error.javaClass.simpleName}")
             emitErrorResponse(state, 502, "Bad Gateway", "YAME could not fetch the upstream resource")
         } finally {
-            synchronized(state) {
-                state.processing = false
-                state.task = null
-            }
-            if (flows[state.flow] !== state) {
-                releaseSlot(state)
-            }
+            synchronized(state) { state.processing = false; state.task = null }
+            if (flows[state.flow] !== state) releaseSlot(state)
         }
     }
 
     private fun fetchFinalResponse(state: FlowState, request: LegacyRequest): FinalResponse {
         var uri = initialUri(state.flow, request)
+        seedClientCookies(state, uri, request.headers)
         var method = request.method
         var body = request.body
         var redirects = 0
         var forwardSensitiveHeaders = true
         val requestConnectionHeadersToStrip = connectionNominatedHeaders(request.headers)
-
         while (true) {
             ensureActive(state)
             requireSupportedScheme(uri)
             logger("HTTP compatibility => $method $uri")
-
-            val builder = HttpRequest.newBuilder(uri)
-                .timeout(Duration.ofMillis(config.requestTimeoutMillis))
-
+            val builder = HttpRequest.newBuilder(uri).timeout(Duration.ofMillis(config.requestTimeoutMillis))
             request.headers.forEach { (name, value) ->
                 val normalizedName = name.lowercase(Locale.ROOT)
-                if (
-                    normalizedName !in REQUEST_HEADERS_TO_STRIP &&
-                    normalizedName !in requestConnectionHeadersToStrip &&
-                    (forwardSensitiveHeaders || normalizedName !in SENSITIVE_REQUEST_HEADERS)
-                ) {
+                if (normalizedName !in REQUEST_HEADERS_TO_STRIP && normalizedName !in requestConnectionHeadersToStrip &&
+                    (forwardSensitiveHeaders || normalizedName !in SENSITIVE_REQUEST_HEADERS)) {
                     builder.header(name, value)
                 }
             }
-            cookieHeaders(state, uri).forEach { value -> builder.header("Cookie", value) }
+            cookieHeaders(state, uri).forEach { builder.header("Cookie", it) }
             builder.header("Accept-Encoding", "identity")
-            builder.method(
-                method,
-                if (body.isEmpty()) {
-                    HttpRequest.BodyPublishers.noBody()
-                } else {
-                    HttpRequest.BodyPublishers.ofByteArray(body)
-                },
-            )
-
-            val response = httpClient.send(
-                builder.build(),
-                HttpResponse.BodyHandlers.ofInputStream(),
-            )
+            builder.method(method, if (body.isEmpty()) HttpRequest.BodyPublishers.noBody() else HttpRequest.BodyPublishers.ofByteArray(body))
+            val response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream())
             ensureActiveOrClose(state, response)
             storeCookies(state, uri, response.headers().map())
             val status = response.statusCode()
             val location = response.headers().firstValue("location").orElse(null)
-
             if (status in REDIRECT_STATUS_CODES && location != null) {
                 response.body().close()
-                if (redirects >= config.maxRedirects) {
-                    throw IllegalStateException("HTTP redirect limit (${config.maxRedirects}) exceeded")
-                }
-
+                if (redirects >= config.maxRedirects) throw IllegalStateException("HTTP redirect limit (${config.maxRedirects}) exceeded")
                 val next = uri.resolve(location)
                 requireSupportedScheme(next)
-                if (!sameOrigin(uri, next)) {
-                    forwardSensitiveHeaders = false
-                }
+                if (!sameOrigin(uri, next)) forwardSensitiveHeaders = false
                 redirects++
                 logger("HTTP compatibility .. redirect $status $uri -> $next")
                 uri = next
-
-                if (
-                    (status == 303 && !method.equals("HEAD", ignoreCase = true)) ||
-                    ((status == 301 || status == 302) && method.equals("POST", ignoreCase = true))
-                ) {
+                if ((status == 303 && !method.equals("HEAD", true)) || ((status == 301 || status == 302) && method.equals("POST", true))) {
                     method = "GET"
                     body = ByteArray(0)
                 }
                 continue
             }
-
             response.body().use { input ->
-                val isHead = request.method.equals("HEAD", ignoreCase = true)
+                val isHead = request.method.equals("HEAD", true)
+                val preservesRepresentationLength = isHead || status == 304
                 val upstreamContentLength = response.headers().firstValueAsLong("content-length").orElse(-1L)
-                if (!isHead && upstreamContentLength > config.maxResponseBytes.toLong()) {
-                    throw ResponseTooLarge(
-                        "Upstream response is $upstreamContentLength bytes; limit is ${config.maxResponseBytes}",
-                    )
+                if (!preservesRepresentationLength && upstreamContentLength > config.maxResponseBytes.toLong()) {
+                    throw ResponseTooLarge("Upstream response is $upstreamContentLength bytes; limit is ${config.maxResponseBytes}")
                 }
-                val responseBody = if (isHead) {
-                    ByteArray(0)
-                } else {
-                    readBounded(state, input, config.maxResponseBytes)
-                }
+                val responseBody = if (preservesRepresentationLength) ByteArray(0) else readBounded(state, input, config.maxResponseBytes)
                 return FinalResponse(
-                    uri = uri,
-                    statusCode = status,
-                    headers = response.headers().map(),
-                    body = responseBody,
-                    contentLength = if (isHead && upstreamContentLength >= 0L) {
-                        upstreamContentLength
-                    } else {
-                        responseBody.size.toLong()
-                    },
+                    uri, status, response.headers().map(), responseBody,
+                    if (preservesRepresentationLength && upstreamContentLength >= 0L) upstreamContentLength else responseBody.size.toLong(),
                 )
             }
         }
     }
 
     private fun emitFinalResponse(state: FlowState, response: FinalResponse) {
-        val responseConnectionHeadersToStrip = connectionNominatedHeaders(
-            response.headers.flatMap { (name, values) -> values.map { value -> name to value } },
-        )
+        val nominated = connectionNominatedHeaders(response.headers.flatMap { (name, values) -> values.map { name to it } })
         val head = buildString {
-            append("HTTP/1.0 ")
-            append(response.statusCode)
-            append(' ')
-            append(reasonPhrase(response.statusCode))
-            append("\r\n")
-
+            append("HTTP/1.0 ${response.statusCode} ${reasonPhrase(response.statusCode)}\r\n")
             response.headers.forEach { (name, values) ->
-                val normalizedName = name.lowercase(Locale.ROOT)
-                if (
-                    normalizedName !in RESPONSE_HEADERS_TO_STRIP &&
-                    normalizedName !in responseConnectionHeadersToStrip
-                ) {
-                    values.forEach { value ->
-                        append(name)
-                        append(": ")
-                        append(value)
-                        append("\r\n")
-                    }
+                val normalized = name.lowercase(Locale.ROOT)
+                if (normalized !in RESPONSE_HEADERS_TO_STRIP && normalized !in nominated) {
+                    values.forEach { append("$name: $it\r\n") }
                 }
             }
-            append("Content-Length: ${response.contentLength}\r\n")
-            append("Connection: close\r\n")
-            append("\r\n")
+            append("Content-Length: ${response.contentLength}\r\nConnection: close\r\n\r\n")
         }.toByteArray(StandardCharsets.ISO_8859_1)
-
-        logger(
-            "HTTP compatibility <= ${response.statusCode} ${response.uri} " +
-                "(${response.body.size} bytes, TLS hidden from peer)",
-        )
+        logger("HTTP compatibility <= ${response.statusCode} ${response.uri} (${response.body.size} bytes, TLS hidden from peer)")
         emitBytes(state, head)
         var offset = 0
         while (offset < response.body.size) {
             val end = minOf(offset + RESPONSE_CHUNK_BYTES, response.body.size)
-            emitBytes(state, response.body.copyOfRange(offset, end))
-            offset = end
+            emitBytes(state, response.body.copyOfRange(offset, end)); offset = end
         }
         finishFlow(state)
     }
@@ -474,285 +321,163 @@ class SystemHttpCompatibilityProxy(
     private fun emitErrorResponse(state: FlowState, status: Int, reason: String, message: String) {
         if (!isActive(state)) return
         val body = "$status $reason\r\n$message\r\n".toByteArray(StandardCharsets.US_ASCII)
-        val response = buildString {
-            append("HTTP/1.0 $status $reason\r\n")
-            append("Content-Type: text/plain; charset=us-ascii\r\n")
-            append("Content-Length: ${body.size}\r\n")
-            append("Connection: close\r\n")
-            append("\r\n")
-        }.toByteArray(StandardCharsets.US_ASCII)
-        emitBytes(state, response)
+        emitBytes(state, ("HTTP/1.0 $status $reason\r\nContent-Type: text/plain; charset=us-ascii\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n").toByteArray(StandardCharsets.US_ASCII))
         emitBytes(state, body)
         finishFlow(state)
     }
-
     private fun emitBytes(state: FlowState, payload: ByteArray) {
         if (payload.isEmpty() || !isActive(state)) return
         awaitReadsEnabled(state)
-        if (!isActive(state)) return
-        safeCallback(state.onEvent, TcpProxyEvent.Payload(payload.copyOf()))
+        if (isActive(state)) safeCallback(state.onEvent, TcpProxyEvent.Payload(payload.copyOf()))
     }
-
     private fun awaitReadsEnabled(state: FlowState) {
-        synchronized(state.readMonitor) {
-            while (state.readsPaused && isActive(state)) {
-                state.readMonitor.wait()
-            }
-        }
+        synchronized(state.readMonitor) { while (state.readsPaused && isActive(state)) state.readMonitor.wait() }
     }
-
-    private fun finishFlow(state: FlowState) {
-        if (isActive(state)) {
-            safeCallback(state.onEvent, TcpProxyEvent.EndOfStream)
-        }
-    }
-
+    private fun finishFlow(state: FlowState) { if (isActive(state)) safeCallback(state.onEvent, TcpProxyEvent.EndOfStream) }
     private fun failFlow(state: FlowState, error: Throwable) {
-        if (removeFlow(state) && !closed) {
-            safeCallback(state.onEvent, TcpProxyEvent.Failure(error))
-        }
+        if (removeFlow(state) && !closed) safeCallback(state.onEvent, TcpProxyEvent.Failure(error))
     }
 
     private fun initialUri(flow: TcpProxyFlow, request: LegacyRequest): URI {
         val absolute = runCatching { URI(request.target) }.getOrNull()
         if (absolute?.isAbsolute == true) {
-            if (!absolute.scheme.equals("http", ignoreCase = true)) {
-                throw BadLegacyRequest("Port 80 compatibility requests must start as HTTP")
-            }
+            if (!absolute.scheme.equals("http", true)) throw BadLegacyRequest("Port 80 compatibility requests must start as HTTP")
             return absolute
         }
-
-        val host = request.headers
-            .firstOrNull { it.first.equals("Host", ignoreCase = true) }
-            ?.second
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
+        val host = request.headers.firstOrNull { it.first.equals("Host", true) }?.second?.trim()?.takeIf { it.isNotEmpty() }
             ?: flow.key.remoteAddress.toString()
         val target = if (request.target.startsWith('/')) request.target else "/${request.target}"
-        return try {
-            URI("http://$host$target")
-        } catch (error: Exception) {
-            throw BadLegacyRequest("Invalid HTTP Host or request target")
-        }
+        return try { URI("http://$host$target") } catch (_: Exception) { throw BadLegacyRequest("Invalid HTTP Host or request target") }
     }
 
     private fun parseRequest(bytes: ByteArray): LegacyRequest {
         val headerEnd = findHeaderEnd(bytes)
         if (headerEnd < 0) throw BadLegacyRequest("Incomplete HTTP request headers")
-
-        val text = String(bytes, 0, headerEnd, StandardCharsets.ISO_8859_1)
-        val lines = text.split("\r\n")
-        val requestLine = lines.firstOrNull()?.split(' ', limit = 3)
-            ?: throw BadLegacyRequest("Missing HTTP request line")
-        if (requestLine.size != 3 || !requestLine[2].startsWith("HTTP/")) {
-            throw BadLegacyRequest("Malformed HTTP request line")
-        }
-
+        val lines = String(bytes, 0, headerEnd, StandardCharsets.ISO_8859_1).split("\r\n")
+        val requestLine = lines.firstOrNull()?.split(' ', limit = 3) ?: throw BadLegacyRequest("Missing HTTP request line")
+        if (requestLine.size != 3 || !requestLine[2].startsWith("HTTP/")) throw BadLegacyRequest("Malformed HTTP request line")
         val method = requestLine[0].uppercase(Locale.ROOT)
         if (!METHOD_PATTERN.matches(method)) throw BadLegacyRequest("Invalid HTTP method")
         if (method == "CONNECT") throw BadLegacyRequest("CONNECT is not valid in HTTP compatibility mode")
-
         val headers = lines.drop(1).map { line ->
             val separator = line.indexOf(':')
             if (separator <= 0) throw BadLegacyRequest("Malformed HTTP header")
-            val name = line.substring(0, separator).trim()
-            val value = line.substring(separator + 1).trim()
-            if (!HEADER_NAME_PATTERN.matches(name) || value.any { it == '\r' || it == '\n' || it.code == 0 }) {
-                throw BadLegacyRequest("Invalid HTTP header")
-            }
+            val name = line.substring(0, separator).trim(); val value = line.substring(separator + 1).trim()
+            if (!HEADER_NAME_PATTERN.matches(name) || value.any { it == '\r' || it == '\n' || it.code == 0 }) throw BadLegacyRequest("Invalid HTTP header")
             name to value
         }
-
-        if (headers.any { it.first.equals("Transfer-Encoding", ignoreCase = true) }) {
-            throw BadLegacyRequest("Chunked legacy HTTP requests are not supported")
-        }
-        val contentLengths = headers
-            .filter { it.first.equals("Content-Length", ignoreCase = true) }
-            .map { it.second.toLongOrNull() ?: throw BadLegacyRequest("Invalid Content-Length") }
-            .distinct()
-        if (contentLengths.size > 1) throw BadLegacyRequest("Conflicting Content-Length headers")
-        val contentLength = contentLengths.singleOrNull() ?: 0L
-        if (contentLength < 0 || contentLength > config.maxRequestBytes) {
-            throw BadLegacyRequest("HTTP request body exceeds compatibility limit")
-        }
-
+        if (headers.any { it.first.equals("Transfer-Encoding", true) }) throw BadLegacyRequest("Chunked legacy HTTP requests are not supported")
+        val lengths = headers.filter { it.first.equals("Content-Length", true) }.map { it.second.toLongOrNull() ?: throw BadLegacyRequest("Invalid Content-Length") }.distinct()
+        if (lengths.size > 1) throw BadLegacyRequest("Conflicting Content-Length headers")
+        val contentLength = lengths.singleOrNull() ?: 0L
+        if (contentLength < 0 || contentLength > config.maxRequestBytes) throw BadLegacyRequest("HTTP request body exceeds compatibility limit")
         val bodyStart = headerEnd + HEADER_DELIMITER.size
-        if (bytes.size - bodyStart != contentLength.toInt()) {
-            throw BadLegacyRequest("HTTP request body length does not match Content-Length")
-        }
-
-        return LegacyRequest(
-            method = method,
-            target = requestLine[1],
-            headers = headers,
-            body = bytes.copyOfRange(bodyStart, bytes.size),
-        )
+        if (bytes.size - bodyStart != contentLength.toInt()) throw BadLegacyRequest("HTTP request body length does not match Content-Length")
+        return LegacyRequest(method, requestLine[1], headers, bytes.copyOfRange(bodyStart, bytes.size))
     }
 
-    private fun requestHeadersComplete(bytes: ByteArray): Boolean = findHeaderEnd(bytes) >= 0
-
+    private fun requestHeadersComplete(bytes: ByteArray) = findHeaderEnd(bytes) >= 0
     private fun expectsContinue(bytes: ByteArray): Boolean {
-        val headerEnd = findHeaderEnd(bytes)
-        if (headerEnd < 0) return false
-        val text = String(bytes, 0, headerEnd, StandardCharsets.ISO_8859_1)
-        val headers = text.split("\r\n").drop(1)
-        val expectValues = headers.mapNotNull { line ->
-            val separator = line.indexOf(':')
-            if (separator <= 0) return@mapNotNull null
-            if (!line.substring(0, separator).trim().equals("Expect", ignoreCase = true)) return@mapNotNull null
-            line.substring(separator + 1).trim()
+        val headerEnd = findHeaderEnd(bytes); if (headerEnd < 0) return false
+        val values = String(bytes, 0, headerEnd, StandardCharsets.ISO_8859_1).split("\r\n").drop(1).mapNotNull { line ->
+            val separator = line.indexOf(':'); if (separator <= 0 || !line.substring(0, separator).trim().equals("Expect", true)) null
+            else line.substring(separator + 1).trim()
         }
-        if (expectValues.isEmpty()) return false
-        return expectValues.all { it.equals("100-continue", ignoreCase = true) }
+        return values.isNotEmpty() && values.all { it.equals("100-continue", true) }
     }
-
     private fun requestLengthIfComplete(bytes: ByteArray): Int? {
-        val headerEnd = findHeaderEnd(bytes)
-        if (headerEnd < 0) return null
+        val headerEnd = findHeaderEnd(bytes); if (headerEnd < 0) return null
         val headerBytes = headerEnd + HEADER_DELIMITER.size
-        val text = String(bytes, 0, headerEnd, StandardCharsets.ISO_8859_1)
-        val contentLengthValues = text.split("\r\n")
-            .drop(1)
-            .mapNotNull { line ->
-                val separator = line.indexOf(':')
-                if (separator <= 0) return@mapNotNull null
-                if (!line.substring(0, separator).trim().equals("Content-Length", ignoreCase = true)) {
-                    return@mapNotNull null
-                }
-                line.substring(separator + 1).trim().toLongOrNull()
-            }
-            .distinct()
-        if (contentLengthValues.size > 1) return headerBytes
-        val contentLength = contentLengthValues.singleOrNull() ?: 0L
-        if (contentLength < 0 || contentLength > config.maxRequestBytes) return headerBytes
-        val total = headerBytes.toLong() + contentLength
+        val values = String(bytes, 0, headerEnd, StandardCharsets.ISO_8859_1).split("\r\n").drop(1).mapNotNull { line ->
+            val separator = line.indexOf(':'); if (separator <= 0 || !line.substring(0, separator).trim().equals("Content-Length", true)) null
+            else line.substring(separator + 1).trim().toLongOrNull()
+        }.distinct()
+        if (values.size > 1) return headerBytes
+        val length = values.singleOrNull() ?: 0L
+        if (length < 0 || length > config.maxRequestBytes) return headerBytes
+        val total = headerBytes.toLong() + length
         if (total > config.maxRequestBytes) return headerBytes
         return if (bytes.size.toLong() >= total) total.toInt() else null
     }
-
     private fun findHeaderEnd(bytes: ByteArray): Int {
-        if (bytes.size < HEADER_DELIMITER.size) return -1
-        for (index in 0..bytes.size - HEADER_DELIMITER.size) {
-            if (
-                bytes[index] == '\r'.code.toByte() &&
-                bytes[index + 1] == '\n'.code.toByte() &&
-                bytes[index + 2] == '\r'.code.toByte() &&
-                bytes[index + 3] == '\n'.code.toByte()
-            ) {
-                return index
-            }
-        }
+        if (bytes.size < 4) return -1
+        for (i in 0..bytes.size - 4) if (bytes[i] == 13.toByte() && bytes[i + 1] == 10.toByte() && bytes[i + 2] == 13.toByte() && bytes[i + 3] == 10.toByte()) return i
         return -1
     }
 
-    private fun cookieHeaders(state: FlowState, uri: URI): List<String> =
-        runCatching { state.cookieManager.get(uri, emptyMap())["Cookie"].orEmpty() }
-            .getOrDefault(emptyList())
-
-    private fun storeCookies(state: FlowState, uri: URI, headers: Map<String, List<String>>) {
-        runCatching { state.cookieManager.put(uri, headers) }
+    private fun seedClientCookies(state: FlowState, uri: URI, headers: List<Pair<String, String>>) {
+        headers.filter { it.first.equals("Cookie", true) || it.first.equals("Cookie2", true) }.forEach { (_, value) ->
+            value.split(';').map { it.trim() }.filter { it.contains('=') }.forEach { pair ->
+                runCatching {
+                    HttpCookie.parse(pair).forEach { cookie ->
+                        cookie.path = defaultCookiePath(uri.path)
+                        state.cookieManager.cookieStore.add(uri, cookie)
+                    }
+                }
+            }
+        }
     }
+    private fun defaultCookiePath(path: String?): String {
+        if (path.isNullOrEmpty() || !path.startsWith('/')) return "/"
+        val lastSlash = path.lastIndexOf('/')
+        return if (lastSlash <= 0) "/" else path.substring(0, lastSlash)
+    }
+    private fun cookieHeaders(state: FlowState, uri: URI): List<String> = runCatching { state.cookieManager.get(uri, emptyMap())["Cookie"].orEmpty() }.getOrDefault(emptyList())
+    private fun storeCookies(state: FlowState, uri: URI, headers: Map<String, List<String>>) { runCatching { state.cookieManager.put(uri, headers) } }
 
     private fun requireSupportedScheme(uri: URI) {
         val scheme = uri.scheme?.lowercase(Locale.ROOT)
-        if (scheme != "http" && scheme != "https") {
-            throw IllegalStateException("Unsupported redirect scheme: ${uri.scheme}")
-        }
-        if (uri.host.isNullOrBlank()) {
-            throw IllegalStateException("HTTP upstream URI has no host")
-        }
+        if (scheme != "http" && scheme != "https") throw IllegalStateException("Unsupported redirect scheme: ${uri.scheme}")
+        if (uri.host.isNullOrBlank()) throw IllegalStateException("HTTP upstream URI has no host")
     }
-
-    private fun connectionNominatedHeaders(headers: Iterable<Pair<String, String>>): Set<String> =
-        headers
-            .filter { (name, _) ->
-                name.equals("Connection", ignoreCase = true) ||
-                    name.equals("Proxy-Connection", ignoreCase = true)
-            }
-            .flatMap { (_, value) -> value.split(',') }
-            .map { it.trim().lowercase(Locale.ROOT) }
-            .filter { it.isNotEmpty() && HEADER_NAME_PATTERN.matches(it) }
-            .toSet()
-
-    private fun sameOrigin(first: URI, second: URI): Boolean =
-        first.scheme.equals(second.scheme, ignoreCase = true) &&
-            first.host.equals(second.host, ignoreCase = true) &&
-            effectivePort(first) == effectivePort(second)
-
-    private fun effectivePort(uri: URI): Int = when {
-        uri.port >= 0 -> uri.port
-        uri.scheme.equals("https", ignoreCase = true) -> 443
-        else -> 80
-    }
+    private fun connectionNominatedHeaders(headers: Iterable<Pair<String, String>>): Set<String> = headers
+        .filter { (name, _) -> name.equals("Connection", true) || name.equals("Proxy-Connection", true) }
+        .flatMap { it.second.split(',') }.map { it.trim().lowercase(Locale.ROOT) }
+        .filter { it.isNotEmpty() && HEADER_NAME_PATTERN.matches(it) }.toSet()
+    private fun sameOrigin(a: URI, b: URI) = a.scheme.equals(b.scheme, true) && a.host.equals(b.host, true) && effectivePort(a) == effectivePort(b)
+    private fun effectivePort(uri: URI) = when { uri.port >= 0 -> uri.port; uri.scheme.equals("https", true) -> 443; else -> 80 }
 
     private fun readBounded(state: FlowState, input: java.io.InputStream, limit: Int): ByteArray {
-        val output = ByteArrayOutputStream(minOf(limit, 64 * 1024))
-        val buffer = ByteArray(RESPONSE_CHUNK_BYTES)
-        var total = 0
+        val output = ByteArrayOutputStream(minOf(limit, 64 * 1024)); val buffer = ByteArray(RESPONSE_CHUNK_BYTES); var total = 0
         while (true) {
-            ensureActive(state)
-            val count = input.read(buffer)
-            if (count < 0) break
-            if (count == 0) continue
-            if (total + count > limit) {
-                throw ResponseTooLarge("Upstream response exceeds compatibility limit of $limit bytes")
-            }
-            output.write(buffer, 0, count)
-            total += count
+            ensureActive(state); val count = input.read(buffer); if (count < 0) break; if (count == 0) continue
+            if (total + count > limit) throw ResponseTooLarge("Upstream response exceeds compatibility limit of $limit bytes")
+            output.write(buffer, 0, count); total += count
         }
         return output.toByteArray()
     }
-
     private fun ensureActive(state: FlowState) {
-        if (!isActive(state) || Thread.currentThread().isInterrupted) {
-            throw CancellationException("HTTP compatibility flow closed")
-        }
+        if (!isActive(state) || Thread.currentThread().isInterrupted) throw CancellationException("HTTP compatibility flow closed")
     }
-
     private fun <T> ensureActiveOrClose(state: FlowState, response: HttpResponse<T>) {
         if (!isActive(state) || Thread.currentThread().isInterrupted) {
-            (response.body() as? AutoCloseable)?.let { body -> runCatching { body.close() } }
+            (response.body() as? AutoCloseable)?.let { runCatching { it.close() } }
             throw CancellationException("HTTP compatibility flow closed")
         }
     }
+    private fun isActive(state: FlowState) = !closed && !state.cancelled && state.flow.generation >= minimumGeneration.get() && flows[state.flow] === state
+    override fun closeFlow(flow: TcpProxyFlow) { flows[flow]?.let(::removeFlow) }
 
-    private fun isActive(state: FlowState): Boolean =
-        !closed &&
-            !state.cancelled &&
-            state.flow.generation >= minimumGeneration.get() &&
-            flows[state.flow] === state
-
-    override fun closeFlow(flow: TcpProxyFlow) {
-        flows[flow]?.let(::removeFlow)
+    private fun cancelQueuedOrRunningTask(state: FlowState) {
+        val task = state.task ?: return
+        if (task.cancel(true) && !state.taskStarted.get()) {
+            synchronized(state) { state.processing = false; state.task = null }
+            releaseSlot(state)
+        }
     }
-
     private fun removeFlow(state: FlowState): Boolean {
         if (!flows.remove(state.flow, state)) return false
         state.cancelled = true
-        state.task?.cancel(true)
-        synchronized(state.readMonitor) {
-            state.readsPaused = false
-            state.readMonitor.notifyAll()
-        }
-        if (!state.processing) {
-            releaseSlot(state)
-        }
+        cancelQueuedOrRunningTask(state)
+        synchronized(state.readMonitor) { state.readsPaused = false; state.readMonitor.notifyAll() }
+        if (!state.processing) releaseSlot(state)
         return true
     }
-
-    private fun releaseSlot(state: FlowState) {
-        if (state.slotReleased.compareAndSet(false, true)) {
-            flowSlots.release()
-        }
-    }
-
+    private fun releaseSlot(state: FlowState) { if (state.slotReleased.compareAndSet(false, true)) flowSlots.release() }
     override fun invalidateBefore(generation: Long) {
         minimumGeneration.accumulateAndGet(generation, ::maxOf)
-        flows.values
-            .filter { it.flow.generation < generation }
-            .forEach(::removeFlow)
+        flows.values.filter { it.flow.generation < generation }.forEach(::removeFlow)
     }
-
     override fun close() {
         if (closed) return
         closed = true
@@ -760,79 +485,28 @@ class SystemHttpCompatibilityProxy(
         executor.shutdownNow()
         runCatching { executor.awaitTermination(CLOSE_JOIN_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS) }
     }
-
-    private fun safeCallback(callback: (TcpProxyEvent) -> Unit, event: TcpProxyEvent) {
-        runCatching { callback(event) }
-    }
-
+    private fun safeCallback(callback: (TcpProxyEvent) -> Unit, event: TcpProxyEvent) { runCatching { callback(event) } }
     private class BadLegacyRequest(message: String) : IllegalArgumentException(message)
     private class ResponseTooLarge(message: String) : IllegalStateException(message)
 
     private companion object {
-        val HEADER_DELIMITER = byteArrayOf('\r'.code.toByte(), '\n'.code.toByte(), '\r'.code.toByte(), '\n'.code.toByte())
+        val HEADER_DELIMITER = byteArrayOf(13, 10, 13, 10)
         val METHOD_PATTERN = Regex("[A-Z!#$%&'*+.^_`|~-]+")
         val HEADER_NAME_PATTERN = Regex("[!#$%&'*+.^_`|~0-9A-Za-z-]+")
         val REDIRECT_STATUS_CODES = setOf(301, 302, 303, 307, 308)
-        val REQUEST_HEADERS_TO_STRIP = setOf(
-            "host",
-            "connection",
-            "proxy-connection",
-            "keep-alive",
-            "transfer-encoding",
-            "te",
-            "trailer",
-            "upgrade",
-            "content-length",
-            "accept-encoding",
-            "expect",
-        )
-        val SENSITIVE_REQUEST_HEADERS = setOf(
-            "authorization",
-            "proxy-authorization",
-            "cookie",
-            "cookie2",
-        )
-        val RESPONSE_HEADERS_TO_STRIP = setOf(
-            "connection",
-            "proxy-connection",
-            "keep-alive",
-            "transfer-encoding",
-            "trailer",
-            "upgrade",
-            "content-length",
-        )
+        val REQUEST_HEADERS_TO_STRIP = setOf("host", "connection", "proxy-connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade", "content-length", "accept-encoding", "expect", "cookie", "cookie2")
+        val SENSITIVE_REQUEST_HEADERS = setOf("authorization", "proxy-authorization", "cookie", "cookie2")
+        val RESPONSE_HEADERS_TO_STRIP = setOf("connection", "proxy-connection", "keep-alive", "transfer-encoding", "trailer", "upgrade", "content-length")
         const val RESPONSE_CHUNK_BYTES = 4 * 1024
         const val CLOSE_JOIN_TIMEOUT_MILLIS = 1_000L
-
-        fun reasonPhrase(status: Int): String = when (status) {
-            200 -> "OK"
-            201 -> "Created"
-            202 -> "Accepted"
-            204 -> "No Content"
-            206 -> "Partial Content"
-            300 -> "Multiple Choices"
-            301 -> "Moved Permanently"
-            302 -> "Found"
-            303 -> "See Other"
-            304 -> "Not Modified"
-            307 -> "Temporary Redirect"
-            308 -> "Permanent Redirect"
-            400 -> "Bad Request"
-            401 -> "Unauthorized"
-            403 -> "Forbidden"
-            404 -> "Not Found"
-            405 -> "Method Not Allowed"
-            408 -> "Request Timeout"
-            409 -> "Conflict"
-            410 -> "Gone"
-            413 -> "Content Too Large"
-            429 -> "Too Many Requests"
-            500 -> "Internal Server Error"
-            501 -> "Not Implemented"
-            502 -> "Bad Gateway"
-            503 -> "Service Unavailable"
-            504 -> "Gateway Timeout"
-            else -> "Upstream Response"
+        fun reasonPhrase(status: Int) = when (status) {
+            200 -> "OK"; 201 -> "Created"; 202 -> "Accepted"; 204 -> "No Content"; 206 -> "Partial Content"
+            300 -> "Multiple Choices"; 301 -> "Moved Permanently"; 302 -> "Found"; 303 -> "See Other"; 304 -> "Not Modified"
+            307 -> "Temporary Redirect"; 308 -> "Permanent Redirect"; 400 -> "Bad Request"; 401 -> "Unauthorized"
+            403 -> "Forbidden"; 404 -> "Not Found"; 405 -> "Method Not Allowed"; 408 -> "Request Timeout"
+            409 -> "Conflict"; 410 -> "Gone"; 413 -> "Content Too Large"; 429 -> "Too Many Requests"
+            500 -> "Internal Server Error"; 501 -> "Not Implemented"; 502 -> "Bad Gateway"; 503 -> "Service Unavailable"
+            504 -> "Gateway Timeout"; else -> "Upstream Response"
         }
     }
 }
