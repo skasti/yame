@@ -514,15 +514,15 @@ class TuiYameObserver(
                 }
                 "/reconnect" -> {
                     commandPalette = null
-                    onReconnect
+                    { onReconnect() }
                 }
                 "/disconnect" -> {
                     commandPalette = null
-                    onDisconnect
+                    { onDisconnect() }
                 }
                 "/refresh-ports" -> {
                     commandPalette = null
-                    onRefreshPorts
+                    { onRefreshPorts() }
                 }
                 "/clear-log" -> {
                     logs.clear()
@@ -539,7 +539,8 @@ class TuiYameObserver(
             TuiPaletteMode.PORTS -> {
                 commandPalette = null
                 val value = selected.value
-                { onPortSelected(value) }
+                val action: () -> Unit = { onPortSelected(value) }
+                action
             }
 
             TuiPaletteMode.BAUD -> {
@@ -552,7 +553,8 @@ class TuiYameObserver(
             TuiPaletteMode.HTTP -> {
                 commandPalette = null
                 val value = selected.value.toBoolean()
-                { onHttpProxySelected(value) }
+                val action: () -> Unit = { onHttpProxySelected(value) }
+                action
             }
 
             TuiPaletteMode.DNS -> null
