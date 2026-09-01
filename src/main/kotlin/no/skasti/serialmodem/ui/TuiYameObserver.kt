@@ -10,6 +10,7 @@ import com.github.ajalt.mordant.rendering.TextColors.yellow
 import com.github.ajalt.mordant.rendering.TextStyles.bold
 import com.github.ajalt.mordant.rendering.TextStyles.inverse
 import com.github.ajalt.mordant.terminal.Terminal
+import no.skasti.serialmodem.BuildInfo
 import no.skasti.serialmodem.observer.HttpProxyActionKind
 import no.skasti.serialmodem.observer.TransferDirection
 import no.skasti.serialmodem.observer.TransferKind
@@ -856,7 +857,7 @@ internal object YameDashboardRenderer {
         val connection = if (state.connected) "CONNECTED" else "NOT CONNECTED"
         val proxy = if (state.httpProxyEnabled) "HTTP proxy ON" else "HTTP proxy OFF"
         val headerText =
-            "[ YAME  •  $serial @ ${state.baud}  •  $connection  •  DNS ${state.dnsUpstream}  •  $proxy ]"
+            "[ YAME ${BuildInfo.display}  •  $serial @ ${state.baud}  •  $connection  •  DNS ${state.dnsUpstream}  •  $proxy ]"
         val header = styles.title(
             clip(headerText, renderWidth).padEnd(renderWidth),
         )
