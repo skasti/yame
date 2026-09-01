@@ -39,9 +39,16 @@ enum class YameLogModule(val fileName: String) {
 class YameLogManager(
     private val levels: Map<YameLogModule, YameLogLevel>,
     private val logDirectory: Path = Path.of("logs"),
+    private val maxActiveLogBytes: Long = 10L * 1024L * 1024L,
+    private val maxArchivesPerModule: Int = 5,
 ) : AutoCloseable {
+    init {
+        require(maxActiveLogBytes > 0) { "maxActiveLogBytes must be positive" }
+        require(maxArchivesPerModule >= 0) { "maxArchivesPerModule must not be negative" }
+    }
     private data class ModuleWriter(
-        val writer: BufferedWriter?,
+        val activePath: Path,
+        var writer: BufferedWriter?,
         @Volatile var level: YameLogLevel,
         @Volatile var writeFailed: Boolean = writer == null,
     )
@@ -58,21 +65,22 @@ class YameLogManager(
 
         writers = YameLogModule.entries.associateWith { module ->
             val level = levels[module] ?: YameLogLevel.INFO
+            val active = logDirectory.resolve("${module.fileName}.log")
             if (!directoryReady) {
-                ModuleWriter(null, level)
+                ModuleWriter(active, null, level)
             } else {
                 runCatching {
-                    val active = logDirectory.resolve("${module.fileName}.log")
                     rotateExisting(active, module)
+                    pruneArchives(module)
                     Files.newBufferedWriter(
                         active,
                         StandardCharsets.UTF_8,
                     )
                 }.fold(
-                    onSuccess = { writer -> ModuleWriter(writer, level) },
+                    onSuccess = { writer -> ModuleWriter(active, writer, level) },
                     onFailure = { error ->
                         reportLoggingFailure(module.fileName, "initialization", error)
-                        ModuleWriter(null, level)
+                        ModuleWriter(active, null, level)
                     },
                 )
             }
@@ -172,6 +180,7 @@ class YameLogManager(
                     .append(message)
                 writer.newLine()
                 writer.flush()
+                rotateIfNeeded(module, target)
             } catch (e: Exception) {
                 target.writeFailed = true
                 reportLoggingFailure(module.fileName, "write", e)
@@ -187,6 +196,34 @@ class YameLogManager(
                     runCatching { writer.close() }
                 }
             }
+        }
+    }
+
+    private fun rotateIfNeeded(module: YameLogModule, target: ModuleWriter) {
+        if (!Files.exists(target.activePath) || Files.size(target.activePath) < maxActiveLogBytes) return
+
+        val current = target.writer ?: return
+        current.close()
+        rotateExisting(target.activePath, module)
+        pruneArchives(module)
+        target.writer = Files.newBufferedWriter(target.activePath, StandardCharsets.UTF_8)
+    }
+
+    private fun pruneArchives(module: YameLogModule) {
+        val prefix = "${module.fileName}-"
+        val archives = Files.list(logDirectory).use { stream ->
+            stream
+                .filter { path ->
+                    val name = path.fileName.toString()
+                    name.startsWith(prefix) && name.endsWith(".log")
+                }
+                .sorted { left, right ->
+                    Files.getLastModifiedTime(right).compareTo(Files.getLastModifiedTime(left))
+                }
+                .toList()
+        }
+        archives.drop(maxArchivesPerModule).forEach { archive ->
+            runCatching { Files.deleteIfExists(archive) }
         }
     }
 
