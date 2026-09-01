@@ -1178,7 +1178,12 @@ class SystemHttpCompatibilityProxy(
             if (rewrittenContent == contentGroup.value) {
                 tagMatch.value
             } else {
-                replaceMatchGroup(tagMatch, contentGroup, rewrittenContent)
+                val rewrittenAttribute = replaceMatchGroup(contentMatch, contentGroup, rewrittenContent)
+                tagMatch.value.replaceRange(
+                    contentMatch.range.first,
+                    contentMatch.range.last + 1,
+                    rewrittenAttribute,
+                )
             }
         }
 
