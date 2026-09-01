@@ -145,10 +145,14 @@ class HttpCompatibilityProxyTest {
     fun `compatibility proxy rewrites HTTPS references for legacy HTML navigation`() {
         val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
         val originalBody =
-            "<html><a href=\"https://example.test/next\">next</a>" +
+            "<html><head><meta http-equiv=\"refresh\" content=\"0;url=https://example.test/meta\"></head>" +
+                "<a href=\"https://example.test/next\">next</a>" +
+                "<a href=https://example.test/unquoted>legacy</a>" +
                 "<form action=\"HTTPS://example.test/post\"></form></html>"
         val rewrittenBody =
-            "<html><a href=\"http://example.test/next\">next</a>" +
+            "<html><head><meta http-equiv=\"refresh\" content=\"0;url=http://example.test/meta\"></head>" +
+                "<a href=\"http://example.test/next\">next</a>" +
+                "<a href=http://example.test/unquoted>legacy</a>" +
                 "<form action=\"http://example.test/post\"></form></html>"
         val thread = serveOnce(server) {
             "HTTP/1.1 200 OK\r\n" +
@@ -181,7 +185,11 @@ class HttpCompatibilityProxyTest {
             assertTrue(response.contains(rewrittenBody), response)
             assertTrue(!response.contains("https://example.test/next"), response)
             assertTrue(!response.contains("HTTPS://example.test/post"), response)
+            assertTrue(!response.contains("https://example.test/unquoted"), response)
+            assertTrue(!response.contains("https://example.test/meta"), response)
             assertTrue(response.contains("http://example.test/next"), response)
+            assertTrue(response.contains("href=http://example.test/unquoted"), response)
+            assertTrue(response.contains("content=\"0;url=http://example.test/meta\""), response)
             assertTrue(!response.contains(".yame/https"), response)
             assertTrue(
                 response.contains(
