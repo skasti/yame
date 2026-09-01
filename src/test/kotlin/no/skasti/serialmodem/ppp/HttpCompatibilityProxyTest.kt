@@ -331,6 +331,108 @@ class HttpCompatibilityProxyTest {
 
 
     @Test
+    fun `hidden stylesheet redirect rebases relative CSS references against final upstream URI`() {
+        val server = ServerSocket(0, 3, InetAddress.getLoopbackAddress())
+        val pageBody =
+            "<html><head><link rel=\"stylesheet\" href=\"http://127.0.0.1:${server.localPort}/styles/main.css\"></head></html>"
+        val cssBody =
+            "body { background: url('../images/bg.gif'); } @import \"./theme/base.css\";"
+        val serverThread = Thread {
+            server.use { listening ->
+                repeat(3) { requestIndex ->
+                    listening.accept().use { socket ->
+                        val request = readRequest(socket)
+                        val response = when (requestIndex) {
+                            0 ->
+                                "HTTP/1.1 200 OK\\r\\n" +
+                                    "Content-Type: text/html; charset=utf-8\\r\\n" +
+                                    "Content-Length: ${pageBody.toByteArray(StandardCharsets.UTF_8).size}\\r\\n" +
+                                    "Connection: close\\r\\n\\r\\n" +
+                                    pageBody
+                            1 -> {
+                                assertTrue(request.startsWith("GET /styles/main.css "), request)
+                                "HTTP/1.1 302 Found\\r\\n" +
+                                    "Location: /assets/main.css\\r\\n" +
+                                    "Content-Length: 0\\r\\n" +
+                                    "Connection: close\\r\\n\\r\\n"
+                            }
+                            else -> {
+                                assertTrue(request.startsWith("GET /assets/main.css "), request)
+                                "HTTP/1.1 200 OK\\r\\n" +
+                                    "Content-Type: text/css; charset=utf-8\\r\\n" +
+                                    "Content-Length: ${cssBody.toByteArray(StandardCharsets.UTF_8).size}\\r\\n" +
+                                    "Connection: close\\r\\n\\r\\n" +
+                                    cssBody
+                            }
+                        }
+                        socket.getOutputStream().write(response.toByteArray(StandardCharsets.ISO_8859_1))
+                        socket.getOutputStream().flush()
+                    }
+                }
+            }
+        }.apply {
+            isDaemon = true
+            start()
+        }
+
+        val proxy = SystemHttpCompatibilityProxy(
+            config = PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000),
+        )
+        val pageEvents = LinkedBlockingQueue<TcpProxyEvent>()
+        val cssEvents = LinkedBlockingQueue<TcpProxyEvent>()
+        val pageFlow = httpFlow(peerPort = 2190)
+        val cssFlow = httpFlow(peerPort = 2191)
+
+        try {
+            proxy.connect(pageFlow, pageEvents::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(pageEvents.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                pageFlow,
+                ("GET /page HTTP/1.0\\r\\nHost: 127.0.0.1:${server.localPort}\\r\\n\\r\\n")
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+            val pageResponse = collectResponse(pageEvents)
+            assertTrue(
+                pageResponse.contains(
+                    "href=\"http://127.0.0.1:${server.localPort}/styles/main.css\"",
+                ),
+                pageResponse,
+            )
+
+            proxy.connect(cssFlow, cssEvents::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(cssEvents.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                cssFlow,
+                ("GET /styles/main.css HTTP/1.0\\r\\nHost: 127.0.0.1:${server.localPort}\\r\\n\\r\\n")
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+
+            val cssResponse = collectResponse(cssEvents)
+            assertTrue(cssResponse.startsWith("HTTP/1.0 200 OK\\r\\n"), cssResponse)
+            assertTrue(!cssResponse.contains("302 Found"), cssResponse)
+            assertTrue(
+                cssResponse.contains(
+                    "url('http://127.0.0.1:${server.localPort}/images/bg.gif')",
+                ),
+                cssResponse,
+            )
+            assertTrue(
+                cssResponse.contains(
+                    "@import \"http://127.0.0.1:${server.localPort}/assets/theme/base.css\"",
+                ),
+                cssResponse,
+            )
+            assertTrue(!cssResponse.contains("../images/bg.gif"), cssResponse)
+            assertTrue(!cssResponse.contains("./theme/base.css"), cssResponse)
+        } finally {
+            proxy.close()
+            runCatching { server.close() }
+            serverThread.join(2_000)
+        }
+    }
+
+
+    @Test
     fun `geocities fixture keeps relative URLs on the document origin while rewriting HTTPS scripts`() {
         val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
         val originalBody = """
