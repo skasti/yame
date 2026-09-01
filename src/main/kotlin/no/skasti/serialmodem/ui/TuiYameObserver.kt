@@ -958,7 +958,7 @@ internal object YameDashboardRenderer {
         val connection = if (state.connected) "CONNECTED" else "NOT CONNECTED"
         val lines = mutableListOf(
             DashboardLine(
-                "YAME  ${state.portName ?: "no port"} @ ${state.baud}  $connection",
+                "YAME ${BuildInfo.display}  ${state.portName ?: "no port"} @ ${state.baud}  $connection",
                 DashboardTone.ACCENT,
             ),
             DashboardLine(
