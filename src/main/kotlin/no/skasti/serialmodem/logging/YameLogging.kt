@@ -20,6 +20,15 @@ enum class YameLogLevel(val priority: Int) {
     INFO(2),
     DEBUG(3);
 
+    private fun reportLoggingFailure(module: String, phase: String, error: Throwable) {
+        runCatching {
+            System.err.println(
+                "YAME $module logging disabled after $phase failure: " +
+                    (error.message ?: error::class.simpleName),
+            )
+        }
+    }
+
     companion object {
         fun parse(value: String): YameLogLevel =
             entries.firstOrNull { it.name.equals(value, ignoreCase = true) }
@@ -41,24 +50,41 @@ class YameLogManager(
     private val logDirectory: Path = Path.of("logs"),
 ) : AutoCloseable {
     private data class ModuleWriter(
-        val writer: BufferedWriter,
+        val writer: BufferedWriter?,
         @Volatile var level: YameLogLevel,
-        @Volatile var writeFailed: Boolean = false,
+        @Volatile var writeFailed: Boolean = writer == null,
     )
 
     private val lock = Any()
     private val writers: Map<YameLogModule, ModuleWriter>
 
     init {
-        Files.createDirectories(logDirectory)
+        val directoryReady = runCatching {
+            Files.createDirectories(logDirectory)
+        }.onFailure { error ->
+            reportLoggingFailure("all", "initialization", error)
+        }.isSuccess
+
         writers = YameLogModule.entries.associateWith { module ->
-            val active = logDirectory.resolve("${module.fileName}.log")
-            rotateExisting(active, module)
-            val writer = Files.newBufferedWriter(
-                active,
-                StandardCharsets.UTF_8,
-            )
-            ModuleWriter(writer, levels[module] ?: YameLogLevel.INFO)
+            val level = levels[module] ?: YameLogLevel.INFO
+            if (!directoryReady) {
+                ModuleWriter(null, level)
+            } else {
+                runCatching {
+                    val active = logDirectory.resolve("${module.fileName}.log")
+                    rotateExisting(active, module)
+                    Files.newBufferedWriter(
+                        active,
+                        StandardCharsets.UTF_8,
+                    )
+                }.fold(
+                    onSuccess = { writer -> ModuleWriter(writer, level) },
+                    onFailure = { error ->
+                        reportLoggingFailure(module.fileName, "initialization", error)
+                        ModuleWriter(null, level)
+                    },
+                )
+            }
         }
     }
 
@@ -145,24 +171,20 @@ class YameLogManager(
 
         synchronized(lock) {
             if (target.writeFailed) return
+            val writer = target.writer ?: return
             try {
-                target.writer
+                writer
                     .append(LocalDateTime.now().format(LOG_TIME_FORMAT))
                     .append(" ")
                     .append(level.name)
                     .append(" ")
                     .append(message)
-                target.writer.newLine()
-                target.writer.flush()
+                writer.newLine()
+                writer.flush()
             } catch (e: Exception) {
                 target.writeFailed = true
-                runCatching {
-                    System.err.println(
-                        "YAME " + module.fileName + " logging disabled after write failure: " +
-                            (e.message ?: e::class.simpleName),
-                    )
-                }
-                runCatching { target.writer.close() }
+                reportLoggingFailure(module.fileName, "write", e)
+                runCatching { writer.close() }
             }
         }
     }
@@ -170,7 +192,9 @@ class YameLogManager(
     override fun close() {
         synchronized(lock) {
             writers.values.forEach { entry ->
-                runCatching { entry.writer.close() }
+                entry.writer?.let { writer ->
+                    runCatching { writer.close() }
+                }
             }
         }
     }
@@ -205,7 +229,8 @@ class YameLogManager(
         when {
             "!!" in message ||
                 "failed" in message.lowercase() ||
-                "error" in message.lowercase() -> YameLogLevel.ERROR
+                "error" in message.lowercase() ||
+                "reader stopped" in message.lowercase() -> YameLogLevel.ERROR
             "warning" in message.lowercase() ||
                 "unsupported" in message.lowercase() -> YameLogLevel.WARN
             "<=" in message ||
