@@ -1,6 +1,8 @@
 package no.skasti.serialmodem.ui
 
 import com.github.ajalt.mordant.terminal.Terminal
+import no.skasti.serialmodem.logging.YameLogManager
+import no.skasti.serialmodem.logging.YameLogModule
 import no.skasti.serialmodem.modem.HayesModem
 import no.skasti.serialmodem.modem.HayesModemConfig
 import no.skasti.serialmodem.ppp.Ipv4Address
@@ -11,6 +13,7 @@ class InteractiveYameApplication(
     initialBaud: Int,
     initialModemConfig: HayesModemConfig,
     terminal: Terminal,
+    private val logManager: YameLogManager,
     private val portProvider: () -> List<no.skasti.serialmodem.serial.SerialPortDescriptor> =
         SerialConnection::availablePortDescriptors,
 ) : AutoCloseable {
@@ -211,16 +214,34 @@ class InteractiveYameApplication(
             connectionAttemptGeneration = connectionGeneration
         }
 
+        val modemFileLogger = logManager.logger(YameLogModule.MODEM)
+        val pppFileLogger = logManager.logger(YameLogModule.PPP)
+        val proxyFileLogger = logManager.logger(YameLogModule.PROXY)
+        val serialFileLogger = logManager.logger(YameLogModule.SERIAL)
         val modem = HayesModem(
             baudRate = baud,
             config = config,
-            logger = observer::onLog,
-            eventSink = observer::onEvent,
+            logger = { message ->
+                observer.onLog(message)
+                modemFileLogger(message)
+            },
+            pppLogger = { message ->
+                observer.onLog(message)
+                pppFileLogger(message)
+            },
+            proxyLogger = proxyFileLogger,
+            eventSink = { event ->
+                logManager.eventSink(event)
+                observer.onEvent(event)
+            },
         )
         val connection = SerialConnection(
             portName = portName,
             baudRate = baud,
-            logger = observer::onLog,
+            logger = { message ->
+                observer.onLog(message)
+                serialFileLogger(message)
+            },
         )
 
         try {
