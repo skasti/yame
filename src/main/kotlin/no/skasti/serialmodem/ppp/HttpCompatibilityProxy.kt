@@ -43,7 +43,14 @@ data class PppHttpCompatibilityConfig(
 }
 
 internal val LEGACY_PROTOCOL_RELATIVE_URL_PATTERN =
-    Regex("""(?<![A-Za-z0-9_./:-])//(?:[^\s/?#"'<>@]+@)?(?:\[[^\]]+\]|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)(?::\d+)?(?:[/?#][^\s"'<>\)]*)?""")
+    Regex("""(?<![A-Za-z0-9_./:-])//(?:[^\s/?#"'<>@]+@)?(?:\[[^\]]+\]|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)(?::\d+)?(?:[/?#](?:[^\s"'<>\(\)]|\([^\(\)\s"'<>]*\))*)?""")
+
+internal val ABSOLUTE_HTTP_URL_PATTERN =
+    Regex("""https?://(?:[^\s/?#"'<>@]+@)?(?:\[[^\]]+\]|[^\s/:?#"'<>]+)(?::\d+)?(?:[/?#](?:[^\s"'<>\(\)]|\([^\(\)\s"'<>]*\))*)?""", RegexOption.IGNORE_CASE)
+
+internal fun injectedBaseTag(contentType: String?, escapedHref: String): String =
+    if (contentType == "application/xhtml+xml") "<base href=\"$escapedHref\" />"
+    else "<base href=\"$escapedHref\">"
 
 internal object LegacyHttpUrl {
     fun mirrorOf(uri: URI): URI =
@@ -226,10 +233,6 @@ internal class LegacyOriginRouteTable {
                 else -> originMappings.put(originKey, upstreamOrigin)
             }
 
-        if (legacyOrigin != upstreamOrigin && exactTarget == LegacyHttpUrl.withoutFragment(upstreamUri)) {
-            exactMappings.remove(exactKey, exactTarget)
-        }
-
         return if (previous == upstreamOrigin || (previous == null && legacyOrigin == upstreamOrigin)) {
             null
         } else {
@@ -242,14 +245,7 @@ internal class LegacyOriginRouteTable {
             "Compatibility reference target must be HTTPS"
         }
         val legacyUri = LegacyHttpUrl.mirrorOf(upstreamHttpsUri)
-        val targetOrigin = Origin.from(upstreamHttpsUri)
-        val existingOrigin = originMappings[originKey(flow, legacyUri)]
-        val exactKey = exactKey(flow, legacyUri)
-        if (existingOrigin == targetOrigin) {
-            exactMappings.remove(exactKey)
-        } else {
-            exactMappings[exactKey] = LegacyHttpUrl.withoutFragment(upstreamHttpsUri)
-        }
+        exactMappings[exactKey(flow, legacyUri)] = LegacyHttpUrl.withoutFragment(upstreamHttpsUri)
         return legacyUri.toString()
     }
 
@@ -810,7 +806,7 @@ class SystemHttpCompatibilityProxy(
             val rewritten =
                 if (htmlContext) rewriteHtmlReferences(flow, upstreamBase, source)
                 else rewriteHttpsReferences(flow, upstreamBase, source)
-            if (htmlContext) preserveDocumentBase(flow, legacyUri, upstreamBase, rewritten) else rewritten
+            if (htmlContext) preserveDocumentBase(flow, legacyUri, upstreamBase, contentType, rewritten) else rewritten
         }
     }
 
@@ -895,7 +891,13 @@ class SystemHttpCompatibilityProxy(
         return rewriteHttpsReferences(flow, upstreamBase, rewritten, htmlContext = false)
     }
 
-    private fun preserveDocumentBase(flow: TcpProxyFlow, legacyUri: URI, upstreamBase: URI, source: String): String {
+    private fun preserveDocumentBase(
+        flow: TcpProxyFlow,
+        legacyUri: URI,
+        upstreamBase: URI,
+        contentType: String?,
+        source: String,
+    ): String {
         val effectiveLegacyBase = legacyBaseFor(legacyUri, upstreamBase).toString()
         if (LegacyHttpUrl.requestObservableKey(legacyUri) == LegacyHttpUrl.requestObservableKey(URI(effectiveLegacyBase))) {
             return source
@@ -913,7 +915,7 @@ class SystemHttpCompatibilityProxy(
             return source.replaceRange(valueGroup.range, escapeHtmlAttributeUrl(replacement))
         }
 
-        val baseTag = "<base href=\"${escapeHtmlAttributeUrl(effectiveLegacyBase)}\">"
+        val baseTag = injectedBaseTag(contentType, escapeHtmlAttributeUrl(effectiveLegacyBase))
         val head = HTML_HEAD_PATTERN.find(source)
         if (head != null) return source.substring(0, head.range.last + 1) + baseTag + source.substring(head.range.last + 1)
         val html = HTML_HTML_PATTERN.find(source)
@@ -1264,8 +1266,6 @@ class SystemHttpCompatibilityProxy(
         val RESPONSE_HEADERS_TO_STRIP_WHEN_BODY_REWRITTEN = setOf("etag", "content-md5", "digest", "content-digest", "repr-digest", "content-range", "accept-ranges")
         val RESPONSE_COOKIE_HEADERS = setOf("set-cookie", "set-cookie2")
         val URI_RESPONSE_HEADERS_TO_REWRITE = setOf("location", "content-location", "refresh", "link")
-        val ABSOLUTE_HTTP_URL_PATTERN =
-            Regex("""https?://(?:[^\s/?#"'<>@]+@)?(?:\[[^\]]+\]|[^\s/:?#"'<>]+)(?::\d+)?(?:[/?#][^\s"'<>\)]*)?""", RegexOption.IGNORE_CASE)
         val REWRITABLE_CONTENT_TYPES = setOf(
             "text/html",
             "application/xhtml+xml",
