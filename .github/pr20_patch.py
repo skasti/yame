@@ -1,0 +1,185 @@
+from pathlib import Path
+
+p = Path('src/main/kotlin/no/skasti/serialmodem/ppp/HttpCompatibilityProxy.kt')
+s = p.read_text()
+
+def rep(old: str, new: str) -> None:
+    global s
+    if old not in s:
+        raise SystemExit('missing source pattern:\n' + old[:300])
+    s = s.replace(old, new, 1)
+
+rep(
+    'private val HTML_HEAD_PATTERN = Regex("""(?is)<head\\b[^>]*>""")\n',
+    'private val HTML_HEAD_PATTERN = Regex("""(?is)<head\\b[^>]*>""")\n'
+    'private val HTML_URL_ATTRIBUTE_PATTERN =\n'
+    '    Regex("""(?is)\\b(?:href|src|action|formaction|poster|data|cite|background)\\s*=\\s*(["\'])(.*?)\\1""")\n'
+)
+rep('        var forwardSensitiveHeaders = sameOrigin(legacyUri, uri)\n',
+    '        var forwardSensitiveHeaders = canForwardSensitiveHeaders(legacyUri, uri)\n')
+rep(
+    '            val rewritten = rewriteHttpsReferences(flow, upstreamBase, source, htmlContext)\n'
+    '            if (htmlContext) preserveDocumentBase(flow, legacyUri, upstreamBase, rewritten) else rewritten\n',
+    '            val rewritten =\n'
+    '                if (htmlContext) rewriteHtmlReferences(flow, upstreamBase, source)\n'
+    '                else rewriteHttpsReferences(flow, upstreamBase, source)\n'
+    '            if (htmlContext) preserveDocumentBase(flow, legacyUri, upstreamBase, rewritten) else rewritten\n'
+)
+marker = '    private fun preserveDocumentBase(flow: TcpProxyFlow, legacyUri: URI, upstreamBase: URI, source: String): String {\n'
+helper = '''    private fun rewriteHtmlReferences(flow: TcpProxyFlow, upstreamBase: URI, source: String): String {
+        var rewritten = source
+        HTML_URL_ATTRIBUTE_PATTERN.findAll(source).toList().asReversed().forEach { match ->
+            val valueGroup = match.groups[2] ?: return@forEach
+            val replacement = rewriteHttpsReferences(flow, upstreamBase, valueGroup.value, htmlContext = true)
+            if (replacement != valueGroup.value) {
+                rewritten = rewritten.replaceRange(valueGroup.range, replacement)
+            }
+        }
+        return rewriteHttpsReferences(flow, upstreamBase, rewritten, htmlContext = false)
+    }
+
+'''
+if marker not in s:
+    raise SystemExit('preserveDocumentBase marker missing')
+s = s.replace(marker, helper + marker, 1)
+start = s.index(marker)
+end = s.index('\n    private fun decodeHtmlEntities', start)
+new_block = '''    private fun preserveDocumentBase(flow: TcpProxyFlow, legacyUri: URI, upstreamBase: URI, source: String): String {
+        val effectiveLegacyBase = legacyBaseFor(legacyUri, upstreamBase).toString()
+        if (LegacyHttpUrl.requestObservableKey(legacyUri) == LegacyHttpUrl.requestObservableKey(URI(effectiveLegacyBase))) {
+            return source
+        }
+
+        val existing = HTML_BASE_HREF_PATTERN.find(source)
+        if (existing != null) {
+            val valueGroup = existing.groups[2] ?: return source
+            val upstreamTarget = runCatching { upstreamBase.resolve(decodeHtmlEntities(valueGroup.value)) }.getOrNull() ?: return source
+            val replacement = when {
+                sameOrigin(upstreamBase, upstreamTarget) -> legacyBaseFor(legacyUri, upstreamTarget).toString()
+                upstreamTarget.scheme.equals("https", true) -> originRoutes.rememberHttpsReference(flow, upstreamTarget)
+                else -> originRoutes.rememberHttpReference(flow, upstreamTarget)
+            }
+            return source.replaceRange(valueGroup.range, escapeHtmlAttributeUrl(replacement))
+        }
+
+        val baseTag = "<base href=\\"${escapeHtmlAttributeUrl(effectiveLegacyBase)}\\">"
+        val head = HTML_HEAD_PATTERN.find(source)
+        if (head != null) return source.substring(0, head.range.last + 1) + baseTag + source.substring(head.range.last + 1)
+        val html = HTML_HTML_PATTERN.find(source)
+        if (html != null) {
+            val insertAt = html.range.last + 1
+            return source.substring(0, insertAt) + "<head>$baseTag</head>" + source.substring(insertAt)
+        }
+        return baseTag + source
+    }
+
+    private fun legacyBaseFor(legacyUri: URI, upstreamUri: URI): URI =
+        URI(
+            buildString {
+                append("http://")
+                append(LegacyHttpUrl.formatHost(requireNotNull(legacyUri.host)))
+                val legacyPort = LegacyHttpUrl.effectivePort(legacyUri)
+                if (legacyPort != 80) append(':').append(legacyPort)
+                append(upstreamUri.rawPath?.takeIf { it.isNotEmpty() } ?: "/")
+                upstreamUri.rawQuery?.let { append('?').append(it) }
+            },
+        )
+'''
+s = s[:start] + new_block + s[end:]
+rep(
+    '            .mapNotNull { parseCookieOverride(uri, it) }\n'
+    '            .forEach { state.session.cookieOverrides += it }\n',
+    '            .mapNotNull { parseCookieOverride(uri, it) }\n'
+    '            .forEach { replacement ->\n'
+    '                state.session.cookieOverrides.removeIf { existing ->\n'
+    '                    existing.name.equals(replacement.name, true) &&\n'
+    '                        existing.domain.equals(replacement.domain, true) &&\n'
+    '                        existing.path == replacement.path\n'
+    '                }\n'
+    '                state.session.cookieOverrides += replacement\n'
+    '            }\n'
+)
+rep(
+    '    private fun sameOrigin(a: URI, b: URI) = a.scheme.equals(b.scheme, true) && a.host.equals(b.host, true) && effectivePort(a) == effectivePort(b)\n'
+    '    private fun effectivePort(uri: URI) = when { uri.port >= 0 -> uri.port; uri.scheme.equals("https", true) -> 443; else -> 80 }\n',
+    '    private fun sameOrigin(a: URI, b: URI) = a.scheme.equals(b.scheme, true) && a.host.equals(b.host, true) && effectivePort(a) == effectivePort(b)\n'
+    '    private fun canForwardSensitiveHeaders(legacyUri: URI, upstreamUri: URI): Boolean =\n'
+    '        sameOrigin(legacyUri, upstreamUri) ||\n'
+    '            (legacyUri.scheme.equals("http", true) && upstreamUri.scheme.equals("https", true) &&\n'
+    '                legacyUri.host.equals(upstreamUri.host, true) && effectivePort(legacyUri) == 80 && effectivePort(upstreamUri) == 443)\n'
+    '    private fun effectivePort(uri: URI) = when { uri.port >= 0 -> uri.port; uri.scheme.equals("https", true) -> 443; else -> 80 }\n'
+)
+p.write_text(s)
+
+t = Path('src/test/kotlin/no/skasti/serialmodem/ppp/HttpCompatibilityReviewRegressionTest.kt')
+ts = t.read_text()
+insert = ts.index('    private fun request(')
+tests = r'''    @Test
+    fun `script raw text URLs keep ampersands raw`() {
+        val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val body = "<html><script>fetch(\"https://api.test/x?a=1&b=2\")</script></html>"
+        val thread = serveOnce(server) {
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n" +
+                "Content-Length: ${body.length}\r\nConnection: close\r\n\r\n$body"
+        }
+        val proxy = SystemHttpCompatibilityProxy(PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000))
+        try {
+            val response = request(proxy, 2312, server.localPort, "/")
+            assertTrue(response.contains("http://api.test/x?a=1&b=2"), response)
+            assertTrue(!response.contains("a=1&amp;b=2"), response)
+        } finally {
+            proxy.close(); runCatching { server.close() }; thread.join(2_000)
+        }
+    }
+
+    @Test
+    fun `existing relative base replaces the captured href rather than the tag name`() {
+        val server = ServerSocket(0, 2, InetAddress.getLoopbackAddress())
+        val thread = Thread {
+            server.use { listening ->
+                listening.accept().use { socket ->
+                    readRequest(socket)
+                    writeResponse(socket, "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:${listening.localPort}/app/index.html\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                }
+                listening.accept().use { socket ->
+                    readRequest(socket)
+                    val body = "<html><head><base href=\"base\"></head><body>x</body></html>"
+                    writeResponse(socket, "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: ${body.length}\r\nConnection: close\r\n\r\n$body")
+                }
+            }
+        }.apply { isDaemon = true; start() }
+        val proxy = SystemHttpCompatibilityProxy(PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000))
+        try {
+            val response = request(proxy, 2313, server.localPort, "/old")
+            assertTrue(response.contains("<base href=\"http://127.0.0.1:${server.localPort}/app/base\">"), response)
+            assertTrue(!response.contains("<http://"), response)
+        } finally {
+            proxy.close(); runCatching { server.close() }; thread.join(2_000)
+        }
+    }
+
+    @Test
+    fun `cross origin redirect keeps the legacy host in the injected document base`() {
+        val oldServer = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val newServer = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val oldThread = serveOnce(oldServer) {
+            "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:${newServer.localPort}/app/index.html\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        }
+        val newThread = serveOnce(newServer) {
+            val body = "<html><head></head><body><img src=\"asset.png\"></body></html>"
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: ${body.length}\r\nConnection: close\r\n\r\n$body"
+        }
+        val proxy = SystemHttpCompatibilityProxy(PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000))
+        try {
+            val response = request(proxy, 2314, oldServer.localPort, "/start")
+            assertTrue(response.contains("<base href=\"http://127.0.0.1:${oldServer.localPort}/app/index.html\">"), response)
+            assertTrue(!response.contains("<base href=\"http://127.0.0.1:${newServer.localPort}"), response)
+        } finally {
+            proxy.close(); runCatching { oldServer.close() }; runCatching { newServer.close() }
+            oldThread.join(2_000); newThread.join(2_000)
+        }
+    }
+
+'''
+ts = ts[:insert] + tests + ts[insert:]
+t.write_text(ts)
