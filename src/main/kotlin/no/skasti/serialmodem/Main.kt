@@ -22,6 +22,7 @@ import kotlin.time.Duration.Companion.seconds
 
 fun main(args: Array<String>) {
     val options = parseArgs(args)
+
     val logManager = YameLogManager(options.logLevels)
     try {
 
