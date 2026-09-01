@@ -1,0 +1,120 @@
+name: Temporary PR 20 review fixes
+
+on:
+  push:
+    branches: [fix/http-compatibility-default-and-links]
+    paths: [.github/workflows/tmp-fix-pr20-review.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: fix/http-compatibility-default-and-links
+          fetch-depth: 0
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Apply fixes and regression tests
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('src/main/kotlin/no/skasti/serialmodem/ppp/HttpCompatibilityProxy.kt')
+          s = p.read_text()
+
+          old = '''    Regex("""https?://(?:[^\\s/?#"'<>@]+@)?(?:\\[[^\\]]+\\]|[^\\s/:?#"'<>]+)(?::\\d+)?(?:[/?#](?:[^\\s"'<>\\(\\)]|\\([^\\(\\)\\s"'<>]*\\))*)?""", RegexOption.IGNORE_CASE)'''
+          new = '''    Regex("""https?://(?:[^\\s/?#"'<>@]+@)?(?:\\[[^\\]]+\\]|[^\\s/:?#"'<>()]+)(?::\\d+)?(?:[/?#](?:[^\\s"'<>\\(\\)]|\\([^\\(\\)\\s"'<>]*\\))*)?""", RegexOption.IGNORE_CASE)'''
+          assert old in s
+          s = s.replace(old, new, 1)
+
+          old = '''            if (HTML_BASE_HREF_PATTERN.matches(tagMatch.value)) rewriteBaseAttribute ?: rewriteAttribute'''
+          new = '''            if (HTML_BASE_HREF_PATTERN.find(tagMatch.value) != null) rewriteBaseAttribute ?: rewriteAttribute'''
+          assert old in s
+          s = s.replace(old, new, 1)
+
+          old = '''            (legacyUri.scheme.equals("http", true) && upstreamUri.scheme.equals("https", true) &&
+                legacyUri.host.equals(upstreamUri.host, true) && effectivePort(legacyUri) == 80 && effectivePort(upstreamUri) == 443)'''
+          new = '''            (legacyUri.scheme.equals("http", true) && upstreamUri.scheme.equals("https", true) &&
+                legacyUri.host.equals(upstreamUri.host, true))'''
+          assert old in s
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          t = Path('src/test/kotlin/no/skasti/serialmodem/ppp/HttpCompatibilityProxyReviewRegressionTest.kt')
+          t.write_text(r'''package no.skasti.serialmodem.ppp
+
+import java.net.URI
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+
+class HttpCompatibilityProxyReviewRegressionTest {
+    @Test
+    fun `base href tag uses base-specific rewriter`() {
+        var baseCalls = 0
+        val source = "<html><head><base href=\"https://cdn.test/app/\"></head></html>"
+        val rewritten = rewriteHtmlUrlContexts(
+            source = source,
+            rewriteAttribute = { "ordinary:$it" },
+            rewriteRaw = { it },
+            rewriteBaseAttribute = {
+                baseCalls++
+                "base:$it"
+            },
+        )
+
+        assertEquals(1, baseCalls)
+        assertTrue(rewritten.contains("href=\"base:https://cdn.test/app/\""), rewritten)
+    }
+
+    @Test
+    fun `host-only absolute URL stops before CSS closing parenthesis`() {
+        val match = requireNotNull(ABSOLUTE_HTTP_URL_PATTERN.find("background:url(https://secure.test)"))
+        assertEquals("https://secure.test", match.value)
+    }
+
+    @Test
+    fun `mapped same-host HTTPS auth supports nondefault ports`() {
+        val proxy = SystemHttpCompatibilityProxy()
+        try {
+            val method = proxy.javaClass.getDeclaredMethod(
+                "canForwardSensitiveHeaders",
+                URI::class.java,
+                URI::class.java,
+            ).apply { isAccessible = true }
+
+            assertTrue(
+                method.invoke(
+                    proxy,
+                    URI("http://example.test/private"),
+                    URI("https://example.test:8443/private"),
+                ) as Boolean,
+            )
+            assertFalse(
+                method.invoke(
+                    proxy,
+                    URI("http://example.test/private"),
+                    URI("https://other.test:8443/private"),
+                ) as Boolean,
+            )
+        } finally {
+            proxy.close()
+        }
+    }
+}
+''')
+          PY
+          ./gradlew test --no-daemon
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/main/kotlin/no/skasti/serialmodem/ppp/HttpCompatibilityProxy.kt src/test/kotlin/no/skasti/serialmodem/ppp/HttpCompatibilityProxyReviewRegressionTest.kt
+          git commit -m 'Fix legacy base routing auth and CSS URL parsing'
+          git push origin HEAD:fix/http-compatibility-default-and-links
