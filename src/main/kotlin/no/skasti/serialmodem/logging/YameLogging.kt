@@ -20,15 +20,6 @@ enum class YameLogLevel(val priority: Int) {
     INFO(2),
     DEBUG(3);
 
-    private fun reportLoggingFailure(module: String, phase: String, error: Throwable) {
-        runCatching {
-            System.err.println(
-                "YAME $module logging disabled after $phase failure: " +
-                    (error.message ?: error::class.simpleName),
-            )
-        }
-    }
-
     companion object {
         fun parse(value: String): YameLogLevel =
             entries.firstOrNull { it.name.equals(value, ignoreCase = true) }
@@ -238,6 +229,15 @@ class YameLogManager(
                 " .. " in message -> YameLogLevel.DEBUG
             else -> YameLogLevel.INFO
         }
+
+    private fun reportLoggingFailure(module: String, phase: String, error: Throwable) {
+        runCatching {
+            System.err.println(
+                "YAME $module logging disabled after $phase failure: " +
+                    (error.message ?: error::class.simpleName),
+            )
+        }
+    }
 
     companion object {
         fun defaultLevels(): Map<YameLogModule, YameLogLevel> =
