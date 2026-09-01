@@ -350,7 +350,7 @@ class HttpCompatibilityProxyTest {
         val thread = serveOnce(server) {
             "HTTP/1.1 200 OK\r\n" +
                 "Content-Type: text/html; charset=windows-1252\r\n" +
-                "Content-Length: ${originalBody.toByteArray(Charsets.WINDOWS_1252).size}\r\n" +
+                "Content-Length: ${originalBody.toByteArray(java.nio.charset.Charset.forName("windows-1252")).size}\r\n" +
                 "Connection: close\r\n\r\n" +
                 originalBody
         }
