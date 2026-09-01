@@ -53,13 +53,33 @@ class LegacyOriginRouteTableTest {
 
 
     @Test
-    fun `rewritten Google script redirect should stay internal for legacy subresource fetch`() {
+    fun `exact-mapped GET redirect is deferred until response type is known`() {
         val legacyScript = URI("http://www.googletagmanager.com/gtag/js?id=G-4KX380T5BD")
         val redirectedUpstream = URI("https://www.googletagmanager.com/gtag/js?id=G-4KX380T5BD&cx=c")
 
+        assertTrue(
+            shouldDeferExactMappedRedirect(
+                followedExactMapping = true,
+                method = "GET",
+                legacyRequestUri = legacyScript,
+                upstreamRedirectUri = redirectedUpstream,
+            ),
+        )
         assertFalse(
-            shouldExposeRedirect(legacyScript, redirectedUpstream),
-            "A redirect while fetching a rewritten HTTPS script should be followed inside YAME rather than exposed as browser navigation",
+            shouldDeferExactMappedRedirect(
+                followedExactMapping = false,
+                method = "GET",
+                legacyRequestUri = legacyScript,
+                upstreamRedirectUri = redirectedUpstream,
+            ),
+        )
+        assertFalse(
+            shouldDeferExactMappedRedirect(
+                followedExactMapping = true,
+                method = "POST",
+                legacyRequestUri = legacyScript,
+                upstreamRedirectUri = redirectedUpstream,
+            ),
         )
     }
 
