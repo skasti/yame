@@ -1,5 +1,6 @@
 package no.skasti.serialmodem.ppp
 
+import java.net.HttpCookie
 import java.net.URI
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -90,6 +91,45 @@ class LegacyOriginRouteTableTest {
         assertTrue(overrides.any { it == replacement })
         assertFalse(overrides.any { it == second })
         assertTrue(overrides.any { it == third })
+    }
+
+    @Test
+    fun `cookie store evicts the oldest identity at the session limit`() {
+        val store = BoundedCookieStore(maxEntries = 2)
+        val uri = URI("https://example.test/")
+
+        store.add(uri, HttpCookie("first", "1"))
+        store.add(uri, HttpCookie("second", "2"))
+        store.add(uri, HttpCookie("third", "3"))
+
+        assertEquals(setOf("second", "third"), store.getCookies().map { it.name }.toSet())
+    }
+
+    @Test
+    fun `replacing a cookie refreshes its eviction order`() {
+        val store = BoundedCookieStore(maxEntries = 2)
+        val uri = URI("https://example.test/")
+
+        store.add(uri, HttpCookie("first", "1"))
+        store.add(uri, HttpCookie("second", "2"))
+        store.add(uri, HttpCookie("first", "replacement"))
+        store.add(uri, HttpCookie("third", "3"))
+
+        val cookies = store.getCookies().associate { it.name to it.value }
+        assertEquals(mapOf("first" to "replacement", "third" to "3"), cookies)
+    }
+
+    @Test
+    fun `expired cookies do not consume bounded store capacity`() {
+        val store = BoundedCookieStore(maxEntries = 2)
+        val uri = URI("https://example.test/")
+        val expired = HttpCookie("expired", "gone").apply { maxAge = 0 }
+
+        store.add(uri, expired)
+        store.add(uri, HttpCookie("first", "1"))
+        store.add(uri, HttpCookie("second", "2"))
+
+        assertEquals(setOf("first", "second"), store.getCookies().map { it.name }.toSet())
     }
 
     @Test
