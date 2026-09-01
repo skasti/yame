@@ -107,8 +107,11 @@ internal fun legacyRedirectUri(upstreamUri: URI): URI =
     else upstreamUri
 
 internal fun shouldExposeRedirect(legacyRequestUri: URI, upstreamRedirectUri: URI): Boolean =
-    LegacyHttpUrl.requestObservableKey(legacyRequestUri) !=
-        LegacyHttpUrl.requestObservableKey(legacyRedirectUri(upstreamRedirectUri))
+    legacyRedirectUri(upstreamRedirectUri).let { legacyRedirect ->
+        LegacyHttpUrl.requestObservableKey(legacyRequestUri) !=
+            LegacyHttpUrl.requestObservableKey(legacyRedirect) ||
+            legacyRequestUri.rawFragment != legacyRedirect.rawFragment
+    }
 
 internal fun rewriteEncodedTextBody(
     headers: Map<String, List<String>>,
@@ -378,6 +381,7 @@ class SystemHttpCompatibilityProxy(
         val body: FinalResponseBody,
         val contentLength: Long?,
         val exposeCookies: Boolean,
+        val locationAlreadyLegacy: Boolean = false,
     )
 
     private enum class ExpectationDisposition { NONE, CONTINUE, UNSUPPORTED }
@@ -654,6 +658,7 @@ class SystemHttpCompatibilityProxy(
                         body = FinalResponseBody.Buffered(ByteArray(0)),
                         contentLength = 0,
                         exposeCookies = sameOrigin(originalUri, uri),
+                        locationAlreadyLegacy = true,
                     )
                 }
 
@@ -726,7 +731,7 @@ class SystemHttpCompatibilityProxy(
     }
 
     private fun emitFinalResponse(state: FlowState, response: FinalResponse) {
-        val legacyHeaders = rewriteLegacyHeaders(state.flow, response.headers)
+        val legacyHeaders = rewriteLegacyHeaders(state.flow, response.headers, response.locationAlreadyLegacy)
         val bufferedBody = (response.body as? FinalResponseBody.Buffered)?.bytes
         val legacyBody =
             bufferedBody?.let { rewriteLegacyBody(state.flow, response.headers, it) }
@@ -797,9 +802,12 @@ class SystemHttpCompatibilityProxy(
     private fun rewriteLegacyHeaders(
         flow: TcpProxyFlow,
         headers: Map<String, List<String>>,
+        locationAlreadyLegacy: Boolean,
     ): Map<String, List<String>> =
         headers.mapValues { (name, values) ->
-            if (name.lowercase(Locale.ROOT) in URI_RESPONSE_HEADERS_TO_REWRITE) {
+            if (locationAlreadyLegacy && name.equals("location", ignoreCase = true)) {
+                values
+            } else if (name.lowercase(Locale.ROOT) in URI_RESPONSE_HEADERS_TO_REWRITE) {
                 values.map { rewriteAbsoluteUrls(flow, it) }
             } else {
                 values

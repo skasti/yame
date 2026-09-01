@@ -42,6 +42,15 @@ class LegacyOriginRouteTableTest {
     }
 
     @Test
+    fun `fragment-only redirect is exposed to the browser`() {
+        val legacy = URI("http://example.test/app")
+        val upstream = URI("http://example.test/app#section")
+
+        assertTrue(shouldExposeRedirect(legacy, upstream))
+        assertEquals(upstream, legacyRedirectUri(upstream))
+    }
+
+    @Test
     fun `seeing an HTTPS link does not reroute unrelated HTTP requests until it is followed`() {
         val routes = LegacyOriginRouteTable()
         val flow = httpFlow(generation = 10)

@@ -85,6 +85,115 @@ class HttpCompatibilityProxyTest {
     }
 
     @Test
+    fun `generated HTTP location keeps its hidden HTTPS route`() {
+        val tlsProbe = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val redirectServer = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val firstUpstreamByte = LinkedBlockingQueue<Int>()
+
+        val tlsProbeThread = Thread {
+            runCatching {
+                tlsProbe.accept().use { accepted ->
+                    firstUpstreamByte.offer(accepted.getInputStream().read())
+                }
+            }
+        }.apply {
+            isDaemon = true
+            start()
+        }
+        val redirectThread = serveOnce(redirectServer) {
+            "HTTP/1.1 302 Found\r\n" +
+                "Location: https://127.0.0.1:${tlsProbe.localPort}/final\r\n" +
+                "Content-Length: 0\r\n" +
+                "Connection: close\r\n\r\n"
+        }
+
+        val proxy = SystemHttpCompatibilityProxy(
+            config = PppHttpCompatibilityConfig(
+                enabled = true,
+                requestTimeoutMillis = 2_000,
+            ),
+        )
+        val events = LinkedBlockingQueue<TcpProxyEvent>()
+        val firstFlow = httpFlow(peerPort = 2111)
+        val followedFlow = httpFlow(peerPort = 2112)
+
+        try {
+            proxy.connect(firstFlow, events::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(events.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                firstFlow,
+                (
+                    "GET /start HTTP/1.0\r\n" +
+                        "Host: 127.0.0.1:${redirectServer.localPort}\r\n\r\n"
+                    ).toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+
+            val redirect = collectResponse(events)
+            assertTrue(
+                redirect.contains("location: http://127.0.0.1/final", ignoreCase = true),
+                redirect,
+            )
+
+            proxy.connect(followedFlow, events::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(events.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                followedFlow,
+                "GET /final HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n".toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+
+            assertEquals(0x16, firstUpstreamByte.poll(2, TimeUnit.SECONDS))
+        } finally {
+            proxy.close()
+            runCatching { redirectServer.close() }
+            runCatching { tlsProbe.close() }
+            redirectThread.join(2_000)
+            tlsProbeThread.join(2_000)
+        }
+    }
+
+    @Test
+    fun `fragment-only redirect is returned to the browser`() {
+        val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val thread = serveOnce(server) {
+            "HTTP/1.1 302 Found\r\n" +
+                "Location: #section\r\n" +
+                "Content-Length: 0\r\n" +
+                "Connection: close\r\n\r\n"
+        }
+        val proxy = SystemHttpCompatibilityProxy(
+            config = PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000),
+        )
+        val events = LinkedBlockingQueue<TcpProxyEvent>()
+        val flow = httpFlow(peerPort = 2113)
+
+        try {
+            proxy.connect(flow, events::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(events.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                flow,
+                (
+                    "GET /page HTTP/1.0\r\n" +
+                        "Host: 127.0.0.1:${server.localPort}\r\n\r\n"
+                    ).toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+
+            val redirect = collectResponse(events)
+            assertTrue(redirect.startsWith("HTTP/1.0 302 Found\r\n"), redirect)
+            assertTrue(
+                redirect.contains(
+                    "location: http://127.0.0.1:${server.localPort}/page#section",
+                    ignoreCase = true,
+                ),
+                redirect,
+            )
+        } finally {
+            proxy.close()
+            runCatching { server.close() }
+            thread.join(2_000)
+        }
+    }
+
+    @Test
     fun `compatibility proxy enforces redirect limit with legacy HTTP error`() {
         val server = ServerSocket(0, 8, InetAddress.getLoopbackAddress())
         val serverThread = Thread {
