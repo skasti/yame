@@ -599,6 +599,7 @@ class SystemHttpCompatibilityProxy(
     private data class SessionState(
         val cookieManager: CookieManager = CookieManager(BoundedCookieStore(), CookiePolicy.ACCEPT_ORIGINAL_SERVER),
         val cookieOverrides: BoundedCookieOverrides = BoundedCookieOverrides(),
+        val resources: NavigationResourceRegistry = NavigationResourceRegistry(),
     )
     private data class FlowState(
         val flow: TcpProxyFlow,
@@ -633,6 +634,7 @@ class SystemHttpCompatibilityProxy(
         val exposeCookies: Boolean,
         val locationAlreadyLegacy: Boolean = false,
         val effectiveBaseUri: URI? = null,
+        val referenceRole: ReferenceRole = ReferenceRole.NAVIGATION,
     )
 
     private enum class ExpectationDisposition { NONE, CONTINUE, UNSUPPORTED }
@@ -919,6 +921,7 @@ class SystemHttpCompatibilityProxy(
                         contentLength = 0,
                         exposeCookies = sameOrigin(originalUri, uri),
                         locationAlreadyLegacy = true,
+                        referenceRole = referenceRole,
                     )
                 }
 
@@ -993,17 +996,38 @@ class SystemHttpCompatibilityProxy(
                 exposeCookies = sameOrigin(originalUri, uri),
                 effectiveBaseUri =
                     if (mappedContentBase || (hideExactRedirect && redirects > 0 && uri != initialUpstreamUri)) uri else null,
+                referenceRole = referenceRole,
             )
         }
     }
 
     private fun emitFinalResponse(state: FlowState, response: FinalResponse) {
+        val navigationLikeResponse =
+            response.referenceRole == ReferenceRole.NAVIGATION &&
+                responseEstablishesNavigationOrigin("GET", response.statusCode, response.headers)
+        val resourceGraphs =
+            if (navigationLikeResponse) {
+                listOf(state.session.resources.startNavigation(response.legacyUri))
+            } else {
+                state.session.resources.contextsFor(response.legacyUri)
+            }
+        resourceGraphs.forEach { graph ->
+            graph.markFetched(
+                legacyUri = response.legacyUri,
+                upstreamUri = response.uri,
+                contentBase = response.effectiveBaseUri,
+                state = ResourceState.READY,
+            )
+        }
         val legacyHeaders = rewriteLegacyHeaders(state.flow, response.headers, response.locationAlreadyLegacy)
         val bufferedBody = (response.body as? FinalResponseBody.Buffered)?.bytes
         val legacyBody =
             bufferedBody?.let {
                 rewriteLegacyBody(
                     flow = state.flow,
+                    session = state.session,
+                    graphs = resourceGraphs,
+                    parentLegacyUri = response.legacyUri,
                     headers = response.headers,
                     body = it,
                     effectiveBaseUri = response.effectiveBaseUri,
@@ -1090,6 +1114,9 @@ class SystemHttpCompatibilityProxy(
 
     private fun rewriteLegacyBody(
         flow: TcpProxyFlow,
+        session: SessionState,
+        graphs: List<NavigationResourceGraph>,
+        parentLegacyUri: URI,
         headers: Map<String, List<String>>,
         body: ByteArray,
         effectiveBaseUri: URI?,
@@ -1097,7 +1124,15 @@ class SystemHttpCompatibilityProxy(
         if (body.isEmpty() || !bodyCanContainNavigableUrls(headers)) return body
         return rewriteEncodedTextBody(headers, body) { source ->
             if (effectiveBaseUri != null) {
-                rewriteBodyUrlsWithBase(flow, headers, source, effectiveBaseUri)
+                rewriteBodyUrlsWithBase(
+                    flow,
+                    session,
+                    graphs,
+                    parentLegacyUri,
+                    headers,
+                    source,
+                    effectiveBaseUri,
+                )
             } else {
                 rewriteBodyAbsoluteUrls(flow, source)
             }
@@ -1106,6 +1141,9 @@ class SystemHttpCompatibilityProxy(
 
     private fun rewriteBodyUrlsWithBase(
         flow: TcpProxyFlow,
+        session: SessionState,
+        graphs: List<NavigationResourceGraph>,
+        parentLegacyUri: URI,
         headers: Map<String, List<String>>,
         source: String,
         baseUri: URI,
@@ -1116,8 +1154,9 @@ class SystemHttpCompatibilityProxy(
             ?.lowercase(Locale.ROOT)
             ?: return rewriteBodyAbsoluteUrls(flow, source)
         return when (contentType) {
-            "text/css" -> rewriteCssUrlsWithBase(flow, source, baseUri)
-            "text/html", "application/xhtml+xml" -> rewriteHtmlUrlsWithBase(flow, source, baseUri)
+            "text/css" -> rewriteCssUrlsWithBase(flow, session, graphs, parentLegacyUri, source, baseUri)
+            "text/html", "application/xhtml+xml" ->
+                rewriteHtmlUrlsWithBase(flow, session, graphs, parentLegacyUri, source, baseUri)
             else -> rewriteBodyAbsoluteUrls(flow, source)
         }
     }
