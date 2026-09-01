@@ -14,6 +14,8 @@ interface PppHandler : Closeable {
 
 class RetroPppHandler(
     private val logger: (String) -> Unit = ::println,
+    private val dnsLogger: (String) -> Unit = logger,
+    private val transferLogger: (String) -> Unit = logger,
     private val proxyLogger: (String) -> Unit = logger,
     private val eventSink: (YameEvent) -> Unit = {},
     private val ipConfig: PppIpConfig = PppIpConfig(),
@@ -46,6 +48,8 @@ class RetroPppHandler(
         session = PppSession(
             sendFrame = ::sendFrame,
             logger = logger,
+            dnsLogger = dnsLogger,
+            transferLogger = transferLogger,
             eventSink = eventSink,
             ipAddresses = addresses,
             selectPeerAddress = addressResolver::selectPeerAddress,
