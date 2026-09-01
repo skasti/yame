@@ -1516,11 +1516,11 @@ class SystemHttpCompatibilityProxy(
         val RESPONSE_COOKIE_HEADERS = setOf("set-cookie", "set-cookie2")
         val URI_RESPONSE_HEADERS_TO_REWRITE = setOf("location", "content-location", "refresh", "link")
         val CSS_URL_REFERENCE_PATTERN =
-            Regex("""(?i)url\\(\\s*(?:"([^"]*)"|\'([^\']*)\'|([^\\s"\'\\)]+))\\s*\\)""")
+            Regex("""(?i)url\(\s*(?:"([^"]*)"|'([^']*)'|([^\s"'\)]+))\s*\)""")
         val CSS_IMPORT_REFERENCE_PATTERN =
-            Regex("""(?i)@import\\s+(?:"([^"]*)"|\'([^\']*)\')""")
+            Regex("""(?i)@import\s+(?:"([^"]*)"|'([^']*)')""")
         val HTML_URL_ATTRIBUTE_PATTERN =
-            Regex("""(?i)\\b(?:src|href|action|background|poster)\\s*=\\s*(?:"([^"]*)"|\'([^\']*)\'|([^\\s"\'=<>]+))""")
+            Regex("""(?i)\b(?:src|href|action|background|poster)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>]+))""")
         val REWRITABLE_CONTENT_TYPES = setOf(
             "text/html",
             "application/xhtml+xml",
