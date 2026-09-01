@@ -144,12 +144,33 @@ private val CHARSET_PARAMETER_PATTERN =
     Regex("""(?i)(?:^|;)\s*charset\s*=\s*(?:"([^"]+)"|'([^']+)'|([^;\s]+))""")
 
 private val HTML_ENTITY_PATTERN = Regex("""&([A-Za-z]+|#[0-9]+|#x[0-9A-Fa-f]+);""")
-private val HTML_BASE_HREF_PATTERN = Regex("""(?is)<base\b[^>]*?\bhref\s*=\s*(["'])(.*?)\1""")
+private val HTML_BASE_HREF_PATTERN =
+    Regex("""(?is)<base\b[^>]*?\bhref\s*=\s*(?:(["'])(.*?)\1|([^\s"'=<>\x60]+))""")
 private val HTML_HEAD_PATTERN = Regex("""(?is)<head\b[^>]*>""")
 private val HTML_URL_ATTRIBUTE_PATTERN =
-    Regex("""(?is)\b(?:href|src|action|formaction|poster|data|cite|background)\s*=\s*(["'])(.*?)\1""")
+    Regex("""(?is)\b(?:href|src|action|formaction|poster|data|cite|background)\s*=\s*(?:(["'])(.*?)\1|([^\s"'=<>\x60]+))""")
+private val HTML_CONTENT_ATTRIBUTE_PATTERN =
+    Regex("""(?is)\bcontent\s*=\s*(?:(["'])(.*?)\1|([^\s"'=<>\x60]+))""")
+private val HTML_META_REFRESH_PATTERN =
+    Regex("""(?is)^<meta\b(?=[^>]*\bhttp-equiv\s*=\s*(?:(["'])\s*refresh\s*\1|refresh(?=[\s>])))[^>]*>""")
 private val HTML_TAG_PATTERN = Regex("""(?is)<(?:[^"'<>]|"[^"]*"|'[^']*')+>""")
 private val HTML_HTML_PATTERN = Regex("""(?is)<html\b[^>]*>""")
+
+private fun rewriteHtmlAttributeValues(
+    tag: String,
+    pattern: Regex,
+    rewriteAttribute: (String) -> String,
+): String {
+    var rewritten = tag
+    pattern.findAll(tag).toList().asReversed().forEach { attributeMatch ->
+        val valueGroup = attributeMatch.groups[2] ?: attributeMatch.groups[3] ?: return@forEach
+        val replacementValue = rewriteAttribute(valueGroup.value)
+        if (replacementValue != valueGroup.value) {
+            rewritten = rewritten.replaceRange(valueGroup.range, replacementValue)
+        }
+    }
+    return rewritten
+}
 
 internal fun rewriteHtmlUrlContexts(
     source: String,
@@ -163,13 +184,9 @@ internal fun rewriteHtmlUrlContexts(
             output.append(rewriteRaw(source.substring(cursor, tagMatch.range.first)))
         }
 
-        var tag = tagMatch.value
-        HTML_URL_ATTRIBUTE_PATTERN.findAll(tagMatch.value).toList().asReversed().forEach { attributeMatch ->
-            val valueGroup = attributeMatch.groups[2] ?: return@forEach
-            val replacementValue = rewriteAttribute(valueGroup.value)
-            if (replacementValue != valueGroup.value) {
-                tag = tag.replaceRange(valueGroup.range, replacementValue)
-            }
+        var tag = rewriteHtmlAttributeValues(tagMatch.value, HTML_URL_ATTRIBUTE_PATTERN, rewriteAttribute)
+        if (HTML_META_REFRESH_PATTERN.matches(tagMatch.value)) {
+            tag = rewriteHtmlAttributeValues(tag, HTML_CONTENT_ATTRIBUTE_PATTERN, rewriteAttribute)
         }
         output.append(tag)
         cursor = tagMatch.range.last + 1
@@ -928,7 +945,7 @@ class SystemHttpCompatibilityProxy(
 
         val existing = HTML_BASE_HREF_PATTERN.find(source)
         if (existing != null) {
-            val valueGroup = existing.groups[2] ?: return source
+            val valueGroup = existing.groups[2] ?: existing.groups[3] ?: return source
             val upstreamTarget = runCatching { upstreamBase.resolve(decodeHtmlEntities(valueGroup.value)) }.getOrNull() ?: return source
             val replacement = when {
                 sameOrigin(upstreamBase, upstreamTarget) -> legacyBaseFor(legacyUri, upstreamTarget).toString()
