@@ -53,34 +53,14 @@ class LegacyOriginRouteTableTest {
 
 
     @Test
-    fun `exact-mapped GET redirect is deferred until response type is known`() {
+    fun `exact-mapped compatibility URL keeps redirect chain internal`() {
         val legacyScript = URI("http://www.googletagmanager.com/gtag/js?id=G-4KX380T5BD")
         val redirectedUpstream = URI("https://www.googletagmanager.com/gtag/js?id=G-4KX380T5BD&cx=c")
 
-        assertTrue(
-            shouldDeferExactMappedRedirect(
-                followedExactMapping = true,
-                method = "GET",
-                legacyRequestUri = legacyScript,
-                upstreamRedirectUri = redirectedUpstream,
-            ),
-        )
-        assertFalse(
-            shouldDeferExactMappedRedirect(
-                followedExactMapping = false,
-                method = "GET",
-                legacyRequestUri = legacyScript,
-                upstreamRedirectUri = redirectedUpstream,
-            ),
-        )
-        assertFalse(
-            shouldDeferExactMappedRedirect(
-                followedExactMapping = true,
-                method = "POST",
-                legacyRequestUri = legacyScript,
-                upstreamRedirectUri = redirectedUpstream,
-            ),
-        )
+        assertTrue(shouldExposeRedirect(legacyScript, redirectedUpstream))
+        // The compatibility proxy must still follow this internally when the
+        // request came from an exact HTTPS mapping. shouldExposeRedirect()
+        // remains the generic visible-navigation policy for non-exact requests.
     }
 
     @Test
