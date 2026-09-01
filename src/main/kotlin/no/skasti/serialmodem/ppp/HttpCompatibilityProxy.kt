@@ -139,6 +139,8 @@ private val CHARSET_PARAMETER_PATTERN =
 private val HTML_ENTITY_PATTERN = Regex("""&([A-Za-z]+|#[0-9]+|#x[0-9A-Fa-f]+);""")
 private val HTML_BASE_HREF_PATTERN = Regex("""(?is)<base\b[^>]*?\bhref\s*=\s*(["'])(.*?)\1""")
 private val HTML_HEAD_PATTERN = Regex("""(?is)<head\b[^>]*>""")
+private val HTML_URL_ATTRIBUTE_PATTERN =
+    Regex("""(?is)\b(?:href|src|action|formaction|poster|data|cite|background)\s*=\s*(["'])(.*?)\1""")
 private val HTML_HTML_PATTERN = Regex("""(?is)<html\b[^>]*>""")
 
 internal class LegacyOriginRouteTable {
@@ -607,7 +609,7 @@ class SystemHttpCompatibilityProxy(
         var method = request.method
         var body = request.body
         var redirects = 0
-        var forwardSensitiveHeaders = sameOrigin(legacyUri, uri)
+        var forwardSensitiveHeaders = canForwardSensitiveHeaders(legacyUri, uri)
         val requestConnectionHeadersToStrip = connectionNominatedHeaders(request.headers)
         while (true) {
             ensureActive(state)
@@ -805,7 +807,9 @@ class SystemHttpCompatibilityProxy(
             ?.lowercase(Locale.ROOT)
         val htmlContext = contentType in NAVIGATION_CONTENT_TYPES
         return rewriteEncodedTextBody(headers, body) { source ->
-            val rewritten = rewriteHttpsReferences(flow, upstreamBase, source, htmlContext)
+            val rewritten =
+                if (htmlContext) rewriteHtmlReferences(flow, upstreamBase, source)
+                else rewriteHttpsReferences(flow, upstreamBase, source)
             if (htmlContext) preserveDocumentBase(flow, legacyUri, upstreamBase, rewritten) else rewritten
         }
     }
@@ -879,28 +883,34 @@ class SystemHttpCompatibilityProxy(
         return rewritten
     }
 
-    private fun preserveDocumentBase(flow: TcpProxyFlow, legacyUri: URI, upstreamBase: URI, source: String): String {
-        val effectiveLegacyBase = if (upstreamBase.scheme.equals("https", ignoreCase = true)) {
-            originRoutes.rememberHttpsReference(flow, LegacyHttpUrl.withoutFragment(upstreamBase))
-        } else {
-            LegacyHttpUrl.withoutFragment(upstreamBase).toString()
+    private fun rewriteHtmlReferences(flow: TcpProxyFlow, upstreamBase: URI, source: String): String {
+        var rewritten = source
+        HTML_URL_ATTRIBUTE_PATTERN.findAll(source).toList().asReversed().forEach { match ->
+            val valueGroup = match.groups[2] ?: return@forEach
+            val replacement = rewriteHttpsReferences(flow, upstreamBase, valueGroup.value, htmlContext = true)
+            if (replacement != valueGroup.value) {
+                rewritten = rewritten.replaceRange(valueGroup.range, replacement)
+            }
         }
+        return rewriteHttpsReferences(flow, upstreamBase, rewritten, htmlContext = false)
+    }
+
+    private fun preserveDocumentBase(flow: TcpProxyFlow, legacyUri: URI, upstreamBase: URI, source: String): String {
+        val effectiveLegacyBase = legacyBaseFor(legacyUri, upstreamBase).toString()
         if (LegacyHttpUrl.requestObservableKey(legacyUri) == LegacyHttpUrl.requestObservableKey(URI(effectiveLegacyBase))) {
             return source
         }
 
         val existing = HTML_BASE_HREF_PATTERN.find(source)
         if (existing != null) {
-            val rawHref = existing.groupValues[2]
-            val upstreamTarget = runCatching { upstreamBase.resolve(decodeHtmlEntities(rawHref)) }.getOrNull() ?: return source
-            val replacement = if (upstreamTarget.scheme.equals("https", true)) {
-                originRoutes.rememberHttpsReference(flow, upstreamTarget)
-            } else {
-                originRoutes.rememberHttpReference(flow, upstreamTarget)
+            val valueGroup = existing.groups[2] ?: return source
+            val upstreamTarget = runCatching { upstreamBase.resolve(decodeHtmlEntities(valueGroup.value)) }.getOrNull() ?: return source
+            val replacement = when {
+                sameOrigin(upstreamBase, upstreamTarget) -> legacyBaseFor(legacyUri, upstreamTarget).toString()
+                upstreamTarget.scheme.equals("https", true) -> originRoutes.rememberHttpsReference(flow, upstreamTarget)
+                else -> originRoutes.rememberHttpReference(flow, upstreamTarget)
             }
-            val escaped = escapeHtmlAttributeUrl(replacement)
-            val valueStart = existing.range.first + existing.value.indexOf(rawHref)
-            return source.replaceRange(valueStart, valueStart + rawHref.length, escaped)
+            return source.replaceRange(valueGroup.range, escapeHtmlAttributeUrl(replacement))
         }
 
         val baseTag = "<base href=\"${escapeHtmlAttributeUrl(effectiveLegacyBase)}\">"
@@ -913,6 +923,18 @@ class SystemHttpCompatibilityProxy(
         }
         return baseTag + source
     }
+
+    private fun legacyBaseFor(legacyUri: URI, upstreamUri: URI): URI =
+        URI(
+            buildString {
+                append("http://")
+                append(LegacyHttpUrl.formatHost(requireNotNull(legacyUri.host)))
+                val legacyPort = LegacyHttpUrl.effectivePort(legacyUri)
+                if (legacyPort != 80) append(':').append(legacyPort)
+                append(upstreamUri.rawPath?.takeIf { it.isNotEmpty() } ?: "/")
+                upstreamUri.rawQuery?.let { append('?').append(it) }
+            },
+        )
 
     private fun decodeHtmlEntities(value: String): String =
         HTML_ENTITY_PATTERN.replace(value) { match ->
@@ -1082,7 +1104,14 @@ class SystemHttpCompatibilityProxy(
             .filter { (name, _) -> name.equals("Set-Cookie", true) || name.equals("Set-Cookie2", true) }
             .flatMap { it.value }
             .mapNotNull { parseCookieOverride(uri, it) }
-            .forEach { state.session.cookieOverrides += it }
+            .forEach { replacement ->
+                state.session.cookieOverrides.removeIf { existing ->
+                    existing.name.equals(replacement.name, true) &&
+                        existing.domain.equals(replacement.domain, true) &&
+                        existing.path == replacement.path
+                }
+                state.session.cookieOverrides += replacement
+            }
     }
 
     private fun parseCookieOverride(uri: URI, value: String): CookieOverride? {
@@ -1145,6 +1174,10 @@ class SystemHttpCompatibilityProxy(
         .flatMap { it.second.split(',') }.map { it.trim().lowercase(Locale.ROOT) }
         .filter { it.isNotEmpty() && HEADER_NAME_PATTERN.matches(it) }.toSet()
     private fun sameOrigin(a: URI, b: URI) = a.scheme.equals(b.scheme, true) && a.host.equals(b.host, true) && effectivePort(a) == effectivePort(b)
+    private fun canForwardSensitiveHeaders(legacyUri: URI, upstreamUri: URI): Boolean =
+        sameOrigin(legacyUri, upstreamUri) ||
+            (legacyUri.scheme.equals("http", true) && upstreamUri.scheme.equals("https", true) &&
+                legacyUri.host.equals(upstreamUri.host, true) && effectivePort(legacyUri) == 80 && effectivePort(upstreamUri) == 443)
     private fun effectivePort(uri: URI) = when { uri.port >= 0 -> uri.port; uri.scheme.equals("https", true) -> 443; else -> 80 }
 
     private fun readBounded(state: FlowState, input: java.io.InputStream, limit: Int): ByteArray {

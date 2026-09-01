@@ -227,6 +227,72 @@ class HttpCompatibilityReviewRegressionTest {
         }
     }
 
+    @Test
+    fun `script raw text URLs keep ampersands raw`() {
+        val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val body = "<html><script>fetch(\"https://api.test/x?a=1&b=2\")</script></html>"
+        val thread = serveOnce(server) {
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n" +
+                "Content-Length: ${body.length}\r\nConnection: close\r\n\r\n$body"
+        }
+        val proxy = SystemHttpCompatibilityProxy(PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000))
+        try {
+            val response = request(proxy, 2312, server.localPort, "/")
+            assertTrue(response.contains("http://api.test/x?a=1&b=2"), response)
+            assertTrue(!response.contains("a=1&amp;b=2"), response)
+        } finally {
+            proxy.close(); runCatching { server.close() }; thread.join(2_000)
+        }
+    }
+
+    @Test
+    fun `existing relative base replaces the captured href rather than the tag name`() {
+        val server = ServerSocket(0, 2, InetAddress.getLoopbackAddress())
+        val thread = Thread {
+            server.use { listening ->
+                listening.accept().use { socket ->
+                    readRequest(socket)
+                    writeResponse(socket, "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:${listening.localPort}/app/index.html\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                }
+                listening.accept().use { socket ->
+                    readRequest(socket)
+                    val body = "<html><head><base href=\"base\"></head><body>x</body></html>"
+                    writeResponse(socket, "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: ${body.length}\r\nConnection: close\r\n\r\n$body")
+                }
+            }
+        }.apply { isDaemon = true; start() }
+        val proxy = SystemHttpCompatibilityProxy(PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000))
+        try {
+            val response = request(proxy, 2313, server.localPort, "/old")
+            assertTrue(response.contains("<base href=\"http://127.0.0.1:${server.localPort}/app/base\">"), response)
+            assertTrue(!response.contains("<http://"), response)
+        } finally {
+            proxy.close(); runCatching { server.close() }; thread.join(2_000)
+        }
+    }
+
+    @Test
+    fun `cross origin redirect keeps the legacy host in the injected document base`() {
+        val oldServer = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val newServer = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val oldThread = serveOnce(oldServer) {
+            "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:${newServer.localPort}/app/index.html\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        }
+        val newThread = serveOnce(newServer) {
+            val body = "<html><head></head><body><img src=\"asset.png\"></body></html>"
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: ${body.length}\r\nConnection: close\r\n\r\n$body"
+        }
+        val proxy = SystemHttpCompatibilityProxy(PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000))
+        try {
+            val response = request(proxy, 2314, oldServer.localPort, "/start")
+            assertTrue(response.contains("<base href=\"http://127.0.0.1:${oldServer.localPort}/app/index.html\">"), response)
+            assertTrue(!response.contains("<base href=\"http://127.0.0.1:${newServer.localPort}"), response)
+        } finally {
+            proxy.close(); runCatching { oldServer.close() }; runCatching { newServer.close() }
+            oldThread.join(2_000); newThread.join(2_000)
+        }
+    }
+
     private fun request(proxy: SystemHttpCompatibilityProxy, peerPort: Int, hostPort: Int, path: String): String {
         val events = LinkedBlockingQueue<TcpProxyEvent>()
         val flow = httpFlow(peerPort)
