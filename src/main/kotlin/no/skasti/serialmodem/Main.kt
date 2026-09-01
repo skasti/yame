@@ -1,6 +1,9 @@
 package no.skasti.serialmodem
 
 import com.github.ajalt.mordant.terminal.Terminal
+import no.skasti.serialmodem.logging.YameLogLevel
+import no.skasti.serialmodem.logging.YameLogManager
+import no.skasti.serialmodem.logging.YameLogModule
 import no.skasti.serialmodem.modem.HayesModem
 import no.skasti.serialmodem.modem.HayesModemConfig
 import no.skasti.serialmodem.ppp.Ipv4Address
@@ -19,11 +22,17 @@ import kotlin.time.Duration.Companion.seconds
 
 fun main(args: Array<String>) {
     val options = parseArgs(args)
+    val logManager = YameLogManager(options.logLevels)
+    try {
 
     if (options.testNumber != null) {
         val modem = HayesModem(
             baudRate = options.baudRate,
             config = options.modemConfig,
+            logger = logManager.logger(YameLogModule.MODEM),
+            pppLogger = logManager.logger(YameLogModule.PPP),
+            proxyLogger = logManager.logger(YameLogModule.PROXY),
+            eventSink = logManager::eventSink,
         )
         println(
             "Tone test. Dialing: ${options.testNumber} " +
@@ -67,6 +76,7 @@ fun main(args: Array<String>) {
             initialPortName = options.portName,
             initialBaud = options.baudRate,
             initialModemConfig = options.modemConfig,
+            logManager = logManager,
             terminal = if (options.uiMode == UiMode.AUTO) {
                 detectedTerminal
             } else {
@@ -94,11 +104,31 @@ fun main(args: Array<String>) {
         return
     }
 
+    val modemConsoleLogger: (String) -> Unit = { message ->
+        println(message)
+        logManager.logger(YameLogModule.MODEM)(message)
+    }
+    val pppConsoleLogger: (String) -> Unit = { message ->
+        println(message)
+        logManager.logger(YameLogModule.PPP)(message)
+    }
+    val proxyConsoleLogger: (String) -> Unit = { message ->
+        println(message)
+        logManager.logger(YameLogModule.PROXY)(message)
+    }
+    val serialConsoleLogger: (String) -> Unit = { message ->
+        println(message)
+        logManager.logger(YameLogModule.SERIAL)(message)
+    }
     val modem = HayesModem(
         baudRate = options.baudRate,
         config = options.modemConfig,
+        logger = modemConsoleLogger,
+        pppLogger = pppConsoleLogger,
+        proxyLogger = proxyConsoleLogger,
+        eventSink = logManager::eventSink,
     )
-    val connection = SerialConnection(portName, options.baudRate)
+    val connection = SerialConnection(portName, options.baudRate, logger = serialConsoleLogger)
     val shutdown = CountDownLatch(1)
 
     try {
@@ -120,6 +150,9 @@ fun main(args: Array<String>) {
     connection.startReading(modem::receive)
     println("Serial modem emulator ready. Press Ctrl+C to stop.")
     shutdown.await()
+    } finally {
+        logManager.close()
+    }
 }
 
 private enum class UiMode {
@@ -135,6 +168,7 @@ private data class Options(
     val testNumber: String?,
     val uiMode: UiMode,
     val modemConfig: HayesModemConfig,
+    val logLevels: Map<YameLogModule, YameLogLevel>,
 )
 
 private fun parseArgs(args: Array<String>): Options {
@@ -151,7 +185,7 @@ private fun parseArgs(args: Array<String>): Options {
     var pppSubnet: Ipv4Cidr? = null
     var dnsUpstream = defaults.pppDnsConfig.upstreamServer
     var httpCompatibilityEnabled = defaults.pppHttpCompatibilityConfig.enabled
-    var httpProxyLogFile = defaults.pppHttpCompatibilityConfig.traceLogFile
+    val logLevels = YameLogManager.defaultLevels().toMutableMap()
     var uiMode = UiMode.AUTO
 
     var i = 0
@@ -205,10 +239,15 @@ private fun parseArgs(args: Array<String>): Options {
             }
             "--http-https-proxy" -> httpCompatibilityEnabled = true
             "--no-http-https-proxy" -> httpCompatibilityEnabled = false
-            "--http-proxy-log" -> {
-                require(i + 1 < args.size) { "$arg requires a file path" }
-                httpProxyLogFile = args[++i].takeIf { it.isNotBlank() }
-                    ?: error("$arg requires a non-empty file path")
+            "--loglevel-modem",
+            "--loglevel-serial",
+            "--loglevel-ppp",
+            "--loglevel-dns",
+            "--loglevel-proxy",
+            "--loglevel-transfers" -> {
+                require(i + 1 < args.size) { "$arg requires error, warn, info, or debug" }
+                val module = logModuleForArgument(arg)
+                logLevels[module] = YameLogLevel.parse(args[++i])
             }
             "--ui" -> {
                 require(i + 1 < args.size) { "$arg requires auto, tui, or plain" }
@@ -239,11 +278,22 @@ private fun parseArgs(args: Array<String>): Options {
             pppDnsConfig = PppDnsConfig(upstreamServer = dnsUpstream),
             pppHttpCompatibilityConfig = PppHttpCompatibilityConfig(
                 enabled = httpCompatibilityEnabled,
-                traceLogFile = httpProxyLogFile,
             ),
         ),
+        logLevels = logLevels.toMap(),
     )
 }
+
+private fun logModuleForArgument(argument: String): YameLogModule =
+    when (argument) {
+        "--loglevel-modem" -> YameLogModule.MODEM
+        "--loglevel-serial" -> YameLogModule.SERIAL
+        "--loglevel-ppp" -> YameLogModule.PPP
+        "--loglevel-dns" -> YameLogModule.DNS
+        "--loglevel-proxy" -> YameLogModule.PROXY
+        "--loglevel-transfers" -> YameLogModule.TRANSFERS
+        else -> error("Unknown log level argument: $argument")
+    }
 
 private fun parseUiMode(value: String): UiMode =
     when (value.lowercase()) {
@@ -302,7 +352,12 @@ private fun printUsage() {
               --dns-upstream IP       DNS server used by YAME's local DNS proxy (default: ${defaults.pppDnsConfig.upstreamServer})
               --http-https-proxy      Enable HTTP/HTTPS compatibility proxy (default)
               --no-http-https-proxy   Disable compatibility proxy and use normal TCP forwarding
-              --http-proxy-log FILE   Append detailed HTTP/HTTPS proxy activity to FILE
+              --loglevel-modem LEVEL  modem.log level: error|warn|info|debug (default: info)
+              --loglevel-serial LEVEL serial.log level: error|warn|info|debug (default: info)
+              --loglevel-ppp LEVEL    ppp.log level: error|warn|info|debug (default: info)
+              --loglevel-dns LEVEL    dns.log level: error|warn|info|debug (default: info)
+              --loglevel-proxy LEVEL  proxy.log level: error|warn|info|debug (default: info)
+              --loglevel-transfers L  transfers.log level: error|warn|info|debug (default: info)
               --ui MODE               UI mode: auto, tui, or plain (default: auto)
           -h, --help                  Show this help
 
@@ -316,8 +371,10 @@ private fun printUsage() {
         HTTP: redirects are followed on the host, modern HTTPS/TLS is terminated there, and the legacy
         peer receives plain HTTP. Absolute HTTPS references in compatible text responses are rewritten
         to HTTP so subsequent navigation stays on the compatibility path. Use --no-http-https-proxy
-        for transparent TCP/80 forwarding instead. Use --http-proxy-log FILE to keep a timestamped
-        compatibility-proxy trace on disk without adding extra dashboard noise.
+        for transparent TCP/80 forwarding instead.
+        Runtime logs are always written to separate files under logs/: modem.log, serial.log, ppp.log,
+        dns.log, proxy.log, and transfers.log. Existing active logs are archived at startup using their
+        original creation timestamp. Use the --loglevel-* options to tune each module independently.
         Durations accept milliseconds or seconds, e.g. 500ms, 2s, or 1.5s, up to 10s.
         Terminal login is only enabled when both --username and --password are provided.
         Tone progress is always logged while a dialing sequence is played.
