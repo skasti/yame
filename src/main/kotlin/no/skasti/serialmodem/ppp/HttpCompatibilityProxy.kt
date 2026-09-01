@@ -46,7 +46,7 @@ internal val LEGACY_PROTOCOL_RELATIVE_URL_PATTERN =
     Regex("""(?<![A-Za-z0-9_./:-])//(?:[^\s/?#"'<>@]+@)?(?:\[[^\]]+\]|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)(?::\d+)?(?:[/?#](?:[^\s"'<>\(\)]|\([^\(\)\s"'<>]*\))*)?""")
 
 internal val ABSOLUTE_HTTP_URL_PATTERN =
-    Regex("""https?://(?:[^\s/?#"'<>@]+@)?(?:\[[^\]]+\]|[^\s/:?#"'<>]+)(?::\d+)?(?:[/?#](?:[^\s"'<>\(\)]|\([^\(\)\s"'<>]*\))*)?""", RegexOption.IGNORE_CASE)
+    Regex("""https?://(?:[^\s/?#"'<>@]+@)?(?:\[[^\]]+\]|[^\s/:?#"'<>()]+)(?::\d+)?(?:[/?#](?:[^\s"'<>\(\)]|\([^\(\)\s"'<>]*\))*)?""", RegexOption.IGNORE_CASE)
 
 internal fun injectedBaseTag(contentType: String?, escapedHref: String): String =
     if (contentType == "application/xhtml+xml") "<base href=\"$escapedHref\" />"
@@ -186,7 +186,7 @@ internal fun rewriteHtmlUrlContexts(
         }
 
         val attributeRewriter =
-            if (HTML_BASE_HREF_PATTERN.matches(tagMatch.value)) rewriteBaseAttribute ?: rewriteAttribute
+            if (HTML_BASE_HREF_PATTERN.find(tagMatch.value) != null) rewriteBaseAttribute ?: rewriteAttribute
             else rewriteAttribute
         var tag = rewriteHtmlAttributeValues(tagMatch.value, HTML_URL_ATTRIBUTE_PATTERN, attributeRewriter)
         if (HTML_META_REFRESH_PATTERN.matches(tagMatch.value)) {
@@ -1241,7 +1241,7 @@ class SystemHttpCompatibilityProxy(
     private fun canForwardSensitiveHeaders(legacyUri: URI, upstreamUri: URI): Boolean =
         sameOrigin(legacyUri, upstreamUri) ||
             (legacyUri.scheme.equals("http", true) && upstreamUri.scheme.equals("https", true) &&
-                legacyUri.host.equals(upstreamUri.host, true) && effectivePort(legacyUri) == 80 && effectivePort(upstreamUri) == 443)
+                legacyUri.host.equals(upstreamUri.host, true))
     private fun effectivePort(uri: URI) = when { uri.port >= 0 -> uri.port; uri.scheme.equals("https", true) -> 443; else -> 80 }
 
     private fun readBounded(state: FlowState, input: java.io.InputStream, limit: Int): ByteArray {
