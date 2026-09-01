@@ -1,13 +1,9 @@
 name: PR 20 Codex fix
-
 on:
   push:
-    branches:
-      - fix/http-compatibility-default-and-links
-
+    branches: [fix/http-compatibility-default-and-links]
 permissions:
   contents: write
-
 jobs:
   fix:
     if: github.actor != 'github-actions[bot]'
@@ -20,238 +16,81 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - name: Apply fixes and regression tests
+      - name: Apply fixes and tests
         shell: python
         run: |
           from pathlib import Path
+          import re
+          p=Path('src/main/kotlin/no/skasti/serialmodem/ppp/HttpCompatibilityProxy.kt'); s=p.read_text()
+          s=s.replace('val rawTarget = if (htmlContext) decodeHtmlEntities(match.value) else match.value', 'val attributeContext = htmlContext && !isHtmlRawTextPosition(value, match.range.first)\n            val rawTarget = if (attributeContext) decodeHtmlEntities(match.value) else match.value', 1)
+          s=s.replace('replacement?.let { if (htmlContext) escapeHtmlAttributeUrl(it) else it } ?: match.value', 'replacement?.let { if (attributeContext) escapeHtmlAttributeUrl(it) else it } ?: match.value', 1)
+          marker='''        rewritten = LEGACY_PROTOCOL_RELATIVE_URL_PATTERN.replace(rewritten) { match ->\n            val scheme = if (upstreamBase.scheme.equals("https", ignoreCase = true)) "https" else "http"\n'''
+          repl=marker+'''            val attributeContext = htmlContext && !isHtmlRawTextPosition(rewritten, match.range.first)\n'''
+          if marker not in s: raise SystemExit('protocol marker missing')
+          s=s.replace(marker,repl,1)
+          s=s.replace('val rawTarget = if (htmlContext) decodeHtmlEntities(match.value) else match.value', 'val rawTarget = if (attributeContext) decodeHtmlEntities(match.value) else match.value', 1)
+          s=s.replace('if (htmlContext) escapeHtmlAttributeUrl(replacement) else replacement', 'if (attributeContext) escapeHtmlAttributeUrl(replacement) else replacement', 1)
+          raw_helper='''\n    private fun isHtmlRawTextPosition(source: String, position: Int): Boolean {\n        val prefix = source.substring(0, position).lowercase(Locale.ROOT)\n        return listOf("script", "style").any { tag ->\n            prefix.lastIndexOf("<$tag") > prefix.lastIndexOf("</$tag")\n        }\n    }\n'''
+          insert='''        return rewritten\n    }\n\n    private fun preserveDocumentBase'''
+          if insert not in s: raise SystemExit('helper insert missing')
+          s=s.replace(insert, '        return rewritten\n    }'+raw_helper+'\n    private fun preserveDocumentBase',1)
+          pat=re.compile(r'''    private fun preserveDocumentBase\(flow: TcpProxyFlow, legacyUri: URI, upstreamBase: URI, source: String\): String \{\n        val effectiveLegacyBase = if \(upstreamBase\.scheme\.equals\("https", ignoreCase = true\)\) \{\n            originRoutes\.rememberHttpsReference\(flow, LegacyHttpUrl\.withoutFragment\(upstreamBase\)\)\n        \} else \{\n            LegacyHttpUrl\.withoutFragment\(upstreamBase\)\.toString\(\)\n        \}\n''')
+          new='''    private fun preserveDocumentBase(flow: TcpProxyFlow, legacyUri: URI, upstreamBase: URI, source: String): String {\n        val effectiveLegacyBase = URI(\n            buildString {\n                append("http://")\n                append(LegacyHttpUrl.formatHost(requireNotNull(legacyUri.host)))\n                val legacyPort = LegacyHttpUrl.effectivePort(legacyUri)\n                if (legacyPort != 80) append(':').append(legacyPort)\n                append(upstreamBase.rawPath?.takeIf { it.isNotEmpty() } ?: "/")\n                upstreamBase.rawQuery?.let { append('?').append(it) }\n            },\n        ).toString()\n'''
+          s,n=pat.subn(new,s,1)
+          if n!=1: raise SystemExit('base prefix missing')
+          s=s.replace('''            val valueStart = existing.range.first + existing.value.indexOf(rawHref)\n            return source.replaceRange(valueStart, valueStart + rawHref.length, escaped)''','''            val valueRange = requireNotNull(existing.groups[2]).range\n            return source.replaceRange(valueRange, escaped)''',1)
+          p.write_text(s)
 
-          main = Path('src/main/kotlin/no/skasti/serialmodem/ppp/HttpCompatibilityProxy.kt')
-          s = main.read_text()
+          p=Path('src/test/kotlin/no/skasti/serialmodem/ppp/HttpCompatibilityReviewRegressionTest.kt'); t=p.read_text()
+          marker='''    private fun request(proxy: SystemHttpCompatibilityProxy, peerPort: Int, hostPort: Int, path: String): String {'''
+          tests=r'''    @Test
+    fun `HTML script body URLs keep raw ampersands`() {
+        val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val body = "<html><script>fetch(\"https://api.test/x?a=1&b=2\")</script></html>"
+        val thread = serveOnce(server) { "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: ${body.length}\r\nConnection: close\r\n\r\n$body" }
+        val proxy = SystemHttpCompatibilityProxy(PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000))
+        try {
+            val response = request(proxy, 2313, server.localPort, "/")
+            assertTrue(response.contains("fetch(\"http://api.test/x?a=1&b=2\")"), response)
+            assertTrue(!response.contains("a=1&amp;b=2"), response)
+        } finally { proxy.close(); runCatching { server.close() }; thread.join(2_000) }
+    }
 
-          old = '''    private fun rewriteHttpsReferences(
-              flow: TcpProxyFlow,
-              upstreamBase: URI,
-              value: String,
-              htmlContext: Boolean = false,
-          ): String {
-              var rewritten = ABSOLUTE_HTTP_URL_PATTERN.replace(value) { match ->
-                  val rawTarget = if (htmlContext) decodeHtmlEntities(match.value) else match.value
-                  val target = runCatching { URI(rawTarget) }.getOrNull()
-                  val replacement = when {
-                      target?.host == null -> null
-                      target.scheme.equals("https", ignoreCase = true) -> originRoutes.rememberHttpsReference(flow, target)
-                      target.scheme.equals("http", ignoreCase = true) -> originRoutes.rememberHttpReference(flow, target)
-                      else -> null
-                  }
-                  replacement?.let { if (htmlContext) escapeHtmlAttributeUrl(it) else it } ?: match.value
-              }
+    @Test
+    fun `relative base href replaces captured value not tag name`() {
+        val server = ServerSocket(0, 2, InetAddress.getLoopbackAddress())
+        val thread = Thread {
+            server.use { listening ->
+                listening.accept().use { socket -> readRequest(socket); writeResponse(socket, "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:${listening.localPort}/app/index.html\r\nContent-Length: 0\r\nConnection: close\r\n\r\n") }
+                listening.accept().use { socket ->
+                    readRequest(socket); val body = "<html><head><base href=\"base\"></head><body>x</body></html>"
+                    writeResponse(socket, "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: ${body.length}\r\nConnection: close\r\n\r\n$body")
+                }
+            }
+        }.apply { isDaemon=true; start() }
+        val proxy = SystemHttpCompatibilityProxy(PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000))
+        try {
+            val response = request(proxy, 2314, server.localPort, "/old")
+            assertTrue(response.contains("<base href=\"http://127.0.0.1:${server.localPort}/app/base\">"), response)
+            assertTrue(!response.contains("<http://"), response)
+        } finally { proxy.close(); runCatching { server.close() }; thread.join(2_000) }
+    }
 
-              rewritten = LEGACY_PROTOCOL_RELATIVE_URL_PATTERN.replace(rewritten) { match ->
-                  val scheme = if (upstreamBase.scheme.equals("https", ignoreCase = true)) "https" else "http"
-                  val rawTarget = if (htmlContext) decodeHtmlEntities(match.value) else match.value
-                  val target = runCatching { URI("$scheme:$rawTarget") }.getOrNull()
-                  when {
-                      target?.host == null -> match.value
-                      target.scheme.equals("https", ignoreCase = true) -> {
-                          val replacement = originRoutes.rememberHttpsReference(flow, target)
-                          if (htmlContext) escapeHtmlAttributeUrl(replacement) else replacement
-                      }
-                      else -> {
-                          originRoutes.rememberHttpReference(flow, target)
-                          match.value
-                      }
-                  }
-              }
-              return rewritten
-          }
-          '''
-          new = '''    private fun rewriteHttpsReferences(
-              flow: TcpProxyFlow,
-              upstreamBase: URI,
-              value: String,
-              htmlContext: Boolean = false,
-          ): String {
-              var rewritten = ABSOLUTE_HTTP_URL_PATTERN.replace(value) { match ->
-                  val attributeContext = htmlContext && !isHtmlRawTextPosition(value, match.range.first)
-                  val rawTarget = if (attributeContext) decodeHtmlEntities(match.value) else match.value
-                  val target = runCatching { URI(rawTarget) }.getOrNull()
-                  val replacement = when {
-                      target?.host == null -> null
-                      target.scheme.equals("https", ignoreCase = true) -> originRoutes.rememberHttpsReference(flow, target)
-                      target.scheme.equals("http", ignoreCase = true) -> originRoutes.rememberHttpReference(flow, target)
-                      else -> null
-                  }
-                  replacement?.let { if (attributeContext) escapeHtmlAttributeUrl(it) else it } ?: match.value
-              }
+    @Test
+    fun `cross origin redirect injects base on legacy host`() {
+        val oldServer=ServerSocket(0,1,InetAddress.getLoopbackAddress()); val newServer=ServerSocket(0,1,InetAddress.getLoopbackAddress())
+        val oldThread=serveOnce(oldServer) { "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:${newServer.localPort}/app/index.html\r\nContent-Length: 0\r\nConnection: close\r\n\r\n" }
+        val body="<html><head></head><body>x</body></html>"; val newThread=serveOnce(newServer) { "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: ${body.length}\r\nConnection: close\r\n\r\n$body" }
+        val proxy=SystemHttpCompatibilityProxy(PppHttpCompatibilityConfig(requestTimeoutMillis=2_000))
+        try {
+            val response=request(proxy,2315,oldServer.localPort,"/start")
+            assertTrue(response.contains("<base href=\"http://127.0.0.1:${oldServer.localPort}/app/index.html\">"),response)
+        } finally { proxy.close(); runCatching { oldServer.close() }; runCatching { newServer.close() }; oldThread.join(2_000); newThread.join(2_000) }
+    }
 
-              rewritten = LEGACY_PROTOCOL_RELATIVE_URL_PATTERN.replace(rewritten) { match ->
-                  val scheme = if (upstreamBase.scheme.equals("https", ignoreCase = true)) "https" else "http"
-                  val attributeContext = htmlContext && !isHtmlRawTextPosition(rewritten, match.range.first)
-                  val rawTarget = if (attributeContext) decodeHtmlEntities(match.value) else match.value
-                  val target = runCatching { URI("$scheme:$rawTarget") }.getOrNull()
-                  when {
-                      target?.host == null -> match.value
-                      target.scheme.equals("https", ignoreCase = true) -> {
-                          val replacement = originRoutes.rememberHttpsReference(flow, target)
-                          if (attributeContext) escapeHtmlAttributeUrl(replacement) else replacement
-                      }
-                      else -> {
-                          originRoutes.rememberHttpReference(flow, target)
-                          match.value
-                      }
-                  }
-              }
-              return rewritten
-          }
-
-          private fun isHtmlRawTextPosition(source: String, position: Int): Boolean {
-              val prefix = source.substring(0, position).lowercase(Locale.ROOT)
-              return listOf("script", "style").any { tag ->
-                  prefix.lastIndexOf("<$tag") > prefix.lastIndexOf("</$tag")
-              }
-          }
-          '''
-          if old not in s:
-              raise SystemExit('rewriteHttpsReferences block not found')
-          s = s.replace(old, new)
-
-          old = '''    private fun preserveDocumentBase(flow: TcpProxyFlow, legacyUri: URI, upstreamBase: URI, source: String): String {
-              val effectiveLegacyBase = if (upstreamBase.scheme.equals("https", ignoreCase = true)) {
-                  originRoutes.rememberHttpsReference(flow, LegacyHttpUrl.withoutFragment(upstreamBase))
-              } else {
-                  LegacyHttpUrl.withoutFragment(upstreamBase).toString()
-              }
-          '''
-          new = '''    private fun preserveDocumentBase(flow: TcpProxyFlow, legacyUri: URI, upstreamBase: URI, source: String): String {
-              val browserBaseTarget = URI(
-                  buildString {
-                      append("http://")
-                      append(LegacyHttpUrl.formatHost(requireNotNull(legacyUri.host)))
-                      val legacyPort = LegacyHttpUrl.effectivePort(legacyUri)
-                      if (legacyPort != 80) append(':').append(legacyPort)
-                      append(upstreamBase.rawPath?.takeIf { it.isNotEmpty() } ?: "/")
-                      upstreamBase.rawQuery?.let { append('?').append(it) }
-                  },
-              )
-              val effectiveLegacyBase = browserBaseTarget.toString()
-          '''
-          if old not in s:
-              raise SystemExit('preserveDocumentBase prefix not found')
-          s = s.replace(old, new)
-
-          old = '''            val escaped = escapeHtmlAttributeUrl(replacement)
-              val valueStart = existing.range.first + existing.value.indexOf(rawHref)
-              return source.replaceRange(valueStart, valueStart + rawHref.length, escaped)
-          '''
-          new = '''            val escaped = escapeHtmlAttributeUrl(replacement)
-              val valueRange = requireNotNull(existing.groups[2]).range
-              return source.replaceRange(valueRange, escaped)
-          '''
-          if old not in s:
-              raise SystemExit('base href replacement block not found')
-          s = s.replace(old, new)
-          main.write_text(s)
-
-          test = Path('src/test/kotlin/no/skasti/serialmodem/ppp/HttpCompatibilityReviewRegressionTest.kt')
-          t = test.read_text()
-          marker = '''    private fun request(proxy: SystemHttpCompatibilityProxy, peerPort: Int, hostPort: Int, path: String): String {
-          '''
-          tests = r'''    @Test
-              fun `cross origin redirect keeps legacy host in injected document base`() {
-                  val oldServer = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
-                  val newServer = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
-                  val oldThread = serveOnce(oldServer) {
-                      "HTTP/1.1 302 Found\r\n" +
-                          "Location: http://127.0.0.1:${newServer.localPort}/app/index.html\r\n" +
-                          "Content-Length: 0\r\nConnection: close\r\n\r\n"
-                  }
-                  val body = "<html><head><title>x</title></head><body><img src=\"asset.png\"></body></html>"
-                  val newThread = serveOnce(newServer) {
-                      "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n" +
-                          "Content-Length: ${body.length}\r\nConnection: close\r\n\r\n$body"
-                  }
-                  val proxy = SystemHttpCompatibilityProxy(PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000))
-                  try {
-                      val response = request(proxy, 2312, oldServer.localPort, "/start")
-                      assertTrue(
-                          response.contains("<base href=\"http://127.0.0.1:${oldServer.localPort}/app/index.html\">"),
-                          response,
-                      )
-                      assertTrue(!response.contains("<base href=\"http://127.0.0.1:${newServer.localPort}/app/index.html\">"), response)
-                  } finally {
-                      proxy.close()
-                      runCatching { oldServer.close() }
-                      runCatching { newServer.close() }
-                      oldThread.join(2_000)
-                      newThread.join(2_000)
-                  }
-              }
-
-              @Test
-              fun `HTML script body URLs are rewritten without HTML entity escaping`() {
-                  val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
-                  val body = "<html><script>fetch(\"https://api.test/x?a=1&b=2\")</script></html>"
-                  val thread = serveOnce(server) {
-                      "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n" +
-                          "Content-Length: ${body.length}\r\nConnection: close\r\n\r\n$body"
-                  }
-                  val proxy = SystemHttpCompatibilityProxy(PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000))
-                  try {
-                      val response = request(proxy, 2313, server.localPort, "/")
-                      assertTrue(response.contains("fetch(\"http://api.test/x?a=1&b=2\")"), response)
-                      assertTrue(!response.contains("a=1&amp;b=2"), response)
-                  } finally {
-                      proxy.close()
-                      runCatching { server.close() }
-                      thread.join(2_000)
-                  }
-              }
-
-              @Test
-              fun `relative existing base href replaces only the captured value`() {
-                  val server = ServerSocket(0, 2, InetAddress.getLoopbackAddress())
-                  val thread = Thread {
-                      server.use { listening ->
-                          listening.accept().use { socket ->
-                              readRequest(socket)
-                              writeResponse(
-                                  socket,
-                                  "HTTP/1.1 302 Found\r\n" +
-                                      "Location: http://127.0.0.1:${listening.localPort}/app/index.html\r\n" +
-                                      "Content-Length: 0\r\nConnection: close\r\n\r\n",
-                              )
-                          }
-                          listening.accept().use { socket ->
-                              readRequest(socket)
-                              val body = "<html><head><base href=\"base\"></head><body>x</body></html>"
-                              writeResponse(
-                                  socket,
-                                  "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n" +
-                                      "Content-Length: ${body.length}\r\nConnection: close\r\n\r\n$body",
-                              )
-                          }
-                      }
-                  }.apply { isDaemon = true; start() }
-                  val proxy = SystemHttpCompatibilityProxy(PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000))
-                  try {
-                      val response = request(proxy, 2314, server.localPort, "/old")
-                      assertTrue(
-                          response.contains("<base href=\"http://127.0.0.1:${server.localPort}/app/base\">"),
-                          response,
-                      )
-                      assertTrue(!response.contains("<http://"), response)
-                  } finally {
-                      proxy.close()
-                      runCatching { server.close() }
-                      thread.join(2_000)
-                  }
-              }
-
-          '''
-          if marker not in t:
-              raise SystemExit('test insertion marker not found')
-          t = t.replace(marker, tests + marker)
-          test.write_text(t)
+'''
+          if marker not in t: raise SystemExit('test marker missing')
+          t=t.replace(marker,tests+marker,1); p.write_text(t)
       - name: Run focused tests
         run: ./gradlew test --tests no.skasti.serialmodem.ppp.HttpCompatibilityReviewRegressionTest
       - name: Commit fixes
