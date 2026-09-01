@@ -31,6 +31,8 @@ fun main(args: Array<String>) {
             config = options.modemConfig,
             logger = logManager.logger(YameLogModule.MODEM),
             pppLogger = logManager.logger(YameLogModule.PPP),
+            dnsLogger = logManager.debugLogger(YameLogModule.DNS),
+            transferLogger = logManager.debugLogger(YameLogModule.TRANSFERS),
             proxyLogger = logManager.debugLogger(YameLogModule.PROXY),
             eventSink = logManager::eventSink,
         )
@@ -112,9 +114,17 @@ fun main(args: Array<String>) {
         println(message)
         logManager.logger(YameLogModule.PPP)(message)
     }
+    val dnsConsoleLogger: (String) -> Unit = { message ->
+        println(message)
+        logManager.debugLogger(YameLogModule.DNS)(message)
+    }
+    val transferConsoleLogger: (String) -> Unit = { message ->
+        println(message)
+        logManager.debugLogger(YameLogModule.TRANSFERS)(message)
+    }
     val proxyConsoleLogger: (String) -> Unit = { message ->
         println(message)
-        logManager.logger(YameLogModule.PROXY)(message)
+        logManager.debugLogger(YameLogModule.PROXY)(message)
     }
     val serialConsoleLogger: (String) -> Unit = { message ->
         println(message)
@@ -125,6 +135,8 @@ fun main(args: Array<String>) {
         config = options.modemConfig,
         logger = modemConsoleLogger,
         pppLogger = pppConsoleLogger,
+        dnsLogger = dnsConsoleLogger,
+        transferLogger = transferConsoleLogger,
         proxyLogger = proxyConsoleLogger,
         eventSink = logManager::eventSink,
     )
