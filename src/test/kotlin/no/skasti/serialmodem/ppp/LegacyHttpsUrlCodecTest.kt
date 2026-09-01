@@ -165,6 +165,21 @@ class LegacyOriginRouteTableTest {
         )
     }
 
+
+    @Test
+    fun `navigation reference wins over resource redirect hiding for the same URL`() {
+        val routes = LegacyOriginRouteTable()
+        val flow = httpFlow(generation = 14)
+        val upstream = URI("https://example.test/shared")
+
+        val legacyResource = URI(routes.rememberHttpsReference(flow, upstream, hideRedirect = true))
+        assertTrue(routes.hidesRedirect(flow, legacyResource))
+
+        val legacyNavigation = URI(routes.rememberHttpsReference(flow, upstream, hideRedirect = false))
+        assertEquals(legacyResource, legacyNavigation)
+        assertFalse(routes.hidesRedirect(flow, legacyNavigation))
+    }
+
     @Test
     fun `HTTPS references are exposed as clean HTTP URLs and remembered exactly`() {
         val routes = LegacyOriginRouteTable()
