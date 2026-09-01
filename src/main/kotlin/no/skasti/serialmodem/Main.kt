@@ -31,7 +31,7 @@ fun main(args: Array<String>) {
             config = options.modemConfig,
             logger = logManager.logger(YameLogModule.MODEM),
             pppLogger = logManager.logger(YameLogModule.PPP),
-            proxyLogger = logManager.logger(YameLogModule.PROXY),
+            proxyLogger = logManager.debugLogger(YameLogModule.PROXY),
             eventSink = logManager::eventSink,
         )
         println(
