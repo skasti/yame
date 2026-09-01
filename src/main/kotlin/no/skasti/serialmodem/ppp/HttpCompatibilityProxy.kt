@@ -1175,7 +1175,7 @@ class SystemHttpCompatibilityProxy(
     private fun rewriteBodyAbsoluteUrlsOutsideGeneratedMappings(flow: TcpProxyFlow, value: String): String =
         ABSOLUTE_HTTP_URL_PATTERN.replace(value) { match ->
             val target = runCatching { URI(match.value) }.getOrNull()
-            if (target?.scheme.equals("http", ignoreCase = true) && originRoutes.resolve(flow, target) != target) {
+            if (target != null && target.scheme.equals("http", ignoreCase = true) && originRoutes.resolve(flow, target) != target) {
                 match.value
             } else {
                 rewriteAbsoluteUrl(
