@@ -121,34 +121,6 @@ internal fun redirectedMethod(status: Int, method: String): String =
         else -> method
     }
 
-internal fun shouldDeferExactMappedRedirect(
-    followedExactMapping: Boolean,
-    method: String,
-    legacyRequestUri: URI,
-    upstreamRedirectUri: URI,
-): Boolean =
-    followedExactMapping &&
-        method.equals("GET", ignoreCase = true) &&
-        shouldExposeRedirect(legacyRequestUri, upstreamRedirectUri)
-
-internal fun rewriteEncodedTextBody(
-    headers: Map<String, List<String>>,
-    body: ByteArray,
-    transform: (String) -> String,
-): ByteArray {
-    val contentType = headers.entries
-        .firstOrNull { (name, _) -> name.equals("content-type", ignoreCase = true) }
-        ?.value
-        ?.firstOrNull()
-    val declaredCharset = contentType
-        ?.let { CHARSET_PARAMETER_PATTERN.find(it) }
-        ?.let { match -> match.groupValues.drop(1).firstOrNull { it.isNotEmpty() } }
-        ?.let { name -> runCatching { Charset.forName(name) }.getOrNull() }
-    val charset = declaredCharset ?: bomCharset(body) ?: StandardCharsets.ISO_8859_1
-    val source = body.toString(charset)
-    val rewritten = transform(source)
-    return if (rewritten == source) body else rewritten.toByteArray(charset)
-}
 
 private fun bomCharset(body: ByteArray): Charset? =
     when {
@@ -795,7 +767,6 @@ class SystemHttpCompatibilityProxy(
         var method = request.method
         var body = request.body
         var redirects = 0
-        var deferredExactRedirectStatus: Int? = null
         var forwardSensitiveHeaders = canForwardSensitiveHeaders(legacyUri, uri)
         val requestConnectionHeadersToStrip = connectionNominatedHeaders(request.headers)
         while (true) {
@@ -834,9 +805,7 @@ class SystemHttpCompatibilityProxy(
                 )
 
                 val legacyNext = legacyRedirectUri(next)
-                val deferExactRedirect =
-                    shouldDeferExactMappedRedirect(followedExactMapping, method, legacyUri, next)
-                if (shouldExposeRedirect(legacyUri, next) && !deferExactRedirect) {
+                if (!followedExactMapping && shouldExposeRedirect(legacyUri, next)) {
                     response.body().close()
                     originRoutes.rememberExact(state.flow, legacyNext, next)
                     logger("HTTP compatibility <= client redirect $status $legacyNext")
@@ -857,10 +826,6 @@ class SystemHttpCompatibilityProxy(
                     )
                 }
 
-                if (deferExactRedirect && deferredExactRedirectStatus == null) {
-                    deferredExactRedirectStatus = status
-                    logger("HTTP compatibility .. deferring exact-mapped redirect until response type is known")
-                }
                 response.body().close()
                 if (redirects >= config.maxRedirects) {
                     throw IllegalStateException("HTTP redirect limit (${config.maxRedirects}) exceeded")
@@ -897,26 +862,6 @@ class SystemHttpCompatibilityProxy(
                     else -> FinalResponseBody.Streaming(response.body())
                 }
             val navigationLikeResponse = responseEstablishesNavigationOrigin(method, status, responseHeaders)
-            if (deferredExactRedirectStatus != null && navigationLikeResponse && shouldExposeRedirect(legacyUri, uri)) {
-                val legacyFinal = legacyRedirectUri(uri)
-                originRoutes.rememberExact(state.flow, legacyFinal, uri)
-                logger("HTTP compatibility <= deferred client redirect ${deferredExactRedirectStatus} ${legacyFinal}")
-                emitEvent(
-                    state,
-                    HttpProxyActionKind.ROUTED,
-                    "deferred client redirect ${LegacyHttpUrl.withoutFragment(legacyFinal)} -> ${LegacyHttpUrl.withoutFragment(uri)}",
-                )
-                return FinalResponse(
-                    legacyUri = legacyUri,
-                    uri = uri,
-                    statusCode = requireNotNull(deferredExactRedirectStatus),
-                    headers = responseHeaders.withHeader("location", legacyFinal.toString()),
-                    body = FinalResponseBody.Buffered(ByteArray(0)),
-                    contentLength = 0,
-                    exposeCookies = sameOrigin(originalUri, uri),
-                    locationAlreadyLegacy = true,
-                )
-            }
             when {
                 followedExactMapping || navigationLikeResponse -> {
                     originRoutes.remember(state.flow, legacyUri, uri)?.let { (legacyOrigin, upstreamOrigin) ->
