@@ -18,15 +18,28 @@ The HTTP compatibility proxy has deliberately pragmatic goals:
 - replace absolute `https://` references in supported text responses with clean
   `http://` references and remember the upstream HTTPS target for the PPP
   session;
-- expose an upstream redirect to the client when its clean HTTP URL changes, so
-  the browser owns the new host, path, query, and relative-URL base;
-- follow a redirect internally only when rewriting HTTPS to HTTP would otherwise
+- distinguish browser navigation targets from embedded/subresource targets when
+  deciding how redirects are exposed;
+- expose redirects for navigation-like requests when the clean HTTP URL changes,
+  so Netscape owns the new host, path, query, and relative-URL base;
+- keep redirects for rewritten subresources (for example scripts, stylesheets,
+  images, and CSS resources) internal to YAME. Real Netscape Navigator 4.08
+  testing showed that returning such a redirect can cause the browser to
+  navigate the top-level window to the resource URL instead of merely following
+  the subresource redirect;
+- when an internally followed subresource redirect changes host or path, treat
+  the final upstream URI as the resource's effective base URI. Relative
+  references in supported rewritable content must therefore be resolved against
+  that final URI and rewritten to clean absolute compatibility URLs before the
+  response is returned to the legacy browser;
+- still follow a redirect internally when rewriting HTTPS to HTTP would otherwise
   produce a redirect back to the exact URL the client just requested.
 
 Prefer small, observable compatibility rules and tests with period-appropriate
-clients. Do not add semantic HTML/CSS/JavaScript parsing merely to avoid changing
-visible URL text. Rewriting every literal absolute `https://` URL in a supported
-text body is intentional.
+clients. Observed legacy-client behavior takes precedence over modern-browser
+redirect expectations when the two differ. Do not add semantic HTML/CSS/JavaScript
+parsing merely to avoid changing visible URL text. Rewriting every literal
+absolute `https://` URL in a supported text body is intentional.
 
 ## Explicit non-goals for this layer
 

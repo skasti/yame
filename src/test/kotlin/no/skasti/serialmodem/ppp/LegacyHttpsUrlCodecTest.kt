@@ -51,6 +51,18 @@ class LegacyOriginRouteTableTest {
         assertEquals(upstream, legacyRedirectUri(upstream))
     }
 
+
+    @Test
+    fun `exact-mapped compatibility URL keeps redirect chain internal`() {
+        val legacyScript = URI("http://www.googletagmanager.com/gtag/js?id=G-4KX380T5BD")
+        val redirectedUpstream = URI("https://www.googletagmanager.com/gtag/js?id=G-4KX380T5BD&cx=c")
+
+        assertTrue(shouldExposeRedirect(legacyScript, redirectedUpstream))
+        // The compatibility proxy must still follow this internally when the
+        // request came from an exact HTTPS mapping. shouldExposeRedirect()
+        // remains the generic visible-navigation policy for non-exact requests.
+    }
+
     @Test
     fun `redirect method follows legacy browser compatible semantics`() {
         assertEquals("GET", redirectedMethod(302, "POST"))
@@ -153,6 +165,21 @@ class LegacyOriginRouteTableTest {
         )
     }
 
+
+    @Test
+    fun `navigation reference wins over resource redirect hiding for the same URL`() {
+        val routes = LegacyOriginRouteTable()
+        val flow = httpFlow(generation = 14)
+        val upstream = URI("https://example.test/shared")
+
+        val legacyResource = URI(routes.rememberHttpsReference(flow, upstream, hideRedirect = true))
+        assertTrue(routes.hidesRedirect(flow, legacyResource))
+
+        val legacyNavigation = URI(routes.rememberHttpsReference(flow, upstream, hideRedirect = false))
+        assertEquals(legacyResource, legacyNavigation)
+        assertFalse(routes.hidesRedirect(flow, legacyNavigation))
+    }
+
     @Test
     fun `HTTPS references are exposed as clean HTTP URLs and remembered exactly`() {
         val routes = LegacyOriginRouteTable()
@@ -244,6 +271,37 @@ class LegacyOriginRouteTableTest {
         assertEquals(first, routes.resolve(flow, first))
         assertEquals(URI("https://upstream-second.test/page"), routes.resolve(flow, second))
         assertEquals(URI("https://upstream-third.test/page"), routes.resolve(flow, third))
+    }
+
+
+    @Test
+    fun `cross-host HTTPS subresource mapping cannot change document origin route`() {
+        val routes = LegacyOriginRouteTable()
+        val flow = httpFlow(generation = 13)
+        val document = URI("http://www.geocities.ws/oldternet/links.htm")
+        val googleScript = URI("https://www.googletagmanager.com/gtag/js?id=G-4KX380T5BD")
+
+        val legacyScript = URI(routes.rememberHttpsReference(flow, googleScript))
+
+        assertEquals(
+            document,
+            routes.resolve(flow, document),
+            "merely seeing the Google script must not reroute the Geocities document",
+        )
+        assertEquals(googleScript, routes.resolve(flow, legacyScript))
+
+        routes.remember(flow, legacyScript, googleScript)
+
+        assertEquals(
+            document,
+            routes.resolve(flow, document),
+            "following a mapped Google subresource must not alter the Geocities host route",
+        )
+        assertEquals(
+            URI("http://www.geocities.ws/oldternet/index.htm"),
+            routes.resolve(flow, URI("http://www.geocities.ws/oldternet/index.htm")),
+            "relative Geocities navigation must keep the Geocities origin",
+        )
     }
 
     @Test
