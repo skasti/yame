@@ -205,22 +205,34 @@ internal class LegacyOriginRouteTable(
         }
     }
 
+    private data class ExactMapping(
+        val target: URI,
+        val hideRedirect: Boolean,
+    )
+
     private val originMappings = ConcurrentHashMap<OriginKey, Origin>()
-    private val exactMappings = ConcurrentHashMap<ExactKey, URI>()
+    private val exactMappings = ConcurrentHashMap<ExactKey, ExactMapping>()
     private val originInsertionOrder = mutableMapOf<RouteSessionKey, LinkedHashSet<OriginKey>>()
     private val exactInsertionOrder = mutableMapOf<RouteSessionKey, LinkedHashSet<ExactKey>>()
     private val insertionOrderLock = Any()
 
     fun resolve(flow: TcpProxyFlow, legacyUri: URI): URI =
-        exactMappings[exactKey(flow, legacyUri)]
+        exactMappings[exactKey(flow, legacyUri)]?.target
             ?: originMappings[originKey(flow, legacyUri)]?.resolvePathFrom(legacyUri)
             ?: legacyUri
 
     fun isExactMapping(flow: TcpProxyFlow, legacyUri: URI, upstreamUri: URI): Boolean =
-        exactMappings[exactKey(flow, legacyUri)] == LegacyHttpUrl.withoutFragment(upstreamUri)
+        exactMappings[exactKey(flow, legacyUri)]?.target == LegacyHttpUrl.withoutFragment(upstreamUri)
 
-    fun rememberExact(flow: TcpProxyFlow, legacyUri: URI, upstreamUri: URI) {
-        rememberExactMapping(exactKey(flow, legacyUri), LegacyHttpUrl.withoutFragment(upstreamUri))
+    fun hidesRedirect(flow: TcpProxyFlow, legacyUri: URI): Boolean =
+        exactMappings[exactKey(flow, legacyUri)]?.hideRedirect == true
+
+    fun rememberExact(flow: TcpProxyFlow, legacyUri: URI, upstreamUri: URI, hideRedirect: Boolean = false) {
+        rememberExactMapping(
+            exactKey(flow, legacyUri),
+            LegacyHttpUrl.withoutFragment(upstreamUri),
+            hideRedirect,
+        )
     }
 
     fun remember(flow: TcpProxyFlow, legacyUri: URI, upstreamUri: URI): Pair<String, String>? {
@@ -228,7 +240,7 @@ internal class LegacyOriginRouteTable(
         val exactKey = exactKey(flow, legacyUri)
         val legacyOrigin = Origin.from(legacyUri)
         val upstreamOrigin = Origin.from(upstreamUri)
-        val exactTarget = exactMappings[exactKey]
+        val exactTarget = exactMappings[exactKey]?.target
         val previous = synchronized(insertionOrderLock) {
             when {
                 legacyOrigin == upstreamOrigin && exactTarget != null -> originMappings[originKey]
@@ -244,20 +256,36 @@ internal class LegacyOriginRouteTable(
         }
     }
 
-    fun rememberHttpsReference(flow: TcpProxyFlow, upstreamHttpsUri: URI): String {
+    fun rememberHttpsReference(
+        flow: TcpProxyFlow,
+        upstreamHttpsUri: URI,
+        hideRedirect: Boolean = true,
+    ): String {
         require(upstreamHttpsUri.scheme.equals("https", ignoreCase = true)) {
             "Compatibility reference target must be HTTPS"
         }
         val legacyUri = LegacyHttpUrl.mirrorOf(upstreamHttpsUri)
-        rememberExactMapping(exactKey(flow, legacyUri), LegacyHttpUrl.withoutFragment(upstreamHttpsUri))
+        rememberExactMapping(
+            exactKey(flow, legacyUri),
+            LegacyHttpUrl.withoutFragment(upstreamHttpsUri),
+            hideRedirect,
+        )
         return legacyUri.toString()
     }
 
-    fun rememberHttpReference(flow: TcpProxyFlow, upstreamHttpUri: URI): String {
+    fun rememberHttpReference(
+        flow: TcpProxyFlow,
+        upstreamHttpUri: URI,
+        hideRedirect: Boolean = true,
+    ): String {
         require(upstreamHttpUri.scheme.equals("http", ignoreCase = true)) {
             "Plain HTTP reference target must use HTTP"
         }
-        rememberExactMapping(exactKey(flow, upstreamHttpUri), LegacyHttpUrl.withoutFragment(upstreamHttpUri))
+        rememberExactMapping(
+            exactKey(flow, upstreamHttpUri),
+            LegacyHttpUrl.withoutFragment(upstreamHttpUri),
+            hideRedirect,
+        )
         return upstreamHttpUri.toString()
     }
 
@@ -279,9 +307,13 @@ internal class LegacyOriginRouteTable(
         }
     }
 
-    private fun rememberExactMapping(key: ExactKey, target: URI) {
+    private fun rememberExactMapping(key: ExactKey, target: URI, hideRedirect: Boolean) {
         synchronized(insertionOrderLock) {
-            exactMappings[key] = target
+            val previous = exactMappings[key]
+            exactMappings[key] = ExactMapping(
+                target = target,
+                hideRedirect = (previous?.hideRedirect ?: true) && hideRedirect,
+            )
             val order = exactInsertionOrder.getOrPut(key.sessionKey()) { linkedSetOf() }
             order.remove(key)
             order.add(key)
@@ -762,6 +794,7 @@ class SystemHttpCompatibilityProxy(
         var uri = originRoutes.resolve(state.flow, legacyUri)
         val initialUpstreamUri = uri
         val followedExactMapping = originRoutes.isExactMapping(state.flow, legacyUri, uri)
+        val hideExactRedirect = followedExactMapping && originRoutes.hidesRedirect(state.flow, legacyUri)
         val originalUri = legacyUri
         seedClientCookies(state, request.headers)
         var method = request.method
@@ -805,7 +838,7 @@ class SystemHttpCompatibilityProxy(
                 )
 
                 val legacyNext = legacyRedirectUri(next)
-                if (!followedExactMapping && shouldExposeRedirect(legacyUri, next)) {
+                if (!hideExactRedirect && shouldExposeRedirect(legacyUri, next)) {
                     response.body().close()
                     originRoutes.rememberExact(state.flow, legacyNext, next)
                     logger("HTTP compatibility <= client redirect $status $legacyNext")
@@ -863,7 +896,7 @@ class SystemHttpCompatibilityProxy(
                 }
             val navigationLikeResponse = responseEstablishesNavigationOrigin(method, status, responseHeaders)
             when {
-                followedExactMapping || navigationLikeResponse -> {
+                navigationLikeResponse -> {
                     originRoutes.remember(state.flow, legacyUri, uri)?.let { (legacyOrigin, upstreamOrigin) ->
                         logger("HTTP compatibility .. session route $legacyOrigin -> $upstreamOrigin")
                         emitEvent(state, HttpProxyActionKind.ROUTED, "session $legacyOrigin -> $upstreamOrigin")
@@ -971,7 +1004,7 @@ class SystemHttpCompatibilityProxy(
             if (locationAlreadyLegacy && name.equals("location", ignoreCase = true)) {
                 values
             } else if (name.lowercase(Locale.ROOT) in URI_RESPONSE_HEADERS_TO_REWRITE) {
-                values.map { rewriteAbsoluteUrls(flow, it) }
+                values.map { rewriteAbsoluteUrls(flow, it, hideRedirect = false) }
             } else {
                 values
             }
@@ -983,7 +1016,7 @@ class SystemHttpCompatibilityProxy(
         body: ByteArray,
     ): ByteArray {
         if (body.isEmpty() || !bodyCanContainNavigableUrls(headers)) return body
-        return rewriteEncodedTextBody(headers, body) { source -> rewriteAbsoluteUrls(flow, source) }
+        return rewriteEncodedTextBody(headers, body) { source -> rewriteBodyAbsoluteUrls(flow, source) }
     }
 
     private fun bodyCanContainNavigableUrls(headers: Map<String, List<String>>): Boolean {
@@ -1018,19 +1051,53 @@ class SystemHttpCompatibilityProxy(
             ?.value
             ?.firstOrNull()
 
+    private fun rewriteBodyAbsoluteUrls(flow: TcpProxyFlow, value: String): String =
+        ABSOLUTE_HTTP_URL_PATTERN.replace(value) { match ->
+            rewriteAbsoluteUrl(
+                flow = flow,
+                rawUrl = match.value,
+                hideRedirect = bodyUrlHidesRedirect(value, match.range.first),
+            ) ?: match.value
+        }
+
     private fun rewriteAbsoluteUrls(
         flow: TcpProxyFlow,
         value: String,
-    ): String {
-        return ABSOLUTE_HTTP_URL_PATTERN.replace(value) { match ->
-            val target = runCatching { URI(match.value) }.getOrNull()
-            val replacement = when {
-                target?.host == null -> null
-                target.scheme.equals("https", ignoreCase = true) -> originRoutes.rememberHttpsReference(flow, target)
-                target.scheme.equals("http", ignoreCase = true) -> originRoutes.rememberHttpReference(flow, target)
-                else -> null
-            }
-            replacement ?: match.value
+        hideRedirect: Boolean,
+    ): String =
+        ABSOLUTE_HTTP_URL_PATTERN.replace(value) { match ->
+            rewriteAbsoluteUrl(flow, match.value, hideRedirect) ?: match.value
+        }
+
+    private fun rewriteAbsoluteUrl(
+        flow: TcpProxyFlow,
+        rawUrl: String,
+        hideRedirect: Boolean,
+    ): String? {
+        val target = runCatching { URI(rawUrl) }.getOrNull() ?: return null
+        if (target.host == null) return null
+        return when {
+            target.scheme.equals("https", ignoreCase = true) ->
+                originRoutes.rememberHttpsReference(flow, target, hideRedirect)
+            target.scheme.equals("http", ignoreCase = true) ->
+                originRoutes.rememberHttpReference(flow, target, hideRedirect)
+            else -> null
+        }
+    }
+
+    private fun bodyUrlHidesRedirect(source: String, urlStart: Int): Boolean {
+        val contextStart = maxOf(0, urlStart - 256)
+        val context = source.substring(contextStart, urlStart)
+        val tagStart = context.lastIndexOf('<')
+        val tagEnd = context.lastIndexOf('>')
+        if (tagStart <= tagEnd) return true
+
+        val tagPrefix = context.substring(tagStart).lowercase(Locale.ROOT)
+        return when {
+            Regex("""<\s*a\b[^>]*\bhref\s*=\s*["']?[^"']*$""").containsMatchIn(tagPrefix) -> false
+            Regex("""<\s*form\b[^>]*\baction\s*=\s*["']?[^"']*$""").containsMatchIn(tagPrefix) -> false
+            Regex("""<\s*meta\b[^>]*http-equiv\s*=\s*["']?refresh["']?[^>]*content\s*=\s*["'][^"']*$""").containsMatchIn(tagPrefix) -> false
+            else -> true
         }
     }
 
