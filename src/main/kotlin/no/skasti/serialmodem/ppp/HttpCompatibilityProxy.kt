@@ -14,7 +14,12 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.StandardOpenOption
 import java.time.Duration
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentHashMap
@@ -33,6 +38,7 @@ data class PppHttpCompatibilityConfig(
     val maxRequestBytes: Int = 16 * 1024 * 1024,
     val maxResponseBytes: Int = 16 * 1024 * 1024,
     val maxFlows: Int = 16,
+    val traceLogFile: String? = null,
 ) {
     init {
         require(maxRedirects >= 0) { "HTTP compatibility maxRedirects must not be negative" }
@@ -519,7 +525,7 @@ class SystemRoutingTcpProxy(
 
 class SystemHttpCompatibilityProxy(
     private val config: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig(enabled = true),
-    private val logger: (String) -> Unit = {},
+    logger: (String) -> Unit = {},
     private val eventSink: (YameEvent) -> Unit = {},
     private val httpClient: HttpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofMillis(config.requestTimeoutMillis))
@@ -567,6 +573,30 @@ class SystemHttpCompatibilityProxy(
     )
 
     private enum class ExpectationDisposition { NONE, CONTINUE, UNSUPPORTED }
+
+    private val traceWriter = config.traceLogFile?.let { fileName ->
+        val path = Path.of(fileName).toAbsolutePath()
+        path.parent?.let(Files::createDirectories)
+        Files.newBufferedWriter(
+            path,
+            StandardCharsets.UTF_8,
+            StandardOpenOption.CREATE,
+            StandardOpenOption.APPEND,
+        )
+    }
+    private val traceLock = Any()
+    private val logger: (String) -> Unit = { message ->
+        logger(message)
+        traceWriter?.let { writer ->
+            synchronized(traceLock) {
+                writer.append(LocalDateTime.now().format(TRACE_TIME_FORMAT))
+                    .append("  ")
+                    .append(message)
+                    .newLine()
+                writer.flush()
+            }
+        }
+    }
 
     private val executor = Executors.newFixedThreadPool(config.maxFlows) { runnable ->
         Thread(runnable, "http-compatibility-proxy").apply { isDaemon = true }
@@ -1328,6 +1358,7 @@ class SystemHttpCompatibilityProxy(
         flows.values.toList().forEach(::removeFlow)
         executor.shutdownNow()
         runCatching { executor.awaitTermination(CLOSE_JOIN_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS) }
+        traceWriter?.let { writer -> synchronized(traceLock) { runCatching { writer.close() } } }
     }
     private fun emitEvent(
         state: FlowState,
@@ -1370,6 +1401,7 @@ class SystemHttpCompatibilityProxy(
         val NAVIGATION_CONTENT_TYPES = setOf("text/html", "application/xhtml+xml")
         const val RESPONSE_CHUNK_BYTES = 4 * 1024
         const val CLOSE_JOIN_TIMEOUT_MILLIS = 1_000L
+        val TRACE_TIME_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS")
         fun reasonPhrase(status: Int) = when (status) {
             200 -> "OK"; 201 -> "Created"; 202 -> "Accepted"; 204 -> "No Content"; 206 -> "Partial Content"
             300 -> "Multiple Choices"; 301 -> "Moved Permanently"; 302 -> "Found"; 303 -> "See Other"; 304 -> "Not Modified"
