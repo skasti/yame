@@ -1,10 +1,8 @@
 name: Temporary PR 20 review fixes
-
-on: [push]
-
+on:
+  push:
 permissions:
   contents: write
-
 jobs:
   patch:
     runs-on: ubuntu-latest
@@ -13,73 +11,10 @@ jobs:
         with:
           ref: fix/http-compatibility-default-and-links
           fetch-depth: 0
-      - name: Apply fixes and regression tests
+      - name: Patch
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('src/main/kotlin/no/skasti/serialmodem/ppp/HttpCompatibilityProxy.kt')
-          s = p.read_text()
-          old = 'Regex("""https?://(?:[^\\s/?#"\'<>@]+@)?(?:\\[[^\\]]+\\]|[^\\s/:?#"\'<>]+)(?::\\d+)?(?:[/?#](?:[^\\s"\'<>\\(\\)]|\\([^\\(\\)\\s"\'<>]*\\))*)?""", RegexOption.IGNORE_CASE)'
-          new = 'Regex("""https?://(?:[^\\s/?#"\'<>@]+@)?(?:\\[[^\\]]+\\]|[^\\s/:?#"\'<>()]+)(?::\\d+)?(?:[/?#](?:[^\\s"\'<>\\(\\)]|\\([^\\(\\)\\s"\'<>]*\\))*)?""", RegexOption.IGNORE_CASE)'
-          assert old in s
-          s = s.replace(old, new, 1)
-          old = 'if (HTML_BASE_HREF_PATTERN.matches(tagMatch.value)) rewriteBaseAttribute ?: rewriteAttribute'
-          new = 'if (HTML_BASE_HREF_PATTERN.find(tagMatch.value) != null) rewriteBaseAttribute ?: rewriteAttribute'
-          assert old in s
-          s = s.replace(old, new, 1)
-          old = '''(legacyUri.scheme.equals("http", true) && upstreamUri.scheme.equals("https", true) &&
-                legacyUri.host.equals(upstreamUri.host, true) && effectivePort(legacyUri) == 80 && effectivePort(upstreamUri) == 443)'''
-          new = '''(legacyUri.scheme.equals("http", true) && upstreamUri.scheme.equals("https", true) &&
-                legacyUri.host.equals(upstreamUri.host, true))'''
-          assert old in s
-          s = s.replace(old, new, 1)
-          p.write_text(s)
-
-          t = Path('src/test/kotlin/no/skasti/serialmodem/ppp/HttpCompatibilityProxyReviewRegressionTest.kt')
-          t.write_text('''package no.skasti.serialmodem.ppp
-
-import java.net.URI
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertTrue
-
-class HttpCompatibilityProxyReviewRegressionTest {
-    @Test
-    fun `base href tag uses base-specific rewriter`() {
-        var baseCalls = 0
-        val source = "<html><head><base href=\\"https://cdn.test/app/\\"></head></html>"
-        val rewritten = rewriteHtmlUrlContexts(
-            source = source,
-            rewriteAttribute = { "ordinary:$it" },
-            rewriteRaw = { it },
-            rewriteBaseAttribute = { baseCalls++; "base:$it" },
-        )
-        assertEquals(1, baseCalls)
-        assertTrue(rewritten.contains("href=\\"base:https://cdn.test/app/\\""), rewritten)
-    }
-
-    @Test
-    fun `host-only absolute URL stops before CSS closing parenthesis`() {
-        val match = requireNotNull(ABSOLUTE_HTTP_URL_PATTERN.find("background:url(https://secure.test)"))
-        assertEquals("https://secure.test", match.value)
-    }
-
-    @Test
-    fun `mapped same-host HTTPS auth supports nondefault ports`() {
-        val proxy = SystemHttpCompatibilityProxy()
-        try {
-            val method = proxy.javaClass.getDeclaredMethod("canForwardSensitiveHeaders", URI::class.java, URI::class.java)
-                .apply { isAccessible = true }
-            assertTrue(method.invoke(proxy, URI("http://example.test/private"), URI("https://example.test:8443/private")) as Boolean)
-            assertFalse(method.invoke(proxy, URI("http://example.test/private"), URI("https://other.test:8443/private")) as Boolean)
-        } finally {
-            proxy.close()
-        }
-    }
-}
-''')
-          PY
+          echo 'ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCnA9UGF0aCgnc3JjL21haW4va290bGluL25vL3NrYXN0aS9zZXJpYWxtb2RlbS9wcHAvSHR0cENvbXBhdGliaWxpdHlQcm94eS5rdCcpCnM9cC5yZWFkX3RleHQoKQpmb3Igb2xkLG5ldyBpbiBbKCdSZWdleCgiIiJodHRwcz86Ly8oPzpbXlxccy8/IyJcJzw+QF0rQCk/KD86XFxbW15cXF1dK1xcXXxbXlxccy86PyMiXCc8Pl0rKSg/OjpcXGQrKT8oPzpbLz8jXSg/OlteXFxzIlwnPD5cXFxcKFxcXFwpXXxcXChbXlxcKFxcKVxccyJcJzw+XSpcXCkpKik/IiIiLCBSZWdleE9wdGlvbi5JR05PUkVfQ0FTRSknLCAnUmVnZXgoIiIiaHR0cHM/Oi8vKD86W15cXHMvPyMiXCc8PkBdK0ApPyg/OlxcW1teXFxdXStcXF18W15cXHMvOj8jIlwnPD5cXFxcKFxcXFwpXSspKD86OlxcZCspPyg/OlsvPyNdKD86W15cXHMiXCc8PlxcXFwoXFxcXCldfFxcKFteXFwoXFwpXFxzIlwnPD5dKlxcKSkqKT8iIiIsIFJlZ2V4T3B0aW9uLklHTk9SRV9DQVNFKScpLCAoJ2lmIChIVE1MX0JBU0VfSFJFRl9QQVRURVJOLm1hdGNoZXModGFnTWF0Y2gudmFsdWUpKSByZXdyaXRlQmFzZUF0dHJpYnV0ZSA/OiByZXdyaXRlQXR0cmlidXRlJywgJ2lmIChIVE1MX0JBU0VfSFJFRl9QQVRURVJOLmZpbmQodGFnTWF0Y2gudmFsdWUpICE9IG51bGwpIHJld3JpdGVCYXNlQXR0cmlidXRlID86IHJld3JpdGVBdHRyaWJ1dGUnKSwgKCcobGVnYWN5VXJpLnNjaGVtZS5lcXVhbHMoImh0dHAiLCB0cnVlKSAmJiB1cHN0cmVhbVVyaS5zY2hlbWUuZXF1YWxzKCJodHRwcyIsIHRydWUpICYmXG4gICAgICAgICAgICAgICAgbGVnYWN5VXJpLmhvc3QuZXF1YWxzKHVwc3RyZWFtVXJpLmhvc3QsIHRydWUpICYmIGVmZmVjdGl2ZVBvcnQobGVnYWN5VXJpKSA9PSA4MCAmJiBlZmZlY3RpdmVQb3J0KHVwc3RyZWFtVXJpKSA9PSA0NDMpJywgJyhsZWdhY3lVcmkuc2NoZW1lLmVxdWFscygiaHR0cCIsIHRydWUpICYmIHVwc3RyZWFtVXJpLnNjaGVtZS5lcXVhbHMoImh0dHBzIiwgdHJ1ZSkgJiZcbiAgICAgICAgICAgICAgICBsZWdhY3lVcmkuaG9zdC5lcXVhbHModXBzdHJlYW1VcmkuaG9zdCwgdHJ1ZSkpJyldOgogICAgYXNzZXJ0IG9sZCBpbiBzLCBvbGQKICAgIHM9cy5yZXBsYWNlKG9sZCxuZXcsMSkKcC53cml0ZV90ZXh0KHMpClBhdGgoJ3NyYy90ZXN0L2tvdGxpbi9uby9za2FzdGkvc2VyaWFsbW9kZW0vcHBwL0h0dHBDb21wYXRpYmlsaXR5UHJveHlSZXZpZXdSZWdyZXNzaW9uVGVzdC5rdCcpLndyaXRlX3RleHQoJ3BhY2thZ2Ugbm8uc2thc3RpLnNlcmlhbG1vZGVtLnBwcFxuXG5pbXBvcnQgamF2YS5uZXQuVVJJXG5pbXBvcnQga290bGluLnRlc3QuVGVzdFxuaW1wb3J0IGtvdGxpbi50ZXN0LmFzc2VydEVxdWFsc1xuaW1wb3J0IGtvdGxpbi50ZXN0LmFzc2VydEZhbHNlXG5pbXBvcnQga290bGluLnRlc3QuYXNzZXJ0VHJ1ZVxuXG5jbGFzcyBIdHRwQ29tcGF0aWJpbGl0eVByb3h5UmV2aWV3UmVncmVzc2lvblRlc3Qge1xuICAgIEBUZXN0XG4gICAgZnVuIGBiYXNlIGhyZWYgdGFnIHVzZXMgYmFzZS1zcGVjaWZpYyByZXdyaXRlcmAoKSB7XG4gICAgICAgIHZhciBiYXNlQ2FsbHMgPSAwXG4gICAgICAgIHZhbCBzb3VyY2UgPSAiPGh0bWw+PGhlYWQ+PGJhc2UgaHJlZj1cXCJodHRwczovL2Nkbi50ZXN0L2FwcC9cXCI+PC9oZWFkPjwvaHRtbD4iXG4gICAgICAgIHZhbCByZXdyaXR0ZW4gPSByZXdyaXRlSHRtbFVybENvbnRleHRzKFxuICAgICAgICAgICAgc291cmNlID0gc291cmNlLFxuICAgICAgICAgICAgcmV3cml0ZUF0dHJpYnV0ZSA9IHsgIm9yZGluYXJ5OiRpdCIgfSxcbiAgICAgICAgICAgIHJld3JpdGVSYXcgPSB7IGl0IH0sXG4gICAgICAgICAgICByZXdyaXRlQmFzZUF0dHJpYnV0ZSA9IHsgYmFzZUNhbGxzKys7ICJiYXNlOiRpdCIgfSxcbiAgICAgICAgKVxuICAgICAgICBhc3NlcnRFcXVhbHMoMSwgYmFzZUNhbGxzKVxuICAgICAgICBhc3NlcnRUcnVlKHJld3JpdHRlbi5jb250YWlucygiaHJlZj1cXCJiYXNlOmh0dHBzOi8vY2RuLnRlc3QvYXBwL1xcIiIpLCByZXdyaXR0ZW4pXG4gICAgfVxuXG4gICAgQFRlc3RcbiAgICBmdW4gYGhvc3Qtb25seSBhYnNvbHV0ZSBVUkwgc3RvcHMgYmVmb3JlIENTUyBjbG9zaW5nIHBhcmVudGhlc2lzYCgpIHtcbiAgICAgICAgdmFsIG1hdGNoID0gcmVxdWlyZU5vdE51bGwoQUJTT0xVVEVfSFRUUF9VUkxfUEFUVEVSTi5maW5kKCJiYWNrZ3JvdW5kOnVybChodHRwczovL3NlY3VyZS50ZXN0KSIpKVxuICAgICAgICBhc3NlcnRFcXVhbHMoImh0dHBzOi8vc2VjdXJlLnRlc3QiLCBtYXRjaC52YWx1ZSlcbiAgICB9XG5cbiAgICBAVGVzdFxuICAgIGZ1biBgbWFwcGVkIHNhbWUtaG9zdCBIVFRQUyBhdXRoIHN1cHBvcnRzIG5vbmRlZmF1bHQgcG9ydHNgKCkge1xuICAgICAgICB2YWwgcHJveHkgPSBTeXN0ZW1IdHRwQ29tcGF0aWJpbGl0eVByb3h5KClcbiAgICAgICAgdHJ5IHtcbiAgICAgICAgICAgIHZhbCBtZXRob2QgPSBwcm94eS5qYXZhQ2xhc3MuZ2V0RGVjbGFyZWRNZXRob2QoXG4gICAgICAgICAgICAgICAgImNhbkZvcndhcmRTZW5zaXRpdmVIZWFkZXJzIixcbiAgICAgICAgICAgICAgICBVUkk6OmNsYXNzLmphdmEsXG4gICAgICAgICAgICAgICAgVVJJOjpjbGFzcy5qYXZhLFxuICAgICAgICAgICAgKS5hcHBseSB7IGlzQWNjZXNzaWJsZSA9IHRydWUgfVxuICAgICAgICAgICAgYXNzZXJ0VHJ1ZShtZXRob2QuaW52b2tlKHByb3h5LCBVUkkoImh0dHA6Ly9leGFtcGxlLnRlc3QvcHJpdmF0ZSIpLCBVUkkoImh0dHBzOi8vZXhhbXBsZS50ZXN0Ojg0NDMvcHJpdmF0ZSIpKSBhcyBCb29sZWFuKVxuICAgICAgICAgICAgYXNzZXJ0RmFsc2UobWV0aG9kLmludm9rZShwcm94eSwgVVJJKCJodHRwOi8vZXhhbXBsZS50ZXN0L3ByaXZhdGUiKSwgVVJJKCJodHRwczovL290aGVyLnRlc3Q6ODQ0My9wcml2YXRlIikpIGFzIEJvb2xlYW4pXG4gICAgICAgIH0gZmluYWxseSB7XG4gICAgICAgICAgICBwcm94eS5jbG9zZSgpXG4gICAgICAgIH1cbiAgICB9XG59XG4nKQo=' | base64 -d > /tmp/patch.py
+          python3 /tmp/patch.py
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add src/main/kotlin/no/skasti/serialmodem/ppp/HttpCompatibilityProxy.kt src/test/kotlin/no/skasti/serialmodem/ppp/HttpCompatibilityProxyReviewRegressionTest.kt
