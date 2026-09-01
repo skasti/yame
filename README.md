@@ -199,8 +199,19 @@ Disable compatibility mode when transparent TCP/80 forwarding is desired:
 In the dashboard, use `/http-proxy` to switch between compatibility and transparent forwarding.
 The dashboard header also shows the running YAME version and build Git commit, which is useful when testing local `installDist` builds.
 
-For a detailed compatibility-proxy trace on disk, start YAME with e.g. `--http-proxy-log yame-http.log`.
-Only HTTP/HTTPS compatibility-proxy diagnostics are appended to this file; normal PPP/modem dashboard logging is unchanged.
+YAME always writes module-specific logs under `logs/`: `modem.log`, `serial.log`, `ppp.log`,
+`dns.log`, `proxy.log`, and `transfers.log`. Each module defaults to `info` and can be tuned
+independently with `--loglevel-<module> error|warn|info|debug`.
+
+For example:
+
+```powershell
+.\build\install\serial-modem-emulator\bin\serial-modem-emulator.bat --ui tui --loglevel-proxy debug --loglevel-ppp warn
+```
+
+If an active module log already exists at startup, YAME archives it as
+`logs/<module>-yyyy-mm-dd-hh-mm.log` using the original file creation time before starting a new
+`<module>.log`.
 
 ## Test tone
 
