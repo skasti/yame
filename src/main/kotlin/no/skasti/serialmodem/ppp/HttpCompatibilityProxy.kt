@@ -1083,8 +1083,8 @@ class SystemHttpCompatibilityProxy(
         return rewriteBodyAbsoluteUrlsOutsideGeneratedMappings(flow, rewritten)
     }
 
-    private fun rewriteHtmlUrlsWithBase(flow: TcpProxyFlow, source: String, baseUri: URI): String =
-        HTML_URL_ATTRIBUTE_PATTERN.replace(source) { match ->
+    private fun rewriteHtmlUrlsWithBase(flow: TcpProxyFlow, source: String, baseUri: URI): String {
+        val rewritten = HTML_URL_ATTRIBUTE_PATTERN.replace(source) { match ->
             val urlGroup = listOf(1, 2, 3).mapNotNull { match.groups[it] }.firstOrNull()
                 ?: return@replace match.value
             val replacement = rewriteUrlReference(
@@ -1095,6 +1095,8 @@ class SystemHttpCompatibilityProxy(
             ) ?: return@replace match.value
             replaceMatchGroup(match, urlGroup, replacement)
         }
+        return rewriteBodyAbsoluteUrlsOutsideGeneratedMappings(flow, rewritten)
+    }
 
     private fun replaceUrlReferenceInMatch(
         flow: TcpProxyFlow,
@@ -1133,7 +1135,11 @@ class SystemHttpCompatibilityProxy(
             if (target?.scheme.equals("http", ignoreCase = true) && originRoutes.resolve(flow, target) != target) {
                 match.value
             } else {
-                rewriteAbsoluteUrl(flow, match.value, hideRedirect = true) ?: match.value
+                rewriteAbsoluteUrl(
+                    flow = flow,
+                    rawUrl = match.value,
+                    hideRedirect = bodyUrlHidesRedirect(value, match.range.first),
+                ) ?: match.value
             }
         }
 
