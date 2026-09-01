@@ -65,6 +65,10 @@ class YameLogManager(
         log(module, inferLevel(message), message)
     }
 
+    fun debugLogger(module: YameLogModule): (String) -> Unit = { message ->
+        log(module, YameLogLevel.DEBUG, message)
+    }
+
     fun eventSink(event: YameEvent) {
         when (event) {
             is YameEvent.DnsQuery ->
@@ -160,7 +164,11 @@ class YameLogManager(
         while (Files.exists(archive)) {
             archive = logDirectory.resolve("${module.fileName}-$stamp-${suffix++}.log")
         }
-        Files.move(active, archive, StandardCopyOption.ATOMIC_MOVE)
+        runCatching {
+            Files.move(active, archive, StandardCopyOption.ATOMIC_MOVE)
+        }.getOrElse {
+            Files.move(active, archive)
+        }
     }
 
     private fun originalCreationTime(path: Path): Instant =
@@ -181,7 +189,7 @@ class YameLogManager(
                 "unsupported" in message.lowercase() -> YameLogLevel.WARN
             "<=" in message ||
                 "=>" in message ||
-                ".." in message -> YameLogLevel.DEBUG
+                " .. " in message -> YameLogLevel.DEBUG
             else -> YameLogLevel.INFO
         }
 
