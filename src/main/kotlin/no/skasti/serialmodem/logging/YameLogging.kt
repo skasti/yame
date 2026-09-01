@@ -43,6 +43,7 @@ class YameLogManager(
     private data class ModuleWriter(
         val writer: BufferedWriter,
         @Volatile var level: YameLogLevel,
+        @Volatile var writeFailed: Boolean = false,
     )
 
     private val lock = Any()
@@ -140,17 +141,29 @@ class YameLogManager(
 
     fun log(module: YameLogModule, level: YameLogLevel, message: String) {
         val target = writers[module] ?: return
-        if (level.priority > target.level.priority) return
+        if (level.priority > target.level.priority || target.writeFailed) return
 
         synchronized(lock) {
-            target.writer
-                .append(LocalDateTime.now().format(LOG_TIME_FORMAT))
-                .append(" ")
-                .append(level.name)
-                .append(" ")
-                .append(message)
-                .newLine()
-            target.writer.flush()
+            if (target.writeFailed) return
+            try {
+                target.writer
+                    .append(LocalDateTime.now().format(LOG_TIME_FORMAT))
+                    .append(" ")
+                    .append(level.name)
+                    .append(" ")
+                    .append(message)
+                target.writer.newLine()
+                target.writer.flush()
+            } catch (e: Exception) {
+                target.writeFailed = true
+                runCatching {
+                    System.err.println(
+                        "YAME " + module.fileName + " logging disabled after write failure: " +
+                            (e.message ?: e::class.simpleName),
+                    )
+                }
+                runCatching { target.writer.close() }
+            }
         }
     }
 
