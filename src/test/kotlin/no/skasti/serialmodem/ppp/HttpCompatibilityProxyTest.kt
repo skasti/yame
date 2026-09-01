@@ -329,6 +329,70 @@ class HttpCompatibilityProxyTest {
         }
     }
 
+
+    @Test
+    fun `geocities fixture keeps relative URLs on the document origin while rewriting HTTPS scripts`() {
+        val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val originalBody = """
+            <html><head>
+            <meta http-equiv="Content-Language" content="en-us">
+            <meta http-equiv="Content-Type" content="text/html; charset=windows-1252">
+            <title>Oldternet Links</title><link rel="shortcut icon" href="oldnet.ico" type="image/x-icon">
+            </head>
+            <body bgcolor="#C0C0C0"><!-- Google tag (gtag.js) -->
+            <script async="" src="https://www.googletagmanager.com/gtag/js?id=G-4KX380T5BD"></script>
+            <a href="index.htm"><img src="home.gif" border="0"></a>
+            <img border="0" src="rbow_div.gif" width="600" height="1">
+            <a href="https://baloo.neocities.org/">Baloo's Revue</a>
+            <script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/v3d52b47920f24c319d37e2661827c42b1787588026925"></script>
+            </body></html>
+        """.trimIndent()
+        val thread = serveOnce(server) {
+            "HTTP/1.1 200 OK\r\n" +
+                "Content-Type: text/html; charset=windows-1252\r\n" +
+                "Content-Length: ${originalBody.toByteArray(Charsets.WINDOWS_1252).size}\r\n" +
+                "Connection: close\r\n\r\n" +
+                originalBody
+        }
+        val proxy = SystemHttpCompatibilityProxy(
+            config = PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000),
+        )
+        val events = LinkedBlockingQueue<TcpProxyEvent>()
+        val flow = httpFlow(peerPort = 2196)
+
+        try {
+            proxy.connect(flow, events::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(events.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                flow,
+                ("GET /oldternet/links.htm HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\n\r\n")
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+
+            val response = collectResponse(events)
+            assertTrue(
+                response.contains("src=\"http://www.googletagmanager.com/gtag/js?id=G-4KX380T5BD\""),
+                response,
+            )
+            assertTrue(
+                response.contains("src=\"http://static.cloudflareinsights.com/beacon.min.js/"),
+                response,
+            )
+            assertTrue(response.contains("href=\"index.htm\""), response)
+            assertTrue(response.contains("src=\"home.gif\""), response)
+            assertTrue(response.contains("src=\"rbow_div.gif\""), response)
+            assertTrue(
+                response.contains("href=\"http://baloo.neocities.org/\""),
+                response,
+            )
+            assertTrue(!response.contains("https://www.googletagmanager.com/"), response)
+        } finally {
+            proxy.close()
+            runCatching { server.close() }
+            thread.join(2_000)
+        }
+    }
+
     @Test
     fun `compatibility proxy does not rewrite HTTPS byte sequences in binary responses`() {
         val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
