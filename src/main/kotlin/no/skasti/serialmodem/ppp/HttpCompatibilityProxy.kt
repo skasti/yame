@@ -227,6 +227,7 @@ internal class LegacyOriginRouteTable(
     private data class ExactMapping(
         val target: URI,
         val hideRedirect: Boolean,
+        val useTargetAsContentBase: Boolean,
     )
 
     private val originMappings = ConcurrentHashMap<OriginKey, Origin>()
@@ -246,11 +247,21 @@ internal class LegacyOriginRouteTable(
     fun hidesRedirect(flow: TcpProxyFlow, legacyUri: URI): Boolean =
         exactMappings[exactKey(flow, legacyUri)]?.hideRedirect == true
 
-    fun rememberExact(flow: TcpProxyFlow, legacyUri: URI, upstreamUri: URI, hideRedirect: Boolean = false) {
+    fun usesTargetAsContentBase(flow: TcpProxyFlow, legacyUri: URI): Boolean =
+        exactMappings[exactKey(flow, legacyUri)]?.useTargetAsContentBase == true
+
+    fun rememberExact(
+        flow: TcpProxyFlow,
+        legacyUri: URI,
+        upstreamUri: URI,
+        hideRedirect: Boolean = false,
+        useTargetAsContentBase: Boolean = false,
+    ) {
         rememberExactMapping(
             exactKey(flow, legacyUri),
             LegacyHttpUrl.withoutFragment(upstreamUri),
             hideRedirect,
+            useTargetAsContentBase,
         )
     }
 
@@ -288,6 +299,7 @@ internal class LegacyOriginRouteTable(
             exactKey(flow, legacyUri),
             LegacyHttpUrl.withoutFragment(upstreamHttpsUri),
             hideRedirect,
+            useTargetAsContentBase = false,
         )
         return legacyUri.toString()
     }
@@ -304,6 +316,7 @@ internal class LegacyOriginRouteTable(
             exactKey(flow, upstreamHttpUri),
             LegacyHttpUrl.withoutFragment(upstreamHttpUri),
             hideRedirect,
+            useTargetAsContentBase = false,
         )
         return upstreamHttpUri.toString()
     }
@@ -326,12 +339,20 @@ internal class LegacyOriginRouteTable(
         }
     }
 
-    private fun rememberExactMapping(key: ExactKey, target: URI, hideRedirect: Boolean) {
+    private fun rememberExactMapping(
+        key: ExactKey,
+        target: URI,
+        hideRedirect: Boolean,
+        useTargetAsContentBase: Boolean,
+    ) {
         synchronized(insertionOrderLock) {
             val previous = exactMappings[key]
+            val effectiveHideRedirect = (previous?.hideRedirect ?: true) && hideRedirect
             exactMappings[key] = ExactMapping(
                 target = target,
-                hideRedirect = (previous?.hideRedirect ?: true) && hideRedirect,
+                hideRedirect = effectiveHideRedirect,
+                useTargetAsContentBase =
+                    effectiveHideRedirect && ((previous?.useTargetAsContentBase ?: false) || useTargetAsContentBase),
             )
             val order = exactInsertionOrder.getOrPut(key.sessionKey()) { linkedSetOf() }
             order.remove(key)
@@ -815,6 +836,8 @@ class SystemHttpCompatibilityProxy(
         val initialUpstreamUri = uri
         val followedExactMapping = originRoutes.isExactMapping(state.flow, legacyUri, uri)
         val hideExactRedirect = followedExactMapping && originRoutes.hidesRedirect(state.flow, legacyUri)
+        val mappedContentBase =
+            followedExactMapping && hideExactRedirect && originRoutes.usesTargetAsContentBase(state.flow, legacyUri)
         val originalUri = legacyUri
         seedClientCookies(state, request.headers)
         var method = request.method
@@ -923,7 +946,13 @@ class SystemHttpCompatibilityProxy(
                     }
                 }
                 redirects > 0 && uri != initialUpstreamUri -> {
-                    originRoutes.rememberExact(state.flow, legacyUri, uri)
+                    originRoutes.rememberExact(
+                        state.flow,
+                        legacyUri,
+                        uri,
+                        hideRedirect = hideExactRedirect,
+                        useTargetAsContentBase = hideExactRedirect,
+                    )
                     logger("HTTP compatibility .. exact route $legacyUri -> $uri")
                     emitEvent(state, HttpProxyActionKind.ROUTED, "exact $legacyUri -> $uri")
                 }
@@ -943,7 +972,7 @@ class SystemHttpCompatibilityProxy(
                     },
                 exposeCookies = sameOrigin(originalUri, uri),
                 effectiveBaseUri =
-                    if (hideExactRedirect && redirects > 0 && uri != initialUpstreamUri) uri else null,
+                    if (mappedContentBase || (hideExactRedirect && redirects > 0 && uri != initialUpstreamUri)) uri else null,
             )
         }
     }
