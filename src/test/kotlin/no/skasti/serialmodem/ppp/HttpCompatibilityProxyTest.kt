@@ -239,6 +239,7 @@ class HttpCompatibilityProxyTest {
             "<html><body><iframe src=\"http://127.0.0.1:${server.localPort}/legacy/frame.html\"></iframe></body></html>"
         val finalBody =
             "<html><head><base href=\"../shared/\">" +
+                "<meta http-equiv=\"refresh\" content=\"0; url=next.html\">" +
                 "<style>.hero{background:url('../images/bg.gif')}</style></head>" +
                 "<body><img src=\"logo.gif\"><div style=\"background:url('icons/panel.gif')\"></div></body></html>"
         val serverThread = Thread {
@@ -324,10 +325,107 @@ class HttpCompatibilityProxyTest {
                 response.contains("url('http://127.0.0.1:${server.localPort}/shared/icons/panel.gif')"),
                 response,
             )
+            assertTrue(
+                response.contains(
+                    "content=\"0; url=http://127.0.0.1:${server.localPort}/shared/next.html\"",
+                ),
+                response,
+            )
         } finally {
             proxy.close()
             runCatching { server.close() }
             serverThread.join(2_000)
+        }
+    }
+
+
+    @Test
+    fun `hidden HTML subresource redirect never promotes an origin route`() {
+        val origin = ServerSocket(0, 3, InetAddress.getLoopbackAddress())
+        val redirected = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val pageBody =
+            "<html><body><iframe src=\"http://127.0.0.1:${origin.localPort}/frame.html\"></iframe></body></html>"
+        val frameBody = "<html><body>frame</body></html>"
+
+        val originThread = Thread {
+            origin.use { listening ->
+                repeat(3) { requestIndex ->
+                    listening.accept().use { socket ->
+                        val request = readRequest(socket)
+                        val response = when (requestIndex) {
+                            0 ->
+                                "HTTP/1.1 200 OK\r\n" +
+                                    "Content-Type: text/html; charset=utf-8\r\n" +
+                                    "Content-Length: ${pageBody.toByteArray(StandardCharsets.UTF_8).size}\r\n" +
+                                    "Connection: close\r\n\r\n" +
+                                    pageBody
+                            1 -> {
+                                assertTrue(request.startsWith("GET /frame.html "), request)
+                                "HTTP/1.1 302 Found\r\n" +
+                                    "Location: http://127.0.0.1:${redirected.localPort}/final/frame.html\r\n" +
+                                    "Content-Length: 0\r\n" +
+                                    "Connection: close\r\n\r\n"
+                            }
+                            else -> {
+                                assertTrue(request.startsWith("GET /unrelated "), request)
+                                val body = "origin-still-correct"
+                                "HTTP/1.1 200 OK\r\n" +
+                                    "Content-Type: text/plain\r\n" +
+                                    "Content-Length: ${body.toByteArray(StandardCharsets.UTF_8).size}\r\n" +
+                                    "Connection: close\r\n\r\n" +
+                                    body
+                            }
+                        }
+                        socket.getOutputStream().write(response.toByteArray(StandardCharsets.ISO_8859_1))
+                        socket.getOutputStream().flush()
+                    }
+                }
+            }
+        }.apply {
+            isDaemon = true
+            start()
+        }
+        val redirectedThread = serveOnce(redirected) { request ->
+            assertTrue(request.startsWith("GET /final/frame.html "), request)
+            "HTTP/1.1 200 OK\r\n" +
+                "Content-Type: text/html; charset=utf-8\r\n" +
+                "Content-Length: ${frameBody.toByteArray(StandardCharsets.UTF_8).size}\r\n" +
+                "Connection: close\r\n\r\n" +
+                frameBody
+        }
+
+        val proxy = SystemHttpCompatibilityProxy(
+            config = PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000),
+        )
+        val pageEvents = LinkedBlockingQueue<TcpProxyEvent>()
+        val frameEvents = LinkedBlockingQueue<TcpProxyEvent>()
+        val unrelatedEvents = LinkedBlockingQueue<TcpProxyEvent>()
+
+        fun send(flow: TcpProxyFlow, events: LinkedBlockingQueue<TcpProxyEvent>, path: String): String {
+            proxy.connect(flow, events::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(events.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                flow,
+                ("GET $path HTTP/1.0\r\nHost: 127.0.0.1:${origin.localPort}\r\n\r\n")
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+            return collectResponse(events)
+        }
+
+        try {
+            send(httpFlow(peerPort = 2124), pageEvents, "/page")
+            val frameResponse = send(httpFlow(peerPort = 2125), frameEvents, "/frame.html")
+            assertTrue(frameResponse.startsWith("HTTP/1.0 200 OK\r\n"), frameResponse)
+            assertTrue(!frameResponse.contains("302 Found"), frameResponse)
+
+            val unrelatedResponse = send(httpFlow(peerPort = 2126), unrelatedEvents, "/unrelated")
+            assertTrue(unrelatedResponse.contains("origin-still-correct"), unrelatedResponse)
+        } finally {
+            proxy.close()
+            runCatching { origin.close() }
+            runCatching { redirected.close() }
+            originThread.join(2_000)
+            redirectedThread.join(2_000)
         }
     }
 
