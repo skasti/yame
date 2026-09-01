@@ -78,6 +78,28 @@ class YameLoggingTest {
     }
 
     @Test
+    fun `active log rotates by size and archive retention is bounded`() {
+        val directory = Files.createTempDirectory("yame-log-bounded")
+
+        YameLogManager(
+            YameLogManager.defaultLevels(),
+            directory,
+            maxActiveLogBytes = 120,
+            maxArchivesPerModule = 2,
+        ).use { logs ->
+            repeat(20) { index ->
+                logs.log(YameLogModule.PPP, YameLogLevel.INFO, "message-$index-" + "x".repeat(40))
+            }
+        }
+
+        val pppFiles = Files.list(directory).use { stream ->
+            stream.map { it.name }.filter { it.startsWith("ppp") }.toList()
+        }
+        assertTrue("ppp.log" in pppFiles)
+        assertTrue(pppFiles.count { it != "ppp.log" } <= 2)
+    }
+
+    @Test
     fun `existing active log is archived using timestamped module name`() {
         val directory = Files.createTempDirectory("yame-log-rotation")
 
