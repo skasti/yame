@@ -1,6 +1,7 @@
 package no.skasti.serialmodem.ui
 
 import com.github.ajalt.mordant.terminal.Terminal
+import no.skasti.serialmodem.logging.YameLogLevel
 import no.skasti.serialmodem.logging.YameLogManager
 import no.skasti.serialmodem.logging.YameLogModule
 import no.skasti.serialmodem.modem.HayesModem
@@ -50,6 +51,8 @@ class InteractiveYameApplication(
         onBaudSelected = ::selectBaud,
         onDnsUpstreamSelected = ::selectDnsUpstream,
         onHttpProxySelected = ::selectHttpProxy,
+        initialLogLevels = YameLogModule.entries.associateWith(logManager::level),
+        onLogLevelSelected = ::selectLogLevel,
         onDisconnect = ::disconnect,
         onReconnect = ::reconnect,
         onRefreshPorts = ::refreshPorts,
@@ -176,6 +179,12 @@ class InteractiveYameApplication(
         autoConnectEnabled = true
         updateObserverSettings()
         restartConnection()
+    }
+
+    private fun selectLogLevel(module: YameLogModule, level: YameLogLevel) {
+        logManager.setLevel(module, level)
+        observer.updateLogLevel(module, level)
+        observer.onLog("Log level for ${module.fileName} changed to ${level.name.lowercase()}")
     }
 
     private fun reconnect() {
