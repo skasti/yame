@@ -135,6 +135,36 @@ class LegacyOriginRouteTableTest {
     }
 
     @Test
+    fun `exact mappings evict the oldest entry at the per-session limit`() {
+        val routes = LegacyOriginRouteTable(maxExactMappingsPerSession = 2)
+        val flow = httpFlow(generation = 11)
+        val first = URI(routes.rememberHttpsReference(flow, URI("https://example.test/first")))
+        val second = URI(routes.rememberHttpsReference(flow, URI("https://example.test/second")))
+        val third = URI(routes.rememberHttpsReference(flow, URI("https://example.test/third")))
+
+        assertEquals(first, routes.resolve(flow, first))
+        assertEquals(URI("https://example.test/second"), routes.resolve(flow, second))
+        assertEquals(URI("https://example.test/third"), routes.resolve(flow, third))
+    }
+
+    @Test
+    fun `origin mappings evict the oldest host at the per-session limit`() {
+        val routes = LegacyOriginRouteTable(maxOriginMappingsPerSession = 2)
+        val flow = httpFlow(generation = 12)
+        val first = URI("http://first.test/page")
+        val second = URI("http://second.test/page")
+        val third = URI("http://third.test/page")
+
+        routes.remember(flow, first, URI("https://upstream-first.test/page"))
+        routes.remember(flow, second, URI("https://upstream-second.test/page"))
+        routes.remember(flow, third, URI("https://upstream-third.test/page"))
+
+        assertEquals(first, routes.resolve(flow, first))
+        assertEquals(URI("https://upstream-second.test/page"), routes.resolve(flow, second))
+        assertEquals(URI("https://upstream-third.test/page"), routes.resolve(flow, third))
+    }
+
+    @Test
     fun `session mappings are isolated and cleaned on reconnect`() {
         val routes = LegacyOriginRouteTable()
         val firstSession = httpFlow(generation = 8)

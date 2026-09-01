@@ -147,7 +147,20 @@ private fun bomCharset(body: ByteArray): Charset? =
 private val CHARSET_PARAMETER_PATTERN =
     Regex("""(?i)(?:^|;)\s*charset\s*=\s*(?:"([^"]+)"|'([^']+)'|([^;\s]+))""")
 
-internal class LegacyOriginRouteTable {
+internal class LegacyOriginRouteTable(
+    private val maxExactMappingsPerSession: Int = 4_096,
+    private val maxOriginMappingsPerSession: Int = 256,
+) {
+    init {
+        require(maxExactMappingsPerSession > 0) { "Exact mapping limit must be positive" }
+        require(maxOriginMappingsPerSession > 0) { "Origin mapping limit must be positive" }
+    }
+
+    private data class RouteSessionKey(
+        val generation: Long,
+        val peerAddress: String,
+    )
+
     private data class OriginKey(
         val generation: Long,
         val peerAddress: String,
@@ -204,6 +217,9 @@ internal class LegacyOriginRouteTable {
 
     private val originMappings = ConcurrentHashMap<OriginKey, Origin>()
     private val exactMappings = ConcurrentHashMap<ExactKey, URI>()
+    private val originInsertionOrder = mutableMapOf<RouteSessionKey, ArrayDeque<OriginKey>>()
+    private val exactInsertionOrder = mutableMapOf<RouteSessionKey, ArrayDeque<ExactKey>>()
+    private val insertionOrderLock = Any()
 
     fun resolve(flow: TcpProxyFlow, legacyUri: URI): URI =
         exactMappings[exactKey(flow, legacyUri)]
@@ -214,7 +230,7 @@ internal class LegacyOriginRouteTable {
         exactMappings[exactKey(flow, legacyUri)] == LegacyHttpUrl.withoutFragment(upstreamUri)
 
     fun rememberExact(flow: TcpProxyFlow, legacyUri: URI, upstreamUri: URI) {
-        exactMappings[exactKey(flow, legacyUri)] = LegacyHttpUrl.withoutFragment(upstreamUri)
+        rememberExactMapping(exactKey(flow, legacyUri), LegacyHttpUrl.withoutFragment(upstreamUri))
     }
 
     fun remember(flow: TcpProxyFlow, legacyUri: URI, upstreamUri: URI): Pair<String, String>? {
@@ -223,12 +239,13 @@ internal class LegacyOriginRouteTable {
         val legacyOrigin = Origin.from(legacyUri)
         val upstreamOrigin = Origin.from(upstreamUri)
         val exactTarget = exactMappings[exactKey]
-        val previous =
+        val previous = synchronized(insertionOrderLock) {
             when {
                 legacyOrigin == upstreamOrigin && exactTarget != null -> originMappings[originKey]
-                legacyOrigin == upstreamOrigin -> originMappings.remove(originKey)
-                else -> originMappings.put(originKey, upstreamOrigin)
+                legacyOrigin == upstreamOrigin -> removeOriginMapping(originKey)
+                else -> rememberOriginMapping(originKey, upstreamOrigin)
             }
+        }
 
         return if (previous == upstreamOrigin || (previous == null && legacyOrigin == upstreamOrigin)) {
             null
@@ -242,7 +259,7 @@ internal class LegacyOriginRouteTable {
             "Compatibility reference target must be HTTPS"
         }
         val legacyUri = LegacyHttpUrl.mirrorOf(upstreamHttpsUri)
-        exactMappings[exactKey(flow, legacyUri)] = LegacyHttpUrl.withoutFragment(upstreamHttpsUri)
+        rememberExactMapping(exactKey(flow, legacyUri), LegacyHttpUrl.withoutFragment(upstreamHttpsUri))
         return legacyUri.toString()
     }
 
@@ -250,19 +267,63 @@ internal class LegacyOriginRouteTable {
         require(upstreamHttpUri.scheme.equals("http", ignoreCase = true)) {
             "Plain HTTP reference target must use HTTP"
         }
-        exactMappings[exactKey(flow, upstreamHttpUri)] = LegacyHttpUrl.withoutFragment(upstreamHttpUri)
+        rememberExactMapping(exactKey(flow, upstreamHttpUri), LegacyHttpUrl.withoutFragment(upstreamHttpUri))
         return upstreamHttpUri.toString()
     }
 
     fun invalidateBefore(generation: Long) {
-        originMappings.keys.removeIf { it.generation < generation }
-        exactMappings.keys.removeIf { it.generation < generation }
+        synchronized(insertionOrderLock) {
+            originMappings.keys.removeIf { it.generation < generation }
+            exactMappings.keys.removeIf { it.generation < generation }
+            originInsertionOrder.keys.removeIf { it.generation < generation }
+            exactInsertionOrder.keys.removeIf { it.generation < generation }
+        }
     }
 
     fun clear() {
-        originMappings.clear()
-        exactMappings.clear()
+        synchronized(insertionOrderLock) {
+            originMappings.clear()
+            exactMappings.clear()
+            originInsertionOrder.clear()
+            exactInsertionOrder.clear()
+        }
     }
+
+    private fun rememberExactMapping(key: ExactKey, target: URI) {
+        synchronized(insertionOrderLock) {
+            exactMappings[key] = target
+            val order = exactInsertionOrder.getOrPut(key.sessionKey()) { ArrayDeque() }
+            order.remove(key)
+            order.addLast(key)
+            while (order.size > maxExactMappingsPerSession) {
+                exactMappings.remove(order.removeFirst())
+            }
+        }
+    }
+
+    private fun rememberOriginMapping(key: OriginKey, target: Origin): Origin? {
+        val previous = originMappings.put(key, target)
+        val order = originInsertionOrder.getOrPut(key.sessionKey()) { ArrayDeque() }
+        order.remove(key)
+        order.addLast(key)
+        while (order.size > maxOriginMappingsPerSession) {
+            originMappings.remove(order.removeFirst())
+        }
+        return previous
+    }
+
+    private fun removeOriginMapping(key: OriginKey): Origin? {
+        val removed = originMappings.remove(key)
+        originInsertionOrder[key.sessionKey()]?.let { order ->
+            order.remove(key)
+            if (order.isEmpty()) originInsertionOrder.remove(key.sessionKey())
+        }
+        return removed
+    }
+
+    private fun OriginKey.sessionKey(): RouteSessionKey = RouteSessionKey(generation, peerAddress)
+
+    private fun ExactKey.sessionKey(): RouteSessionKey = RouteSessionKey(generation, peerAddress)
 
     private fun originKey(flow: TcpProxyFlow, legacyUri: URI): OriginKey =
         OriginKey(
