@@ -1152,8 +1152,35 @@ class SystemHttpCompatibilityProxy(
             replaceMatchGroup(match, urlGroup, replacement)
         }
         rewritten = rewriteInlineCssWithBase(flow, rewritten, documentBaseUri)
+        rewritten = rewriteMetaRefreshWithBase(flow, rewritten, documentBaseUri)
         return rewriteBodyAbsoluteUrlsOutsideGeneratedMappings(flow, rewritten)
     }
+
+    private fun rewriteMetaRefreshWithBase(flow: TcpProxyFlow, source: String, baseUri: URI): String =
+        HTML_META_TAG_PATTERN.replace(source) { tagMatch ->
+            if (!isMetaRefreshTag(tagMatch.value)) return@replace tagMatch.value
+            val contentMatch = HTML_ATTRIBUTE_PATTERN.findAll(tagMatch.value)
+                .firstOrNull { it.groupValues[1].equals("content", ignoreCase = true) }
+                ?: return@replace tagMatch.value
+            val contentGroup = contentMatch.groups.drop(2).filterNotNull().firstOrNull { it.value.isNotEmpty() }
+                ?: return@replace tagMatch.value
+            val rewrittenContent = META_REFRESH_URL_PATTERN.replace(contentGroup.value) { urlMatch ->
+                val urlGroup = listOf(2, 3, 4).mapNotNull { urlMatch.groups[it] }.firstOrNull()
+                    ?: return@replace urlMatch.value
+                val replacement = rewriteUrlReference(
+                    flow = flow,
+                    baseUri = baseUri,
+                    rawUrl = urlGroup.value,
+                    hideRedirect = false,
+                ) ?: return@replace urlMatch.value
+                replaceMatchGroup(urlMatch, urlGroup, replacement)
+            }
+            if (rewrittenContent == contentGroup.value) {
+                tagMatch.value
+            } else {
+                replaceMatchGroup(tagMatch, contentGroup, rewrittenContent)
+            }
+        }
 
     private fun htmlDocumentBaseUri(source: String, responseBaseUri: URI): URI {
         val baseTag = HTML_BASE_TAG_PATTERN.find(source) ?: return responseBaseUri
@@ -1642,6 +1669,10 @@ class SystemHttpCompatibilityProxy(
             Regex("""(?i)\b([a-z_:][-a-z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>]+))""")
         val HTML_BASE_TAG_PATTERN =
             Regex("""(?is)<\s*base\b[^>]*>""")
+        val HTML_META_TAG_PATTERN =
+            Regex("""(?is)<\s*meta\b[^>]*>""")
+        val META_REFRESH_URL_PATTERN =
+            Regex("""(?i)(\burl\s*=\s*)(?:"([^"]*)"|'([^']*)'|([^;\s]+))""")
         val HTML_STYLE_BLOCK_PATTERN =
             Regex("""(?is)<\s*style\b[^>]*>(.*?)</\s*style\s*>""")
         val HTML_STYLE_ATTRIBUTE_PATTERN =
