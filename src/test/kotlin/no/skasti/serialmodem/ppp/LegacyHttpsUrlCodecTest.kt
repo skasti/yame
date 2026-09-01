@@ -246,6 +246,37 @@ class LegacyOriginRouteTableTest {
         assertEquals(URI("https://upstream-third.test/page"), routes.resolve(flow, third))
     }
 
+
+    @Test
+    fun `cross-host HTTPS subresource mapping cannot change document origin route`() {
+        val routes = LegacyOriginRouteTable()
+        val flow = httpFlow(generation = 13)
+        val document = URI("http://www.geocities.ws/oldternet/links.htm")
+        val googleScript = URI("https://www.googletagmanager.com/gtag/js?id=G-4KX380T5BD")
+
+        val legacyScript = URI(routes.rememberHttpsReference(flow, googleScript))
+
+        assertEquals(
+            document,
+            routes.resolve(flow, document),
+            "merely seeing the Google script must not reroute the Geocities document",
+        )
+        assertEquals(googleScript, routes.resolve(flow, legacyScript))
+
+        routes.remember(flow, legacyScript, googleScript)
+
+        assertEquals(
+            document,
+            routes.resolve(flow, document),
+            "following a mapped Google subresource must not alter the Geocities host route",
+        )
+        assertEquals(
+            URI("http://www.geocities.ws/oldternet/index.htm"),
+            routes.resolve(flow, URI("http://www.geocities.ws/oldternet/index.htm")),
+            "relative Geocities navigation must keep the Geocities origin",
+        )
+    }
+
     @Test
     fun `session mappings are isolated and cleaned on reconnect`() {
         val routes = LegacyOriginRouteTable()
