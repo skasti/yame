@@ -14,6 +14,7 @@ interface PppHandler : Closeable {
 
 class RetroPppHandler(
     private val logger: (String) -> Unit = ::println,
+    private val proxyLogger: (String) -> Unit = logger,
     private val eventSink: (YameEvent) -> Unit = {},
     private val ipConfig: PppIpConfig = PppIpConfig(),
     private val dnsConfig: PppDnsConfig = PppDnsConfig(),
@@ -51,7 +52,7 @@ class RetroPppHandler(
             dnsConfig = dnsConfig,
             tcpProxy = SystemRoutingTcpProxy(
                 httpConfig = httpCompatibilityConfig,
-                logger = logger,
+                logger = proxyLogger,
                 eventSink = eventSink,
             ),
         )
