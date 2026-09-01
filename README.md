@@ -201,7 +201,9 @@ The dashboard header also shows the running YAME version and build Git commit, w
 
 YAME always writes module-specific logs under `logs/`: `modem.log`, `serial.log`, `ppp.log`,
 `dns.log`, `proxy.log`, and `transfers.log`. Each module defaults to `info` and can be tuned
-independently with `--loglevel-<module> error|warn|info|debug`.
+independently with `--loglevel-<module> error|warn|info|debug`. In the TUI, the same levels can
+be changed live with `/loglevel-modem`, `/loglevel-serial`, `/loglevel-ppp`,
+`/loglevel-dns`, `/loglevel-proxy`, and `/loglevel-transfers`; no reconnect is required.
 
 For example:
 
