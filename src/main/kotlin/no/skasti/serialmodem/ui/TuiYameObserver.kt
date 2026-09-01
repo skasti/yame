@@ -10,6 +10,9 @@ import com.github.ajalt.mordant.rendering.TextColors.yellow
 import com.github.ajalt.mordant.rendering.TextStyles.bold
 import com.github.ajalt.mordant.rendering.TextStyles.inverse
 import com.github.ajalt.mordant.terminal.Terminal
+import no.skasti.serialmodem.BuildInfo
+import no.skasti.serialmodem.logging.YameLogLevel
+import no.skasti.serialmodem.logging.YameLogModule
 import no.skasti.serialmodem.observer.HttpProxyActionKind
 import no.skasti.serialmodem.observer.TransferDirection
 import no.skasti.serialmodem.observer.TransferKind
@@ -25,11 +28,13 @@ class TuiYameObserver(
     initialBaud: Int,
     initialDnsUpstream: String,
     initialHttpProxyEnabled: Boolean,
+    initialLogLevels: Map<YameLogModule, YameLogLevel> = emptyMap(),
     private val onQuit: () -> Unit = {},
     private val onPortSelected: (String) -> Unit = {},
     private val onBaudSelected: (Int) -> Unit = {},
     private val onDnsUpstreamSelected: (String) -> Unit = {},
     private val onHttpProxySelected: (Boolean) -> Unit = {},
+    private val onLogLevelSelected: (YameLogModule, YameLogLevel) -> Unit = { _, _ -> },
     private val onDisconnect: () -> Unit = {},
     private val onReconnect: () -> Unit = {},
     private val onRefreshPorts: () -> Unit = {},
@@ -39,6 +44,9 @@ class TuiYameObserver(
     private var baud = initialBaud
     private var dnsUpstream = initialDnsUpstream
     private var httpProxyEnabled = initialHttpProxyEnabled
+    private val logLevels = YameLogModule.entries.associateWith {
+        initialLogLevels[it] ?: YameLogLevel.INFO
+    }.toMutableMap()
     private var connected = false
     private var availablePorts: List<SerialPortDescriptor> = emptyList()
 
@@ -80,6 +88,12 @@ class TuiYameObserver(
         this.baud = baud
         this.dnsUpstream = dnsUpstream
         this.httpProxyEnabled = httpProxyEnabled
+        render()
+    }
+
+    @Synchronized
+    fun updateLogLevel(module: YameLogModule, level: YameLogLevel) {
+        logLevels[module] = level
         render()
     }
 
@@ -423,6 +437,25 @@ class TuiYameObserver(
         render()
     }
 
+    @Synchronized
+    private fun openLogLevelPalette(module: YameLogModule) {
+        val current = logLevels[module] ?: YameLogLevel.INFO
+        commandPalette = TuiCommandPalette(
+            mode = TuiPaletteMode.LOG_LEVEL,
+            input = "/loglevel-${module.fileName}",
+            title = "Log level: ${module.fileName}",
+            options = YameLogLevel.entries.map { level ->
+                TuiCommandOption(
+                    level.name.lowercase(),
+                    if (level == current) "current" else "",
+                    "${module.name}:${level.name}",
+                )
+            },
+            selectedIndex = YameLogLevel.entries.indexOf(current),
+        )
+        render()
+    }
+
     private fun handlePaletteKey(key: String) {
         val action = synchronized(this) {
             val palette = commandPalette ?: return
@@ -512,6 +545,30 @@ class TuiYameObserver(
                     openHttpPalette()
                     null
                 }
+                "/loglevel-modem" -> {
+                    openLogLevelPalette(YameLogModule.MODEM)
+                    null
+                }
+                "/loglevel-serial" -> {
+                    openLogLevelPalette(YameLogModule.SERIAL)
+                    null
+                }
+                "/loglevel-ppp" -> {
+                    openLogLevelPalette(YameLogModule.PPP)
+                    null
+                }
+                "/loglevel-dns" -> {
+                    openLogLevelPalette(YameLogModule.DNS)
+                    null
+                }
+                "/loglevel-proxy" -> {
+                    openLogLevelPalette(YameLogModule.PROXY)
+                    null
+                }
+                "/loglevel-transfers" -> {
+                    openLogLevelPalette(YameLogModule.TRANSFERS)
+                    null
+                }
                 "/reconnect" -> {
                     commandPalette = null
                     { onReconnect() }
@@ -555,6 +612,18 @@ class TuiYameObserver(
                 val value = selected.value.toBoolean()
                 val action: () -> Unit = { onHttpProxySelected(value) }
                 action
+            }
+
+            TuiPaletteMode.LOG_LEVEL -> {
+                commandPalette = null
+                val parts = selected.value.split(':', limit = 2)
+                val module = runCatching { YameLogModule.valueOf(parts[0]) }.getOrNull()
+                val level = parts.getOrNull(1)?.let { runCatching { YameLogLevel.valueOf(it) }.getOrNull() }
+                if (module != null && level != null) {
+                    { onLogLevelSelected(module, level) }
+                } else {
+                    null
+                }
             }
 
             TuiPaletteMode.DNS -> null
@@ -638,6 +707,12 @@ class TuiYameObserver(
             TuiCommandOption("/baud", "Select baud rate", "/baud"),
             TuiCommandOption("/dns-upstream", "Change upstream resolver and reconnect", "/dns-upstream"),
             TuiCommandOption("/http-proxy", "Enable or disable HTTP/TLS compatibility", "/http-proxy"),
+            TuiCommandOption("/loglevel-modem", "Set modem file log level", "/loglevel-modem"),
+            TuiCommandOption("/loglevel-serial", "Set serial file log level", "/loglevel-serial"),
+            TuiCommandOption("/loglevel-ppp", "Set ppp file log level", "/loglevel-ppp"),
+            TuiCommandOption("/loglevel-dns", "Set dns file log level", "/loglevel-dns"),
+            TuiCommandOption("/loglevel-proxy", "Set proxy file log level", "/loglevel-proxy"),
+            TuiCommandOption("/loglevel-transfers", "Set transfers file log level", "/loglevel-transfers"),
             TuiCommandOption("/reconnect", "Open the selected serial port", "/reconnect"),
             TuiCommandOption("/disconnect", "Close the current serial port", "/disconnect"),
             TuiCommandOption("/refresh-ports", "Rescan serial ports", "/refresh-ports"),
@@ -696,6 +771,7 @@ internal enum class TuiPaletteMode {
     BAUD,
     DNS,
     HTTP,
+    LOG_LEVEL,
 }
 
 internal data class TuiCommandOption(
@@ -856,7 +932,7 @@ internal object YameDashboardRenderer {
         val connection = if (state.connected) "CONNECTED" else "NOT CONNECTED"
         val proxy = if (state.httpProxyEnabled) "HTTP proxy ON" else "HTTP proxy OFF"
         val headerText =
-            "[ YAME  •  $serial @ ${state.baud}  •  $connection  •  DNS ${state.dnsUpstream}  •  $proxy ]"
+            "[ YAME ${BuildInfo.display}  •  $serial @ ${state.baud}  •  $connection  •  DNS ${state.dnsUpstream}  •  $proxy ]"
         val header = styles.title(
             clip(headerText, renderWidth).padEnd(renderWidth),
         )
@@ -882,7 +958,7 @@ internal object YameDashboardRenderer {
         val connection = if (state.connected) "CONNECTED" else "NOT CONNECTED"
         val lines = mutableListOf(
             DashboardLine(
-                "YAME  ${state.portName ?: "no port"} @ ${state.baud}  $connection",
+                "YAME ${BuildInfo.display}  ${state.portName ?: "no port"} @ ${state.baud}  $connection",
                 DashboardTone.ACCENT,
             ),
             DashboardLine(

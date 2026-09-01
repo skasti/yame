@@ -14,6 +14,8 @@ import java.util.TimerTask
 class PppSession(
     private val sendFrame: (PppFrame) -> Unit,
     private val logger: (String) -> Unit = ::println,
+    private val dnsLogger: (String) -> Unit = logger,
+    private val transferLogger: (String) -> Unit = logger,
     private val eventSink: (YameEvent) -> Unit = {},
     private val restartIntervalMillis: Long = DEFAULT_RESTART_INTERVAL_MILLIS,
     private val ipAddresses: PppAddresses = DEFAULT_IP_ADDRESSES,
@@ -96,6 +98,14 @@ class PppSession(
     private var localIpcpConfigureRequest: PppControlPacket? = null
     private var ipcpRestartTimer: Timer? = null
 
+    private fun sessionLog(message: String) {
+        when {
+            message.startsWith("DNS ") -> dnsLogger(message)
+            message.startsWith("TCP ") -> transferLogger(message)
+            else -> logger(message)
+        }
+    }
+
     init {
         require(restartIntervalMillis > 0) { "restartIntervalMillis must be positive" }
         require(icmpEchoTimeoutMillis > 0) { "icmpEchoTimeoutMillis must be positive" }
@@ -132,7 +142,7 @@ class PppSession(
             LCP_PROTOCOL -> receiveLcp(frame.payload)
             IPCP_PROTOCOL -> receiveIpcp(frame.payload)
             IPV4_PROTOCOL -> receiveIpv4(frame.payload)
-            else -> logger(
+            else -> sessionLog(
                 "PPP .. protocol=${frame.protocolName()} (0x%04X) not handled yet"
                     .format(frame.protocol),
             )
@@ -142,7 +152,7 @@ class PppSession(
     private fun receiveLcp(payload: ByteArray) {
         val packet = LcpPacket.parse(payload)
         if (packet == null) {
-            logger("LCP !! malformed packet (${payload.size} bytes)")
+            sessionLog("LCP !! malformed packet (${payload.size} bytes)")
             return
         }
 
@@ -150,10 +160,10 @@ class PppSession(
             LcpPacket.CONFIGURE_REQUEST -> receiveConfigureRequest(packet)
             LcpPacket.CONFIGURE_ACK -> receiveConfigureAck(packet)
             LcpPacket.CONFIGURE_NAK ->
-                logger("LCP <= Configure-Nak id=${packet.identifier}; renegotiation not implemented yet")
+                sessionLog("LCP <= Configure-Nak id=${packet.identifier}; renegotiation not implemented yet")
             LcpPacket.CONFIGURE_REJECT ->
-                logger("LCP <= Configure-Reject id=${packet.identifier}; renegotiation not implemented yet")
-            else -> logger("LCP <= code=${packet.code} id=${packet.identifier} (${packet.data.size} data bytes)")
+                sessionLog("LCP <= Configure-Reject id=${packet.identifier}; renegotiation not implemented yet")
+            else -> sessionLog("LCP <= code=${packet.code} id=${packet.identifier} (${packet.data.size} data bytes)")
         }
     }
 
@@ -169,14 +179,14 @@ class PppSession(
 
         val options = LcpOption.parseAll(packet.data)
         if (options == null) {
-            logger("LCP !! malformed Configure-Request id=${packet.identifier}")
+            sessionLog("LCP !! malformed Configure-Request id=${packet.identifier}")
             return
         }
 
         val rejected = options.filterNot(::isSupportedPeerOption)
         if (rejected.isNotEmpty()) {
             val rejectData = rejected.fold(ByteArray(0)) { bytes, option -> bytes + option.encode() }
-            logger(
+            sessionLog(
                 "LCP => Configure-Reject id=${packet.identifier}: " +
                     rejected.joinToString { "type=${it.type}" },
             )
@@ -190,7 +200,7 @@ class PppSession(
             return
         }
 
-        logger("LCP => Configure-Ack id=${packet.identifier}")
+        sessionLog("LCP => Configure-Ack id=${packet.identifier}")
         sendLcp(
             LcpPacket(
                 code = LcpPacket.CONFIGURE_ACK,
@@ -210,11 +220,11 @@ class PppSession(
             packet.identifier != request.identifier ||
             !packet.data.contentEquals(request.data)
         ) {
-            logger("LCP !! unexpected Configure-Ack id=${packet.identifier}")
+            sessionLog("LCP !! unexpected Configure-Ack id=${packet.identifier}")
             return
         }
 
-        logger("LCP <= Configure-Ack id=${packet.identifier}")
+        sessionLog("LCP <= Configure-Ack id=${packet.identifier}")
         receiveAccm = REQUESTED_RECEIVE_ACCM
         localConfigured = true
         stopLcpRestartTimer()
@@ -290,9 +300,9 @@ class PppSession(
         val request = localConfigureRequest ?: return
 
         if (isRetry) {
-            logger("LCP => Configure-Request id=${request.identifier} retry")
+            sessionLog("LCP => Configure-Request id=${request.identifier} retry")
         } else {
-            logger("LCP => Configure-Request id=${request.identifier} (ACCM=0)")
+            sessionLog("LCP => Configure-Request id=${request.identifier} (ACCM=0)")
         }
         sendLcp(request)
     }
@@ -322,7 +332,7 @@ class PppSession(
         try {
             sendOutstandingConfigureRequest(isRetry = true)
         } catch (e: Exception) {
-            logger("LCP !! Configure-Request retry failed: ${e.message}")
+            sessionLog("LCP !! Configure-Request retry failed: ${e.message}")
         }
     }
 
@@ -344,24 +354,24 @@ class PppSession(
         val open = peerConfigured && localConfigured
         if (open && !lcpOpen) {
             lcpOpen = true
-            logger("LCP open")
+            sessionLog("LCP open")
             startIpcp()
         }
     }
     private fun receiveIpv4(payload: ByteArray) {
         if (!ipcpOpen) {
-            logger("IPv4 .. ignored before IPCP is open")
+            sessionLog("IPv4 .. ignored before IPCP is open")
             return
         }
 
         val packet = Ipv4Packet.parse(payload)
         if (packet == null) {
-            logger("IPv4 !! malformed packet or invalid header checksum (${payload.size} bytes)")
+            sessionLog("IPv4 !! malformed packet or invalid header checksum (${payload.size} bytes)")
             return
         }
 
         if (packet.source != peerIpAddress) {
-            logger(
+            sessionLog(
                 "IPv4 !! source ${packet.source} does not match negotiated peer $peerIpAddress",
             )
             return
@@ -376,7 +386,7 @@ class PppSession(
 
     private fun receiveLocalIpv4(packet: Ipv4Packet) {
         if (packet.isFragmented) {
-            logger("IPv4 .. fragmented packet to local endpoint not handled")
+            sessionLog("IPv4 .. fragmented packet to local endpoint not handled")
             return
         }
 
@@ -384,26 +394,26 @@ class PppSession(
             Ipv4Packet.ICMP_PROTOCOL -> receiveLocalIcmp(packet)
             Ipv4Packet.TCP_PROTOCOL -> receiveLocalTcp(packet)
             Ipv4Packet.UDP_PROTOCOL -> receiveLocalUdp(packet)
-            else -> logger("IPv4 .. local protocol=${packet.protocol} not handled")
+            else -> sessionLog("IPv4 .. local protocol=${packet.protocol} not handled")
         }
     }
 
     private fun receiveLocalIcmp(packet: Ipv4Packet) {
         val icmp = IcmpPacket.parse(packet.payload)
         if (icmp == null) {
-            logger("ICMP !! malformed packet or invalid checksum")
+            sessionLog("ICMP !! malformed packet or invalid checksum")
             return
         }
 
         val reply = icmp.toEchoReply()
         if (reply == null) {
-            logger("ICMP .. type=${icmp.type} code=${icmp.code} not handled")
+            sessionLog("ICMP .. type=${icmp.type} code=${icmp.code} not handled")
             return
         }
 
         val identifier = icmp.echoIdentifier()
         val sequence = icmp.echoSequence()
-        logger(
+        sessionLog(
             "ICMP <= Echo Request ${packet.source} -> ${packet.destination} " +
                 "id=$identifier seq=$sequence",
         )
@@ -433,12 +443,12 @@ class PppSession(
             destination = packet.destination,
         )
         if (udp == null) {
-            logger("UDP !! malformed local datagram or invalid checksum")
+            sessionLog("UDP !! malformed local datagram or invalid checksum")
             return
         }
 
         if (udp.destinationPort != DNS_PORT) {
-            logger("UDP .. local port=${udp.destinationPort} not handled")
+            sessionLog("UDP .. local port=${udp.destinationPort} not handled")
             return
         }
 
@@ -450,7 +460,7 @@ class PppSession(
             generation = generation,
             namespace = UdpFlowNamespace.LOCAL_DNS,
         )
-        logger(
+        sessionLog(
             "DNS <= ${packet.source}:${udp.sourcePort} -> " +
                 "$localIpAddress:$DNS_PORT; forwarding to " +
                 "${dnsConfig.upstreamServer}:${dnsConfig.upstreamPort}",
@@ -500,7 +510,7 @@ class PppSession(
                             message = reason,
                         ),
                     )
-                    logger(
+                    sessionLog(
                         "DNS !! upstream ${dnsConfig.upstreamServer}:" +
                             "${dnsConfig.upstreamPort} failed: $reason",
                     )
@@ -516,12 +526,12 @@ class PppSession(
             destination = packet.destination,
         )
         if (tcp == null) {
-            logger("TCP !! malformed local segment or invalid checksum")
+            sessionLog("TCP !! malformed local segment or invalid checksum")
             return
         }
 
         if (tcp.destinationPort != DNS_PORT) {
-            logger("TCP .. local port=${tcp.destinationPort} not handled")
+            sessionLog("TCP .. local port=${tcp.destinationPort} not handled")
             return
         }
 
@@ -537,7 +547,7 @@ class PppSession(
 
     private fun receiveExternalIpv4(packet: Ipv4Packet) {
         if (packet.isFragmented) {
-            logger("IPv4 .. fragmented egress packet not handled")
+            sessionLog("IPv4 .. fragmented egress packet not handled")
             return
         }
 
@@ -545,7 +555,7 @@ class PppSession(
             Ipv4Packet.ICMP_PROTOCOL -> receiveExternalIcmp(packet)
             Ipv4Packet.TCP_PROTOCOL -> receiveExternalTcp(packet)
             Ipv4Packet.UDP_PROTOCOL -> receiveExternalUdp(packet)
-            else -> logger(
+            else -> sessionLog(
                 "IPv4 .. ${packet.source} -> ${packet.destination} " +
                     "protocol=${packet.protocol} egress not handled yet",
             )
@@ -555,20 +565,20 @@ class PppSession(
     private fun receiveExternalIcmp(packet: Ipv4Packet) {
         val icmp = IcmpPacket.parse(packet.payload)
         if (icmp == null) {
-            logger("ICMP !! malformed packet or invalid checksum")
+            sessionLog("ICMP !! malformed packet or invalid checksum")
             return
         }
 
         val reply = icmp.toEchoReply()
         if (reply == null) {
-            logger("ICMP .. egress type=${icmp.type} code=${icmp.code} not handled")
+            sessionLog("ICMP .. egress type=${icmp.type} code=${icmp.code} not handled")
             return
         }
 
         val identifier = icmp.echoIdentifier()
         val sequence = icmp.echoSequence()
         val generation = ipcpGeneration
-        logger(
+        sessionLog(
             "ICMP <= Echo Request ${packet.source} -> ${packet.destination} " +
                 "id=$identifier seq=$sequence; probing via host",
         )
@@ -585,7 +595,7 @@ class PppSession(
                             generation,
                         )
                     } else {
-                        logger(
+                        sessionLog(
                             "ICMP .. host Echo Request to ${packet.destination} " +
                                 "id=$identifier seq=$sequence timed out",
                         )
@@ -593,7 +603,7 @@ class PppSession(
                 },
                 onFailure = { error ->
                     val reason = error.message ?: error.javaClass.simpleName
-                    logger(
+                    sessionLog(
                         "ICMP !! host Echo Request to ${packet.destination} " +
                             "id=$identifier seq=$sequence failed: $reason",
                     )
@@ -609,7 +619,7 @@ class PppSession(
             destination = packet.destination,
         )
         if (udp == null) {
-            logger("UDP !! malformed datagram or invalid checksum")
+            sessionLog("UDP !! malformed datagram or invalid checksum")
             return
         }
 
@@ -620,7 +630,7 @@ class PppSession(
             destinationPort = udp.destinationPort,
             generation = generation,
         )
-        logger(
+        sessionLog(
             "UDP <= ${packet.source}:${udp.sourcePort} -> " +
                 "${packet.destination}:${udp.destinationPort} " +
                 "payload=${udp.payload.size} bytes",
@@ -637,7 +647,7 @@ class PppSession(
                 },
                 onFailure = { error ->
                     val reason = error.message ?: error.javaClass.simpleName
-                    logger(
+                    sessionLog(
                         "UDP !! ${packet.destination}:${udp.destinationPort} " +
                             "flow failed: $reason",
                     )
@@ -653,7 +663,7 @@ class PppSession(
             destination = packet.destination,
         )
         if (tcp == null) {
-            logger("TCP !! malformed segment or invalid checksum")
+            sessionLog("TCP !! malformed segment or invalid checksum")
             return
         }
 
@@ -695,7 +705,7 @@ class PppSession(
                     tcpFlowTable.acknowledgment(key)?.let { ack ->
                         sendTcpPacket(key, ack, existingContext.dscpEcn)
                     }
-                    logger(
+                    sessionLog(
                         "TCP .. host write buffer has $writeCapacity bytes free; " +
                             "deferring ${tcp.payload.size}-byte peer segment",
                     )
@@ -714,7 +724,7 @@ class PppSession(
         if (connectionRequested) {
             val synAck = result.responses.singleOrNull()
             if (synAck == null) {
-                logger("TCP !! SYN did not produce exactly one SYN-ACK")
+                sessionLog("TCP !! SYN did not produce exactly one SYN-ACK")
                 tcpFlowTable.reset(key)
                 return
             }
@@ -741,7 +751,7 @@ class PppSession(
                     kind = if (localDns) TransferKind.DNS else TransferKind.TCP,
                 ),
             )
-            logger(
+            sessionLog(
                 "TCP <= SYN ${packet.source}:${tcp.sourcePort} -> " +
                     "${packet.destination}:${tcp.destinationPort}; connecting via host to " +
                     "$connectAddress:$connectPort",
@@ -783,7 +793,7 @@ class PppSession(
                             state = TransferState.OPEN,
                         ),
                     )
-                    logger(
+                    sessionLog(
                         "TCP open ${key.peerAddress}:${key.peerPort} <-> " +
                             "${key.remoteAddress}:${key.remotePort}",
                     )
@@ -859,7 +869,7 @@ class PppSession(
                 context.pendingSynAck = null
                 if (synAck != null) {
                     sendTcpPacket(flow.key, synAck, context.dscpEcn)
-                    logger(
+                    sessionLog(
                         "TCP host connected ${flow.connectAddress}:${flow.connectPort}; " +
                             "sent SYN-ACK to ${flow.key.peerAddress}:${flow.key.peerPort}",
                     )
@@ -1017,7 +1027,7 @@ class PppSession(
                 tcpRetransmitTimeoutMillis,
             ) ?: continue
 
-            logger(
+            sessionLog(
                 "TCP .. retransmitting ${context.proxyFlow.key.remoteAddress}:" +
                     "${packet.sourcePort} -> ${context.proxyFlow.key.peerAddress}:" +
                     "${packet.destinationPort} seq=${packet.sequenceNumber} " +
@@ -1071,7 +1081,7 @@ class PppSession(
         val fin = tcpFlowTable.close(context.proxyFlow.key) ?: return
         context.hostFinSent = true
         sendTcpPacket(context.proxyFlow.key, fin, context.dscpEcn)
-        logger(
+        sessionLog(
             "TCP host closed ${context.proxyFlow.key.remoteAddress}:" +
                 "${context.proxyFlow.key.remotePort}; sent FIN",
         )
@@ -1085,7 +1095,7 @@ class PppSession(
 
         cancelTcpHandshakeTimeout(context)
         val reason = error.message ?: error.javaClass.simpleName
-        logger(
+        sessionLog(
             "TCP !! ${context.proxyFlow.key.remoteAddress}:" +
                 "${context.proxyFlow.key.remotePort} failed: $reason",
         )
@@ -1136,7 +1146,7 @@ class PppSession(
         )
         val encoded = ipv4.encode()
         if (encoded.size > transmitMru) {
-            logger(
+            sessionLog(
                 "TCP .. segment ${encoded.size} bytes exceeds peer MRU $transmitMru; not sent",
             )
             return
@@ -1149,7 +1159,7 @@ class PppSession(
             ),
         )
         tcpFlowTable.markSent(key, packet)
-        logger(
+        sessionLog(
             "TCP => ${key.remoteAddress}:${packet.sourcePort} -> " +
                 "${key.peerAddress}:${packet.destinationPort} " +
                 "flags=0x${packet.flags.toString(16)} seq=${packet.sequenceNumber} " +
@@ -1171,7 +1181,7 @@ class PppSession(
             generation != ipcpGeneration ||
             request.source != peerIpAddress
         ) {
-            logger(
+            sessionLog(
                 "ICMP .. dropping host Echo Reply from ${request.destination}; PPP/IPCP state changed",
             )
             return
@@ -1202,7 +1212,7 @@ class PppSession(
         dscpEcn: Int,
     ) {
         if (closed || !ipcpOpen || flow.generation != ipcpGeneration) {
-            logger("DNS .. dropping upstream reply; PPP/IPCP state changed")
+            sessionLog("DNS .. dropping upstream reply; PPP/IPCP state changed")
             return
         }
 
@@ -1224,7 +1234,7 @@ class PppSession(
         dscpEcn: Int,
     ) {
         if (closed || !ipcpOpen || flow.generation != ipcpGeneration) {
-            logger(
+            sessionLog(
                 "UDP .. dropping reply from ${flow.destination}:${flow.destinationPort}; " +
                     "PPP/IPCP state changed",
             )
@@ -1268,7 +1278,7 @@ class PppSession(
         )
         val encodedReply = replyPacket.encode()
         if (encodedReply.size > transmitMru) {
-            logger(
+            sessionLog(
                 "$logPrefix .. reply ${encodedReply.size} bytes exceeds peer MRU $transmitMru; not sent",
             )
             return
@@ -1280,7 +1290,7 @@ class PppSession(
                 payload = encodedReply,
             ),
         )
-        logger(
+        sessionLog(
             "$logPrefix => $source:$sourcePort -> " +
                 "$destination:$destinationPort payload=${payload.size} bytes",
         )
@@ -1295,7 +1305,7 @@ class PppSession(
     ) {
         val encodedReply = replyPacket.encode()
         if (encodedReply.size > transmitMru) {
-            logger(
+            sessionLog(
                 "ICMP .. Echo Reply ${encodedReply.size} bytes exceeds peer MRU $transmitMru; not sent",
             )
             return
@@ -1308,7 +1318,7 @@ class PppSession(
             ),
         )
 
-        logger(
+        sessionLog(
             "ICMP => Echo Reply $logSource -> $logDestination " +
                 "id=$identifier seq=$sequence",
         )
@@ -1316,13 +1326,13 @@ class PppSession(
 
     private fun receiveIpcp(payload: ByteArray) {
         if (!lcpOpen) {
-            logger("IPCP .. ignored before LCP is open")
+            sessionLog("IPCP .. ignored before LCP is open")
             return
         }
 
         val packet = PppControlPacket.parse(payload)
         if (packet == null) {
-            logger("IPCP !! malformed packet (${payload.size} bytes)")
+            sessionLog("IPCP !! malformed packet (${payload.size} bytes)")
             return
         }
 
@@ -1330,16 +1340,16 @@ class PppSession(
             PppControlPacket.CONFIGURE_REQUEST -> receiveIpcpConfigureRequest(packet)
             PppControlPacket.CONFIGURE_ACK -> receiveIpcpConfigureAck(packet)
             PppControlPacket.CONFIGURE_NAK ->
-                logger(
+                sessionLog(
                     "IPCP <= Configure-Nak id=${packet.identifier}; " +
                         "local address renegotiation not implemented yet",
                 )
             PppControlPacket.CONFIGURE_REJECT ->
-                logger(
+                sessionLog(
                     "IPCP <= Configure-Reject id=${packet.identifier}; " +
                         "local address renegotiation not implemented yet",
                 )
-            else -> logger(
+            else -> sessionLog(
                 "IPCP <= code=${packet.code} id=${packet.identifier} (${packet.data.size} data bytes)",
             )
         }
@@ -1361,14 +1371,14 @@ class PppSession(
 
         val options = PppControlOption.parseAll(packet.data)
         if (options == null) {
-            logger("IPCP !! malformed Configure-Request id=${packet.identifier}")
+            sessionLog("IPCP !! malformed Configure-Request id=${packet.identifier}")
             return
         }
 
         val rejected = options.filterNot(::isSupportedPeerIpcpOption)
         if (rejected.isNotEmpty()) {
             val rejectData = rejected.fold(ByteArray(0)) { bytes, option -> bytes + option.encode() }
-            logger(
+            sessionLog(
                 "IPCP => Configure-Reject id=${packet.identifier}: " +
                     rejected.joinToString { "type=${it.type}" },
             )
@@ -1449,7 +1459,7 @@ class PppSession(
 
         if (nakOptions.isNotEmpty()) {
             val nakData = nakOptions.fold(ByteArray(0)) { bytes, option -> bytes + option.encode() }
-            logger(
+            sessionLog(
                 "IPCP => Configure-Nak id=${packet.identifier}: " +
                     nakOptions.joinToString { option ->
                         val address = Ipv4Address.fromBytes(option.data)
@@ -1467,7 +1477,7 @@ class PppSession(
         }
 
         peerIpAddress = selectedAddress
-        logger(
+        sessionLog(
             "IPCP => Configure-Ack id=${packet.identifier} " +
                 "(IP-Address=$peerIpAddress)",
         )
@@ -1499,11 +1509,11 @@ class PppSession(
             packet.identifier != request.identifier ||
             !packet.data.contentEquals(request.data)
         ) {
-            logger("IPCP !! unexpected Configure-Ack id=${packet.identifier}")
+            sessionLog("IPCP !! unexpected Configure-Ack id=${packet.identifier}")
             return
         }
 
-        logger("IPCP <= Configure-Ack id=${packet.identifier}")
+        sessionLog("IPCP <= Configure-Ack id=${packet.identifier}")
         ipcpLocalConfigured = true
         stopIpcpRestartTimer()
         updateIpcpState()
@@ -1543,9 +1553,9 @@ class PppSession(
         val request = localIpcpConfigureRequest ?: return
 
         if (isRetry) {
-            logger("IPCP => Configure-Request id=${request.identifier} retry")
+            sessionLog("IPCP => Configure-Request id=${request.identifier} retry")
         } else {
-            logger(
+            sessionLog(
                 "IPCP => Configure-Request id=${request.identifier} " +
                     "(IP-Address=$localIpAddress)",
             )
@@ -1578,7 +1588,7 @@ class PppSession(
         try {
             sendOutstandingIpcpConfigureRequest(isRetry = true)
         } catch (e: Exception) {
-            logger("IPCP !! Configure-Request retry failed: ${e.message}")
+            sessionLog("IPCP !! Configure-Request retry failed: ${e.message}")
         }
     }
 
@@ -1671,7 +1681,7 @@ class PppSession(
         val open = ipcpPeerConfigured && ipcpLocalConfigured
         if (open && !ipcpOpen) {
             ipcpOpen = true
-            logger("IPCP open: local=$localIpAddress peer=$peerIpAddress")
+            sessionLog("IPCP open: local=$localIpAddress peer=$peerIpAddress")
         }
     }
 
