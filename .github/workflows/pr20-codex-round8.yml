@@ -1,0 +1,99 @@
+name: PR20 Codex round 8 fix
+
+on:
+  push:
+    branches:
+      - fix/http-compatibility-default-and-links
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Apply focused fixes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/main/kotlin/no/skasti/serialmodem/ppp/HttpCompatibilityProxy.kt')
+          text = path.read_text()
+
+          text = text.replace(
+              '    val maxRequestBytes: Int = 0xffff,',
+              '    val maxRequestBytes: Int = 16 * 1024 * 1024,'
+          )
+          text = text.replace(
+              '        require(maxRequestBytes in 1..0xffff) { "HTTP compatibility maxRequestBytes must be 1..65535" }',
+              '        require(maxRequestBytes > 0) { "HTTP compatibility maxRequestBytes must be positive" }',
+          )
+
+          marker = '''private val HTML_URL_ATTRIBUTE_PATTERN =\n    Regex("""(?is)\\b(?:href|src|action|formaction|poster|data|cite|background)\\s*=\\s*(["'])(.*?)\\1""")\nprivate val HTML_HTML_PATTERN = Regex("""(?is)<html\\b[^>]*>""")'''
+          replacement = '''private val HTML_URL_ATTRIBUTE_PATTERN =\n    Regex("""(?is)\\b(?:href|src|action|formaction|poster|data|cite|background)\\s*=\\s*(["'])(.*?)\\1""")\nprivate val HTML_TAG_PATTERN = Regex("""(?is)<(?:[^"'<>]|"[^"]*"|'[^']*')+>""")\nprivate val HTML_HTML_PATTERN = Regex("""(?is)<html\\b[^>]*>""")\n\ninternal fun rewriteHtmlUrlContexts(\n    source: String,\n    rewriteAttribute: (String) -> String,\n    rewriteRaw: (String) -> String,\n): String {\n    val output = StringBuilder(source.length)\n    var cursor = 0\n    HTML_TAG_PATTERN.findAll(source).forEach { tagMatch ->\n        if (cursor < tagMatch.range.first) {\n            output.append(rewriteRaw(source.substring(cursor, tagMatch.range.first)))\n        }\n\n        var tag = tagMatch.value\n        HTML_URL_ATTRIBUTE_PATTERN.findAll(tagMatch.value).toList().asReversed().forEach { attributeMatch ->\n            val valueGroup = attributeMatch.groups[2] ?: return@forEach\n            val replacementValue = rewriteAttribute(valueGroup.value)\n            if (replacementValue != valueGroup.value) {\n                tag = tag.replaceRange(valueGroup.range, replacementValue)\n            }\n        }\n        output.append(tag)\n        cursor = tagMatch.range.last + 1\n    }\n    if (cursor < source.length) output.append(rewriteRaw(source.substring(cursor)))\n    return output.toString()\n}'''
+          if marker not in text:
+              raise SystemExit('HTML pattern marker not found')
+          text = text.replace(marker, replacement)
+
+          old = '''    private fun rewriteHtmlReferences(flow: TcpProxyFlow, upstreamBase: URI, source: String): String {\n        var rewritten = source\n        HTML_URL_ATTRIBUTE_PATTERN.findAll(source).toList().asReversed().forEach { match ->\n            val valueGroup = match.groups[2] ?: return@forEach\n            val replacement = rewriteHttpsReferences(flow, upstreamBase, valueGroup.value, htmlContext = true)\n            if (replacement != valueGroup.value) {\n                rewritten = rewritten.replaceRange(valueGroup.range, replacement)\n            }\n        }\n        return rewriteHttpsReferences(flow, upstreamBase, rewritten, htmlContext = false)\n    }'''
+          new = '''    private fun rewriteHtmlReferences(flow: TcpProxyFlow, upstreamBase: URI, source: String): String =\n        rewriteHtmlUrlContexts(\n            source = source,\n            rewriteAttribute = { rewriteHttpsReferences(flow, upstreamBase, it, htmlContext = true) },\n            rewriteRaw = { rewriteHttpsReferences(flow, upstreamBase, it, htmlContext = false) },\n        )'''
+          if old not in text:
+              raise SystemExit('rewriteHtmlReferences block not found')
+          text = text.replace(old, new)
+          path.write_text(text)
+
+          test = Path('src/test/kotlin/no/skasti/serialmodem/ppp/CodexRound8RegressionTest.kt')
+          test.write_text(r'''package no.skasti.serialmodem.ppp
+
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+
+class CodexRound8RegressionTest {
+    @Test
+    fun `HTML attributes are rewritten once while script raw text stays raw`() {
+        val source =
+            "<a href=\"https://example.test/next?a=1&amp;b=2\">next</a>" +
+                "<script>window.location.href = \"https://api.test/x?a=1&b=2\"</script>"
+
+        val rewritten = rewriteHtmlUrlContexts(
+            source = source,
+            rewriteAttribute = { value -> value.replace("https://", "attr://") },
+            rewriteRaw = { value -> value.replace("https://", "raw://") },
+        )
+
+        assertEquals(
+            "<a href=\"attr://example.test/next?a=1&amp;b=2\">next</a>" +
+                "<script>window.location.href = \"raw://api.test/x?a=1&b=2\"</script>",
+            rewritten,
+        )
+    }
+
+    @Test
+    fun `default compatibility request limit no longer rejects normal uploads above 64 KiB`() {
+        assertTrue(PppHttpCompatibilityConfig().maxRequestBytes > 0xffff)
+        assertEquals(128 * 1024, PppHttpCompatibilityConfig(maxRequestBytes = 128 * 1024).maxRequestBytes)
+    }
+}
+''')
+          PY
+      - name: Run tests
+        run: ./gradlew test
+      - name: Commit fixes and remove helper workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/pr20-codex-round8.yml
+          git add src/main/kotlin/no/skasti/serialmodem/ppp/HttpCompatibilityProxy.kt \
+                  src/test/kotlin/no/skasti/serialmodem/ppp/CodexRound8RegressionTest.kt
+          git commit -m "Address latest Codex HTTP compatibility feedback"
+          git push origin HEAD:fix/http-compatibility-default-and-links
