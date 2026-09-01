@@ -6,10 +6,13 @@ import no.skasti.serialmodem.observer.YameEvent
 import java.io.ByteArrayOutputStream
 import java.net.CookieManager
 import java.net.CookiePolicy
+import java.net.CookieStore
+import java.net.HttpCookie
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets
 import java.time.Duration
 import java.util.Locale
@@ -24,19 +27,439 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 data class PppHttpCompatibilityConfig(
-    val enabled: Boolean = false,
+    val enabled: Boolean = true,
     val maxRedirects: Int = 8,
     val requestTimeoutMillis: Long = 30_000,
-    val maxRequestBytes: Int = 0xffff,
+    val maxRequestBytes: Int = 16 * 1024 * 1024,
     val maxResponseBytes: Int = 16 * 1024 * 1024,
     val maxFlows: Int = 16,
 ) {
     init {
         require(maxRedirects >= 0) { "HTTP compatibility maxRedirects must not be negative" }
         require(requestTimeoutMillis > 0) { "HTTP compatibility request timeout must be positive" }
-        require(maxRequestBytes in 1..0xffff) { "HTTP compatibility maxRequestBytes must be 1..65535" }
+        require(maxRequestBytes > 0) { "HTTP compatibility maxRequestBytes must be positive" }
         require(maxResponseBytes > 0) { "HTTP compatibility maxResponseBytes must be positive" }
         require(maxFlows > 0) { "HTTP compatibility maxFlows must be positive" }
+    }
+}
+
+internal val ABSOLUTE_HTTP_URL_PATTERN =
+    Regex("""https?://(?:[^\s/?#"'<>@]+@)?(?:\[[^\]]+\]|[^\s/:?#"'<>()]+)(?::\d+)?(?:[/?#](?:[^\s"'<>\(\)]|\([^\(\)\s"'<>]*\))*)?""", RegexOption.IGNORE_CASE)
+
+internal object LegacyHttpUrl {
+    fun mirrorOf(uri: URI): URI =
+        URI(
+            buildString {
+                append("http://")
+                uri.rawUserInfo?.let { append(it).append('@') }
+                append(formatHost(requireNotNull(uri.host)))
+                append(uri.rawPath?.takeIf { it.isNotEmpty() } ?: "/")
+                uri.rawQuery?.let { append('?').append(it) }
+                uri.rawFragment?.let { append('#').append(it) }
+            },
+        )
+
+    fun withoutFragment(uri: URI): URI =
+        URI(
+            buildString {
+                append(requireNotNull(uri.scheme))
+                append("://")
+                uri.rawUserInfo?.let { append(it).append('@') }
+                append(formatHost(requireNotNull(uri.host)))
+                val port = effectivePort(uri)
+                val defaultPort =
+                    (uri.scheme.equals("http", ignoreCase = true) && port == 80) ||
+                        (uri.scheme.equals("https", ignoreCase = true) && port == 443)
+                if (!defaultPort) append(':').append(port)
+                append(uri.rawPath?.takeIf { it.isNotEmpty() } ?: "/")
+                uri.rawQuery?.let { append('?').append(it) }
+            },
+        )
+
+    fun formatHost(host: String): String {
+        val normalized = host.removePrefix("[").removeSuffix("]")
+        return if (normalized.contains(':')) "[$normalized]" else normalized
+    }
+
+    fun effectivePort(uri: URI): Int =
+        when {
+            uri.port >= 0 -> uri.port
+            uri.scheme.equals("https", ignoreCase = true) -> 443
+            else -> 80
+        }
+
+    fun requestObservableKey(uri: URI): String =
+        URI(
+            buildString {
+                val scheme = requireNotNull(uri.scheme).lowercase(Locale.ROOT)
+                append(scheme).append("://")
+                append(formatHost(requireNotNull(uri.host).lowercase(Locale.ROOT)))
+                val port = effectivePort(uri)
+                val defaultPort = (scheme == "http" && port == 80) || (scheme == "https" && port == 443)
+                if (!defaultPort) append(':').append(port)
+                append(uri.rawPath?.takeIf { it.isNotEmpty() } ?: "/")
+                uri.rawQuery?.let { append('?').append(it) }
+            },
+        ).toString()
+}
+
+internal fun legacyRedirectUri(upstreamUri: URI): URI =
+    if (upstreamUri.scheme.equals("https", ignoreCase = true)) LegacyHttpUrl.mirrorOf(upstreamUri)
+    else upstreamUri
+
+internal fun shouldExposeRedirect(legacyRequestUri: URI, upstreamRedirectUri: URI): Boolean =
+    legacyRedirectUri(upstreamRedirectUri).let { legacyRedirect ->
+        LegacyHttpUrl.requestObservableKey(legacyRequestUri) !=
+            LegacyHttpUrl.requestObservableKey(legacyRedirect) ||
+            legacyRequestUri.rawFragment != legacyRedirect.rawFragment
+    }
+
+internal fun redirectedMethod(status: Int, method: String): String =
+    when {
+        status == 303 && !method.equals("HEAD", ignoreCase = true) -> "GET"
+        (status == 301 || status == 302) && method.equals("POST", ignoreCase = true) -> "GET"
+        else -> method
+    }
+
+internal fun rewriteEncodedTextBody(
+    headers: Map<String, List<String>>,
+    body: ByteArray,
+    transform: (String) -> String,
+): ByteArray {
+    val contentType = headers.entries
+        .firstOrNull { (name, _) -> name.equals("content-type", ignoreCase = true) }
+        ?.value
+        ?.firstOrNull()
+    val declaredCharset = contentType
+        ?.let { CHARSET_PARAMETER_PATTERN.find(it) }
+        ?.let { match -> match.groupValues.drop(1).firstOrNull { it.isNotEmpty() } }
+        ?.let { name -> runCatching { Charset.forName(name) }.getOrNull() }
+    val charset = declaredCharset ?: bomCharset(body) ?: StandardCharsets.ISO_8859_1
+    val source = body.toString(charset)
+    val rewritten = transform(source)
+    return if (rewritten == source) body else rewritten.toByteArray(charset)
+}
+
+private fun bomCharset(body: ByteArray): Charset? =
+    when {
+        body.size >= 4 && body[0] == 0x00.toByte() && body[1] == 0x00.toByte() &&
+            body[2] == 0xFE.toByte() && body[3] == 0xFF.toByte() -> Charset.forName("UTF-32BE")
+        body.size >= 4 && body[0] == 0xFF.toByte() && body[1] == 0xFE.toByte() &&
+            body[2] == 0x00.toByte() && body[3] == 0x00.toByte() -> Charset.forName("UTF-32LE")
+        body.size >= 3 && body[0] == 0xEF.toByte() && body[1] == 0xBB.toByte() && body[2] == 0xBF.toByte() -> StandardCharsets.UTF_8
+        body.size >= 2 && body[0] == 0xFE.toByte() && body[1] == 0xFF.toByte() -> StandardCharsets.UTF_16
+        body.size >= 2 && body[0] == 0xFF.toByte() && body[1] == 0xFE.toByte() -> StandardCharsets.UTF_16
+        else -> null
+    }
+
+private val CHARSET_PARAMETER_PATTERN =
+    Regex("""(?i)(?:^|;)\s*charset\s*=\s*(?:"([^"]+)"|'([^']+)'|([^;\s]+))""")
+
+internal class LegacyOriginRouteTable(
+    private val maxExactMappingsPerSession: Int = 4_096,
+    private val maxOriginMappingsPerSession: Int = 256,
+) {
+    init {
+        require(maxExactMappingsPerSession > 0) { "Exact mapping limit must be positive" }
+        require(maxOriginMappingsPerSession > 0) { "Origin mapping limit must be positive" }
+    }
+
+    private data class RouteSessionKey(
+        val generation: Long,
+        val peerAddress: String,
+    )
+
+    private data class OriginKey(
+        val generation: Long,
+        val peerAddress: String,
+        val legacyHost: String,
+        val legacyPort: Int,
+    )
+
+    private data class ExactKey(
+        val generation: Long,
+        val peerAddress: String,
+        val legacyUri: String,
+    )
+
+    private data class Origin(
+        val scheme: String,
+        val host: String,
+        val port: Int,
+    ) {
+        fun resolvePathFrom(uri: URI): URI =
+            URI(
+                buildString {
+                    append(scheme)
+                    append("://")
+                    append(LegacyHttpUrl.formatHost(host))
+                    if (!isDefaultPort()) append(':').append(port)
+                    append(uri.rawPath?.takeIf { it.isNotEmpty() } ?: "/")
+                    uri.rawQuery?.let { append('?').append(it) }
+                },
+            )
+
+        fun asDisplayString(): String =
+            buildString {
+                append(scheme)
+                append("://")
+                append(LegacyHttpUrl.formatHost(host))
+                if (!isDefaultPort()) append(':').append(port)
+            }
+
+        private fun isDefaultPort(): Boolean =
+            (scheme == "http" && port == 80) || (scheme == "https" && port == 443)
+
+        companion object {
+            fun from(uri: URI): Origin =
+                Origin(
+                    scheme = requireNotNull(uri.scheme).lowercase(Locale.ROOT),
+                    host = normalizeHost(requireNotNull(uri.host)),
+                    port = LegacyHttpUrl.effectivePort(uri),
+                )
+
+            private fun normalizeHost(host: String): String =
+                host.removePrefix("[").removeSuffix("]").lowercase(Locale.ROOT)
+        }
+    }
+
+    private val originMappings = ConcurrentHashMap<OriginKey, Origin>()
+    private val exactMappings = ConcurrentHashMap<ExactKey, URI>()
+    private val originInsertionOrder = mutableMapOf<RouteSessionKey, LinkedHashSet<OriginKey>>()
+    private val exactInsertionOrder = mutableMapOf<RouteSessionKey, LinkedHashSet<ExactKey>>()
+    private val insertionOrderLock = Any()
+
+    fun resolve(flow: TcpProxyFlow, legacyUri: URI): URI =
+        exactMappings[exactKey(flow, legacyUri)]
+            ?: originMappings[originKey(flow, legacyUri)]?.resolvePathFrom(legacyUri)
+            ?: legacyUri
+
+    fun isExactMapping(flow: TcpProxyFlow, legacyUri: URI, upstreamUri: URI): Boolean =
+        exactMappings[exactKey(flow, legacyUri)] == LegacyHttpUrl.withoutFragment(upstreamUri)
+
+    fun rememberExact(flow: TcpProxyFlow, legacyUri: URI, upstreamUri: URI) {
+        rememberExactMapping(exactKey(flow, legacyUri), LegacyHttpUrl.withoutFragment(upstreamUri))
+    }
+
+    fun remember(flow: TcpProxyFlow, legacyUri: URI, upstreamUri: URI): Pair<String, String>? {
+        val originKey = originKey(flow, legacyUri)
+        val exactKey = exactKey(flow, legacyUri)
+        val legacyOrigin = Origin.from(legacyUri)
+        val upstreamOrigin = Origin.from(upstreamUri)
+        val exactTarget = exactMappings[exactKey]
+        val previous = synchronized(insertionOrderLock) {
+            when {
+                legacyOrigin == upstreamOrigin && exactTarget != null -> originMappings[originKey]
+                legacyOrigin == upstreamOrigin -> removeOriginMapping(originKey)
+                else -> rememberOriginMapping(originKey, upstreamOrigin)
+            }
+        }
+
+        return if (previous == upstreamOrigin || (previous == null && legacyOrigin == upstreamOrigin)) {
+            null
+        } else {
+            legacyOrigin.asDisplayString() to upstreamOrigin.asDisplayString()
+        }
+    }
+
+    fun rememberHttpsReference(flow: TcpProxyFlow, upstreamHttpsUri: URI): String {
+        require(upstreamHttpsUri.scheme.equals("https", ignoreCase = true)) {
+            "Compatibility reference target must be HTTPS"
+        }
+        val legacyUri = LegacyHttpUrl.mirrorOf(upstreamHttpsUri)
+        rememberExactMapping(exactKey(flow, legacyUri), LegacyHttpUrl.withoutFragment(upstreamHttpsUri))
+        return legacyUri.toString()
+    }
+
+    fun rememberHttpReference(flow: TcpProxyFlow, upstreamHttpUri: URI): String {
+        require(upstreamHttpUri.scheme.equals("http", ignoreCase = true)) {
+            "Plain HTTP reference target must use HTTP"
+        }
+        rememberExactMapping(exactKey(flow, upstreamHttpUri), LegacyHttpUrl.withoutFragment(upstreamHttpUri))
+        return upstreamHttpUri.toString()
+    }
+
+    fun invalidateBefore(generation: Long) {
+        synchronized(insertionOrderLock) {
+            originMappings.keys.removeIf { it.generation < generation }
+            exactMappings.keys.removeIf { it.generation < generation }
+            originInsertionOrder.keys.removeIf { it.generation < generation }
+            exactInsertionOrder.keys.removeIf { it.generation < generation }
+        }
+    }
+
+    fun clear() {
+        synchronized(insertionOrderLock) {
+            originMappings.clear()
+            exactMappings.clear()
+            originInsertionOrder.clear()
+            exactInsertionOrder.clear()
+        }
+    }
+
+    private fun rememberExactMapping(key: ExactKey, target: URI) {
+        synchronized(insertionOrderLock) {
+            exactMappings[key] = target
+            val order = exactInsertionOrder.getOrPut(key.sessionKey()) { linkedSetOf() }
+            order.remove(key)
+            order.add(key)
+            while (order.size > maxExactMappingsPerSession) {
+                val oldest = order.first()
+                order.remove(oldest)
+                exactMappings.remove(oldest)
+            }
+        }
+    }
+
+    private fun rememberOriginMapping(key: OriginKey, target: Origin): Origin? {
+        val previous = originMappings.put(key, target)
+        val order = originInsertionOrder.getOrPut(key.sessionKey()) { linkedSetOf() }
+        order.remove(key)
+        order.add(key)
+        while (order.size > maxOriginMappingsPerSession) {
+            val oldest = order.first()
+            order.remove(oldest)
+            originMappings.remove(oldest)
+        }
+        return previous
+    }
+
+    private fun removeOriginMapping(key: OriginKey): Origin? {
+        val removed = originMappings.remove(key)
+        originInsertionOrder[key.sessionKey()]?.let { order ->
+            order.remove(key)
+            if (order.isEmpty()) originInsertionOrder.remove(key.sessionKey())
+        }
+        return removed
+    }
+
+    private fun OriginKey.sessionKey(): RouteSessionKey = RouteSessionKey(generation, peerAddress)
+
+    private fun ExactKey.sessionKey(): RouteSessionKey = RouteSessionKey(generation, peerAddress)
+
+    private fun originKey(flow: TcpProxyFlow, legacyUri: URI): OriginKey =
+        OriginKey(
+            generation = flow.generation,
+            peerAddress = flow.key.peerAddress.toString(),
+            legacyHost = requireNotNull(legacyUri.host).removePrefix("[").removeSuffix("]").lowercase(Locale.ROOT),
+            legacyPort = LegacyHttpUrl.effectivePort(legacyUri),
+        )
+
+    private fun exactKey(flow: TcpProxyFlow, legacyUri: URI): ExactKey =
+        ExactKey(
+            generation = flow.generation,
+            peerAddress = flow.key.peerAddress.toString(),
+            legacyUri = LegacyHttpUrl.requestObservableKey(legacyUri),
+        )
+}
+
+internal data class CookieOverride(
+    val name: String,
+    val domain: String,
+    val path: String,
+    val secure: Boolean,
+)
+
+internal class BoundedCookieOverrides(
+    private val maxEntries: Int = 256,
+) {
+    private data class Key(val name: String, val domain: String, val path: String)
+
+    init {
+        require(maxEntries > 0) { "Cookie override limit must be positive" }
+    }
+
+    private val entries = linkedMapOf<Key, CookieOverride>()
+
+    @Synchronized
+    fun put(override: CookieOverride) {
+        val key = Key(override.name.lowercase(Locale.ROOT), override.domain.lowercase(Locale.ROOT), override.path)
+        entries.remove(key)
+        entries[key] = override
+        while (entries.size > maxEntries) entries.remove(entries.keys.first())
+    }
+
+    @Synchronized
+    fun any(predicate: (CookieOverride) -> Boolean): Boolean = entries.values.any(predicate)
+}
+
+internal class BoundedCookieStore(
+    private val maxEntries: Int = 256,
+    private val delegate: CookieStore = CookieManager().cookieStore,
+) : CookieStore {
+    private data class Key(val name: String, val domain: String, val path: String)
+    private data class Entry(val uri: URI?, val cookie: HttpCookie)
+
+    init {
+        require(maxEntries > 0) { "Cookie store limit must be positive" }
+    }
+
+    private val insertionOrder = linkedMapOf<Key, Entry>()
+
+    @Synchronized
+    override fun add(uri: URI?, cookie: HttpCookie) {
+        purgeExpired()
+        val key = key(uri, cookie)
+        insertionOrder.remove(key)?.let { previous -> delegate.remove(previous.uri, previous.cookie) }
+        delegate.add(uri, cookie)
+        if (!cookie.hasExpired()) insertionOrder[key] = Entry(uri, cookie)
+        trimToLimit()
+    }
+
+    @Synchronized
+    override fun get(uri: URI): MutableList<HttpCookie> {
+        purgeExpired()
+        return delegate.get(uri).toMutableList()
+    }
+
+    @Synchronized
+    override fun getCookies(): MutableList<HttpCookie> {
+        purgeExpired()
+        return delegate.getCookies().toMutableList()
+    }
+
+    @Synchronized
+    override fun getURIs(): MutableList<URI> {
+        purgeExpired()
+        return delegate.getURIs().toMutableList()
+    }
+
+    @Synchronized
+    override fun remove(uri: URI?, cookie: HttpCookie): Boolean {
+        insertionOrder.remove(key(uri, cookie))
+        return delegate.remove(uri, cookie)
+    }
+
+    @Synchronized
+    override fun removeAll(): Boolean {
+        insertionOrder.clear()
+        return delegate.removeAll()
+    }
+
+    private fun key(uri: URI?, cookie: HttpCookie): Key =
+        Key(
+            name = cookie.name.lowercase(Locale.ROOT),
+            domain = (cookie.domain ?: uri?.host.orEmpty()).lowercase(Locale.ROOT),
+            path = cookie.path.orEmpty(),
+        )
+
+    private fun purgeExpired() {
+        val iterator = insertionOrder.iterator()
+        while (iterator.hasNext()) {
+            val (_, entry) = iterator.next()
+            if (entry.cookie.hasExpired()) {
+                delegate.remove(entry.uri, entry.cookie)
+                iterator.remove()
+            }
+        }
+    }
+
+    private fun trimToLimit() {
+        while (insertionOrder.size > maxEntries) {
+            val oldestKey = insertionOrder.keys.first()
+            val oldest = insertionOrder.remove(oldestKey) ?: continue
+            delegate.remove(oldest.uri, oldest.cookie)
+        }
     }
 }
 
@@ -104,33 +527,43 @@ class SystemHttpCompatibilityProxy(
         .build(),
 ) : TcpProxy {
     private data class ClientCookie(val name: String, val value: String)
-    private data class CookieOverride(val name: String, val domain: String, val path: String, val secure: Boolean)
+    private data class SessionKey(val generation: Long, val peerAddress: String)
+    private data class SessionState(
+        val cookieManager: CookieManager = CookieManager(BoundedCookieStore(), CookiePolicy.ACCEPT_ORIGINAL_SERVER),
+        val cookieOverrides: BoundedCookieOverrides = BoundedCookieOverrides(),
+    )
     private data class FlowState(
         val flow: TcpProxyFlow,
         val onEvent: (TcpProxyEvent) -> Unit,
+        val session: SessionState,
         val request: ByteArrayOutputStream = ByteArrayOutputStream(),
         val readMonitor: java.lang.Object = java.lang.Object(),
         val slotReleased: AtomicBoolean = AtomicBoolean(),
         val taskStarted: AtomicBoolean = AtomicBoolean(),
-        val cookieManager: CookieManager = CookieManager(null, CookiePolicy.ACCEPT_ORIGINAL_SERVER),
         val clientCookies: MutableList<ClientCookie> = mutableListOf(),
-        val cookieOverrides: MutableList<CookieOverride> = mutableListOf(),
         @Volatile var processing: Boolean = false,
         @Volatile var readsPaused: Boolean = false,
         @Volatile var cancelled: Boolean = false,
+        @Volatile var responseStarted: Boolean = false,
         @Volatile var expectContinueSent: Boolean = false,
         @Volatile var task: Future<*>? = null,
         @Volatile var interimTask: Future<*>? = null,
     )
 
     private data class LegacyRequest(val method: String, val target: String, val headers: List<Pair<String, String>>, val body: ByteArray)
+    private sealed interface FinalResponseBody {
+        data class Buffered(val bytes: ByteArray) : FinalResponseBody
+        data class Streaming(val input: java.io.InputStream) : FinalResponseBody
+    }
     private data class FinalResponse(
+        val legacyUri: URI,
         val uri: URI,
         val statusCode: Int,
         val headers: Map<String, List<String>>,
-        val body: ByteArray,
-        val contentLength: Long,
+        val body: FinalResponseBody,
+        val contentLength: Long?,
         val exposeCookies: Boolean,
+        val locationAlreadyLegacy: Boolean = false,
     )
 
     private enum class ExpectationDisposition { NONE, CONTINUE, UNSUPPORTED }
@@ -140,6 +573,8 @@ class SystemHttpCompatibilityProxy(
     }
     private val flowSlots = Semaphore(config.maxFlows)
     private val flows = ConcurrentHashMap<TcpProxyFlow, FlowState>()
+    private val sessionStates = ConcurrentHashMap<SessionKey, SessionState>()
+    private val originRoutes = LegacyOriginRouteTable()
     private val minimumGeneration = AtomicLong(Long.MIN_VALUE)
     @Volatile private var closed = false
 
@@ -156,7 +591,12 @@ class SystemHttpCompatibilityProxy(
             safeCallback(onEvent, TcpProxyEvent.Failure(IllegalStateException("HTTP compatibility flow limit reached")))
             return
         }
-        val state = FlowState(flow = flow, onEvent = onEvent)
+        val state =
+            FlowState(
+                flow = flow,
+                onEvent = onEvent,
+                session = sessionStates.computeIfAbsent(sessionKey(flow)) { SessionState() },
+            )
         if (flows.putIfAbsent(flow, state) != null) {
             releaseSlot(state)
             safeCallback(onEvent, TcpProxyEvent.Failure(IllegalStateException("HTTP compatibility flow already exists")))
@@ -320,15 +760,15 @@ class SystemHttpCompatibilityProxy(
         } catch (error: BadLegacyRequest) {
             logger("HTTP compatibility !! bad request: ${error.message}")
             emitEvent(state, HttpProxyActionKind.ERROR, error.message ?: "Invalid HTTP request")
-            emitErrorResponse(state, 400, "Bad Request", error.message ?: "Invalid HTTP request")
+            emitErrorUnlessStarted(state, 400, "Bad Request", error.message ?: "Invalid HTTP request")
         } catch (error: ResponseTooLarge) {
             logger("HTTP compatibility !! ${error.message}")
             emitEvent(state, HttpProxyActionKind.ERROR, error.message ?: "Upstream response too large")
-            emitErrorResponse(state, 502, "Bad Gateway", error.message ?: "Upstream response too large")
+            emitErrorUnlessStarted(state, 502, "Bad Gateway", error.message ?: "Upstream response too large")
         } catch (error: Throwable) {
             logger("HTTP compatibility !! upstream failed: ${error.message ?: error.javaClass.simpleName}")
             emitEvent(state, HttpProxyActionKind.ERROR, error.message ?: error.javaClass.simpleName)
-            emitErrorResponse(state, 502, "Bad Gateway", "YAME could not fetch the upstream resource")
+            emitErrorUnlessStarted(state, 502, "Bad Gateway", "YAME could not fetch the upstream resource")
         } finally {
             synchronized(state) { state.processing = false; state.task = null }
             if (flows[state.flow] !== state) releaseSlot(state)
@@ -336,13 +776,16 @@ class SystemHttpCompatibilityProxy(
     }
 
     private fun fetchFinalResponse(state: FlowState, request: LegacyRequest): FinalResponse {
-        var uri = initialUri(state.flow, request)
-        val originalUri = uri
+        val legacyUri = legacyUri(state.flow, request)
+        var uri = originRoutes.resolve(state.flow, legacyUri)
+        val initialUpstreamUri = uri
+        val followedExactMapping = originRoutes.isExactMapping(state.flow, legacyUri, uri)
+        val originalUri = legacyUri
         seedClientCookies(state, request.headers)
         var method = request.method
         var body = request.body
         var redirects = 0
-        var forwardSensitiveHeaders = true
+        var forwardSensitiveHeaders = canForwardSensitiveHeaders(legacyUri, uri)
         val requestConnectionHeadersToStrip = connectionNominatedHeaders(request.headers)
         while (true) {
             ensureActive(state)
@@ -370,71 +813,265 @@ class SystemHttpCompatibilityProxy(
             val status = response.statusCode()
             val location = response.headers().firstValue("location").orElse(null)
             if (status in REDIRECT_STATUS_CODES && location != null) {
-                response.body().close()
-                if (redirects >= config.maxRedirects) throw IllegalStateException("HTTP redirect limit (${config.maxRedirects}) exceeded")
                 val next = uri.resolve(location)
                 requireSupportedScheme(next)
-                if (!sameOrigin(uri, next)) forwardSensitiveHeaders = false
-                redirects++
                 logger("HTTP compatibility .. redirect $status $uri -> $next")
                 emitEvent(
                     state,
                     HttpProxyActionKind.REDIRECT,
                     "$status $uri -> $next",
                 )
-                uri = next
-                if ((status == 303 && !method.equals("HEAD", true)) || ((status == 301 || status == 302) && method.equals("POST", true))) {
-                    method = "GET"
-                    body = ByteArray(0)
+
+                val legacyNext = legacyRedirectUri(next)
+                if (shouldExposeRedirect(legacyUri, next)) {
+                    response.body().close()
+                    originRoutes.rememberExact(state.flow, legacyNext, next)
+                    logger("HTTP compatibility <= client redirect $status $legacyNext")
+                    emitEvent(
+                        state,
+                        HttpProxyActionKind.ROUTED,
+                        "client redirect ${LegacyHttpUrl.withoutFragment(legacyNext)} -> ${LegacyHttpUrl.withoutFragment(next)}",
+                    )
+                    return FinalResponse(
+                        legacyUri = legacyUri,
+                        uri = uri,
+                        statusCode = status,
+                        headers = response.headers().map().withHeader("location", legacyNext.toString()),
+                        body = FinalResponseBody.Buffered(ByteArray(0)),
+                        contentLength = 0,
+                        exposeCookies = sameOrigin(originalUri, uri),
+                        locationAlreadyLegacy = true,
+                    )
                 }
+
+                response.body().close()
+                if (redirects >= config.maxRedirects) {
+                    throw IllegalStateException("HTTP redirect limit (${config.maxRedirects}) exceeded")
+                }
+                if (!sameOrigin(uri, next)) forwardSensitiveHeaders = false
+                redirects++
+                uri = next
+                val nextMethod = redirectedMethod(status, method)
+                if (!nextMethod.equals(method, ignoreCase = true)) body = ByteArray(0)
+                method = nextMethod
                 continue
             }
-            response.body().use { input ->
-                val isHead = request.method.equals("HEAD", true)
-                val preservesRepresentationLength = isHead || status == 304
-                val upstreamContentLength = response.headers().firstValueAsLong("content-length").orElse(-1L)
-                if (!preservesRepresentationLength && upstreamContentLength > config.maxResponseBytes.toLong()) {
-                    throw ResponseTooLarge("Upstream response is $upstreamContentLength bytes; limit is ${config.maxResponseBytes}")
+            val responseHeaders = response.headers().map()
+            val isHead = request.method.equals("HEAD", true)
+            val preservesRepresentationLength = isHead || status == 304
+            val upstreamContentLength = response.headers().firstValueAsLong("content-length").orElse(-1L)
+            val responseBody =
+                when {
+                    preservesRepresentationLength -> {
+                        response.body().close()
+                        FinalResponseBody.Buffered(ByteArray(0))
+                    }
+                    status != 206 && bodyCanContainNavigableUrls(responseHeaders) -> {
+                        if (upstreamContentLength > config.maxResponseBytes.toLong()) {
+                            response.body().close()
+                            throw ResponseTooLarge(
+                                "Rewritable upstream response is $upstreamContentLength bytes; limit is ${config.maxResponseBytes}",
+                            )
+                        }
+                        FinalResponseBody.Buffered(
+                            response.body().use { input -> readBounded(state, input, config.maxResponseBytes) },
+                        )
+                    }
+                    else -> FinalResponseBody.Streaming(response.body())
                 }
-                val responseBody = if (preservesRepresentationLength) ByteArray(0) else readBounded(state, input, config.maxResponseBytes)
-                return FinalResponse(
-                    uri = uri,
-                    statusCode = status,
-                    headers = response.headers().map(),
-                    body = responseBody,
-                    contentLength = if (preservesRepresentationLength && upstreamContentLength >= 0L) upstreamContentLength else responseBody.size.toLong(),
-                    exposeCookies = sameOrigin(originalUri, uri),
-                )
+            val navigationLikeResponse = responseEstablishesNavigationOrigin(method, status, responseHeaders)
+            when {
+                followedExactMapping || navigationLikeResponse -> {
+                    originRoutes.remember(state.flow, legacyUri, uri)?.let { (legacyOrigin, upstreamOrigin) ->
+                        logger("HTTP compatibility .. session route $legacyOrigin -> $upstreamOrigin")
+                        emitEvent(state, HttpProxyActionKind.ROUTED, "session $legacyOrigin -> $upstreamOrigin")
+                    }
+                }
+                redirects > 0 && uri != initialUpstreamUri -> {
+                    originRoutes.rememberExact(state.flow, legacyUri, uri)
+                    logger("HTTP compatibility .. exact route $legacyUri -> $uri")
+                    emitEvent(state, HttpProxyActionKind.ROUTED, "exact $legacyUri -> $uri")
+                }
             }
+            return FinalResponse(
+                legacyUri = legacyUri,
+                uri = uri,
+                statusCode = status,
+                headers = responseHeaders,
+                body = responseBody,
+                contentLength =
+                    when {
+                        preservesRepresentationLength && upstreamContentLength >= 0L -> upstreamContentLength
+                        responseBody is FinalResponseBody.Buffered -> responseBody.bytes.size.toLong()
+                        upstreamContentLength >= 0L -> upstreamContentLength
+                        else -> null
+                    },
+                exposeCookies = sameOrigin(originalUri, uri),
+            )
         }
     }
 
     private fun emitFinalResponse(state: FlowState, response: FinalResponse) {
-        val nominated = connectionNominatedHeaders(response.headers.flatMap { (name, values) -> values.map { name to it } })
+        val legacyHeaders = rewriteLegacyHeaders(state.flow, response.headers, response.locationAlreadyLegacy)
+        val bufferedBody = (response.body as? FinalResponseBody.Buffered)?.bytes
+        val legacyBody =
+            bufferedBody?.let { rewriteLegacyBody(state.flow, response.headers, it) }
+        val bodyRewritten = bufferedBody != null && legacyBody !== bufferedBody
+        val rewritten = legacyHeaders != response.headers || bodyRewritten
+        val contentLength =
+            when {
+                bufferedBody != null && response.contentLength != null &&
+                    response.contentLength != bufferedBody.size.toLong() -> response.contentLength
+                legacyBody != null -> legacyBody.size.toLong()
+                else -> response.contentLength
+            }
+        val nominated = connectionNominatedHeaders(legacyHeaders.flatMap { (name, values) -> values.map { name to it } })
         val head = buildString {
             append("HTTP/1.0 ${response.statusCode} ${reasonPhrase(response.statusCode)}\r\n")
-            response.headers.forEach { (name, values) ->
+            legacyHeaders.forEach { (name, values) ->
                 val normalized = name.lowercase(Locale.ROOT)
                 val hiddenCrossOriginCookie = !response.exposeCookies && normalized in RESPONSE_COOKIE_HEADERS
-                if (normalized !in RESPONSE_HEADERS_TO_STRIP && normalized !in nominated && !hiddenCrossOriginCookie) {
+                val staleRepresentationMetadata = bodyRewritten && normalized in RESPONSE_HEADERS_TO_STRIP_WHEN_BODY_REWRITTEN
+                if (normalized !in RESPONSE_HEADERS_TO_STRIP && normalized !in nominated &&
+                    !hiddenCrossOriginCookie && !staleRepresentationMetadata) {
                     values.forEach { append("$name: $it\r\n") }
                 }
             }
-            append("Content-Length: ${response.contentLength}\r\nConnection: close\r\n\r\n")
+            contentLength?.let { append("Content-Length: $it\r\n") }
+            append("Connection: close\r\n\r\n")
         }.toByteArray(StandardCharsets.ISO_8859_1)
-        logger("HTTP compatibility <= ${response.statusCode} ${response.uri} (${response.body.size} bytes, TLS hidden from peer)")
+        val rewriteSuffix = if (rewritten) ", HTTPS references rewritten for legacy client" else ""
+        val sizeDescription = contentLength?.let { "$it bytes" } ?: "streaming response"
+        logger(
+            "HTTP compatibility <= ${response.statusCode} ${response.uri} " +
+                "($sizeDescription, TLS hidden from peer$rewriteSuffix)",
+        )
         emitEvent(
             state,
             HttpProxyActionKind.RESPONSE,
-            "${response.statusCode} ${response.uri} · ${response.body.size} bytes · TLS hidden",
+            "${response.statusCode} ${response.uri} · $sizeDescription · TLS hidden" +
+                if (rewritten) " · HTTPS links rewritten" else "",
         )
+        state.responseStarted = true
         emitBytes(state, head)
-        var offset = 0
-        while (offset < response.body.size) {
-            val end = minOf(offset + RESPONSE_CHUNK_BYTES, response.body.size)
-            emitBytes(state, response.body.copyOfRange(offset, end)); offset = end
+        when (val body = response.body) {
+            is FinalResponseBody.Buffered -> {
+                val bytes = requireNotNull(legacyBody)
+                var offset = 0
+                while (offset < bytes.size) {
+                    val end = minOf(offset + RESPONSE_CHUNK_BYTES, bytes.size)
+                    emitBytes(state, bytes.copyOfRange(offset, end))
+                    offset = end
+                }
+            }
+            is FinalResponseBody.Streaming -> {
+                body.input.use { input ->
+                    val buffer = ByteArray(RESPONSE_CHUNK_BYTES)
+                    while (true) {
+                        ensureActive(state)
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        if (count == 0) continue
+                        emitBytes(state, buffer.copyOf(count))
+                    }
+                }
+            }
         }
         finishFlow(state)
+    }
+
+    private fun rewriteLegacyHeaders(
+        flow: TcpProxyFlow,
+        headers: Map<String, List<String>>,
+        locationAlreadyLegacy: Boolean,
+    ): Map<String, List<String>> =
+        headers.mapValues { (name, values) ->
+            if (locationAlreadyLegacy && name.equals("location", ignoreCase = true)) {
+                values
+            } else if (name.lowercase(Locale.ROOT) in URI_RESPONSE_HEADERS_TO_REWRITE) {
+                values.map { rewriteAbsoluteUrls(flow, it) }
+            } else {
+                values
+            }
+        }
+
+    private fun rewriteLegacyBody(
+        flow: TcpProxyFlow,
+        headers: Map<String, List<String>>,
+        body: ByteArray,
+    ): ByteArray {
+        if (body.isEmpty() || !bodyCanContainNavigableUrls(headers)) return body
+        return rewriteEncodedTextBody(headers, body) { source -> rewriteAbsoluteUrls(flow, source) }
+    }
+
+    private fun bodyCanContainNavigableUrls(headers: Map<String, List<String>>): Boolean {
+        val contentEncoding = firstHeader(headers, "content-encoding")
+        if (contentEncoding != null && !contentEncoding.equals("identity", ignoreCase = true)) return false
+
+        val contentType = firstHeader(headers, "content-type")
+            ?.substringBefore(';')
+            ?.trim()
+            ?.lowercase(Locale.ROOT)
+            ?: return false
+        return contentType in REWRITABLE_CONTENT_TYPES
+    }
+
+    private fun responseEstablishesNavigationOrigin(
+        method: String,
+        status: Int,
+        headers: Map<String, List<String>>,
+    ): Boolean {
+        if (!method.equals("GET", ignoreCase = true) || status !in 200..299 || status == 206) return false
+        val contentType = firstHeader(headers, "content-type")
+            ?.substringBefore(';')
+            ?.trim()
+            ?.lowercase(Locale.ROOT)
+            ?: return false
+        return contentType in NAVIGATION_CONTENT_TYPES
+    }
+
+    private fun firstHeader(headers: Map<String, List<String>>, name: String): String? =
+        headers.entries
+            .firstOrNull { (headerName, _) -> headerName.equals(name, ignoreCase = true) }
+            ?.value
+            ?.firstOrNull()
+
+    private fun rewriteAbsoluteUrls(
+        flow: TcpProxyFlow,
+        value: String,
+    ): String {
+        return ABSOLUTE_HTTP_URL_PATTERN.replace(value) { match ->
+            val target = runCatching { URI(match.value) }.getOrNull()
+            val replacement = when {
+                target?.host == null -> null
+                target.scheme.equals("https", ignoreCase = true) -> originRoutes.rememberHttpsReference(flow, target)
+                target.scheme.equals("http", ignoreCase = true) -> originRoutes.rememberHttpReference(flow, target)
+                else -> null
+            }
+            replacement ?: match.value
+        }
+    }
+
+    private fun Map<String, List<String>>.withHeader(name: String, value: String): Map<String, List<String>> =
+        buildMap {
+            this@withHeader.forEach { (existingName, values) ->
+                if (!existingName.equals(name, ignoreCase = true)) put(existingName, values)
+            }
+            put(name, listOf(value))
+        }
+
+    private fun emitErrorUnlessStarted(
+        state: FlowState,
+        status: Int,
+        reason: String,
+        message: String,
+    ) {
+        if (state.responseStarted) {
+            logger("HTTP compatibility .. response already started; closing partial response")
+            finishFlow(state)
+        } else {
+            emitErrorResponse(state, status, reason, message)
+        }
     }
 
     private fun emitErrorResponse(state: FlowState, status: Int, reason: String, message: String) {
@@ -457,7 +1094,7 @@ class SystemHttpCompatibilityProxy(
         if (removeFlow(state) && !closed) safeCallback(state.onEvent, TcpProxyEvent.Failure(error))
     }
 
-    private fun initialUri(flow: TcpProxyFlow, request: LegacyRequest): URI {
+    private fun legacyUri(flow: TcpProxyFlow, request: LegacyRequest): URI {
         val absolute = runCatching { URI(request.target) }.getOrNull()
         if (absolute?.isAbsolute == true) {
             if (!absolute.scheme.equals("http", true)) throw BadLegacyRequest("Port 80 compatibility requests must start as HTTP")
@@ -466,7 +1103,11 @@ class SystemHttpCompatibilityProxy(
         val host = request.headers.firstOrNull { it.first.equals("Host", true) }?.second?.trim()?.takeIf { it.isNotEmpty() }
             ?: flow.key.remoteAddress.toString()
         val target = if (request.target.startsWith('/')) request.target else "/${request.target}"
-        return try { URI("http://$host$target") } catch (_: Exception) { throw BadLegacyRequest("Invalid HTTP Host or request target") }
+        return try {
+            URI("http://$host$target")
+        } catch (_: Exception) {
+            throw BadLegacyRequest("Invalid HTTP Host or request target")
+        }
     }
 
     private fun parseRequest(bytes: ByteArray): LegacyRequest {
@@ -529,6 +1170,9 @@ class SystemHttpCompatibilityProxy(
         return -1
     }
 
+    private fun sessionKey(flow: TcpProxyFlow): SessionKey =
+        SessionKey(flow.generation, flow.key.peerAddress.toString())
+
     private fun seedClientCookies(state: FlowState, headers: List<Pair<String, String>>) {
         headers.filter { it.first.equals("Cookie", true) || it.first.equals("Cookie2", true) }.forEach { (_, value) ->
             value.split(';').map { it.trim() }.forEach { pair ->
@@ -546,23 +1190,23 @@ class SystemHttpCompatibilityProxy(
         val result = mutableListOf<String>()
         if (includeClientCookies && state.clientCookies.isNotEmpty()) {
             val remaining = state.clientCookies.filterNot { client ->
-                state.cookieOverrides.any { replacement ->
+                state.session.cookieOverrides.any { replacement ->
                     replacement.name.equals(client.name, true) && cookieOverrideApplies(replacement, uri)
                 }
             }
             if (remaining.isNotEmpty()) result += remaining.joinToString("; ") { "${it.name}=${it.value}" }
         }
-        result += runCatching { state.cookieManager.get(uri, emptyMap())["Cookie"].orEmpty() }.getOrDefault(emptyList())
+        result += runCatching { state.session.cookieManager.get(uri, emptyMap())["Cookie"].orEmpty() }.getOrDefault(emptyList())
         return result
     }
 
     private fun storeCookies(state: FlowState, uri: URI, headers: Map<String, List<String>>) {
-        runCatching { state.cookieManager.put(uri, headers) }
+        runCatching { state.session.cookieManager.put(uri, headers) }
         headers.entries
             .filter { (name, _) -> name.equals("Set-Cookie", true) || name.equals("Set-Cookie2", true) }
             .flatMap { it.value }
             .mapNotNull { parseCookieOverride(uri, it) }
-            .forEach { state.cookieOverrides += it }
+            .forEach(state.session.cookieOverrides::put)
     }
 
     private fun parseCookieOverride(uri: URI, value: String): CookieOverride? {
@@ -625,6 +1269,10 @@ class SystemHttpCompatibilityProxy(
         .flatMap { it.second.split(',') }.map { it.trim().lowercase(Locale.ROOT) }
         .filter { it.isNotEmpty() && HEADER_NAME_PATTERN.matches(it) }.toSet()
     private fun sameOrigin(a: URI, b: URI) = a.scheme.equals(b.scheme, true) && a.host.equals(b.host, true) && effectivePort(a) == effectivePort(b)
+    private fun canForwardSensitiveHeaders(legacyUri: URI, upstreamUri: URI): Boolean =
+        sameOrigin(legacyUri, upstreamUri) ||
+            (legacyUri.scheme.equals("http", true) && upstreamUri.scheme.equals("https", true) &&
+                legacyUri.host.equals(upstreamUri.host, true))
     private fun effectivePort(uri: URI) = when { uri.port >= 0 -> uri.port; uri.scheme.equals("https", true) -> 443; else -> 80 }
 
     private fun readBounded(state: FlowState, input: java.io.InputStream, limit: Int): ByteArray {
@@ -668,11 +1316,15 @@ class SystemHttpCompatibilityProxy(
     private fun releaseSlot(state: FlowState) { if (state.slotReleased.compareAndSet(false, true)) flowSlots.release() }
     override fun invalidateBefore(generation: Long) {
         minimumGeneration.accumulateAndGet(generation, ::maxOf)
+        originRoutes.invalidateBefore(generation)
+        sessionStates.keys.removeIf { it.generation < generation }
         flows.values.filter { it.flow.generation < generation }.forEach(::removeFlow)
     }
     override fun close() {
         if (closed) return
         closed = true
+        originRoutes.clear()
+        sessionStates.clear()
         flows.values.toList().forEach(::removeFlow)
         executor.shutdownNow()
         runCatching { executor.awaitTermination(CLOSE_JOIN_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS) }
@@ -704,7 +1356,18 @@ class SystemHttpCompatibilityProxy(
         val REQUEST_HEADERS_TO_STRIP = setOf("host", "connection", "proxy-connection", "proxy-authorization", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade", "content-length", "accept-encoding", "expect", "cookie", "cookie2")
         val SENSITIVE_REQUEST_HEADERS = setOf("authorization", "cookie", "cookie2")
         val RESPONSE_HEADERS_TO_STRIP = setOf("connection", "proxy-connection", "keep-alive", "transfer-encoding", "trailer", "upgrade", "content-length")
+        val RESPONSE_HEADERS_TO_STRIP_WHEN_BODY_REWRITTEN = setOf("etag", "content-md5", "digest", "content-digest", "repr-digest", "content-range", "accept-ranges")
         val RESPONSE_COOKIE_HEADERS = setOf("set-cookie", "set-cookie2")
+        val URI_RESPONSE_HEADERS_TO_REWRITE = setOf("location", "content-location", "refresh", "link")
+        val REWRITABLE_CONTENT_TYPES = setOf(
+            "text/html",
+            "application/xhtml+xml",
+            "text/css",
+            "text/javascript",
+            "application/javascript",
+            "application/x-javascript",
+        )
+        val NAVIGATION_CONTENT_TYPES = setOf("text/html", "application/xhtml+xml")
         const val RESPONSE_CHUNK_BYTES = 4 * 1024
         const val CLOSE_JOIN_TIMEOUT_MILLIS = 1_000L
         fun reasonPhrase(status: Int) = when (status) {
