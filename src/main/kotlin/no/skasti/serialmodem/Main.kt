@@ -151,6 +151,7 @@ private fun parseArgs(args: Array<String>): Options {
     var pppSubnet: Ipv4Cidr? = null
     var dnsUpstream = defaults.pppDnsConfig.upstreamServer
     var httpCompatibilityEnabled = defaults.pppHttpCompatibilityConfig.enabled
+    var httpProxyLogFile = defaults.pppHttpCompatibilityConfig.traceLogFile
     var uiMode = UiMode.AUTO
 
     var i = 0
@@ -204,6 +205,11 @@ private fun parseArgs(args: Array<String>): Options {
             }
             "--http-https-proxy" -> httpCompatibilityEnabled = true
             "--no-http-https-proxy" -> httpCompatibilityEnabled = false
+            "--http-proxy-log" -> {
+                require(i + 1 < args.size) { "$arg requires a file path" }
+                httpProxyLogFile = args[++i].takeIf { it.isNotBlank() }
+                    ?: error("$arg requires a non-empty file path")
+            }
             "--ui" -> {
                 require(i + 1 < args.size) { "$arg requires auto, tui, or plain" }
                 uiMode = parseUiMode(args[++i])
@@ -231,7 +237,10 @@ private fun parseArgs(args: Array<String>): Options {
             password = password,
             pppIpConfig = PppIpConfig(configuredSubnet = pppSubnet),
             pppDnsConfig = PppDnsConfig(upstreamServer = dnsUpstream),
-            pppHttpCompatibilityConfig = PppHttpCompatibilityConfig(enabled = httpCompatibilityEnabled),
+            pppHttpCompatibilityConfig = PppHttpCompatibilityConfig(
+                enabled = httpCompatibilityEnabled,
+                traceLogFile = httpProxyLogFile,
+            ),
         ),
     )
 }
@@ -293,6 +302,7 @@ private fun printUsage() {
               --dns-upstream IP       DNS server used by YAME's local DNS proxy (default: ${defaults.pppDnsConfig.upstreamServer})
               --http-https-proxy      Enable HTTP/HTTPS compatibility proxy (default)
               --no-http-https-proxy   Disable compatibility proxy and use normal TCP forwarding
+              --http-proxy-log FILE   Append detailed HTTP/HTTPS proxy activity to FILE
               --ui MODE               UI mode: auto, tui, or plain (default: auto)
           -h, --help                  Show this help
 
@@ -306,7 +316,8 @@ private fun printUsage() {
         HTTP: redirects are followed on the host, modern HTTPS/TLS is terminated there, and the legacy
         peer receives plain HTTP. Absolute HTTPS references in compatible text responses are rewritten
         to HTTP so subsequent navigation stays on the compatibility path. Use --no-http-https-proxy
-        for transparent TCP/80 forwarding instead.
+        for transparent TCP/80 forwarding instead. Use --http-proxy-log FILE to keep a timestamped
+        compatibility-proxy trace on disk without adding extra dashboard noise.
         Durations accept milliseconds or seconds, e.g. 500ms, 2s, or 1.5s, up to 10s.
         Terminal login is only enabled when both --username and --password are provided.
         Tone progress is always logged while a dialing sequence is played.
