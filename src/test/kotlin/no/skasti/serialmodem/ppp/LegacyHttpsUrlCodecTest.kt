@@ -51,6 +51,18 @@ class LegacyOriginRouteTableTest {
         assertEquals(upstream, legacyRedirectUri(upstream))
     }
 
+
+    @Test
+    fun `rewritten Google script redirect should stay internal for legacy subresource fetch`() {
+        val legacyScript = URI("http://www.googletagmanager.com/gtag/js?id=G-4KX380T5BD")
+        val redirectedUpstream = URI("https://www.googletagmanager.com/gtag/js?id=G-4KX380T5BD&cx=c")
+
+        assertFalse(
+            shouldExposeRedirect(legacyScript, redirectedUpstream),
+            "A redirect while fetching a rewritten HTTPS script should be followed inside YAME rather than exposed as browser navigation",
+        )
+    }
+
     @Test
     fun `redirect method follows legacy browser compatible semantics`() {
         assertEquals("GET", redirectedMethod(302, "POST"))
