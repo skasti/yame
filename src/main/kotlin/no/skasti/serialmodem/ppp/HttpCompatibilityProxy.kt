@@ -1084,18 +1084,61 @@ class SystemHttpCompatibilityProxy(
     }
 
     private fun rewriteHtmlUrlsWithBase(flow: TcpProxyFlow, source: String, baseUri: URI): String {
-        val rewritten = HTML_URL_ATTRIBUTE_PATTERN.replace(source) { match ->
+        val documentBaseUri = htmlDocumentBaseUri(source, baseUri)
+        var rewritten = HTML_URL_ATTRIBUTE_PATTERN.replace(source) { match ->
             val urlGroup = listOf(1, 2, 3).mapNotNull { match.groups[it] }.firstOrNull()
                 ?: return@replace match.value
+            val tagStart = source.lastIndexOf('<', startIndex = match.range.first)
+            val tagPrefix =
+                if (tagStart >= 0) source.substring(tagStart, match.range.first).lowercase(Locale.ROOT)
+                else ""
+            val referenceBase =
+                if (Regex("""<\s*base\b""").containsMatchIn(tagPrefix)) baseUri else documentBaseUri
             val replacement = rewriteUrlReference(
                 flow = flow,
-                baseUri = baseUri,
+                baseUri = referenceBase,
                 rawUrl = urlGroup.value,
                 hideRedirect = bodyUrlHidesRedirect(source, urlGroup.range.first),
             ) ?: return@replace match.value
             replaceMatchGroup(match, urlGroup, replacement)
         }
+        rewritten = rewriteInlineCssWithBase(flow, rewritten, documentBaseUri)
         return rewriteBodyAbsoluteUrlsOutsideGeneratedMappings(flow, rewritten)
+    }
+
+    private fun htmlDocumentBaseUri(source: String, responseBaseUri: URI): URI {
+        val baseTag = HTML_BASE_TAG_PATTERN.find(source) ?: return responseBaseUri
+        val href = HTML_ATTRIBUTE_PATTERN.findAll(baseTag.value)
+            .firstOrNull { it.groupValues[1].equals("href", ignoreCase = true) }
+            ?.let { match -> match.groupValues.drop(2).firstOrNull { it.isNotEmpty() } }
+            ?: return responseBaseUri
+        val reference = runCatching { URI(href) }.getOrNull() ?: return responseBaseUri
+        return runCatching {
+            if (reference.isAbsolute) reference else responseBaseUri.resolve(reference)
+        }.getOrDefault(responseBaseUri)
+    }
+
+    private fun rewriteInlineCssWithBase(flow: TcpProxyFlow, source: String, baseUri: URI): String {
+        var rewritten = HTML_STYLE_BLOCK_PATTERN.replace(source) { match ->
+            val cssGroup = match.groups[1] ?: return@replace match.value
+            replaceMatchGroup(match, cssGroup, rewriteCssFragmentWithBase(flow, cssGroup.value, baseUri))
+        }
+        rewritten = HTML_STYLE_ATTRIBUTE_PATTERN.replace(rewritten) { match ->
+            val cssGroup = listOf(1, 2).mapNotNull { match.groups[it] }.firstOrNull()
+                ?: return@replace match.value
+            replaceMatchGroup(match, cssGroup, rewriteCssFragmentWithBase(flow, cssGroup.value, baseUri))
+        }
+        return rewritten
+    }
+
+    private fun rewriteCssFragmentWithBase(flow: TcpProxyFlow, source: String, baseUri: URI): String {
+        var rewritten = CSS_URL_REFERENCE_PATTERN.replace(source) { match ->
+            replaceUrlReferenceInMatch(flow, match, listOf(1, 2, 3), baseUri, hideRedirect = true)
+        }
+        rewritten = CSS_IMPORT_REFERENCE_PATTERN.replace(rewritten) { match ->
+            replaceUrlReferenceInMatch(flow, match, listOf(1, 2), baseUri, hideRedirect = true)
+        }
+        return rewritten
     }
 
     private fun replaceUrlReferenceInMatch(
@@ -1218,6 +1261,7 @@ class SystemHttpCompatibilityProxy(
 
         return when {
             Regex("""<\s*a\b[^>]*\bhref\s*=\s*["']?[^"']*$""").containsMatchIn(prefix) -> false
+            Regex("""<\s*area\b[^>]*\bhref\s*=\s*["']?[^"']*$""").containsMatchIn(prefix) -> false
             Regex("""<\s*form\b[^>]*\baction\s*=\s*["']?[^"']*$""").containsMatchIn(prefix) -> false
             isMetaRefreshTag(tag) -> false
             else -> true
@@ -1547,6 +1591,12 @@ class SystemHttpCompatibilityProxy(
             Regex("""(?i)\b(?:src|href|action|background|poster)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>]+))""")
         val HTML_ATTRIBUTE_PATTERN =
             Regex("""(?i)\b([a-z_:][-a-z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>]+))""")
+        val HTML_BASE_TAG_PATTERN =
+            Regex("""(?is)<\s*base\b[^>]*>""")
+        val HTML_STYLE_BLOCK_PATTERN =
+            Regex("""(?is)<\s*style\b[^>]*>(.*?)</\s*style\s*>""")
+        val HTML_STYLE_ATTRIBUTE_PATTERN =
+            Regex("""(?is)\bstyle\s*=\s*(?:"([^"]*)"|'([^']*)')""")
         val REWRITABLE_CONTENT_TYPES = setOf(
             "text/html",
             "application/xhtml+xml",
