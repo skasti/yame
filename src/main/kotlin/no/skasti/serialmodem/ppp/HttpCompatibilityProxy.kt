@@ -1047,45 +1047,47 @@ class SystemHttpCompatibilityProxy(
     ): ByteArray {
         if (body.isEmpty() || !bodyCanContainNavigableUrls(headers)) return body
         return rewriteEncodedTextBody(headers, body) { source ->
-            val rebased = rebaseRelativeReferences(flow, headers, source, effectiveBaseUri)
-            rewriteBodyAbsoluteUrls(flow, rebased)
+            if (effectiveBaseUri != null) {
+                rewriteBodyUrlsWithBase(flow, headers, source, effectiveBaseUri)
+            } else {
+                rewriteBodyAbsoluteUrls(flow, source)
+            }
         }
     }
 
-    private fun rebaseRelativeReferences(
+    private fun rewriteBodyUrlsWithBase(
         flow: TcpProxyFlow,
         headers: Map<String, List<String>>,
         source: String,
-        effectiveBaseUri: URI?,
+        baseUri: URI,
     ): String {
-        val baseUri = effectiveBaseUri ?: return source
         val contentType = firstHeader(headers, "content-type")
             ?.substringBefore(';')
             ?.trim()
             ?.lowercase(Locale.ROOT)
-            ?: return source
+            ?: return rewriteBodyAbsoluteUrls(flow, source)
         return when (contentType) {
-            "text/css" -> rebaseCssReferences(flow, source, baseUri)
-            "text/html", "application/xhtml+xml" -> rebaseHtmlReferences(flow, source, baseUri)
-            else -> source
+            "text/css" -> rewriteCssUrlsWithBase(flow, source, baseUri)
+            "text/html", "application/xhtml+xml" -> rewriteHtmlUrlsWithBase(flow, source, baseUri)
+            else -> rewriteBodyAbsoluteUrls(flow, source)
         }
     }
 
-    private fun rebaseCssReferences(flow: TcpProxyFlow, source: String, baseUri: URI): String {
+    private fun rewriteCssUrlsWithBase(flow: TcpProxyFlow, source: String, baseUri: URI): String {
         var rewritten = CSS_URL_REFERENCE_PATTERN.replace(source) { match ->
-            replaceRelativeReferenceInMatch(flow, match, listOf(1, 2, 3), baseUri, hideRedirect = true)
+            replaceUrlReferenceInMatch(flow, match, listOf(1, 2, 3), baseUri, hideRedirect = true)
         }
         rewritten = CSS_IMPORT_REFERENCE_PATTERN.replace(rewritten) { match ->
-            replaceRelativeReferenceInMatch(flow, match, listOf(1, 2), baseUri, hideRedirect = true)
+            replaceUrlReferenceInMatch(flow, match, listOf(1, 2), baseUri, hideRedirect = true)
         }
-        return rewritten
+        return rewriteBodyAbsoluteUrlsOutsideGeneratedMappings(flow, rewritten)
     }
 
-    private fun rebaseHtmlReferences(flow: TcpProxyFlow, source: String, baseUri: URI): String =
+    private fun rewriteHtmlUrlsWithBase(flow: TcpProxyFlow, source: String, baseUri: URI): String =
         HTML_URL_ATTRIBUTE_PATTERN.replace(source) { match ->
             val urlGroup = listOf(1, 2, 3).mapNotNull { match.groups[it] }.firstOrNull()
                 ?: return@replace match.value
-            val replacement = rewriteRelativeReference(
+            val replacement = rewriteUrlReference(
                 flow = flow,
                 baseUri = baseUri,
                 rawUrl = urlGroup.value,
@@ -1094,7 +1096,7 @@ class SystemHttpCompatibilityProxy(
             replaceMatchGroup(match, urlGroup, replacement)
         }
 
-    private fun replaceRelativeReferenceInMatch(
+    private fun replaceUrlReferenceInMatch(
         flow: TcpProxyFlow,
         match: MatchResult,
         rawGroups: List<Int>,
@@ -1102,7 +1104,7 @@ class SystemHttpCompatibilityProxy(
         hideRedirect: Boolean,
     ): String {
         val urlGroup = rawGroups.mapNotNull { match.groups[it] }.firstOrNull() ?: return match.value
-        val replacement = rewriteRelativeReference(flow, baseUri, urlGroup.value, hideRedirect)
+        val replacement = rewriteUrlReference(flow, baseUri, urlGroup.value, hideRedirect)
             ?: return match.value
         return replaceMatchGroup(match, urlGroup, replacement)
     }
@@ -1113,7 +1115,7 @@ class SystemHttpCompatibilityProxy(
         return match.value.substring(0, start) + replacement + match.value.substring(endExclusive)
     }
 
-    private fun rewriteRelativeReference(
+    private fun rewriteUrlReference(
         flow: TcpProxyFlow,
         baseUri: URI,
         rawUrl: String,
@@ -1121,10 +1123,19 @@ class SystemHttpCompatibilityProxy(
     ): String? {
         if (rawUrl.isBlank() || rawUrl.startsWith('#')) return null
         val reference = runCatching { URI(rawUrl) }.getOrNull() ?: return null
-        if (reference.isAbsolute) return null
-        val resolved = runCatching { baseUri.resolve(reference) }.getOrNull() ?: return null
-        return rewriteAbsoluteUrl(flow, resolved.toString(), hideRedirect)
+        val target = if (reference.isAbsolute) reference else runCatching { baseUri.resolve(reference) }.getOrNull() ?: return null
+        return rewriteAbsoluteUrl(flow, target.toString(), hideRedirect)
     }
+
+    private fun rewriteBodyAbsoluteUrlsOutsideGeneratedMappings(flow: TcpProxyFlow, value: String): String =
+        ABSOLUTE_HTTP_URL_PATTERN.replace(value) { match ->
+            val target = runCatching { URI(match.value) }.getOrNull()
+            if (target?.scheme.equals("http", ignoreCase = true) && originRoutes.resolve(flow, target) != target) {
+                match.value
+            } else {
+                rewriteAbsoluteUrl(flow, match.value, hideRedirect = true) ?: match.value
+            }
+        }
 
     private fun bodyCanContainNavigableUrls(headers: Map<String, List<String>>): Boolean {
         val contentEncoding = firstHeader(headers, "content-encoding")
@@ -1193,19 +1204,26 @@ class SystemHttpCompatibilityProxy(
     }
 
     private fun bodyUrlHidesRedirect(source: String, urlStart: Int): Boolean {
-        val contextStart = maxOf(0, urlStart - 256)
-        val context = source.substring(contextStart, urlStart)
-        val tagStart = context.lastIndexOf('<')
-        val tagEnd = context.lastIndexOf('>')
-        if (tagStart <= tagEnd) return true
+        val tagStart = source.lastIndexOf('<', startIndex = urlStart)
+        val tagEnd = source.indexOf('>', startIndex = urlStart).takeIf { it >= 0 } ?: return true
+        if (tagStart < 0) return true
+        val tag = source.substring(tagStart, tagEnd + 1)
+        val prefix = source.substring(tagStart, urlStart).lowercase(Locale.ROOT)
 
-        val tagPrefix = context.substring(tagStart).lowercase(Locale.ROOT)
         return when {
-            Regex("""<\s*a\b[^>]*\bhref\s*=\s*["']?[^"']*$""").containsMatchIn(tagPrefix) -> false
-            Regex("""<\s*form\b[^>]*\baction\s*=\s*["']?[^"']*$""").containsMatchIn(tagPrefix) -> false
-            Regex("""<\s*meta\b[^>]*http-equiv\s*=\s*["']?refresh["']?[^>]*content\s*=\s*["'][^"']*$""").containsMatchIn(tagPrefix) -> false
+            Regex("""<\s*a\b[^>]*\bhref\s*=\s*["']?[^"']*$""").containsMatchIn(prefix) -> false
+            Regex("""<\s*form\b[^>]*\baction\s*=\s*["']?[^"']*$""").containsMatchIn(prefix) -> false
+            isMetaRefreshTag(tag) -> false
             else -> true
         }
+    }
+
+    private fun isMetaRefreshTag(tag: String): Boolean {
+        if (!Regex("""(?i)^<\s*meta\b""").containsMatchIn(tag)) return false
+        val httpEquiv = HTML_ATTRIBUTE_PATTERN.findAll(tag)
+            .firstOrNull { it.groupValues[1].equals("http-equiv", ignoreCase = true) }
+            ?.let { match -> match.groupValues.drop(2).firstOrNull { it.isNotEmpty() } }
+        return httpEquiv.equals("refresh", ignoreCase = true)
     }
 
     private fun Map<String, List<String>>.withHeader(name: String, value: String): Map<String, List<String>> =
@@ -1521,6 +1539,8 @@ class SystemHttpCompatibilityProxy(
             Regex("""(?i)@import\s+(?:"([^"]*)"|'([^']*)')""")
         val HTML_URL_ATTRIBUTE_PATTERN =
             Regex("""(?i)\b(?:src|href|action|background|poster)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>]+))""")
+        val HTML_ATTRIBUTE_PATTERN =
+            Regex("""(?i)\b([a-z_:][-a-z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>]+))""")
         val REWRITABLE_CONTENT_TYPES = setOf(
             "text/html",
             "application/xhtml+xml",
