@@ -36,6 +36,23 @@ class YameLoggingTest {
         assertContains(directory.resolve("proxy.log").readText(), "visible proxy debug")
     }
 
+
+    @Test
+    fun `runtime level changes take effect immediately`() {
+        val directory = Files.createTempDirectory("yame-log-runtime-levels")
+
+        YameLogManager(YameLogManager.defaultLevels(), directory).use { logs ->
+            logs.log(YameLogModule.PROXY, YameLogLevel.DEBUG, "hidden before")
+            logs.setLevel(YameLogModule.PROXY, YameLogLevel.DEBUG)
+            logs.log(YameLogModule.PROXY, YameLogLevel.DEBUG, "visible after")
+            assertEquals(YameLogLevel.DEBUG, logs.level(YameLogModule.PROXY))
+        }
+
+        val proxy = directory.resolve("proxy.log").readText()
+        assertFalse("hidden before" in proxy)
+        assertContains(proxy, "visible after")
+    }
+
     @Test
     fun `existing active log is archived using timestamped module name`() {
         val directory = Files.createTempDirectory("yame-log-rotation")
