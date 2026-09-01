@@ -216,7 +216,7 @@ class InteractiveYameApplication(
 
         val modemFileLogger = logManager.logger(YameLogModule.MODEM)
         val pppFileLogger = logManager.logger(YameLogModule.PPP)
-        val proxyFileLogger = logManager.logger(YameLogModule.PROXY)
+        val proxyFileLogger = logManager.debugLogger(YameLogModule.PROXY)
         val serialFileLogger = logManager.logger(YameLogModule.SERIAL)
         val modem = HayesModem(
             baudRate = baud,
