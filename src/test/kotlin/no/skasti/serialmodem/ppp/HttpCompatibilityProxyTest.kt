@@ -344,24 +344,24 @@ class HttpCompatibilityProxyTest {
                         val request = readRequest(socket)
                         val response = when (requestIndex) {
                             0 ->
-                                "HTTP/1.1 200 OK\\r\\n" +
-                                    "Content-Type: text/html; charset=utf-8\\r\\n" +
-                                    "Content-Length: ${pageBody.toByteArray(StandardCharsets.UTF_8).size}\\r\\n" +
-                                    "Connection: close\\r\\n\\r\\n" +
+                                "HTTP/1.1 200 OK\r\n" +
+                                    "Content-Type: text/html; charset=utf-8\r\n" +
+                                    "Content-Length: ${pageBody.toByteArray(StandardCharsets.UTF_8).size}\r\n" +
+                                    "Connection: close\r\n\r\n" +
                                     pageBody
                             1 -> {
                                 assertTrue(request.startsWith("GET /styles/main.css "), request)
-                                "HTTP/1.1 302 Found\\r\\n" +
-                                    "Location: /assets/main.css\\r\\n" +
-                                    "Content-Length: 0\\r\\n" +
-                                    "Connection: close\\r\\n\\r\\n"
+                                "HTTP/1.1 302 Found\r\n" +
+                                    "Location: /assets/main.css\r\n" +
+                                    "Content-Length: 0\r\n" +
+                                    "Connection: close\r\n\r\n"
                             }
                             else -> {
                                 assertTrue(request.startsWith("GET /assets/main.css "), request)
-                                "HTTP/1.1 200 OK\\r\\n" +
-                                    "Content-Type: text/css; charset=utf-8\\r\\n" +
-                                    "Content-Length: ${cssBody.toByteArray(StandardCharsets.UTF_8).size}\\r\\n" +
-                                    "Connection: close\\r\\n\\r\\n" +
+                                "HTTP/1.1 200 OK\r\n" +
+                                    "Content-Type: text/css; charset=utf-8\r\n" +
+                                    "Content-Length: ${cssBody.toByteArray(StandardCharsets.UTF_8).size}\r\n" +
+                                    "Connection: close\r\n\r\n" +
                                     cssBody
                             }
                         }
@@ -388,7 +388,7 @@ class HttpCompatibilityProxyTest {
             assertIs<TcpProxyEvent.Connected>(requireNotNull(pageEvents.poll(2, TimeUnit.SECONDS)))
             proxy.send(
                 pageFlow,
-                ("GET /page HTTP/1.0\\r\\nHost: 127.0.0.1:${server.localPort}\\r\\n\\r\\n")
+                ("GET /page HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\n\r\n")
                     .toByteArray(StandardCharsets.US_ASCII),
             ).getOrThrow()
             val pageResponse = collectResponse(pageEvents)
@@ -403,12 +403,12 @@ class HttpCompatibilityProxyTest {
             assertIs<TcpProxyEvent.Connected>(requireNotNull(cssEvents.poll(2, TimeUnit.SECONDS)))
             proxy.send(
                 cssFlow,
-                ("GET /styles/main.css HTTP/1.0\\r\\nHost: 127.0.0.1:${server.localPort}\\r\\n\\r\\n")
+                ("GET /styles/main.css HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\n\r\n")
                     .toByteArray(StandardCharsets.US_ASCII),
             ).getOrThrow()
 
             val cssResponse = collectResponse(cssEvents)
-            assertTrue(cssResponse.startsWith("HTTP/1.0 200 OK\\r\\n"), cssResponse)
+            assertTrue(cssResponse.startsWith("HTTP/1.0 200 OK\r\n"), cssResponse)
             assertTrue(!cssResponse.contains("302 Found"), cssResponse)
             assertTrue(
                 cssResponse.contains(
