@@ -122,6 +122,25 @@ internal fun redirectedMethod(status: Int, method: String): String =
     }
 
 
+internal fun rewriteEncodedTextBody(
+    headers: Map<String, List<String>>,
+    body: ByteArray,
+    transform: (String) -> String,
+): ByteArray {
+    val contentType = headers.entries
+        .firstOrNull { (name, _) -> name.equals("content-type", ignoreCase = true) }
+        ?.value
+        ?.firstOrNull()
+    val declaredCharset = contentType
+        ?.let { CHARSET_PARAMETER_PATTERN.find(it) }
+        ?.let { match -> match.groupValues.drop(1).firstOrNull { it.isNotEmpty() } }
+        ?.let { name -> runCatching { Charset.forName(name) }.getOrNull() }
+    val charset = declaredCharset ?: bomCharset(body) ?: StandardCharsets.ISO_8859_1
+    val source = body.toString(charset)
+    val rewritten = transform(source)
+    return if (rewritten == source) body else rewritten.toByteArray(charset)
+}
+
 private fun bomCharset(body: ByteArray): Charset? =
     when {
         body.size >= 4 && body[0] == 0x00.toByte() && body[1] == 0x00.toByte() &&
