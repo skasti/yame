@@ -33,6 +33,7 @@ tasks.test {
 val yameGitCommit = providers.provider {
     runCatching {
         val process = ProcessBuilder("git", "rev-parse", "--short=8", "HEAD")
+            .directory(rootProject.projectDir)
             .redirectErrorStream(true)
             .start()
         val value = process.inputStream.bufferedReader().readText().trim()
