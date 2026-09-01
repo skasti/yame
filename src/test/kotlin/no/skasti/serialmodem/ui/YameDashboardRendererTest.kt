@@ -1,6 +1,5 @@
 package no.skasti.serialmodem.ui
 
-import no.skasti.serialmodem.observer.HttpProxyActionKind
 import no.skasti.serialmodem.observer.TransferKind
 import no.skasti.serialmodem.observer.TransferState
 import kotlin.test.Test
@@ -44,13 +43,17 @@ class YameDashboardRendererTest {
                     detail = null,
                 ),
             ),
-            httpActivity = listOf(
-                DashboardHttpActivity(
-                    time = "10:00:02",
-                    kind = HttpProxyActionKind.REDIRECT,
-                    message = "301 http://example.test/ -> https://example.test/",
+            httpHosts = listOf(
+                DashboardHttpHost(
+                    host = "example.test",
+                    urls = listOf(
+                        "http://example.test/",
+                        "https://example.test/assets/site.css",
+                    ),
+                    expanded = true,
                 ),
             ),
+            selectedHttpHostIndex = 0,
             commandPalette = null,
         )
 
@@ -66,7 +69,38 @@ class YameDashboardRendererTest {
         assertContains(rendered, "HTTP / HTTPS compatibility proxy")
         assertContains(rendered, "vg.no")
         assertContains(rendered, "93.184.216.34:80")
-        assertContains(rendered, "301 http://example.test/")
+        assertContains(rendered, "example.test  (2)")
+        assertContains(rendered, "/assets/site.css")
+    }
+
+    @Test
+    fun collapsedProxyHostHidesUrls() {
+        val rendered = YameDashboardRenderer.render(
+            state = DashboardState(
+                portName = "COM3",
+                baud = 115200,
+                connected = true,
+                dnsUpstream = "8.8.8.8",
+                httpProxyEnabled = true,
+                logs = emptyList(),
+                dnsLookups = emptyList(),
+                transfers = emptyList(),
+                httpHosts = listOf(
+                    DashboardHttpHost(
+                        host = "example.test",
+                        urls = listOf("https://example.test/path/page.html?x=1"),
+                        expanded = false,
+                    ),
+                ),
+                selectedHttpHostIndex = 0,
+                commandPalette = null,
+            ),
+            width = 120,
+            height = 34,
+        )
+
+        assertContains(rendered, "▶ example.test")
+        assertFalse(rendered.contains("/path/page.html?x=1"))
     }
 
     @Test
@@ -81,7 +115,8 @@ class YameDashboardRendererTest {
                 logs = emptyList(),
                 dnsLookups = emptyList(),
                 transfers = emptyList(),
-                httpActivity = emptyList(),
+                httpHosts = emptyList(),
+                selectedHttpHostIndex = 0,
                 commandPalette = TuiCommandPalette(
                     mode = TuiPaletteMode.COMMANDS,
                     input = "/",
@@ -125,7 +160,8 @@ class YameDashboardRendererTest {
                 logs = emptyList(),
                 dnsLookups = emptyList(),
                 transfers = emptyList(),
-                httpActivity = emptyList(),
+                httpHosts = emptyList(),
+                selectedHttpHostIndex = 0,
                 commandPalette = TuiCommandPalette(
                     mode = TuiPaletteMode.COMMANDS,
                     input = "/",
@@ -153,7 +189,8 @@ class YameDashboardRendererTest {
                 logs = emptyList(),
                 dnsLookups = emptyList(),
                 transfers = emptyList(),
-                httpActivity = emptyList(),
+                httpHosts = emptyList(),
+                selectedHttpHostIndex = 0,
                 commandPalette = TuiCommandPalette(
                     mode = TuiPaletteMode.PORTS,
                     input = "/port",
@@ -204,7 +241,8 @@ class YameDashboardRendererTest {
                     ),
                 ),
                 transfers = emptyList(),
-                httpActivity = emptyList(),
+                httpHosts = emptyList(),
+                selectedHttpHostIndex = 0,
                 commandPalette = null,
             ),
             width = 120,
