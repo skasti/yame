@@ -40,10 +40,15 @@ fun main(args: Array<String>) {
     try {
 
     if (options.testNumber != null) {
+        val modemFileLogger = logManager.logger(YameLogModule.MODEM)
+        val modemConsoleLogger: (String) -> Unit = { message ->
+            println(message)
+            modemFileLogger(message)
+        }
         val modem = HayesModem(
             baudRate = options.baudRate,
             config = options.modemConfig,
-            logger = logManager.logger(YameLogModule.MODEM),
+            logger = modemConsoleLogger,
             pppLogger = logManager.logger(YameLogModule.PPP),
             dnsLogger = logManager.debugLogger(YameLogModule.DNS),
             transferLogger = logManager.debugLogger(YameLogModule.TRANSFERS),
