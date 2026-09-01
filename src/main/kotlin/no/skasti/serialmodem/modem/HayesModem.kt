@@ -17,9 +17,12 @@ class HayesModem(
     private val config: HayesModemConfig = HayesModemConfig(),
     private val tonePlayer: TonePlayer = JavaSoundTonePlayer(),
     private val logger: (String) -> Unit = ::println,
+    private val pppLogger: (String) -> Unit = logger,
+    private val proxyLogger: (String) -> Unit = pppLogger,
     private val eventSink: (YameEvent) -> Unit = {},
     private val pppHandler: PppHandler = RetroPppHandler(
-        logger = logger,
+        logger = pppLogger,
+        proxyLogger = proxyLogger,
         eventSink = eventSink,
         ipConfig = config.pppIpConfig,
         dnsConfig = config.pppDnsConfig,
