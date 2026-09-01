@@ -597,6 +597,7 @@ class SystemHttpCompatibilityProxy(
         val contentLength: Long?,
         val exposeCookies: Boolean,
         val locationAlreadyLegacy: Boolean = false,
+        val effectiveBaseUri: URI? = null,
     )
 
     private enum class ExpectationDisposition { NONE, CONTINUE, UNSUPPORTED }
@@ -941,6 +942,8 @@ class SystemHttpCompatibilityProxy(
                         else -> null
                     },
                 exposeCookies = sameOrigin(originalUri, uri),
+                effectiveBaseUri =
+                    if (hideExactRedirect && redirects > 0 && uri != initialUpstreamUri) uri else null,
             )
         }
     }
@@ -949,7 +952,14 @@ class SystemHttpCompatibilityProxy(
         val legacyHeaders = rewriteLegacyHeaders(state.flow, response.headers, response.locationAlreadyLegacy)
         val bufferedBody = (response.body as? FinalResponseBody.Buffered)?.bytes
         val legacyBody =
-            bufferedBody?.let { rewriteLegacyBody(state.flow, response.headers, it) }
+            bufferedBody?.let {
+                rewriteLegacyBody(
+                    flow = state.flow,
+                    headers = response.headers,
+                    body = it,
+                    effectiveBaseUri = response.effectiveBaseUri,
+                )
+            }
         val bodyRewritten = bufferedBody != null && legacyBody !== bufferedBody
         val rewritten = legacyHeaders != response.headers || bodyRewritten
         val contentLength =
@@ -1033,9 +1043,87 @@ class SystemHttpCompatibilityProxy(
         flow: TcpProxyFlow,
         headers: Map<String, List<String>>,
         body: ByteArray,
+        effectiveBaseUri: URI?,
     ): ByteArray {
         if (body.isEmpty() || !bodyCanContainNavigableUrls(headers)) return body
-        return rewriteEncodedTextBody(headers, body) { source -> rewriteBodyAbsoluteUrls(flow, source) }
+        return rewriteEncodedTextBody(headers, body) { source ->
+            val rebased = rebaseRelativeReferences(flow, headers, source, effectiveBaseUri)
+            rewriteBodyAbsoluteUrls(flow, rebased)
+        }
+    }
+
+    private fun rebaseRelativeReferences(
+        flow: TcpProxyFlow,
+        headers: Map<String, List<String>>,
+        source: String,
+        effectiveBaseUri: URI?,
+    ): String {
+        val baseUri = effectiveBaseUri ?: return source
+        val contentType = firstHeader(headers, "content-type")
+            ?.substringBefore(';')
+            ?.trim()
+            ?.lowercase(Locale.ROOT)
+            ?: return source
+        return when (contentType) {
+            "text/css" -> rebaseCssReferences(flow, source, baseUri)
+            "text/html", "application/xhtml+xml" -> rebaseHtmlReferences(flow, source, baseUri)
+            else -> source
+        }
+    }
+
+    private fun rebaseCssReferences(flow: TcpProxyFlow, source: String, baseUri: URI): String {
+        var rewritten = CSS_URL_REFERENCE_PATTERN.replace(source) { match ->
+            replaceRelativeReferenceInMatch(flow, match, listOf(1, 2, 3), baseUri, hideRedirect = true)
+        }
+        rewritten = CSS_IMPORT_REFERENCE_PATTERN.replace(rewritten) { match ->
+            replaceRelativeReferenceInMatch(flow, match, listOf(1, 2), baseUri, hideRedirect = true)
+        }
+        return rewritten
+    }
+
+    private fun rebaseHtmlReferences(flow: TcpProxyFlow, source: String, baseUri: URI): String =
+        HTML_URL_ATTRIBUTE_PATTERN.replace(source) { match ->
+            val urlGroup = listOf(1, 2, 3).mapNotNull { match.groups[it] }.firstOrNull()
+                ?: return@replace match.value
+            val replacement = rewriteRelativeReference(
+                flow = flow,
+                baseUri = baseUri,
+                rawUrl = urlGroup.value,
+                hideRedirect = bodyUrlHidesRedirect(source, urlGroup.range.first),
+            ) ?: return@replace match.value
+            replaceMatchGroup(match, urlGroup, replacement)
+        }
+
+    private fun replaceRelativeReferenceInMatch(
+        flow: TcpProxyFlow,
+        match: MatchResult,
+        rawGroups: List<Int>,
+        baseUri: URI,
+        hideRedirect: Boolean,
+    ): String {
+        val urlGroup = rawGroups.mapNotNull { match.groups[it] }.firstOrNull() ?: return match.value
+        val replacement = rewriteRelativeReference(flow, baseUri, urlGroup.value, hideRedirect)
+            ?: return match.value
+        return replaceMatchGroup(match, urlGroup, replacement)
+    }
+
+    private fun replaceMatchGroup(match: MatchResult, group: MatchGroup, replacement: String): String {
+        val start = group.range.first - match.range.first
+        val endExclusive = group.range.last - match.range.first + 1
+        return match.value.substring(0, start) + replacement + match.value.substring(endExclusive)
+    }
+
+    private fun rewriteRelativeReference(
+        flow: TcpProxyFlow,
+        baseUri: URI,
+        rawUrl: String,
+        hideRedirect: Boolean,
+    ): String? {
+        if (rawUrl.isBlank() || rawUrl.startsWith('#')) return null
+        val reference = runCatching { URI(rawUrl) }.getOrNull() ?: return null
+        if (reference.isAbsolute) return null
+        val resolved = runCatching { baseUri.resolve(reference) }.getOrNull() ?: return null
+        return rewriteAbsoluteUrl(flow, resolved.toString(), hideRedirect)
     }
 
     private fun bodyCanContainNavigableUrls(headers: Map<String, List<String>>): Boolean {
@@ -1427,6 +1515,12 @@ class SystemHttpCompatibilityProxy(
         val RESPONSE_HEADERS_TO_STRIP_WHEN_BODY_REWRITTEN = setOf("etag", "content-md5", "digest", "content-digest", "repr-digest", "content-range", "accept-ranges")
         val RESPONSE_COOKIE_HEADERS = setOf("set-cookie", "set-cookie2")
         val URI_RESPONSE_HEADERS_TO_REWRITE = setOf("location", "content-location", "refresh", "link")
+        val CSS_URL_REFERENCE_PATTERN =
+            Regex("""(?i)url\\(\\s*(?:"([^"]*)"|\'([^\']*)\'|([^\\s"\'\\)]+))\\s*\\)""")
+        val CSS_IMPORT_REFERENCE_PATTERN =
+            Regex("""(?i)@import\\s+(?:"([^"]*)"|\'([^\']*)\')""")
+        val HTML_URL_ATTRIBUTE_PATTERN =
+            Regex("""(?i)\\b(?:src|href|action|background|poster)\\s*=\\s*(?:"([^"]*)"|\'([^\']*)\'|([^\\s"\'=<>]+))""")
         val REWRITABLE_CONTENT_TYPES = setOf(
             "text/html",
             "application/xhtml+xml",
