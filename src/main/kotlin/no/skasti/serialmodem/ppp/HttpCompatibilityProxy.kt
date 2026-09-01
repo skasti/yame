@@ -1161,17 +1161,37 @@ class SystemHttpCompatibilityProxy(
         }
     }
 
-    private fun rewriteCssUrlsWithBase(flow: TcpProxyFlow, source: String, baseUri: URI): String {
+    private fun rewriteCssUrlsWithBase(
+        flow: TcpProxyFlow,
+        session: SessionState,
+        graphs: List<NavigationResourceGraph>,
+        parentLegacyUri: URI,
+        source: String,
+        baseUri: URI,
+    ): String {
         var rewritten = CSS_URL_REFERENCE_PATTERN.replace(source) { match ->
-            replaceUrlReferenceInMatch(flow, match, listOf(1, 2, 3), baseUri, hideRedirect = true)
+            replaceDiscoveredUrlReferenceInMatch(
+                flow, session, graphs, parentLegacyUri, match, listOf(1, 2, 3), baseUri,
+                ResourceRelation.CSS_URL, ResourceKind.OTHER,
+            )
         }
         rewritten = CSS_IMPORT_REFERENCE_PATTERN.replace(rewritten) { match ->
-            replaceUrlReferenceInMatch(flow, match, listOf(1, 2), baseUri, hideRedirect = true)
+            replaceDiscoveredUrlReferenceInMatch(
+                flow, session, graphs, parentLegacyUri, match, listOf(1, 2), baseUri,
+                ResourceRelation.CSS_IMPORT, ResourceKind.STYLESHEET,
+            )
         }
         return rewriteBodyAbsoluteUrlsOutsideGeneratedMappings(flow, rewritten)
     }
 
-    private fun rewriteHtmlUrlsWithBase(flow: TcpProxyFlow, source: String, baseUri: URI): String {
+    private fun rewriteHtmlUrlsWithBase(
+        flow: TcpProxyFlow,
+        session: SessionState,
+        graphs: List<NavigationResourceGraph>,
+        parentLegacyUri: URI,
+        source: String,
+        baseUri: URI,
+    ): String {
         val documentBaseUri = htmlDocumentBaseUri(source, baseUri)
         var rewritten = HTML_URL_ATTRIBUTE_PATTERN.replace(source) { match ->
             val urlGroup = listOf(1, 2, 3).mapNotNull { match.groups[it] }.firstOrNull()
@@ -1182,20 +1202,36 @@ class SystemHttpCompatibilityProxy(
                 else ""
             val referenceBase =
                 if (Regex("""<\s*base\b""").containsMatchIn(tagPrefix)) baseUri else documentBaseUri
-            val replacement = rewriteUrlReference(
+            val relation = bodyReferenceRelation(source, urlGroup.range.first)
+            val replacement = rewriteAndDiscoverUrlReference(
                 flow = flow,
+                session = session,
+                graphs = graphs,
+                parentLegacyUri = parentLegacyUri,
                 baseUri = referenceBase,
                 rawUrl = urlGroup.value,
-                hideRedirect = bodyUrlHidesRedirect(source, urlGroup.range.first),
+                relation = relation,
+                kind = resourceKindForRelation(relation),
             ) ?: return@replace match.value
             replaceMatchGroup(match, urlGroup, replacement)
         }
-        rewritten = rewriteInlineCssWithBase(flow, rewritten, documentBaseUri)
-        rewritten = rewriteMetaRefreshWithBase(flow, rewritten, documentBaseUri)
+        rewritten = rewriteInlineCssWithBase(
+            flow, session, graphs, parentLegacyUri, rewritten, documentBaseUri,
+        )
+        rewritten = rewriteMetaRefreshWithBase(
+            flow, session, graphs, parentLegacyUri, rewritten, documentBaseUri,
+        )
         return rewriteBodyAbsoluteUrlsOutsideGeneratedMappings(flow, rewritten)
     }
 
-    private fun rewriteMetaRefreshWithBase(flow: TcpProxyFlow, source: String, baseUri: URI): String =
+    private fun rewriteMetaRefreshWithBase(
+        flow: TcpProxyFlow,
+        session: SessionState,
+        graphs: List<NavigationResourceGraph>,
+        parentLegacyUri: URI,
+        source: String,
+        baseUri: URI,
+    ): String =
         HTML_META_TAG_PATTERN.replace(source) { tagMatch ->
             if (!isMetaRefreshTag(tagMatch.value)) return@replace tagMatch.value
             val contentMatch = HTML_ATTRIBUTE_PATTERN.findAll(tagMatch.value)
@@ -1206,11 +1242,15 @@ class SystemHttpCompatibilityProxy(
             val rewrittenContent = META_REFRESH_URL_PATTERN.replace(contentGroup.value) { urlMatch ->
                 val urlGroup = listOf(2, 3, 4).mapNotNull { urlMatch.groups[it] }.firstOrNull()
                     ?: return@replace urlMatch.value
-                val replacement = rewriteUrlReference(
+                val replacement = rewriteAndDiscoverUrlReference(
                     flow = flow,
+                    session = session,
+                    graphs = graphs,
+                    parentLegacyUri = parentLegacyUri,
                     baseUri = baseUri,
                     rawUrl = urlGroup.value,
-                    hideRedirect = false,
+                    relation = ResourceRelation.META_REFRESH,
+                    kind = ResourceKind.DOCUMENT,
                 ) ?: return@replace urlMatch.value
                 replaceMatchGroup(urlMatch, urlGroup, replacement)
             }
@@ -1238,25 +1278,111 @@ class SystemHttpCompatibilityProxy(
         }.getOrDefault(responseBaseUri)
     }
 
-    private fun rewriteInlineCssWithBase(flow: TcpProxyFlow, source: String, baseUri: URI): String {
+    private fun rewriteInlineCssWithBase(
+        flow: TcpProxyFlow,
+        session: SessionState,
+        graphs: List<NavigationResourceGraph>,
+        parentLegacyUri: URI,
+        source: String,
+        baseUri: URI,
+    ): String {
         var rewritten = HTML_STYLE_BLOCK_PATTERN.replace(source) { match ->
             val cssGroup = match.groups[1] ?: return@replace match.value
-            replaceMatchGroup(match, cssGroup, rewriteCssFragmentWithBase(flow, cssGroup.value, baseUri))
+            replaceMatchGroup(
+                match,
+                cssGroup,
+                rewriteCssFragmentWithBase(flow, session, graphs, parentLegacyUri, cssGroup.value, baseUri),
+            )
         }
         rewritten = HTML_STYLE_ATTRIBUTE_PATTERN.replace(rewritten) { match ->
             val cssGroup = listOf(1, 2).mapNotNull { match.groups[it] }.firstOrNull()
                 ?: return@replace match.value
-            replaceMatchGroup(match, cssGroup, rewriteCssFragmentWithBase(flow, cssGroup.value, baseUri))
+            replaceMatchGroup(
+                match,
+                cssGroup,
+                rewriteCssFragmentWithBase(flow, session, graphs, parentLegacyUri, cssGroup.value, baseUri),
+            )
         }
         return rewritten
     }
 
-    private fun rewriteCssFragmentWithBase(flow: TcpProxyFlow, source: String, baseUri: URI): String {
+    private fun rewriteCssFragmentWithBase(
+        flow: TcpProxyFlow,
+        session: SessionState,
+        graphs: List<NavigationResourceGraph>,
+        parentLegacyUri: URI,
+        source: String,
+        baseUri: URI,
+    ): String {
         var rewritten = CSS_URL_REFERENCE_PATTERN.replace(source) { match ->
-            replaceUrlReferenceInMatch(flow, match, listOf(1, 2, 3), baseUri, hideRedirect = true)
+            replaceDiscoveredUrlReferenceInMatch(
+                flow, session, graphs, parentLegacyUri, match, listOf(1, 2, 3), baseUri,
+                ResourceRelation.CSS_URL, ResourceKind.OTHER,
+            )
         }
         rewritten = CSS_IMPORT_REFERENCE_PATTERN.replace(rewritten) { match ->
-            replaceUrlReferenceInMatch(flow, match, listOf(1, 2), baseUri, hideRedirect = true)
+            replaceDiscoveredUrlReferenceInMatch(
+                flow, session, graphs, parentLegacyUri, match, listOf(1, 2), baseUri,
+                ResourceRelation.CSS_IMPORT, ResourceKind.STYLESHEET,
+            )
+        }
+        return rewritten
+    }
+
+    private fun replaceDiscoveredUrlReferenceInMatch(
+        flow: TcpProxyFlow,
+        session: SessionState,
+        graphs: List<NavigationResourceGraph>,
+        parentLegacyUri: URI,
+        match: MatchResult,
+        rawGroups: List<Int>,
+        baseUri: URI,
+        relation: ResourceRelation,
+        kind: ResourceKind,
+    ): String {
+        val urlGroup = rawGroups.mapNotNull { match.groups[it] }.firstOrNull() ?: return match.value
+        val replacement = rewriteAndDiscoverUrlReference(
+            flow = flow,
+            session = session,
+            graphs = graphs,
+            parentLegacyUri = parentLegacyUri,
+            baseUri = baseUri,
+            rawUrl = urlGroup.value,
+            relation = relation,
+            kind = kind,
+        ) ?: return match.value
+        return replaceMatchGroup(match, urlGroup, replacement)
+    }
+
+    private fun rewriteAndDiscoverUrlReference(
+        flow: TcpProxyFlow,
+        session: SessionState,
+        graphs: List<NavigationResourceGraph>,
+        parentLegacyUri: URI,
+        baseUri: URI,
+        rawUrl: String,
+        relation: ResourceRelation,
+        kind: ResourceKind,
+    ): String? {
+        if (rawUrl.isBlank() || rawUrl.startsWith('#')) return null
+        val reference = runCatching { URI(rawUrl) }.getOrNull() ?: return null
+        val upstreamUri =
+            if (reference.isAbsolute) reference else runCatching { baseUri.resolve(reference) }.getOrNull() ?: return null
+        val rewritten = rewriteAbsoluteUrl(
+            flow = flow,
+            rawUrl = upstreamUri.toString(),
+            hideRedirect = relation.role == ReferenceRole.SUBRESOURCE,
+        ) ?: return null
+        val legacyUri = runCatching { URI(rewritten) }.getOrNull() ?: return rewritten
+        graphs.forEach { graph ->
+            session.resources.discover(
+                graph = graph,
+                parentLegacyUri = parentLegacyUri,
+                childLegacyUri = legacyUri,
+                upstreamUri = upstreamUri,
+                relation = relation,
+                kind = kind,
+            )
         }
         return rewritten
     }
@@ -1371,6 +1497,42 @@ class SystemHttpCompatibilityProxy(
             else -> null
         }
     }
+
+    private fun bodyReferenceRelation(source: String, urlStart: Int): ResourceRelation {
+        val tagStart = source.lastIndexOf('<', startIndex = urlStart)
+        val tagEnd = source.indexOf('>', startIndex = urlStart).takeIf { it >= 0 } ?: return ResourceRelation.OTHER_SUBRESOURCE
+        if (tagStart < 0) return ResourceRelation.OTHER_SUBRESOURCE
+        val tag = source.substring(tagStart, tagEnd + 1)
+        val prefix = source.substring(tagStart, urlStart).lowercase(Locale.ROOT)
+        return when {
+            Regex("""<\s*a\b[^>]*\bhref\s*=\s*["']?[^"']*$""").containsMatchIn(prefix) -> ResourceRelation.A_HREF
+            Regex("""<\s*area\b[^>]*\bhref\s*=\s*["']?[^"']*$""").containsMatchIn(prefix) -> ResourceRelation.AREA_HREF
+            Regex("""<\s*form\b[^>]*\baction\s*=\s*["']?[^"']*$""").containsMatchIn(prefix) -> ResourceRelation.FORM_ACTION
+            Regex("""<\s*(?:iframe|frame)\b[^>]*\bsrc\s*=\s*["']?[^"']*$""").containsMatchIn(prefix) -> ResourceRelation.FRAME_SRC
+            Regex("""<\s*img\b[^>]*\bsrc\s*=\s*["']?[^"']*$""").containsMatchIn(prefix) -> ResourceRelation.IMG_SRC
+            Regex("""<\s*script\b[^>]*\bsrc\s*=\s*["']?[^"']*$""").containsMatchIn(prefix) -> ResourceRelation.SCRIPT_SRC
+            Regex("""<\s*link\b[^>]*\bhref\s*=\s*["']?[^"']*$""").containsMatchIn(prefix) &&
+                tag.contains(Regex("""(?i)\brel\s*=\s*["']?stylesheet\b""")) -> ResourceRelation.LINK_STYLESHEET
+            isMetaRefreshTag(tag) -> ResourceRelation.META_REFRESH
+            else -> ResourceRelation.OTHER_SUBRESOURCE
+        }
+    }
+
+    private fun resourceKindForRelation(relation: ResourceRelation): ResourceKind =
+        when (relation) {
+            ResourceRelation.ROOT,
+            ResourceRelation.A_HREF,
+            ResourceRelation.AREA_HREF,
+            ResourceRelation.META_REFRESH -> ResourceKind.DOCUMENT
+            ResourceRelation.FORM_ACTION -> ResourceKind.FORM
+            ResourceRelation.LINK_STYLESHEET,
+            ResourceRelation.CSS_IMPORT -> ResourceKind.STYLESHEET
+            ResourceRelation.IMG_SRC -> ResourceKind.IMAGE
+            ResourceRelation.SCRIPT_SRC -> ResourceKind.SCRIPT
+            ResourceRelation.FRAME_SRC -> ResourceKind.FRAME
+            ResourceRelation.CSS_URL,
+            ResourceRelation.OTHER_SUBRESOURCE -> ResourceKind.OTHER
+        }
 
     private fun bodyUrlHidesRedirect(source: String, urlStart: Int): Boolean {
         val tagStart = source.lastIndexOf('<', startIndex = urlStart)
