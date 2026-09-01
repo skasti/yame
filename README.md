@@ -197,6 +197,10 @@ Disable compatibility mode when transparent TCP/80 forwarding is desired:
 ```
 
 In the dashboard, use `/http-proxy` to switch between compatibility and transparent forwarding.
+The dashboard header also shows the running YAME version and build Git commit, which is useful when testing local `installDist` builds.
+
+For a detailed compatibility-proxy trace on disk, start YAME with e.g. `--http-proxy-log yame-http.log`.
+Only HTTP/HTTPS compatibility-proxy diagnostics are appended to this file; normal PPP/modem dashboard logging is unchanged.
 
 ## Test tone
 
