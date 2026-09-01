@@ -42,7 +42,7 @@ class YameLogManager(
 ) : AutoCloseable {
     private data class ModuleWriter(
         val writer: BufferedWriter,
-        val level: YameLogLevel,
+        @Volatile var level: YameLogLevel,
     )
 
     private val lock = Any()
@@ -59,6 +59,14 @@ class YameLogManager(
             )
             ModuleWriter(writer, levels[module] ?: YameLogLevel.INFO)
         }
+    }
+
+    fun level(module: YameLogModule): YameLogLevel =
+        writers[module]?.level ?: YameLogLevel.INFO
+
+    fun setLevel(module: YameLogModule, level: YameLogLevel) {
+        writers[module]?.level = level
+        log(module, YameLogLevel.INFO, "Log level changed to ${level.name.lowercase()}")
     }
 
     fun logger(module: YameLogModule): (String) -> Unit = { message ->
