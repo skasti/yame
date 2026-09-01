@@ -54,6 +54,30 @@ class YameLoggingTest {
     }
 
     @Test
+    fun `log initialization failure does not abort application logging setup`() {
+        val notADirectory = Files.createTempFile("yame-log-path", ".tmp")
+
+        YameLogManager(YameLogManager.defaultLevels(), notADirectory).use { logs ->
+            assertEquals(YameLogLevel.INFO, logs.level(YameLogModule.PROXY))
+            logs.log(YameLogModule.PROXY, YameLogLevel.ERROR, "logging path unavailable")
+        }
+    }
+
+    @Test
+    fun `serial reader termination is retained at error level`() {
+        val directory = Files.createTempDirectory("yame-log-serial-error")
+        val levels = YameLogManager.defaultLevels().toMutableMap().apply {
+            this[YameLogModule.SERIAL] = YameLogLevel.ERROR
+        }
+
+        YameLogManager(levels, directory).use { logs ->
+            logs.logger(YameLogModule.SERIAL)("Serial reader stopped: device disconnected")
+        }
+
+        assertContains(directory.resolve("serial.log").readText(), "Serial reader stopped")
+    }
+
+    @Test
     fun `existing active log is archived using timestamped module name`() {
         val directory = Files.createTempDirectory("yame-log-rotation")
 
