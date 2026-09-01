@@ -156,6 +156,11 @@ private fun bomCharset(body: ByteArray): Charset? =
 private val CHARSET_PARAMETER_PATTERN =
     Regex("""(?i)(?:^|;)\s*charset\s*=\s*(?:"([^"]+)"|'([^']+)'|([^;\s]+))""")
 
+internal enum class ReferenceRole {
+    NAVIGATION,
+    SUBRESOURCE,
+}
+
 internal class LegacyOriginRouteTable(
     private val maxExactMappingsPerSession: Int = 4_096,
     private val maxOriginMappingsPerSession: Int = 256,
@@ -226,7 +231,7 @@ internal class LegacyOriginRouteTable(
 
     private data class ExactMapping(
         val target: URI,
-        val hideRedirect: Boolean,
+        val role: ReferenceRole,
         val useTargetAsContentBase: Boolean,
     )
 
@@ -244,8 +249,11 @@ internal class LegacyOriginRouteTable(
     fun isExactMapping(flow: TcpProxyFlow, legacyUri: URI, upstreamUri: URI): Boolean =
         exactMappings[exactKey(flow, legacyUri)]?.target == LegacyHttpUrl.withoutFragment(upstreamUri)
 
+    fun referenceRole(flow: TcpProxyFlow, legacyUri: URI): ReferenceRole? =
+        exactMappings[exactKey(flow, legacyUri)]?.role
+
     fun hidesRedirect(flow: TcpProxyFlow, legacyUri: URI): Boolean =
-        exactMappings[exactKey(flow, legacyUri)]?.hideRedirect == true
+        referenceRole(flow, legacyUri) == ReferenceRole.SUBRESOURCE
 
     fun usesTargetAsContentBase(flow: TcpProxyFlow, legacyUri: URI): Boolean =
         exactMappings[exactKey(flow, legacyUri)]?.useTargetAsContentBase == true
@@ -254,13 +262,13 @@ internal class LegacyOriginRouteTable(
         flow: TcpProxyFlow,
         legacyUri: URI,
         upstreamUri: URI,
-        hideRedirect: Boolean = false,
+        role: ReferenceRole = ReferenceRole.NAVIGATION,
         useTargetAsContentBase: Boolean = false,
     ) {
         rememberExactMapping(
             exactKey(flow, legacyUri),
             LegacyHttpUrl.withoutFragment(upstreamUri),
-            hideRedirect,
+            role,
             useTargetAsContentBase,
         )
     }
@@ -298,7 +306,7 @@ internal class LegacyOriginRouteTable(
         rememberExactMapping(
             exactKey(flow, legacyUri),
             LegacyHttpUrl.withoutFragment(upstreamHttpsUri),
-            hideRedirect,
+            if (hideRedirect) ReferenceRole.SUBRESOURCE else ReferenceRole.NAVIGATION,
             useTargetAsContentBase = false,
         )
         return legacyUri.toString()
@@ -315,7 +323,7 @@ internal class LegacyOriginRouteTable(
         rememberExactMapping(
             exactKey(flow, upstreamHttpUri),
             LegacyHttpUrl.withoutFragment(upstreamHttpUri),
-            hideRedirect,
+            if (hideRedirect) ReferenceRole.SUBRESOURCE else ReferenceRole.NAVIGATION,
             useTargetAsContentBase = false,
         )
         return upstreamHttpUri.toString()
@@ -342,17 +350,23 @@ internal class LegacyOriginRouteTable(
     private fun rememberExactMapping(
         key: ExactKey,
         target: URI,
-        hideRedirect: Boolean,
+        role: ReferenceRole,
         useTargetAsContentBase: Boolean,
     ) {
         synchronized(insertionOrderLock) {
             val previous = exactMappings[key]
-            val effectiveHideRedirect = (previous?.hideRedirect ?: true) && hideRedirect
+            val effectiveRole =
+                if (previous?.role == ReferenceRole.NAVIGATION || role == ReferenceRole.NAVIGATION) {
+                    ReferenceRole.NAVIGATION
+                } else {
+                    ReferenceRole.SUBRESOURCE
+                }
             exactMappings[key] = ExactMapping(
                 target = target,
-                hideRedirect = effectiveHideRedirect,
+                role = effectiveRole,
                 useTargetAsContentBase =
-                    effectiveHideRedirect && ((previous?.useTargetAsContentBase ?: false) || useTargetAsContentBase),
+                    effectiveRole == ReferenceRole.SUBRESOURCE &&
+                        ((previous?.useTargetAsContentBase ?: false) || useTargetAsContentBase),
             )
             val order = exactInsertionOrder.getOrPut(key.sessionKey()) { linkedSetOf() }
             order.remove(key)
@@ -835,7 +849,13 @@ class SystemHttpCompatibilityProxy(
         var uri = originRoutes.resolve(state.flow, legacyUri)
         val initialUpstreamUri = uri
         val followedExactMapping = originRoutes.isExactMapping(state.flow, legacyUri, uri)
-        val hideExactRedirect = followedExactMapping && originRoutes.hidesRedirect(state.flow, legacyUri)
+        val referenceRole =
+            if (followedExactMapping) {
+                originRoutes.referenceRole(state.flow, legacyUri) ?: ReferenceRole.NAVIGATION
+            } else {
+                ReferenceRole.NAVIGATION
+            }
+        val hideExactRedirect = referenceRole == ReferenceRole.SUBRESOURCE
         val mappedContentBase =
             followedExactMapping && hideExactRedirect && originRoutes.usesTargetAsContentBase(state.flow, legacyUri)
         val originalUri = legacyUri
@@ -939,7 +959,7 @@ class SystemHttpCompatibilityProxy(
                 }
             val navigationLikeResponse = responseEstablishesNavigationOrigin(method, status, responseHeaders)
             when {
-                navigationLikeResponse -> {
+                navigationLikeResponse && referenceRole == ReferenceRole.NAVIGATION -> {
                     originRoutes.remember(state.flow, legacyUri, uri)?.let { (legacyOrigin, upstreamOrigin) ->
                         logger("HTTP compatibility .. session route $legacyOrigin -> $upstreamOrigin")
                         emitEvent(state, HttpProxyActionKind.ROUTED, "session $legacyOrigin -> $upstreamOrigin")
@@ -950,8 +970,8 @@ class SystemHttpCompatibilityProxy(
                         state.flow,
                         legacyUri,
                         uri,
-                        hideRedirect = hideExactRedirect,
-                        useTargetAsContentBase = hideExactRedirect,
+                        role = referenceRole,
+                        useTargetAsContentBase = referenceRole == ReferenceRole.SUBRESOURCE,
                     )
                     logger("HTTP compatibility .. exact route $legacyUri -> $uri")
                     emitEvent(state, HttpProxyActionKind.ROUTED, "exact $legacyUri -> $uri")
