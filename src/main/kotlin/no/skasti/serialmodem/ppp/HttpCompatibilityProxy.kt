@@ -136,6 +136,11 @@ private fun bomCharset(body: ByteArray): Charset? =
 private val CHARSET_PARAMETER_PATTERN =
     Regex("""(?i)(?:^|;)\s*charset\s*=\s*(?:"([^"]+)"|'([^']+)'|([^;\s]+))""")
 
+private val HTML_ENTITY_PATTERN = Regex("""&([A-Za-z]+|#[0-9]+|#x[0-9A-Fa-f]+);""")
+private val HTML_BASE_HREF_PATTERN = Regex("""(?is)<base\b[^>]*?\bhref\s*=\s*(["'])(.*?)\1""")
+private val HTML_HEAD_PATTERN = Regex("""(?is)<head\b[^>]*>""")
+private val HTML_HTML_PATTERN = Regex("""(?is)<html\b[^>]*>""")
+
 internal class LegacyOriginRouteTable {
     private data class OriginKey(
         val generation: Long,
@@ -374,6 +379,7 @@ class SystemHttpCompatibilityProxy(
         data class Streaming(val input: java.io.InputStream) : FinalResponseBody
     }
     private data class FinalResponse(
+        val legacyUri: URI,
         val uri: URI,
         val statusCode: Int,
         val headers: Map<String, List<String>>,
@@ -686,6 +692,7 @@ class SystemHttpCompatibilityProxy(
                 }
             }
             return FinalResponse(
+                legacyUri = legacyUri,
                 uri = uri,
                 statusCode = status,
                 headers = responseHeaders,
@@ -706,7 +713,7 @@ class SystemHttpCompatibilityProxy(
         val legacyHeaders = rewriteLegacyHeaders(state.flow, response.uri, response.headers)
         val bufferedBody = (response.body as? FinalResponseBody.Buffered)?.bytes
         val legacyBody =
-            bufferedBody?.let { rewriteLegacyBody(state.flow, response.uri, response.headers, it) }
+            bufferedBody?.let { rewriteLegacyBody(state.flow, response.legacyUri, response.uri, response.headers, it) }
         val bodyRewritten = bufferedBody != null && legacyBody !== bufferedBody
         val rewritten = legacyHeaders != response.headers || bodyRewritten
         val contentLength =
@@ -786,13 +793,20 @@ class SystemHttpCompatibilityProxy(
 
     private fun rewriteLegacyBody(
         flow: TcpProxyFlow,
+        legacyUri: URI,
         upstreamBase: URI,
         headers: Map<String, List<String>>,
         body: ByteArray,
     ): ByteArray {
         if (body.isEmpty() || !bodyCanContainNavigableUrls(headers)) return body
+        val contentType = firstHeader(headers, "content-type")
+            ?.substringBefore(';')
+            ?.trim()
+            ?.lowercase(Locale.ROOT)
+        val htmlContext = contentType in NAVIGATION_CONTENT_TYPES
         return rewriteEncodedTextBody(headers, body) { source ->
-            rewriteHttpsReferences(flow, upstreamBase, source)
+            val rewritten = rewriteHttpsReferences(flow, upstreamBase, source, htmlContext)
+            if (htmlContext) preserveDocumentBase(flow, legacyUri, upstreamBase, rewritten) else rewritten
         }
     }
 
@@ -828,23 +842,34 @@ class SystemHttpCompatibilityProxy(
             ?.value
             ?.firstOrNull()
 
-    private fun rewriteHttpsReferences(flow: TcpProxyFlow, upstreamBase: URI, value: String): String {
+    private fun rewriteHttpsReferences(
+        flow: TcpProxyFlow,
+        upstreamBase: URI,
+        value: String,
+        htmlContext: Boolean = false,
+    ): String {
         var rewritten = ABSOLUTE_HTTP_URL_PATTERN.replace(value) { match ->
-            val target = runCatching { URI(match.value) }.getOrNull()
-            when {
-                target?.host == null -> match.value
+            val rawTarget = if (htmlContext) decodeHtmlEntities(match.value) else match.value
+            val target = runCatching { URI(rawTarget) }.getOrNull()
+            val replacement = when {
+                target?.host == null -> null
                 target.scheme.equals("https", ignoreCase = true) -> originRoutes.rememberHttpsReference(flow, target)
                 target.scheme.equals("http", ignoreCase = true) -> originRoutes.rememberHttpReference(flow, target)
-                else -> match.value
+                else -> null
             }
+            replacement?.let { if (htmlContext) escapeHtmlAttributeUrl(it) else it } ?: match.value
         }
 
         rewritten = LEGACY_PROTOCOL_RELATIVE_URL_PATTERN.replace(rewritten) { match ->
             val scheme = if (upstreamBase.scheme.equals("https", ignoreCase = true)) "https" else "http"
-            val target = runCatching { URI("$scheme:${match.value}") }.getOrNull()
+            val rawTarget = if (htmlContext) decodeHtmlEntities(match.value) else match.value
+            val target = runCatching { URI("$scheme:$rawTarget") }.getOrNull()
             when {
                 target?.host == null -> match.value
-                target.scheme.equals("https", ignoreCase = true) -> originRoutes.rememberHttpsReference(flow, target)
+                target.scheme.equals("https", ignoreCase = true) -> {
+                    val replacement = originRoutes.rememberHttpsReference(flow, target)
+                    if (htmlContext) escapeHtmlAttributeUrl(replacement) else replacement
+                }
                 else -> {
                     originRoutes.rememberHttpReference(flow, target)
                     match.value
@@ -853,6 +878,63 @@ class SystemHttpCompatibilityProxy(
         }
         return rewritten
     }
+
+    private fun preserveDocumentBase(flow: TcpProxyFlow, legacyUri: URI, upstreamBase: URI, source: String): String {
+        val effectiveLegacyBase = if (upstreamBase.scheme.equals("https", ignoreCase = true)) {
+            originRoutes.rememberHttpsReference(flow, LegacyHttpUrl.withoutFragment(upstreamBase))
+        } else {
+            LegacyHttpUrl.withoutFragment(upstreamBase).toString()
+        }
+        if (LegacyHttpUrl.requestObservableKey(legacyUri) == LegacyHttpUrl.requestObservableKey(URI(effectiveLegacyBase))) {
+            return source
+        }
+
+        val existing = HTML_BASE_HREF_PATTERN.find(source)
+        if (existing != null) {
+            val rawHref = existing.groupValues[2]
+            val upstreamTarget = runCatching { upstreamBase.resolve(decodeHtmlEntities(rawHref)) }.getOrNull() ?: return source
+            val replacement = if (upstreamTarget.scheme.equals("https", true)) {
+                originRoutes.rememberHttpsReference(flow, upstreamTarget)
+            } else {
+                originRoutes.rememberHttpReference(flow, upstreamTarget)
+            }
+            val escaped = escapeHtmlAttributeUrl(replacement)
+            val valueStart = existing.range.first + existing.value.indexOf(rawHref)
+            return source.replaceRange(valueStart, valueStart + rawHref.length, escaped)
+        }
+
+        val baseTag = "<base href=\"${escapeHtmlAttributeUrl(effectiveLegacyBase)}\">"
+        val head = HTML_HEAD_PATTERN.find(source)
+        if (head != null) return source.substring(0, head.range.last + 1) + baseTag + source.substring(head.range.last + 1)
+        val html = HTML_HTML_PATTERN.find(source)
+        if (html != null) {
+            val insertAt = html.range.last + 1
+            return source.substring(0, insertAt) + "<head>$baseTag</head>" + source.substring(insertAt)
+        }
+        return baseTag + source
+    }
+
+    private fun decodeHtmlEntities(value: String): String =
+        HTML_ENTITY_PATTERN.replace(value) { match ->
+            when (val entity = match.groupValues[1]) {
+                "amp" -> "&"
+                "quot" -> "\""
+                "apos" -> "'"
+                "lt" -> "<"
+                "gt" -> ">"
+                else -> {
+                    val codePoint = when {
+                        entity.startsWith("#x", true) -> entity.substring(2).toIntOrNull(16)
+                        entity.startsWith('#') -> entity.substring(1).toIntOrNull()
+                        else -> null
+                    }
+                    codePoint?.let { runCatching { String(Character.toChars(it)) }.getOrNull() } ?: match.value
+                }
+            }
+        }
+
+    private fun escapeHtmlAttributeUrl(value: String): String =
+        value.replace("&", "&amp;").replace("\"", "&quot;")
 
     private fun emitErrorUnlessStarted(
         state: FlowState,

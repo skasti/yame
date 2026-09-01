@@ -170,6 +170,63 @@ class HttpCompatibilityReviewRegressionTest {
         }
     }
 
+    @Test
+    fun `hidden redirect preserves final document path as browser base`() {
+        val server = ServerSocket(0, 2, InetAddress.getLoopbackAddress())
+        val thread = Thread {
+            server.use { listening ->
+                listening.accept().use { socket ->
+                    readRequest(socket)
+                    writeResponse(
+                        socket,
+                        "HTTP/1.1 302 Found\r\n" +
+                            "Location: http://127.0.0.1:${listening.localPort}/app/index.html\r\n" +
+                            "Content-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                }
+                listening.accept().use { socket ->
+                    val request = readRequest(socket)
+                    assertTrue(request.startsWith("GET /app/index.html HTTP/1.1"), request)
+                    val body = "<html><head><title>x</title></head><body><img src=\"logo.png\"></body></html>"
+                    writeResponse(
+                        socket,
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n" +
+                            "Content-Length: ${body.length}\r\nConnection: close\r\n\r\n$body",
+                    )
+                }
+            }
+        }.apply { isDaemon = true; start() }
+        val proxy = SystemHttpCompatibilityProxy(PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000))
+        try {
+            val response = request(proxy, 2310, server.localPort, "/old")
+            assertTrue(response.contains("<base href=\"http://127.0.0.1:${server.localPort}/app/index.html\">"), response)
+        } finally {
+            proxy.close()
+            runCatching { server.close() }
+            thread.join(2_000)
+        }
+    }
+
+    @Test
+    fun `HTML entity encoded HTTPS query is rewritten without changing entity spelling`() {
+        val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val body = "<a href=\"https://example.test/x?a=1&amp;b=2\">next</a>"
+        val thread = serveOnce(server) {
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n" +
+                "Content-Length: ${body.length}\r\nConnection: close\r\n\r\n$body"
+        }
+        val proxy = SystemHttpCompatibilityProxy(PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000))
+        try {
+            val response = request(proxy, 2311, server.localPort, "/")
+            assertTrue(response.contains("http://example.test/x?a=1&amp;b=2"), response)
+            assertTrue(!response.contains("a=1&amp;amp;b=2"), response)
+        } finally {
+            proxy.close()
+            runCatching { server.close() }
+            thread.join(2_000)
+        }
+    }
+
     private fun request(proxy: SystemHttpCompatibilityProxy, peerPort: Int, hostPort: Int, path: String): String {
         val events = LinkedBlockingQueue<TcpProxyEvent>()
         val flow = httpFlow(peerPort)
