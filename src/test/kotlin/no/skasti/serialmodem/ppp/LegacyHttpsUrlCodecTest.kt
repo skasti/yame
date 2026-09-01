@@ -84,6 +84,32 @@ class LegacyOriginRouteTableTest {
     }
 
     @Test
+    fun `HTTPS base reference establishes routing for descendant URLs without requesting the base`() {
+        val routes = LegacyOriginRouteTable()
+        val flow = httpFlow(generation = 13)
+
+        val legacyBase = routes.rememberHttpsBaseReference(flow, URI("https://cdn.test/app/"))
+
+        assertEquals("http://cdn.test/app/", legacyBase)
+        assertEquals(
+            URI("https://cdn.test/app/asset.gif"),
+            routes.resolve(flow, URI("http://cdn.test/app/asset.gif")),
+        )
+    }
+
+    @Test
+    fun `inline style URL attributes are included in the HTML attribute rewrite pass`() {
+        val source = "<div style=\"background:url(https://secure.test/a.gif)\">x</div>"
+        val rewritten = rewriteHtmlUrlContexts(
+            source = source,
+            rewriteAttribute = { it.replace("https://", "http://") },
+            rewriteRaw = { it },
+        )
+
+        assertEquals("<div style=\"background:url(http://secure.test/a.gif)\">x</div>", rewritten)
+    }
+
+    @Test
     fun `HTTPS references are exposed as clean HTTP URLs and remembered exactly`() {
         val routes = LegacyOriginRouteTable()
         val flow = httpFlow(generation = 1)
