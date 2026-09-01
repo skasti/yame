@@ -29,14 +29,14 @@ data class PppHttpCompatibilityConfig(
     val enabled: Boolean = true,
     val maxRedirects: Int = 8,
     val requestTimeoutMillis: Long = 30_000,
-    val maxRequestBytes: Int = 0xffff,
+    val maxRequestBytes: Int = 16 * 1024 * 1024,
     val maxResponseBytes: Int = 16 * 1024 * 1024,
     val maxFlows: Int = 16,
 ) {
     init {
         require(maxRedirects >= 0) { "HTTP compatibility maxRedirects must not be negative" }
         require(requestTimeoutMillis > 0) { "HTTP compatibility request timeout must be positive" }
-        require(maxRequestBytes in 1..0xffff) { "HTTP compatibility maxRequestBytes must be 1..65535" }
+        require(maxRequestBytes > 0) { "HTTP compatibility maxRequestBytes must be positive" }
         require(maxResponseBytes > 0) { "HTTP compatibility maxResponseBytes must be positive" }
         require(maxFlows > 0) { "HTTP compatibility maxFlows must be positive" }
     }
@@ -148,7 +148,35 @@ private val HTML_BASE_HREF_PATTERN = Regex("""(?is)<base\b[^>]*?\bhref\s*=\s*(["
 private val HTML_HEAD_PATTERN = Regex("""(?is)<head\b[^>]*>""")
 private val HTML_URL_ATTRIBUTE_PATTERN =
     Regex("""(?is)\b(?:href|src|action|formaction|poster|data|cite|background)\s*=\s*(["'])(.*?)\1""")
+private val HTML_TAG_PATTERN = Regex("""(?is)<(?:[^"'<>]|"[^"]*"|'[^']*')+>""")
 private val HTML_HTML_PATTERN = Regex("""(?is)<html\b[^>]*>""")
+
+internal fun rewriteHtmlUrlContexts(
+    source: String,
+    rewriteAttribute: (String) -> String,
+    rewriteRaw: (String) -> String,
+): String {
+    val output = StringBuilder(source.length)
+    var cursor = 0
+    HTML_TAG_PATTERN.findAll(source).forEach { tagMatch ->
+        if (cursor < tagMatch.range.first) {
+            output.append(rewriteRaw(source.substring(cursor, tagMatch.range.first)))
+        }
+
+        var tag = tagMatch.value
+        HTML_URL_ATTRIBUTE_PATTERN.findAll(tagMatch.value).toList().asReversed().forEach { attributeMatch ->
+            val valueGroup = attributeMatch.groups[2] ?: return@forEach
+            val replacementValue = rewriteAttribute(valueGroup.value)
+            if (replacementValue != valueGroup.value) {
+                tag = tag.replaceRange(valueGroup.range, replacementValue)
+            }
+        }
+        output.append(tag)
+        cursor = tagMatch.range.last + 1
+    }
+    if (cursor < source.length) output.append(rewriteRaw(source.substring(cursor)))
+    return output.toString()
+}
 
 internal class LegacyOriginRouteTable {
     private data class OriginKey(
@@ -879,17 +907,12 @@ class SystemHttpCompatibilityProxy(
         return rewritten
     }
 
-    private fun rewriteHtmlReferences(flow: TcpProxyFlow, upstreamBase: URI, source: String): String {
-        var rewritten = source
-        HTML_URL_ATTRIBUTE_PATTERN.findAll(source).toList().asReversed().forEach { match ->
-            val valueGroup = match.groups[2] ?: return@forEach
-            val replacement = rewriteHttpsReferences(flow, upstreamBase, valueGroup.value, htmlContext = true)
-            if (replacement != valueGroup.value) {
-                rewritten = rewritten.replaceRange(valueGroup.range, replacement)
-            }
-        }
-        return rewriteHttpsReferences(flow, upstreamBase, rewritten, htmlContext = false)
-    }
+    private fun rewriteHtmlReferences(flow: TcpProxyFlow, upstreamBase: URI, source: String): String =
+        rewriteHtmlUrlContexts(
+            source = source,
+            rewriteAttribute = { rewriteHttpsReferences(flow, upstreamBase, it, htmlContext = true) },
+            rewriteRaw = { rewriteHttpsReferences(flow, upstreamBase, it, htmlContext = false) },
+        )
 
     private fun preserveDocumentBase(
         flow: TcpProxyFlow,
