@@ -151,6 +151,186 @@ class HttpCompatibilityProxyTest {
         }
     }
 
+
+    @Test
+    fun `image map href is treated as navigation and exposes changed redirect`() {
+        val server = ServerSocket(0, 2, InetAddress.getLoopbackAddress())
+        val pageBody =
+            "<html><body><map name=\"m\"><area href=\"http://127.0.0.1:${server.localPort}/nav/start\" shape=\"rect\"></map></body></html>"
+        val serverThread = Thread {
+            server.use { listening ->
+                repeat(2) { requestIndex ->
+                    listening.accept().use { socket ->
+                        val request = readRequest(socket)
+                        val response =
+                            if (requestIndex == 0) {
+                                "HTTP/1.1 200 OK\r\n" +
+                                    "Content-Type: text/html; charset=utf-8\r\n" +
+                                    "Content-Length: ${pageBody.toByteArray(StandardCharsets.UTF_8).size}\r\n" +
+                                    "Connection: close\r\n\r\n" +
+                                    pageBody
+                            } else {
+                                assertTrue(request.startsWith("GET /nav/start "), request)
+                                "HTTP/1.1 302 Found\r\n" +
+                                    "Location: /nav/final\r\n" +
+                                    "Content-Length: 0\r\n" +
+                                    "Connection: close\r\n\r\n"
+                            }
+                        socket.getOutputStream().write(response.toByteArray(StandardCharsets.ISO_8859_1))
+                        socket.getOutputStream().flush()
+                    }
+                }
+            }
+        }.apply {
+            isDaemon = true
+            start()
+        }
+
+        val proxy = SystemHttpCompatibilityProxy(
+            config = PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000),
+        )
+        val pageEvents = LinkedBlockingQueue<TcpProxyEvent>()
+        val navEvents = LinkedBlockingQueue<TcpProxyEvent>()
+        val pageFlow = httpFlow(peerPort = 2120)
+        val navFlow = httpFlow(peerPort = 2121)
+
+        try {
+            proxy.connect(pageFlow, pageEvents::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(pageEvents.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                pageFlow,
+                ("GET /page HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\n\r\n")
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+            val pageResponse = collectResponse(pageEvents)
+            assertTrue(
+                pageResponse.contains("area href=\"http://127.0.0.1:${server.localPort}/nav/start\""),
+                pageResponse,
+            )
+
+            proxy.connect(navFlow, navEvents::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(navEvents.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                navFlow,
+                ("GET /nav/start HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\n\r\n")
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+
+            val redirect = collectResponse(navEvents)
+            assertTrue(redirect.startsWith("HTTP/1.0 302 Found\r\n"), redirect)
+            assertTrue(
+                redirect.contains(
+                    "location: http://127.0.0.1:${server.localPort}/nav/final",
+                    ignoreCase = true,
+                ),
+                redirect,
+            )
+        } finally {
+            proxy.close()
+            runCatching { server.close() }
+            serverThread.join(2_000)
+        }
+    }
+
+    @Test
+    fun `hidden redirected HTML honors base and rebases inline CSS references`() {
+        val server = ServerSocket(0, 3, InetAddress.getLoopbackAddress())
+        val pageBody =
+            "<html><body><iframe src=\"http://127.0.0.1:${server.localPort}/legacy/frame.html\"></iframe></body></html>"
+        val finalBody =
+            "<html><head><base href=\"../shared/\">" +
+                "<style>.hero{background:url('../images/bg.gif')}</style></head>" +
+                "<body><img src=\"logo.gif\"><div style=\"background:url('icons/panel.gif')\"></div></body></html>"
+        val serverThread = Thread {
+            server.use { listening ->
+                repeat(3) { requestIndex ->
+                    listening.accept().use { socket ->
+                        val request = readRequest(socket)
+                        val response = when (requestIndex) {
+                            0 ->
+                                "HTTP/1.1 200 OK\r\n" +
+                                    "Content-Type: text/html; charset=utf-8\r\n" +
+                                    "Content-Length: ${pageBody.toByteArray(StandardCharsets.UTF_8).size}\r\n" +
+                                    "Connection: close\r\n\r\n" +
+                                    pageBody
+                            1 -> {
+                                assertTrue(request.startsWith("GET /legacy/frame.html "), request)
+                                "HTTP/1.1 302 Found\r\n" +
+                                    "Location: /final/page.html\r\n" +
+                                    "Content-Length: 0\r\n" +
+                                    "Connection: close\r\n\r\n"
+                            }
+                            else -> {
+                                assertTrue(request.startsWith("GET /final/page.html "), request)
+                                "HTTP/1.1 200 OK\r\n" +
+                                    "Content-Type: text/html; charset=utf-8\r\n" +
+                                    "Content-Length: ${finalBody.toByteArray(StandardCharsets.UTF_8).size}\r\n" +
+                                    "Connection: close\r\n\r\n" +
+                                    finalBody
+                            }
+                        }
+                        socket.getOutputStream().write(response.toByteArray(StandardCharsets.ISO_8859_1))
+                        socket.getOutputStream().flush()
+                    }
+                }
+            }
+        }.apply {
+            isDaemon = true
+            start()
+        }
+
+        val proxy = SystemHttpCompatibilityProxy(
+            config = PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000),
+        )
+        val pageEvents = LinkedBlockingQueue<TcpProxyEvent>()
+        val frameEvents = LinkedBlockingQueue<TcpProxyEvent>()
+        val pageFlow = httpFlow(peerPort = 2122)
+        val frameFlow = httpFlow(peerPort = 2123)
+
+        try {
+            proxy.connect(pageFlow, pageEvents::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(pageEvents.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                pageFlow,
+                ("GET /page HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\n\r\n")
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+            collectResponse(pageEvents)
+
+            proxy.connect(frameFlow, frameEvents::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(frameEvents.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                frameFlow,
+                ("GET /legacy/frame.html HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\n\r\n")
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+
+            val response = collectResponse(frameEvents)
+            assertTrue(response.startsWith("HTTP/1.0 200 OK\r\n"), response)
+            assertTrue(!response.contains("302 Found"), response)
+            assertTrue(
+                response.contains("<base href=\"http://127.0.0.1:${server.localPort}/shared/\">"),
+                response,
+            )
+            assertTrue(
+                response.contains("<img src=\"http://127.0.0.1:${server.localPort}/shared/logo.gif\">"),
+                response,
+            )
+            assertTrue(
+                response.contains("url('http://127.0.0.1:${server.localPort}/images/bg.gif')"),
+                response,
+            )
+            assertTrue(
+                response.contains("url('http://127.0.0.1:${server.localPort}/shared/icons/panel.gif')"),
+                response,
+            )
+        } finally {
+            proxy.close()
+            runCatching { server.close() }
+            serverThread.join(2_000)
+        }
+    }
+
     @Test
     fun `fragment-only redirect is returned to the browser`() {
         val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
