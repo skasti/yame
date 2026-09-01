@@ -51,6 +51,48 @@ class LegacyOriginRouteTableTest {
     }
 
     @Test
+    fun `redirect method follows legacy browser compatible semantics`() {
+        assertEquals("GET", redirectedMethod(302, "POST"))
+        assertEquals("GET", redirectedMethod(303, "POST"))
+        assertEquals("HEAD", redirectedMethod(303, "HEAD"))
+        assertEquals("POST", redirectedMethod(307, "POST"))
+    }
+
+    @Test
+    fun `cookie overrides evict the oldest identity at the session limit`() {
+        val overrides = BoundedCookieOverrides(maxEntries = 2)
+        val first = CookieOverride("first", "example.test", "/", secure = false)
+        val second = CookieOverride("second", "example.test", "/", secure = false)
+        val third = CookieOverride("third", "example.test", "/", secure = false)
+
+        overrides.put(first)
+        overrides.put(second)
+        overrides.put(third)
+
+        assertFalse(overrides.any { it == first })
+        assertTrue(overrides.any { it == second })
+        assertTrue(overrides.any { it == third })
+    }
+
+    @Test
+    fun `replacing a cookie override refreshes its eviction order`() {
+        val overrides = BoundedCookieOverrides(maxEntries = 2)
+        val first = CookieOverride("session", "example.test", "/", secure = false)
+        val replacement = first.copy(secure = true)
+        val second = CookieOverride("second", "example.test", "/", secure = false)
+        val third = CookieOverride("third", "example.test", "/", secure = false)
+
+        overrides.put(first)
+        overrides.put(second)
+        overrides.put(replacement)
+        overrides.put(third)
+
+        assertTrue(overrides.any { it == replacement })
+        assertFalse(overrides.any { it == second })
+        assertTrue(overrides.any { it == third })
+    }
+
+    @Test
     fun `seeing an HTTPS link does not reroute unrelated HTTP requests until it is followed`() {
         val routes = LegacyOriginRouteTable()
         val flow = httpFlow(generation = 10)

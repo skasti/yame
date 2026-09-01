@@ -16,7 +16,6 @@ import java.time.Duration
 import java.util.Locale
 import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.FutureTask
@@ -111,6 +110,13 @@ internal fun shouldExposeRedirect(legacyRequestUri: URI, upstreamRedirectUri: UR
         LegacyHttpUrl.requestObservableKey(legacyRequestUri) !=
             LegacyHttpUrl.requestObservableKey(legacyRedirect) ||
             legacyRequestUri.rawFragment != legacyRedirect.rawFragment
+    }
+
+internal fun redirectedMethod(status: Int, method: String): String =
+    when {
+        status == 303 && !method.equals("HEAD", ignoreCase = true) -> "GET"
+        (status == 301 || status == 302) && method.equals("POST", ignoreCase = true) -> "GET"
+        else -> method
     }
 
 internal fun rewriteEncodedTextBody(
@@ -217,8 +223,8 @@ internal class LegacyOriginRouteTable(
 
     private val originMappings = ConcurrentHashMap<OriginKey, Origin>()
     private val exactMappings = ConcurrentHashMap<ExactKey, URI>()
-    private val originInsertionOrder = mutableMapOf<RouteSessionKey, ArrayDeque<OriginKey>>()
-    private val exactInsertionOrder = mutableMapOf<RouteSessionKey, ArrayDeque<ExactKey>>()
+    private val originInsertionOrder = mutableMapOf<RouteSessionKey, LinkedHashSet<OriginKey>>()
+    private val exactInsertionOrder = mutableMapOf<RouteSessionKey, LinkedHashSet<ExactKey>>()
     private val insertionOrderLock = Any()
 
     fun resolve(flow: TcpProxyFlow, legacyUri: URI): URI =
@@ -292,22 +298,26 @@ internal class LegacyOriginRouteTable(
     private fun rememberExactMapping(key: ExactKey, target: URI) {
         synchronized(insertionOrderLock) {
             exactMappings[key] = target
-            val order = exactInsertionOrder.getOrPut(key.sessionKey()) { ArrayDeque() }
+            val order = exactInsertionOrder.getOrPut(key.sessionKey()) { linkedSetOf() }
             order.remove(key)
-            order.addLast(key)
+            order.add(key)
             while (order.size > maxExactMappingsPerSession) {
-                exactMappings.remove(order.removeFirst())
+                val oldest = order.first()
+                order.remove(oldest)
+                exactMappings.remove(oldest)
             }
         }
     }
 
     private fun rememberOriginMapping(key: OriginKey, target: Origin): Origin? {
         val previous = originMappings.put(key, target)
-        val order = originInsertionOrder.getOrPut(key.sessionKey()) { ArrayDeque() }
+        val order = originInsertionOrder.getOrPut(key.sessionKey()) { linkedSetOf() }
         order.remove(key)
-        order.addLast(key)
+        order.add(key)
         while (order.size > maxOriginMappingsPerSession) {
-            originMappings.remove(order.removeFirst())
+            val oldest = order.first()
+            order.remove(oldest)
+            originMappings.remove(oldest)
         }
         return previous
     }
@@ -339,6 +349,36 @@ internal class LegacyOriginRouteTable(
             peerAddress = flow.key.peerAddress.toString(),
             legacyUri = LegacyHttpUrl.requestObservableKey(legacyUri),
         )
+}
+
+internal data class CookieOverride(
+    val name: String,
+    val domain: String,
+    val path: String,
+    val secure: Boolean,
+)
+
+internal class BoundedCookieOverrides(
+    private val maxEntries: Int = 256,
+) {
+    private data class Key(val name: String, val domain: String, val path: String)
+
+    init {
+        require(maxEntries > 0) { "Cookie override limit must be positive" }
+    }
+
+    private val entries = linkedMapOf<Key, CookieOverride>()
+
+    @Synchronized
+    fun put(override: CookieOverride) {
+        val key = Key(override.name.lowercase(Locale.ROOT), override.domain.lowercase(Locale.ROOT), override.path)
+        entries.remove(key)
+        entries[key] = override
+        while (entries.size > maxEntries) entries.remove(entries.keys.first())
+    }
+
+    @Synchronized
+    fun any(predicate: (CookieOverride) -> Boolean): Boolean = entries.values.any(predicate)
 }
 
 class SystemRoutingTcpProxy(
@@ -405,11 +445,10 @@ class SystemHttpCompatibilityProxy(
         .build(),
 ) : TcpProxy {
     private data class ClientCookie(val name: String, val value: String)
-    private data class CookieOverride(val name: String, val domain: String, val path: String, val secure: Boolean)
     private data class SessionKey(val generation: Long, val peerAddress: String)
     private data class SessionState(
         val cookieManager: CookieManager = CookieManager(null, CookiePolicy.ACCEPT_ORIGINAL_SERVER),
-        val cookieOverrides: CopyOnWriteArrayList<CookieOverride> = CopyOnWriteArrayList(),
+        val cookieOverrides: BoundedCookieOverrides = BoundedCookieOverrides(),
     )
     private data class FlowState(
         val flow: TcpProxyFlow,
@@ -730,10 +769,9 @@ class SystemHttpCompatibilityProxy(
                 if (!sameOrigin(uri, next)) forwardSensitiveHeaders = false
                 redirects++
                 uri = next
-                if ((status == 303 && !method.equals("HEAD", true)) || ((status == 301 || status == 302) && method.equals("POST", true))) {
-                    method = "GET"
-                    body = ByteArray(0)
-                }
+                val nextMethod = redirectedMethod(status, method)
+                if (!nextMethod.equals(method, ignoreCase = true)) body = ByteArray(0)
+                method = nextMethod
                 continue
             }
             val responseHeaders = response.headers().map()
@@ -759,7 +797,7 @@ class SystemHttpCompatibilityProxy(
                     }
                     else -> FinalResponseBody.Streaming(response.body())
                 }
-            val navigationLikeResponse = responseEstablishesNavigationOrigin(request.method, status, responseHeaders)
+            val navigationLikeResponse = responseEstablishesNavigationOrigin(method, status, responseHeaders)
             when {
                 followedExactMapping || navigationLikeResponse -> {
                     originRoutes.remember(state.flow, legacyUri, uri)?.let { (legacyOrigin, upstreamOrigin) ->
@@ -1086,14 +1124,7 @@ class SystemHttpCompatibilityProxy(
             .filter { (name, _) -> name.equals("Set-Cookie", true) || name.equals("Set-Cookie2", true) }
             .flatMap { it.value }
             .mapNotNull { parseCookieOverride(uri, it) }
-            .forEach { replacement ->
-                state.session.cookieOverrides.removeIf { existing ->
-                    existing.name.equals(replacement.name, true) &&
-                        existing.domain.equals(replacement.domain, true) &&
-                        existing.path == replacement.path
-                }
-                state.session.cookieOverrides += replacement
-            }
+            .forEach(state.session.cookieOverrides::put)
     }
 
     private fun parseCookieOverride(uri: URI, value: String): CookieOverride? {
