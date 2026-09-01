@@ -23,6 +23,19 @@ import kotlin.time.Duration.Companion.seconds
 fun main(args: Array<String>) {
     val options = parseArgs(args)
 
+    if (options.listPorts) {
+        val ports = SerialConnection.availablePortDescriptors()
+        if (ports.isEmpty()) {
+            println("No serial ports found")
+        } else {
+            println("Available serial ports:")
+            ports.forEach { port ->
+                println("  ${port.systemPortName}\t${port.descriptivePortName}")
+            }
+        }
+        return
+    }
+
     val logManager = YameLogManager(options.logLevels)
     try {
 
@@ -47,19 +60,6 @@ fun main(args: Array<String>) {
             it.dial(options.testNumber)
         }
         println("Tone test complete.")
-        return
-    }
-
-    if (options.listPorts) {
-        val ports = SerialConnection.availablePortDescriptors()
-        if (ports.isEmpty()) {
-            println("No serial ports found")
-        } else {
-            println("Available serial ports:")
-            ports.forEach { port ->
-                println("  ${port.systemPortName}\t${port.descriptivePortName}")
-            }
-        }
         return
     }
 
