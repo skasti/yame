@@ -28,3 +28,38 @@ application {
 tasks.test {
     useJUnitPlatform()
 }
+
+
+val yameGitCommit = providers.provider {
+    runCatching {
+        val process = ProcessBuilder("git", "rev-parse", "--short=8", "HEAD")
+            .redirectErrorStream(true)
+            .start()
+        val value = process.inputStream.bufferedReader().readText().trim()
+        if (process.waitFor() == 0 && value.isNotBlank()) value else "unknown"
+    }.getOrDefault("unknown")
+}
+
+val generatedBuildInfoDir = layout.buildDirectory.dir("generated/resources/buildInfo")
+val generateBuildInfo by tasks.registering {
+    inputs.property("version", project.version.toString())
+    inputs.property("gitCommit", yameGitCommit)
+    outputs.dir(generatedBuildInfoDir)
+
+    doLast {
+        val output = generatedBuildInfoDir.get().file("yame-build.properties").asFile
+        output.parentFile.mkdirs()
+        output.writeText(
+            "version=${project.version}\n" +
+                "gitCommit=${yameGitCommit.get()}\n"
+        )
+    }
+}
+
+sourceSets.named("main") {
+    resources.srcDir(generatedBuildInfoDir)
+}
+
+tasks.processResources {
+    dependsOn(generateBuildInfo)
+}
