@@ -1134,7 +1134,55 @@ class SystemHttpCompatibilityProxy(
                     effectiveBaseUri,
                 )
             } else {
+                recordAbsoluteBodyReferences(
+                    flow = flow,
+                    session = session,
+                    graphs = graphs,
+                    parentLegacyUri = parentLegacyUri,
+                    headers = headers,
+                    source = source,
+                )
                 rewriteBodyAbsoluteUrls(flow, source)
+            }
+        }
+    }
+
+    private fun recordAbsoluteBodyReferences(
+        flow: TcpProxyFlow,
+        session: SessionState,
+        graphs: List<NavigationResourceGraph>,
+        parentLegacyUri: URI,
+        headers: Map<String, List<String>>,
+        source: String,
+    ) {
+        if (graphs.isEmpty()) return
+        val contentType = firstHeader(headers, "content-type")
+            ?.substringBefore(';')
+            ?.trim()
+            ?.lowercase(Locale.ROOT)
+        ABSOLUTE_HTTP_URL_PATTERN.findAll(source).forEach { match ->
+            val upstreamUri = runCatching { URI(match.value) }.getOrNull() ?: return@forEach
+            val relation =
+                when (contentType) {
+                    "text/html", "application/xhtml+xml" -> bodyReferenceRelation(source, match.range.first)
+                    "text/css" -> ResourceRelation.OTHER_SUBRESOURCE
+                    else -> ResourceRelation.OTHER_SUBRESOURCE
+                }
+            val legacyValue = rewriteAbsoluteUrl(
+                flow = flow,
+                rawUrl = match.value,
+                hideRedirect = relation.role == ReferenceRole.SUBRESOURCE,
+            ) ?: return@forEach
+            val legacyUri = runCatching { URI(legacyValue) }.getOrNull() ?: return@forEach
+            graphs.forEach { graph ->
+                session.resources.discover(
+                    graph = graph,
+                    parentLegacyUri = parentLegacyUri,
+                    childLegacyUri = legacyUri,
+                    upstreamUri = upstreamUri,
+                    relation = relation,
+                    kind = resourceKindForRelation(relation),
+                )
             }
         }
     }
@@ -1800,6 +1848,9 @@ class SystemHttpCompatibilityProxy(
         }
     }
     private fun isActive(state: FlowState) = !closed && !state.cancelled && state.flow.generation >= minimumGeneration.get() && flows[state.flow] === state
+    internal fun resourceGraphSnapshots(flow: TcpProxyFlow): List<NavigationResourceGraphSnapshot> =
+        sessionStates[sessionKey(flow)]?.resources?.snapshots().orEmpty()
+
     override fun closeFlow(flow: TcpProxyFlow) { flows[flow]?.let(::removeFlow) }
 
     private fun cancelQueuedOrRunningTask(state: FlowState) {
