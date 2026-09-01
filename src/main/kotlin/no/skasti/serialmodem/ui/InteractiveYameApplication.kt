@@ -216,6 +216,8 @@ class InteractiveYameApplication(
 
         val modemFileLogger = logManager.logger(YameLogModule.MODEM)
         val pppFileLogger = logManager.logger(YameLogModule.PPP)
+        val dnsFileLogger = logManager.debugLogger(YameLogModule.DNS)
+        val transferFileLogger = logManager.debugLogger(YameLogModule.TRANSFERS)
         val proxyFileLogger = logManager.debugLogger(YameLogModule.PROXY)
         val serialFileLogger = logManager.logger(YameLogModule.SERIAL)
         val modem = HayesModem(
@@ -228,6 +230,14 @@ class InteractiveYameApplication(
             pppLogger = { message ->
                 observer.onLog(message)
                 pppFileLogger(message)
+            },
+            dnsLogger = { message ->
+                observer.onLog(message)
+                dnsFileLogger(message)
+            },
+            transferLogger = { message ->
+                observer.onLog(message)
+                transferFileLogger(message)
             },
             proxyLogger = proxyFileLogger,
             eventSink = { event ->
