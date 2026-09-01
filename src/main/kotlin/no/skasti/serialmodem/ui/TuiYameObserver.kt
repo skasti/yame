@@ -20,6 +20,7 @@ import no.skasti.serialmodem.observer.TransferState
 import no.skasti.serialmodem.observer.YameEvent
 import no.skasti.serialmodem.ppp.dns.dnsResponseCodeName
 import no.skasti.serialmodem.serial.SerialPortDescriptor
+import java.net.URI
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
@@ -53,7 +54,9 @@ class TuiYameObserver(
     private val logs = ArrayDeque<String>()
     private val dnsLookups = mutableListOf<DashboardDnsLookup>()
     private val transfers = linkedMapOf<String, DashboardTransfer>()
-    private val httpActivity = ArrayDeque<DashboardHttpActivity>()
+    private val httpHosts = linkedMapOf<String, LinkedHashSet<String>>()
+    private val expandedHttpHosts = linkedSetOf<String>()
+    private var selectedHttpHostIndex = 0
     private var commandPalette: TuiCommandPalette? = null
     private var keyboardInput: JLineKeyboardInput? = null
 
@@ -273,18 +276,42 @@ class TuiYameObserver(
             }
 
             is YameEvent.HttpProxyAction -> {
-                httpActivity.addLast(
-                    DashboardHttpActivity(
-                        time = LocalTime.now().format(TIME_FORMAT),
-                        kind = event.kind,
-                        message = event.message,
-                    ),
-                )
-                while (httpActivity.size > MAX_HTTP_LINES) {
-                    httpActivity.removeFirst()
-                }
+                recordHttpUrls(event.message)
             }
         }
+        render()
+    }
+
+    private fun recordHttpUrls(message: String) {
+        ABSOLUTE_URL_PATTERN.findAll(message).forEach { match ->
+            val uri = runCatching { URI(match.value.trimEnd('.', ',', ';', ')', ']')) }.getOrNull()
+                ?: return@forEach
+            val host = uri.host?.lowercase() ?: return@forEach
+            val urls = httpHosts.getOrPut(host) { linkedSetOf() }
+            urls += uri.toString()
+            while (urls.size > MAX_URLS_PER_HOST) urls.remove(urls.first())
+        }
+        while (httpHosts.size > MAX_HTTP_HOSTS) {
+            val oldest = httpHosts.keys.first()
+            httpHosts.remove(oldest)
+            expandedHttpHosts.remove(oldest)
+        }
+        selectedHttpHostIndex =
+            selectedHttpHostIndex.coerceIn(0, (httpHosts.size - 1).coerceAtLeast(0))
+    }
+
+    @Synchronized
+    private fun moveHttpHostSelection(delta: Int) {
+        if (httpHosts.isEmpty()) return
+        selectedHttpHostIndex =
+            (selectedHttpHostIndex + delta).coerceIn(0, httpHosts.size - 1)
+        render()
+    }
+
+    @Synchronized
+    private fun setSelectedHttpHostExpanded(expanded: Boolean) {
+        val host = httpHosts.keys.elementAtOrNull(selectedHttpHostIndex) ?: return
+        if (expanded) expandedHttpHosts += host else expandedHttpHosts -= host
         render()
     }
 
@@ -335,6 +362,10 @@ class TuiYameObserver(
                                     commandPalette != null -> handlePaletteKey(key)
                                     key == "/" -> openCommandPalette()
                                     key.equals("q", ignoreCase = true) -> requestQuit()
+                                    key == "ArrowUp" -> moveHttpHostSelection(-1)
+                                    key == "ArrowDown" -> moveHttpHostSelection(1)
+                                    key == "ArrowRight" || key == "Enter" -> setSelectedHttpHostExpanded(true)
+                                    key == "ArrowLeft" -> setSelectedHttpHostExpanded(false)
                                 }
                             }
                         } finally {
@@ -668,7 +699,14 @@ class TuiYameObserver(
                     logs = logs.toList(),
                     dnsLookups = dnsLookups.toList(),
                     transfers = transfers.values.toList(),
-                    httpActivity = httpActivity.toList(),
+                    httpHosts = httpHosts.map { (host, urls) ->
+                        DashboardHttpHost(
+                            host = host,
+                            urls = urls.toList(),
+                            expanded = host in expandedHttpHosts,
+                        )
+                    },
+                    selectedHttpHostIndex = selectedHttpHostIndex,
                     commandPalette = commandPalette,
                 ),
                 width = terminal.size.width,
@@ -694,7 +732,8 @@ class TuiYameObserver(
         const val MAX_LOG_LINES = 250
         const val MAX_DNS_LOOKUPS = 40
         const val MAX_TRANSFERS = 20
-        const val MAX_HTTP_LINES = 80
+        const val MAX_HTTP_HOSTS = 128
+        const val MAX_URLS_PER_HOST = 512
         const val INPUT_POLL_MILLIS = 200L
         const val ENTER_ALTERNATE_SCREEN = "\u001B[?1049h"
         const val LEAVE_ALTERNATE_SCREEN = "\u001B[?1049l"
@@ -702,6 +741,7 @@ class TuiYameObserver(
         const val SHOW_CURSOR = "\u001B[?25h"
         val TIME_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
         val COMMON_BAUD_RATES = listOf(9_600, 19_200, 38_400, 57_600, 115_200)
+        val ABSOLUTE_URL_PATTERN = Regex("""https?://[^\s"'<>]+""", RegexOption.IGNORE_CASE)
         val COMMAND_OPTIONS = listOf(
             TuiCommandOption("/port", "Select serial port", "/port"),
             TuiCommandOption("/baud", "Select baud rate", "/baud"),
@@ -759,10 +799,10 @@ internal data class DashboardTransfer(
         }
 }
 
-internal data class DashboardHttpActivity(
-    val time: String,
-    val kind: HttpProxyActionKind,
-    val message: String,
+internal data class DashboardHttpHost(
+    val host: String,
+    val urls: List<String>,
+    val expanded: Boolean,
 )
 
 internal enum class TuiPaletteMode {
@@ -797,7 +837,8 @@ internal data class DashboardState(
     val logs: List<String>,
     val dnsLookups: List<DashboardDnsLookup>,
     val transfers: List<DashboardTransfer>,
-    val httpActivity: List<DashboardHttpActivity>,
+    val httpHosts: List<DashboardHttpHost>,
+    val selectedHttpHostIndex: Int,
     val commandPalette: TuiCommandPalette?,
 )
 
@@ -918,7 +959,12 @@ internal object YameDashboardRenderer {
                 title = "HTTP / HTTPS compatibility proxy",
                 width = rightWidth,
                 height = lowerHeight,
-                lines = httpLines(state.httpActivity, lowerHeight - 2),
+                lines = httpHostLines(
+                    state.httpHosts,
+                    state.selectedHttpHostIndex,
+                    lowerHeight - 2,
+                    rightWidth - 4,
+                ),
                 styles = styles,
             )
         }
@@ -978,8 +1024,12 @@ internal object YameDashboardRenderer {
             ?.let {
                 lines += DashboardLine(compactTransfer(it), transferTone(it.state))
             }
-        state.httpActivity.lastOrNull()?.let {
-            lines += DashboardLine("HTTP ${it.message}", httpTone(it.kind))
+        state.httpHosts.getOrNull(state.selectedHttpHostIndex)?.let { host ->
+            val marker = if (host.expanded) "▼" else "▶"
+            lines += DashboardLine(
+                "HTTP $marker ${host.host} (${host.urls.size})",
+                DashboardTone.ACCENT,
+            )
         }
         state.logs.lastOrNull()?.let {
             lines += DashboardLine(it)
@@ -1081,29 +1131,51 @@ internal object YameDashboardRenderer {
             }
     }
 
-    private fun httpLines(
-        activity: List<DashboardHttpActivity>,
+    private fun httpHostLines(
+        hosts: List<DashboardHttpHost>,
+        selectedHostIndex: Int,
         visibleRows: Int,
+        contentWidth: Int,
     ): List<DashboardLine> {
-        if (activity.isEmpty()) {
-            return listOf(DashboardLine("(no compatibility proxy activity)", DashboardTone.MUTED))
+        if (hosts.isEmpty()) {
+            return listOf(DashboardLine("(no compatibility proxy hosts yet)", DashboardTone.MUTED))
         }
 
-        return activity
-            .takeLast(visibleRows.coerceAtLeast(1))
-            .map { item ->
-                val marker = when (item.kind) {
-                    HttpProxyActionKind.ROUTED -> "↪"
-                    HttpProxyActionKind.REQUEST -> "→"
-                    HttpProxyActionKind.REDIRECT -> "↻"
-                    HttpProxyActionKind.RESPONSE -> "←"
-                    HttpProxyActionKind.ERROR -> "!"
+        val selected = selectedHostIndex.coerceIn(0, hosts.lastIndex)
+        val allLines = mutableListOf<DashboardLine>()
+        hosts.forEachIndexed { index, host ->
+            val marker = if (host.expanded) "▼" else "▶"
+            val selection = if (index == selected) "›" else " "
+            allLines += DashboardLine(
+                clip("$selection $marker ${host.host}  (${host.urls.size})", contentWidth),
+                if (index == selected) DashboardTone.SELECTED else DashboardTone.ACCENT,
+            )
+            if (host.expanded) {
+                host.urls.forEach { url ->
+                    val path = runCatching { URI(url) }.getOrNull()?.let { uri ->
+                        buildString {
+                            append(uri.rawPath?.takeIf { it.isNotEmpty() } ?: "/")
+                            uri.rawQuery?.let { append('?').append(it) }
+                        }
+                    } ?: url
+                    allLines += DashboardLine(
+                        clip("    $path", contentWidth),
+                        DashboardTone.MUTED,
+                    )
                 }
-                DashboardLine(
-                    "${item.time} $marker ${item.message}",
-                    httpTone(item.kind),
-                )
             }
+        }
+
+        var selectedLine = 0
+        for (index in 0 until selected) {
+            selectedLine += 1 + if (hosts[index].expanded) hosts[index].urls.size else 0
+        }
+        val start = viewportStart(
+            selectedIndex = selectedLine.coerceIn(0, (allLines.size - 1).coerceAtLeast(0)),
+            itemCount = allLines.size,
+            visibleRows = visibleRows.coerceAtLeast(1),
+        )
+        return allLines.drop(start).take(visibleRows.coerceAtLeast(1))
     }
 
     private fun paletteLines(
