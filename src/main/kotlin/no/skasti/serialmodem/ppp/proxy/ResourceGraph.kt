@@ -58,18 +58,18 @@ internal data class NavigationResourceGraphSnapshot(
     val edges: List<ResourceEdgeSnapshot>,
 )
 
-internal data class ResourceRegistryRoot(
+data class ResourceRegistryRoot(
     val graphId: Long,
     val rootLegacyUri: URI,
 )
 
-internal data class ResourceRegistryResource(
+data class ResourceRegistryResource(
     val graphId: Long,
     val rootLegacyUri: URI,
-    val resource: ResourceNodeSnapshot,
+    val resourceLegacyUri: URI,
 )
 
-internal class ResourceRegistryEvent<T> {
+class ResourceRegistryEvent<T> {
     private val handlers = linkedSetOf<(T) -> Unit>()
 
     @Synchronized
@@ -88,7 +88,7 @@ internal class ResourceRegistryEvent<T> {
     }
 }
 
-internal class ResourceRegistryHooks {
+class ResourceRegistryHooks {
     val onRootAdded = ResourceRegistryEvent<ResourceRegistryRoot>()
     val onRootRemoved = ResourceRegistryEvent<ResourceRegistryRoot>()
     val onRootUsed = ResourceRegistryEvent<ResourceRegistryRoot>()
@@ -279,7 +279,7 @@ internal class NavigationResourceRegistry(
             if (key !in before) {
                 graph.snapshot().nodes.firstOrNull { LegacyHttpUrl.requestObservableKey(it.legacyUri) == key }?.let { resource ->
                     hooks.onResourceAdded.fire(
-                        ResourceRegistryResource(graph.id, graph.rootLegacyUri, resource),
+                        ResourceRegistryResource(graph.id, graph.rootLegacyUri, resource.legacyUri),
                     )
                 }
             }
@@ -295,7 +295,7 @@ internal class NavigationResourceRegistry(
         val removedSnapshot = removed.snapshot()
         removedSnapshot.nodes.forEach { resource ->
             hooks.onResourceRemoved.fire(
-                ResourceRegistryResource(removedSnapshot.id, removedSnapshot.rootLegacyUri, resource),
+                ResourceRegistryResource(removedSnapshot.id, removedSnapshot.rootLegacyUri, resource.legacyUri),
             )
         }
         hooks.onRootRemoved.fire(ResourceRegistryRoot(removedSnapshot.id, removedSnapshot.rootLegacyUri))
