@@ -6,9 +6,10 @@ import no.skasti.serialmodem.ppp.proxy.cookies.BoundedCookieOverrides
 import no.skasti.serialmodem.ppp.proxy.cookies.BoundedCookieStore
 import no.skasti.serialmodem.ppp.proxy.cookies.CookieOverride
 import no.skasti.serialmodem.ppp.proxy.routing.LegacyOriginRouteTable
-import no.skasti.serialmodem.ppp.proxy.transform.LegacyTextPayloadTransformer
-import no.skasti.serialmodem.ppp.proxy.transform.PayloadTransformationContext
-import no.skasti.serialmodem.ppp.proxy.transform.PayloadTransformationPipeline
+import no.skasti.serialmodem.ppp.proxy.transform.LegacyTextResourceTransformer
+import no.skasti.serialmodem.ppp.proxy.transform.ResourceRepresentation
+import no.skasti.serialmodem.ppp.proxy.transform.ResourceTransformationContext
+import no.skasti.serialmodem.ppp.proxy.transform.ResourceTransformationPipeline
 import no.skasti.serialmodem.ppp.tcp.TcpProxy
 import no.skasti.serialmodem.ppp.tcp.TcpProxyEvent
 import no.skasti.serialmodem.ppp.tcp.TcpProxyFlow
@@ -97,7 +98,7 @@ internal class SystemHttpCompatibilityProxy(
     private val flows = ConcurrentHashMap<TcpProxyFlow, FlowState>()
     private val sessionStates = ConcurrentHashMap<SessionKey, SessionState>()
     private val originRoutes = LegacyOriginRouteTable()
-    private val payloadTransformations = PayloadTransformationPipeline(listOf(LegacyTextPayloadTransformer()))
+    private val resourceTransformations = ResourceTransformationPipeline(listOf(LegacyTextResourceTransformer()))
     private val minimumGeneration = AtomicLong(Long.MIN_VALUE)
     @Volatile private var closed = false
 
@@ -445,8 +446,29 @@ internal class SystemHttpCompatibilityProxy(
                         response.body().close()
                         FinalResponseBody.Buffered(ByteArray(0))
                     }
-                    status != 206 && payloadTransformations.supports(
-                        PayloadTransformationContext(responseHeaders) { it },
+                    status != 206 && resourceTransformations.supports(
+                        ResourceTransformationContext(
+                            navigationIds = state.session.resources.contextsFor(legacyUri).map { it.id }.toSet(),
+                            legacyUri = legacyUri,
+                            upstreamUri = uri,
+                            kind = state.session.resources.contextsFor(legacyUri)
+                                .firstNotNullOfOrNull { it.nodeSnapshot(legacyUri)?.kind }
+                                ?: if (referenceRole == ReferenceRole.NAVIGATION) ResourceKind.DOCUMENT else ResourceKind.OTHER,
+                            relation = state.session.resources.contextsFor(legacyUri)
+                                .asSequence()
+                                .flatMap { it.snapshot().edges.asSequence() }
+                                .firstOrNull { it.childLegacyUri == legacyUri }
+                                ?.relation,
+                            role = referenceRole,
+                            requestHeaders = request.headers
+                                .groupBy({ it.first.lowercase(Locale.ROOT) }, { it.second }),
+                            rewriteText = { it },
+                        ),
+                        ResourceRepresentation(
+                            statusCode = status,
+                            headers = responseHeaders,
+                            body = ByteArray(0),
+                        ),
                     ) -> {
                         if (upstreamContentLength > config.maxResponseBytes.toLong()) {
                             response.body().close()
@@ -644,21 +666,39 @@ internal class SystemHttpCompatibilityProxy(
         forceAbsoluteRelativeReferences: Boolean,
     ): ByteArray {
         if (body.isEmpty()) return body
-        return payloadTransformations.transform(
-            PayloadTransformationContext(headers) { source ->
-                rewriteBodyUrlsWithBase(
-                    flow = flow,
-                    session = session,
-                    graphs = graphs,
-                    parentLegacyUri = parentLegacyUri,
-                    headers = headers,
-                    source = source,
-                    baseUri = resolutionBaseUri,
-                    forceAbsoluteRelativeReferences = forceAbsoluteRelativeReferences,
-                )
-            },
-            body,
-        )
+        return resourceTransformations.transform(
+            ResourceTransformationContext(
+                navigationIds = graphs.map { it.id }.toSet(),
+                legacyUri = parentLegacyUri,
+                upstreamUri = resolutionBaseUri,
+                kind = graphs.firstNotNullOfOrNull { it.nodeSnapshot(parentLegacyUri)?.kind }
+                    ?: ResourceKind.OTHER,
+                relation = graphs.asSequence()
+                    .flatMap { it.snapshot().edges.asSequence() }
+                    .firstOrNull { it.childLegacyUri == parentLegacyUri }
+                    ?.relation,
+                role = graphs.firstNotNullOfOrNull { it.nodeSnapshot(parentLegacyUri)?.role }
+                    ?: ReferenceRole.SUBRESOURCE,
+                requestHeaders = emptyMap(),
+                rewriteText = { source ->
+                    rewriteBodyUrlsWithBase(
+                        flow = flow,
+                        session = session,
+                        graphs = graphs,
+                        parentLegacyUri = parentLegacyUri,
+                        headers = headers,
+                        source = source,
+                        baseUri = resolutionBaseUri,
+                        forceAbsoluteRelativeReferences = forceAbsoluteRelativeReferences,
+                    )
+                },
+            ),
+            ResourceRepresentation(
+                statusCode = 200,
+                headers = headers,
+                body = body,
+            ),
+        ).body
     }
 
     private fun recordAbsoluteBodyReferences(
