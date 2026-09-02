@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1320" height="760" viewBox="0 0 1320 760">
+  <rect width="1320" height="760" rx="14" fill="#0d1117"/>
+  <rect x="1" y="1" width="1318" height="758" rx="13" fill="none" stroke="#30363d"/>
+  <text x="28" y="42" fill="#58a6ff" font-family="Consolas, 'Liberation Mono', Menlo, monospace" font-size="20" font-weight="700">[ YAME 0.1.x  •  COM3 @ 115200  •  CONNECTED  •  DNS 8.8.8.8  •  HTTP proxy ON ]</text>
+
+  <g font-family="Consolas, 'Liberation Mono', Menlo, monospace" font-size="16">
+    <rect x="26" y="68" width="690" height="610" rx="4" fill="none" stroke="#58a6ff"/>
+    <text x="46" y="96" fill="#58a6ff" font-weight="700">Log</text>
+    <text x="48" y="132" fill="#c9d1d9">12:21:03  MODEM connected</text>
+    <text x="48" y="164" fill="#c9d1d9">12:21:03  PPP data mode active</text>
+    <text x="48" y="196" fill="#c9d1d9">12:21:04  PPP IP local=10.0.0.1 peer=10.0.0.2</text>
+    <text x="48" y="228" fill="#c9d1d9">12:21:05  LCP open</text>
+    <text x="48" y="260" fill="#c9d1d9">12:21:06  IPCP open</text>
+    <text x="48" y="292" fill="#c9d1d9">12:21:09  DNS A nrk.no → NOERROR</text>
+    <text x="48" y="324" fill="#c9d1d9">12:21:11  TCP 10.0.0.2:49152 → 185.125.177.49:80</text>
+    <text x="48" y="356" fill="#c9d1d9">12:21:12  HTTP compatibility request started</text>
+
+    <rect x="738" y="68" width="556" height="176" rx="4" fill="none" stroke="#58a6ff"/>
+    <text x="758" y="96" fill="#58a6ff" font-weight="700">DNS lookups</text>
+    <text x="760" y="132" fill="#3fb950">U A     nrk.no                 NOERROR  1 ans</text>
+    <text x="760" y="164" fill="#3fb950">U A     gfx.nrk.no             NOERROR  1 ans</text>
+    <text x="760" y="196" fill="#3fb950">U A     vg.no                  NOERROR  1 ans</text>
+
+    <rect x="738" y="260" width="556" height="176" rx="4" fill="none" stroke="#58a6ff"/>
+    <text x="758" y="288" fill="#58a6ff" font-weight="700">Transfers</text>
+    <text x="760" y="324" fill="#d29922">● TCP 185.125.177.49:80  ↑1.2K ↓73.4K  10.8 KiB/s</text>
+    <text x="760" y="356" fill="#3fb950">✓ TCP 151.101.1.67:80   ↑0.9K ↓12.4K  5.6 KiB/s</text>
+
+    <rect x="738" y="452" width="556" height="226" rx="4" fill="none" stroke="#3fb950" stroke-width="2"/>
+    <text x="758" y="480" fill="#3fb950" font-weight="700">HTTP / HTTPS compatibility proxy</text>
+    <rect x="752" y="496" width="522" height="30" rx="3" fill="#238636"/>
+    <text x="764" y="518" fill="#ffffff" font-weight="700">› ▶ nrk.no                 (6)</text>
+    <text x="764" y="554" fill="#c9d1d9">  ▶ gfx.nrk.no             (3)</text>
+    <text x="764" y="586" fill="#c9d1d9">  ▶ vg.no                  (4)</text>
+    <text x="764" y="618" fill="#c9d1d9">  ▶ example.org            (1)</text>
+    <text x="764" y="650" fill="#8b949e">  ▶ github.com             (2)</text>
+  </g>
+
+  <text x="28" y="732" fill="#8b949e" font-family="Consolas, 'Liberation Mono', Menlo, monospace" font-size="16">[/] commands   [↑/↓] select host   [Enter/→] expand   [←] collapse   [q/Ctrl-C] quit</text>
+</svg>
