@@ -21,6 +21,7 @@ internal data class ResourceTransformationContext(
     val relation: ResourceRelation?,
     val role: ReferenceRole,
     val requestHeaders: Map<String, List<String>>,
+    val requestMethod: String,
     val transformationProfile: String,
     val rewriteText: (String) -> String,
 )
