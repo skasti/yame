@@ -909,6 +909,44 @@ class HttpCompatibilityProxyTest {
     }
 
     @Test
+    fun `partial content bypasses resource transformations`() {
+        val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val body = "https://example.test/partial"
+        val thread = serveOnce(server) {
+            "HTTP/1.1 206 Partial Content\r\n" +
+                "Content-Type: text/html\r\n" +
+                "Content-Range: bytes 0-27/100\r\n" +
+                "Content-Length: ${body.toByteArray(StandardCharsets.ISO_8859_1).size}\r\n" +
+                "Connection: close\r\n\r\n" +
+                body
+        }
+        val proxy = SystemHttpCompatibilityProxy(
+            config = PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000),
+        )
+        val events = LinkedBlockingQueue<TcpProxyEvent>()
+        val flow = httpFlow(peerPort = 2198)
+
+        try {
+            proxy.connect(flow, events::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(events.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                flow,
+                ("GET /partial HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\n\r\n")
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+
+            val response = collectResponse(events)
+            assertTrue(response.startsWith("HTTP/1.0 206 Partial Content\r\n"), response)
+            assertTrue(response.endsWith(body), response)
+            assertTrue(response.contains("https://example.test/partial"), response)
+        } finally {
+            proxy.close()
+            runCatching { server.close() }
+            thread.join(2_000)
+        }
+    }
+
+    @Test
     fun `compatibility proxy keeps rewrite cap for navigable text responses`() {
         val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
         val body = "<html><a href=\"https://example.test/path\">link</a></html>"
