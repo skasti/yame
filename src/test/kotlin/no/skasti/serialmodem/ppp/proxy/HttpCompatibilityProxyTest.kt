@@ -834,7 +834,7 @@ class HttpCompatibilityProxyTest {
         val proxy = SystemHttpCompatibilityProxy(
             config = PppHttpCompatibilityConfig(
                 requestTimeoutMillis = 2_000,
-                maxResponseBytes = 16,
+                maxResponseBytes = 1024,
             ),
         )
         val events = LinkedBlockingQueue<TcpProxyEvent>()
@@ -860,7 +860,7 @@ class HttpCompatibilityProxyTest {
     }
 
     @Test
-    fun `partial streamed response closes without appending a second HTTP response`() {
+    fun `truncated buffered response fails before emitting a partial HTTP response`() {
         val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
         val thread = Thread {
             server.use { listening ->
@@ -898,9 +898,9 @@ class HttpCompatibilityProxyTest {
             ).getOrThrow()
 
             val response = collectResponse(events)
-            assertTrue(response.startsWith("HTTP/1.0 200 OK\r\n"), response)
+            assertTrue(response.startsWith("HTTP/1.0 502 Bad Gateway\r\n"), response)
             assertEquals(1, Regex("HTTP/1\\.0 ").findAll(response).count(), response)
-            assertTrue(!response.contains("502 Bad Gateway"), response)
+            assertTrue(!response.contains("HTTP/1.0 200 OK"), response)
         } finally {
             proxy.close()
             runCatching { server.close() }
