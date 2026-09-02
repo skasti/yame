@@ -40,9 +40,9 @@ class ResourceRepresentationCacheTest {
         assertTrue(cache.put(third, representation(byteArrayOf(3, 3, 3))))
 
         assertNull(cache.get(second))
-        assertNull(cache.get(first))
+        assertContentEquals(byteArrayOf(1, 1), requireNotNull(cache.get(first)).body)
         assertContentEquals(byteArrayOf(3, 3, 3), requireNotNull(cache.get(third)).body)
-        assertEquals(1 to 3L, cache.snapshot())
+        assertEquals(2 to 5L, cache.snapshot())
     }
 
     @Test
