@@ -16,7 +16,6 @@ import no.skasti.serialmodem.ppp.proxy.transform.ResourceWorkKey
 import no.skasti.serialmodem.ppp.proxy.transform.ResourceRepresentation
 import no.skasti.serialmodem.ppp.proxy.transform.cachePolicyFrom
 import no.skasti.serialmodem.ppp.proxy.transform.validatorsFrom
-import no.skasti.serialmodem.ppp.proxy.transform.sameSourceRepresentation
 import no.skasti.serialmodem.ppp.proxy.transform.sourceFingerprint
 import no.skasti.serialmodem.ppp.proxy.transform.ResourceTransformationContext
 import no.skasti.serialmodem.ppp.proxy.transform.ResourceTransformationPipeline
@@ -683,6 +682,8 @@ internal class SystemHttpCompatibilityProxy(
                     body = body,
                 ),
             )
+        if (statusCode == 206) return source.representation
+
         val context =
             ResourceTransformationContext(
                 navigationIds = graphs.map { it.id }.toSet(),
@@ -724,19 +725,20 @@ internal class SystemHttpCompatibilityProxy(
                 upstreamUri = upstreamUri,
                 profile = config.transformationProfile,
             )
+        val fingerprint = sourceFingerprint(source.source)
         resourceCache.get(cacheKey)
-            ?.takeIf { cached -> sameSourceRepresentation(cached.resource.source, source.source) }
+            ?.takeIf { cached -> sourceFingerprint(cached.resource.source) == fingerprint }
             ?.let { return it.resource.representation }
 
         val workKey =
             ResourceWorkKey(
                 cacheKey = cacheKey,
-                sourceFingerprint = sourceFingerprint(source.source),
+                sourceFingerprint = fingerprint,
             )
         val transformed =
             inFlightResourceWork.getOrStart(workKey) {
                 resourceCache.get(cacheKey)
-                    ?.takeIf { cached -> sameSourceRepresentation(cached.resource.source, source.source) }
+                    ?.takeIf { cached -> sourceFingerprint(cached.resource.source) == fingerprint }
                     ?.let {
                         return@getOrStart no.skasti.serialmodem.ppp.proxy.transform.ResourceTransformationState(it.resource)
                     }
