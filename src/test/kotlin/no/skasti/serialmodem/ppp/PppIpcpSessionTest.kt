@@ -2,6 +2,8 @@ package no.skasti.serialmodem.ppp
 
 import no.skasti.serialmodem.ppp.ip.Ipv4Address
 import no.skasti.serialmodem.ppp.ip.Ipv4Cidr
+import no.skasti.serialmodem.ppp.ipcp.IPCP_IP_COMPRESSION_PROTOCOL
+import no.skasti.serialmodem.ppp.ipcp.IpcpOptionType
 import no.skasti.serialmodem.ppp.session.PppSession
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -23,7 +25,7 @@ class PppIpcpSessionTest {
         assertEquals(PppControlPacket.CONFIGURE_REQUEST, request.code)
 
         val option = requireNotNull(PppControlOption.parseAll(request.data)).single()
-        assertEquals(PppControlOption.IPCP_IP_ADDRESS, option.type)
+        assertEquals(IpcpOptionType.IPCP_IP_ADDRESS, option.type)
         assertEquals(Ipv4Address.parse("10.0.0.1"), Ipv4Address.fromBytes(option.data))
         assertFalse(session.ipcpOpen)
         session.close()
@@ -164,7 +166,7 @@ class PppIpcpSessionTest {
         val nak = sent.last().let { requireNotNull(PppControlPacket.parse(it.payload)) }
         assertEquals(PppControlPacket.CONFIGURE_NAK, nak.code)
         val dns = requireNotNull(PppControlOption.parseAll(nak.data)).single()
-        assertEquals(PppControlOption.IPCP_PRIMARY_DNS, dns.type)
+        assertEquals(IpcpOptionType.IPCP_PRIMARY_DNS, dns.type)
         assertEquals(Ipv4Address.parse("10.0.0.1"), Ipv4Address.fromBytes(dns.data))
         session.close()
     }
@@ -177,15 +179,15 @@ class PppIpcpSessionTest {
 
         val data =
             PppControlOption(
-                type = PppControlOption.IPCP_IP_ADDRESS,
+                type = IpcpOptionType.IPCP_IP_ADDRESS,
                 data = Ipv4Address.parse("10.0.0.2").toByteArray(),
             ).encode() +
                 PppControlOption(
-                    type = PppControlOption.IPCP_PRIMARY_DNS,
+                    type = IpcpOptionType.IPCP_PRIMARY_DNS,
                     data = Ipv4Address.ZERO.toByteArray(),
                 ).encode() +
                 PppControlOption(
-                    type = PppControlOption.IPCP_SECONDARY_DNS,
+                    type = IpcpOptionType.IPCP_SECONDARY_DNS,
                     data = Ipv4Address.parse("8.8.8.8").toByteArray(),
                 ).encode()
         session.receive(
@@ -202,7 +204,7 @@ class PppIpcpSessionTest {
         val nak = sent.last().let { requireNotNull(PppControlPacket.parse(it.payload)) }
         val options = requireNotNull(PppControlOption.parseAll(nak.data))
         assertEquals(
-            listOf(PppControlOption.IPCP_PRIMARY_DNS, PppControlOption.IPCP_SECONDARY_DNS),
+            listOf(IpcpOptionType.IPCP_PRIMARY_DNS, IpcpOptionType.IPCP_SECONDARY_DNS),
             options.map { it.type },
         )
         assertTrue(options.all { Ipv4Address.fromBytes(it.data) == Ipv4Address.parse("10.0.0.1") })
@@ -225,7 +227,7 @@ class PppIpcpSessionTest {
         val nak = sent.last().let { requireNotNull(PppControlPacket.parse(it.payload)) }
         assertEquals(PppControlPacket.CONFIGURE_NAK, nak.code)
         val suggested = requireNotNull(PppControlOption.parseAll(nak.data)).single()
-        assertEquals(PppControlOption.IPCP_PRIMARY_DNS, suggested.type)
+        assertEquals(IpcpOptionType.IPCP_PRIMARY_DNS, suggested.type)
         assertEquals(Ipv4Address.parse("10.0.0.1"), Ipv4Address.fromBytes(suggested.data))
 
         session.receive(
@@ -248,7 +250,7 @@ class PppIpcpSessionTest {
         openLcp(session, sent)
 
         val compression = PppControlOption(
-            type = PppControlOption.IPCP_IP_COMPRESSION_PROTOCOL,
+            type = IpcpOptionType.IPCP_IP_COMPRESSION_PROTOCOL,
             data = byteArrayOf(0x00, 0x2d),
         )
         session.receive(
@@ -322,12 +324,12 @@ class PppIpcpSessionTest {
     ): PppFrame {
         val data =
             PppControlOption(
-                type = PppControlOption.IPCP_IP_ADDRESS,
+                type = IpcpOptionType.IPCP_IP_ADDRESS,
                 data = address.toByteArray(),
             ).encode() +
                 (dnsAddress?.let {
                     PppControlOption(
-                        type = PppControlOption.IPCP_PRIMARY_DNS,
+                        type = IpcpOptionType.IPCP_PRIMARY_DNS,
                         data = it.toByteArray(),
                     ).encode()
                 } ?: ByteArray(0))

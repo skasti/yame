@@ -8,6 +8,7 @@ import no.skasti.serialmodem.observer.YameEvent
 import no.skasti.serialmodem.ppp.ip.Ipv4Address
 import no.skasti.serialmodem.ppp.ip.Ipv4Cidr
 import no.skasti.serialmodem.ppp.ip.Ipv4Packet
+import no.skasti.serialmodem.ppp.ipcp.IpcpOptionType
 import no.skasti.serialmodem.ppp.lcp.LcpOption
 import no.skasti.serialmodem.ppp.lcp.LcpPacket
 import no.skasti.serialmodem.ppp.PppAddresses
@@ -21,6 +22,7 @@ import no.skasti.serialmodem.ppp.dns.summarizeDnsMessage
 import no.skasti.serialmodem.ppp.icmp.IcmpEchoProxy
 import no.skasti.serialmodem.ppp.icmp.IcmpPacket
 import no.skasti.serialmodem.ppp.icmp.SystemPingIcmpEchoProxy
+import no.skasti.serialmodem.ppp.lcp.LcpOptionType
 import no.skasti.serialmodem.ppp.tcp.SystemTcpProxy
 import no.skasti.serialmodem.ppp.tcp.TcpFlowEvent
 import no.skasti.serialmodem.ppp.tcp.TcpFlowKey
@@ -263,11 +265,11 @@ class PppSession(
 
     private fun isSupportedPeerOption(option: LcpOption): Boolean =
         when (option.type) {
-            LcpOption.MRU -> option.data.size == 2
-            LcpOption.ACCM -> option.data.size == 4
-            LcpOption.MAGIC_NUMBER -> option.data.size == 4
-            LcpOption.PROTOCOL_FIELD_COMPRESSION,
-            LcpOption.ADDRESS_CONTROL_FIELD_COMPRESSION,
+            LcpOptionType.MRU -> option.data.size == 2
+            LcpOptionType.ACCM -> option.data.size == 4
+            LcpOptionType.MAGIC_NUMBER -> option.data.size == 4
+            LcpOptionType.PROTOCOL_FIELD_COMPRESSION,
+            LcpOptionType.ADDRESS_CONTROL_FIELD_COMPRESSION,
             -> option.data.isEmpty()
             else -> false
         }
@@ -280,13 +282,13 @@ class PppSession(
 
         for (option in options) {
             when (option.type) {
-                LcpOption.MRU -> {
+                LcpOptionType.MRU -> {
                     transmitMru =
                         ((option.data[0].toInt() and 0xff) shl 8) or
                             (option.data[1].toInt() and 0xff)
                 }
 
-                LcpOption.ACCM -> {
+                LcpOptionType.ACCM -> {
                     transmitAccm =
                         ((option.data[0].toUInt() and 0xffu) shl 24) or
                             ((option.data[1].toUInt() and 0xffu) shl 16) or
@@ -294,10 +296,10 @@ class PppSession(
                             (option.data[3].toUInt() and 0xffu)
                 }
 
-                LcpOption.PROTOCOL_FIELD_COMPRESSION ->
+                LcpOptionType.PROTOCOL_FIELD_COMPRESSION ->
                     transmitProtocolFieldCompression = true
 
-                LcpOption.ADDRESS_CONTROL_FIELD_COMPRESSION ->
+                LcpOptionType.ADDRESS_CONTROL_FIELD_COMPRESSION ->
                     transmitAddressControlFieldCompression = true
             }
         }
@@ -316,7 +318,7 @@ class PppSession(
         nextLcpIdentifier = (nextLcpIdentifier + 1) and 0xff
 
         val accm = LcpOption(
-            type = LcpOption.ACCM,
+            type = LcpOptionType.ACCM,
             data = byteArrayOf(0x00, 0x00, 0x00, 0x00),
         )
         localConfigureRequest = LcpPacket(
@@ -1423,7 +1425,7 @@ class PppSession(
         }
 
         val nakOptions = mutableListOf<PppControlOption>()
-        val addressOption = options.firstOrNull { it.type == PppControlOption.IPCP_IP_ADDRESS }
+        val addressOption = options.firstOrNull { it.type == IpcpOptionType.IPCP_IP_ADDRESS }
         val requestedAddress = addressOption
             ?.let { Ipv4Address.fromBytes(it.data) }
             ?: Ipv4Address.ZERO
@@ -1432,22 +1434,22 @@ class PppSession(
 
         for (option in options) {
             when (option.type) {
-                PppControlOption.IPCP_IP_ADDRESS -> {
+                IpcpOptionType.IPCP_IP_ADDRESS -> {
                     if (
                         requestedAddress == Ipv4Address.ZERO ||
                         requestedAddress != selectedAddress
                     ) {
                         nakOptions += PppControlOption(
-                            type = PppControlOption.IPCP_IP_ADDRESS,
+                            type = IpcpOptionType.IPCP_IP_ADDRESS,
                             data = selectedAddress.toByteArray(),
                         )
                     }
                 }
 
-                PppControlOption.IPCP_PRIMARY_DNS,
-                PppControlOption.IPCP_SECONDARY_DNS,
+                IpcpOptionType.IPCP_PRIMARY_DNS,
+                IpcpOptionType.IPCP_SECONDARY_DNS,
                 -> {
-                    if (option.type == PppControlOption.IPCP_PRIMARY_DNS) {
+                    if (option.type == IpcpOptionType.IPCP_PRIMARY_DNS) {
                         primaryDnsSeen = true
                         ipcpDnsPrompted = true
                         ipcpDnsPromptRequestIdentifier = null
@@ -1466,7 +1468,7 @@ class PppSession(
 
         if (addressOption == null) {
             nakOptions += PppControlOption(
-                type = PppControlOption.IPCP_IP_ADDRESS,
+                type = IpcpOptionType.IPCP_IP_ADDRESS,
                 data = selectedAddress.toByteArray(),
             )
         }
@@ -1477,7 +1479,7 @@ class PppSession(
                 ipcpDnsPromptRequestData?.contentEquals(packet.data) == true
         if (!primaryDnsSeen && (!ipcpDnsPrompted || repeatedDnsPromptRequest)) {
             nakOptions += PppControlOption(
-                type = PppControlOption.IPCP_PRIMARY_DNS,
+                type = IpcpOptionType.IPCP_PRIMARY_DNS,
                 data = localIpAddress.toByteArray(),
             )
             if (!ipcpDnsPrompted) {
@@ -1525,9 +1527,9 @@ class PppSession(
 
     private fun isSupportedPeerIpcpOption(option: PppControlOption): Boolean =
         when (option.type) {
-            PppControlOption.IPCP_IP_ADDRESS,
-            PppControlOption.IPCP_PRIMARY_DNS,
-            PppControlOption.IPCP_SECONDARY_DNS,
+            IpcpOptionType.IPCP_IP_ADDRESS,
+            IpcpOptionType.IPCP_PRIMARY_DNS,
+            IpcpOptionType.IPCP_SECONDARY_DNS,
             -> option.data.size == 4
 
             else -> false
@@ -1569,7 +1571,7 @@ class PppSession(
         nextIpcpIdentifier = (nextIpcpIdentifier + 1) and 0xff
 
         val address = PppControlOption(
-            type = PppControlOption.IPCP_IP_ADDRESS,
+            type = IpcpOptionType.IPCP_IP_ADDRESS,
             data = localIpAddress.toByteArray(),
         )
         localIpcpConfigureRequest = PppControlPacket(

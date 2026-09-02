@@ -24,7 +24,7 @@ class PppSessionTest {
 
         val options = requireNotNull(LcpOption.parseAll(packet.data))
         assertEquals(1, options.size)
-        assertEquals(LcpOption.ACCM, options.single().type)
+        assertEquals(LcpOptionType.ACCM, options.single().type)
         assertContentEquals(byteArrayOf(0, 0, 0, 0), options.single().data)
     }
 

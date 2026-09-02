@@ -208,7 +208,7 @@ class HttpCompatibilityPppIntegrationTest {
                     code = LcpPacket.CONFIGURE_REQUEST,
                     identifier = 0x1c,
                     data = LcpOption(
-                        type = LcpOption.ACCM,
+                        type = LcpOptionType.ACCM,
                         data = byteArrayOf(0, 0, 0, 0),
                     ).encode(),
                 ).encode(),
@@ -240,11 +240,11 @@ class HttpCompatibilityPppIntegrationTest {
                     identifier = 9,
                     data =
                         PppControlOption(
-                            type = PppControlOption.IPCP_IP_ADDRESS,
+                            type = IpcpOptionType.IPCP_IP_ADDRESS,
                             data = PEER.toByteArray(),
                         ).encode() +
                                 PppControlOption(
-                                    type = PppControlOption.IPCP_PRIMARY_DNS,
+                                    type = IpcpOptionType.IPCP_PRIMARY_DNS,
                                     data = YAME.toByteArray(),
                                 ).encode(),
                 ).encode(),

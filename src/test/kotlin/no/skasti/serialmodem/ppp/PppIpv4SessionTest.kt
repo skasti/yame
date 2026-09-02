@@ -204,11 +204,11 @@ class PppIpv4SessionTest {
                     identifier = 10,
                     data =
                         PppControlOption(
-                            type = PppControlOption.IPCP_IP_ADDRESS,
+                            type = IpcpOptionType.IPCP_IP_ADDRESS,
                             data = Ipv4Address.parse("10.0.0.2").toByteArray(),
                         ).encode() +
                                 PppControlOption(
-                                    type = PppControlOption.IPCP_PRIMARY_DNS,
+                                    type = IpcpOptionType.IPCP_PRIMARY_DNS,
                                     data = Ipv4Address.parse("10.0.0.1").toByteArray(),
                                 ).encode(),
                 ).encode(),
@@ -431,11 +431,11 @@ class PppIpv4SessionTest {
                     identifier = 10,
                     data =
                         PppControlOption(
-                            type = PppControlOption.IPCP_IP_ADDRESS,
+                            type = IpcpOptionType.IPCP_IP_ADDRESS,
                             data = source.toByteArray(),
                         ).encode() +
                                 PppControlOption(
-                                    type = PppControlOption.IPCP_PRIMARY_DNS,
+                                    type = IpcpOptionType.IPCP_PRIMARY_DNS,
                                     data = Ipv4Address.parse("10.0.0.1").toByteArray(),
                                 ).encode(),
                 ).encode(),
@@ -928,11 +928,11 @@ class PppIpv4SessionTest {
                     identifier = 11,
                     data =
                         PppControlOption(
-                            type = PppControlOption.IPCP_IP_ADDRESS,
+                            type = IpcpOptionType.IPCP_IP_ADDRESS,
                             data = peer.toByteArray(),
                         ).encode() +
                                 PppControlOption(
-                                    type = PppControlOption.IPCP_PRIMARY_DNS,
+                                    type = IpcpOptionType.IPCP_PRIMARY_DNS,
                                     data = Ipv4Address.parse("10.0.0.1").toByteArray(),
                                 ).encode(),
                 ).encode(),
@@ -1002,7 +1002,7 @@ class PppIpv4SessionTest {
             }
             add(
                 LcpOption(
-                    type = LcpOption.ACCM,
+                    type = LcpOptionType.ACCM,
                     data = byteArrayOf(0x00, 0x00, 0x00, 0x00),
                 ),
             )
@@ -1044,11 +1044,11 @@ class PppIpv4SessionTest {
                     identifier = 9,
                     data =
                         PppControlOption(
-                            type = PppControlOption.IPCP_IP_ADDRESS,
+                            type = IpcpOptionType.IPCP_IP_ADDRESS,
                             data = Ipv4Address.parse("10.0.0.2").toByteArray(),
                         ).encode() +
                                 PppControlOption(
-                                    type = PppControlOption.IPCP_PRIMARY_DNS,
+                                    type = IpcpOptionType.IPCP_PRIMARY_DNS,
                                     data = Ipv4Address.parse("10.0.0.1").toByteArray(),
                                 ).encode(),
                 ).encode(),
