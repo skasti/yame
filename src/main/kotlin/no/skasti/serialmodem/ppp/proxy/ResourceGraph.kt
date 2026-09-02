@@ -235,7 +235,6 @@ internal class NavigationResourceRegistry(
         require(maxEdgesPerContext > 0) { "Resource graph edge limit must be positive" }
     }
 
-    private val nextId = AtomicLong(1)
     private val graphs = linkedMapOf<Long, NavigationResourceGraph>()
     private val contextByLegacyUri = mutableMapOf<String, LinkedHashSet<Long>>()
 
@@ -311,5 +310,9 @@ internal class NavigationResourceRegistry(
         contextByLegacyUri
             .getOrPut(LegacyHttpUrl.requestObservableKey(uri)) { linkedSetOf() }
             .add(graphId)
+    }
+
+    private companion object {
+        val nextId = AtomicLong(1)
     }
 }
