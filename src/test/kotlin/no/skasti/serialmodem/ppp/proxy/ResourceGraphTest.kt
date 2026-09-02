@@ -145,4 +145,27 @@ class ResourceGraphTest {
         assertTrue(registry.contextsFor(dropped).isEmpty())
     }
 
+    @Test
+    fun `navigation kind promotion is deterministic regardless of discovery order`() {
+        fun discover(frameFirst: Boolean): ResourceNodeSnapshot {
+            val registry = NavigationResourceRegistry()
+            val graph = registry.startNavigation(URI("http://legacy.test/root"))
+            val target = URI("http://legacy.test/mixed")
+            val upstream = URI("https://legacy.test/mixed")
+            if (frameFirst) {
+                registry.discover(graph, graph.rootLegacyUri, target, upstream, ResourceRelation.FRAME_SRC, ResourceKind.FRAME)
+                registry.discover(graph, graph.rootLegacyUri, target, upstream, ResourceRelation.A_HREF, ResourceKind.DOCUMENT)
+            } else {
+                registry.discover(graph, graph.rootLegacyUri, target, upstream, ResourceRelation.A_HREF, ResourceKind.DOCUMENT)
+                registry.discover(graph, graph.rootLegacyUri, target, upstream, ResourceRelation.FRAME_SRC, ResourceKind.FRAME)
+            }
+            return graph.snapshot().nodes.single { it.legacyUri == target }
+        }
+
+        assertEquals(ResourceKind.DOCUMENT, discover(frameFirst = true).kind)
+        assertEquals(ResourceKind.DOCUMENT, discover(frameFirst = false).kind)
+        assertEquals(ReferenceRole.NAVIGATION, discover(frameFirst = true).role)
+        assertEquals(ReferenceRole.NAVIGATION, discover(frameFirst = false).role)
+    }
+
 }

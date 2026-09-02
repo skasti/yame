@@ -1067,6 +1067,144 @@ class HttpCompatibilityProxyTest {
         }
     }
 
+    @Test
+    fun `HTML error response still creates a navigation graph and discovers dependencies`() {
+        val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val body = "<html><img src=\"error.gif\"></html>"
+        val thread = serveOnce(server) {
+            "HTTP/1.1 404 Not Found\r\n" +
+                "Content-Type: text/html; charset=utf-8\r\n" +
+                "Content-Length: ${body.toByteArray(StandardCharsets.UTF_8).size}\r\n" +
+                "Connection: close\r\n\r\n" +
+                body
+        }
+        val proxy = SystemHttpCompatibilityProxy(
+            config = PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000),
+        )
+        val events = LinkedBlockingQueue<TcpProxyEvent>()
+        val flow = httpFlow(peerPort = 2292)
+
+        try {
+            proxy.connect(flow, events::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(events.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                flow,
+                ("GET /missing HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\n\r\n")
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+
+            collectResponse(events)
+            val graph = proxy.resourceGraphSnapshots(flow).single()
+            assertEquals(URI("http://127.0.0.1:${server.localPort}/missing"), graph.rootLegacyUri)
+            assertTrue(graph.edges.any { it.relation == ResourceRelation.IMG_SRC })
+        } finally {
+            proxy.close()
+            runCatching { server.close() }
+            thread.join(2_000)
+        }
+    }
+
+    @Test
+    fun `base href is tracked explicitly and controls relative dependency resolution`() {
+        val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val body = "<html><head><base href=\"/assets/\"></head><body><img src=\"logo.gif\"></body></html>"
+        val thread = serveOnce(server) {
+            "HTTP/1.1 200 OK\r\n" +
+                "Content-Type: text/html; charset=utf-8\r\n" +
+                "Content-Length: ${body.toByteArray(StandardCharsets.UTF_8).size}\r\n" +
+                "Connection: close\r\n\r\n" +
+                body
+        }
+        val proxy = SystemHttpCompatibilityProxy(
+            config = PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000),
+        )
+        val events = LinkedBlockingQueue<TcpProxyEvent>()
+        val flow = httpFlow(peerPort = 2293)
+
+        try {
+            proxy.connect(flow, events::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(events.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                flow,
+                ("GET /pages/index.html HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\n\r\n")
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+
+            collectResponse(events)
+            val graph = proxy.resourceGraphSnapshots(flow).single()
+            assertTrue(graph.edges.any { it.relation == ResourceRelation.BASE_HREF })
+            assertTrue(
+                graph.nodes.any { it.legacyUri == URI("http://127.0.0.1:${server.localPort}/assets/logo.gif") },
+            )
+        } finally {
+            proxy.close()
+            runCatching { server.close() }
+            thread.join(2_000)
+        }
+    }
+
+    @Test
+    fun `CSS import url is classified as stylesheet import`() {
+        val server = ServerSocket(0, 2, InetAddress.getLoopbackAddress())
+        val pageBody = "<html><link rel=\"stylesheet\" href=\"style.css\"></html>"
+        val cssBody = "@import url(\"theme.css\"); body { background: url(\"bg.gif\"); }"
+        val serverThread = Thread {
+            server.use { listening ->
+                repeat(2) { index ->
+                    listening.accept().use { socket ->
+                        val request = readRequest(socket)
+                        val body = if (index == 0) pageBody else cssBody
+                        val type = if (index == 0) "text/html" else "text/css"
+                        if (index == 1) assertTrue(request.startsWith("GET /style.css "), request)
+                        val response =
+                            "HTTP/1.1 200 OK\r\n" +
+                                "Content-Type: $type; charset=utf-8\r\n" +
+                                "Content-Length: ${body.toByteArray(StandardCharsets.UTF_8).size}\r\n" +
+                                "Connection: close\r\n\r\n" +
+                                body
+                        socket.getOutputStream().write(response.toByteArray(StandardCharsets.ISO_8859_1))
+                        socket.getOutputStream().flush()
+                    }
+                }
+            }
+        }.apply { isDaemon = true; start() }
+        val proxy = SystemHttpCompatibilityProxy(config = PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000))
+        val pageEvents = LinkedBlockingQueue<TcpProxyEvent>()
+        val cssEvents = LinkedBlockingQueue<TcpProxyEvent>()
+        val pageFlow = httpFlow(peerPort = 2294)
+        val cssFlow = httpFlow(peerPort = 2295)
+
+        try {
+            proxy.connect(pageFlow, pageEvents::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(pageEvents.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                pageFlow,
+                ("GET /index.html HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\n\r\n")
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+            collectResponse(pageEvents)
+
+            proxy.connect(cssFlow, cssEvents::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(cssEvents.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                cssFlow,
+                ("GET /style.css HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\n\r\n")
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+            collectResponse(cssEvents)
+
+            val graph = proxy.resourceGraphSnapshots(pageFlow).single()
+            val theme = URI("http://127.0.0.1:${server.localPort}/theme.css")
+            assertTrue(graph.edges.any { it.childLegacyUri == theme && it.relation == ResourceRelation.CSS_IMPORT })
+            assertEquals(ResourceKind.STYLESHEET, graph.nodes.single { it.legacyUri == theme }.kind)
+            assertTrue(graph.edges.none { it.childLegacyUri == theme && it.relation == ResourceRelation.CSS_URL })
+        } finally {
+            proxy.close()
+            runCatching { server.close() }
+            serverThread.join(2_000)
+        }
+    }
+
     private fun collectResponse(events: LinkedBlockingQueue<TcpProxyEvent>): String {
         val bytes = ArrayList<Byte>()
         while (true) {
