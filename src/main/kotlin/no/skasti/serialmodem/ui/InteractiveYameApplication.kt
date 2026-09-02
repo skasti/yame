@@ -6,6 +6,7 @@ import no.skasti.serialmodem.logging.YameLogManager
 import no.skasti.serialmodem.logging.YameLogModule
 import no.skasti.serialmodem.modem.HayesModem
 import no.skasti.serialmodem.modem.HayesModemConfig
+import no.skasti.serialmodem.ppp.RetroPppHandler
 import no.skasti.serialmodem.ppp.ip.Ipv4Address
 import no.skasti.serialmodem.ppp.proxy.ResourceRegistryHooks
 import no.skasti.serialmodem.serial.SerialConnection
@@ -245,31 +246,47 @@ class InteractiveYameApplication(
         val transferFileLogger = logManager.debugLogger(YameLogModule.TRANSFERS)
         val proxyFileLogger = logManager.debugLogger(YameLogModule.PROXY)
         val serialFileLogger = logManager.logger(YameLogModule.SERIAL)
+        val modemLogger: (String) -> Unit = { message ->
+            observer.onLog(message)
+            modemFileLogger(message)
+        }
+        val pppLogger: (String) -> Unit = { message ->
+            observer.onLog(message)
+            pppFileLogger(message)
+        }
+        val dnsLogger: (String) -> Unit = { message ->
+            observer.onLog(message)
+            dnsFileLogger(message)
+        }
+        val transferLogger: (String) -> Unit = { message ->
+            observer.onLog(message)
+            transferFileLogger(message)
+        }
+        val eventSink: (no.skasti.serialmodem.observer.YameEvent) -> Unit = { event ->
+            logManager.eventSink(event)
+            observer.onEvent(event)
+        }
+        val pppHandler = RetroPppHandler(
+            logger = pppLogger,
+            dnsLogger = dnsLogger,
+            transferLogger = transferLogger,
+            proxyLogger = proxyFileLogger,
+            eventSink = eventSink,
+            resourceRegistryHooks = resourceRegistryHooks,
+            ipConfig = config.pppIpConfig,
+            dnsConfig = config.pppDnsConfig,
+            httpCompatibilityConfig = config.pppHttpCompatibilityConfig,
+        )
         val modem = HayesModem(
             baudRate = baud,
             config = config,
-            logger = { message ->
-                observer.onLog(message)
-                modemFileLogger(message)
-            },
-            pppLogger = { message ->
-                observer.onLog(message)
-                pppFileLogger(message)
-            },
-            dnsLogger = { message ->
-                observer.onLog(message)
-                dnsFileLogger(message)
-            },
-            transferLogger = { message ->
-                observer.onLog(message)
-                transferFileLogger(message)
-            },
+            logger = modemLogger,
+            pppLogger = pppLogger,
+            dnsLogger = dnsLogger,
+            transferLogger = transferLogger,
             proxyLogger = proxyFileLogger,
-            eventSink = { event ->
-                logManager.eventSink(event)
-                observer.onEvent(event)
-            },
-            resourceRegistryHooks = resourceRegistryHooks,
+            eventSink = eventSink,
+            pppHandler = pppHandler,
         )
         val connection = SerialConnection(
             portName = portName,
