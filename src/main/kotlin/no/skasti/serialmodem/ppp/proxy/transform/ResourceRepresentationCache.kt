@@ -140,11 +140,11 @@ internal class ResourceCache(
     fun put(
         key: ResourceCacheKey,
         cached: CachedResource,
+        sourceFingerprint: String = sourceFingerprint(cached.resource.source),
     ): Boolean {
         if (cached.cachePolicy.noStore) return false
         val size = cached.resource.totalBodyBytes()
         if (size > maxBytes) return false
-        val fingerprint = sourceFingerprint(cached.resource.source)
 
         synchronized(lock) {
             entries.remove(key)?.let { totalBytes -= it.bytes }
@@ -153,7 +153,7 @@ internal class ResourceCache(
                 entries.remove(oldest.key)
                 totalBytes -= oldest.value.bytes
             }
-            entries[key] = Entry(cached.deepCopy(), size, fingerprint)
+            entries[key] = Entry(cached.deepCopy(), size, sourceFingerprint)
             totalBytes += size
         }
         return true
@@ -234,7 +234,6 @@ private fun ResourceRepresentation.deepCopy(): ResourceRepresentation =
         headers = headers.mapValues { (_, values) -> values.toList() },
         body = body.copyOf(),
     )
-
 
 internal fun sourceFingerprint(representation: ResourceRepresentation): String {
     val digest = MessageDigest.getInstance("SHA-256")
