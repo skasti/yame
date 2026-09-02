@@ -96,8 +96,9 @@ internal class ResourceTransformationPipeline(
             if (!transformer.supports(context, current)) {
                 current
             } else {
-                transformer.transform(context, current).copy(
-                    cacheable = current.cacheable && transformer.cacheable,
+                val next = transformer.transform(context, current)
+                next.copy(
+                    cacheable = current.cacheable && transformer.cacheable && next.cacheable,
                 )
             }
         }
