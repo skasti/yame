@@ -58,18 +58,18 @@ internal data class NavigationResourceGraphSnapshot(
     val edges: List<ResourceEdgeSnapshot>,
 )
 
-data class ResourceRegistryRoot(
+internal data class ResourceRegistryRoot(
     val graphId: Long,
     val rootLegacyUri: URI,
 )
 
-data class ResourceRegistryResource(
+internal data class ResourceRegistryResource(
     val graphId: Long,
     val rootLegacyUri: URI,
     val resourceLegacyUri: URI,
 )
 
-class ResourceRegistryEvent<T>(
+internal class ResourceRegistryEvent<T>(
     private val dispatch: ((() -> Unit) -> Unit),
 ) {
     private val handlers = linkedSetOf<(T) -> Unit>()
@@ -96,7 +96,7 @@ class ResourceRegistryEvent<T>(
     }
 }
 
-class ResourceRegistryHooks(
+internal class ResourceRegistryHooks(
     private val dispatch: ((() -> Unit) -> Unit) = { task -> task() },
 ) {
     val onRootAdded = ResourceRegistryEvent<ResourceRegistryRoot>(dispatch)
