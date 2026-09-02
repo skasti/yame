@@ -988,6 +988,84 @@ class HttpCompatibilityProxyTest {
         }
     }
 
+    @Test
+    fun `normal HTML discovers relative resources without rewriting them absolute`() {
+        val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val body = "<html><iframe src=\"frame.html\"></iframe><img src=\"/img.gif\"></html>"
+        val thread = serveOnce(server) {
+            "HTTP/1.1 200 OK\r\n" +
+                "Content-Type: text/html; charset=utf-8\r\n" +
+                "Content-Length: ${body.toByteArray(StandardCharsets.UTF_8).size}\r\n" +
+                "Connection: close\r\n\r\n" +
+                body
+        }
+        val proxy = SystemHttpCompatibilityProxy(
+            config = PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000),
+        )
+        val events = LinkedBlockingQueue<TcpProxyEvent>()
+        val flow = httpFlow(peerPort = 2290)
+
+        try {
+            proxy.connect(flow, events::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(events.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                flow,
+                ("GET /pages/index.html HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\n\r\n")
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+
+            val response = collectResponse(events)
+            assertTrue(response.contains("src=\"frame.html\""), response)
+            assertTrue(response.contains("src=\"/img.gif\""), response)
+
+            val graph = proxy.resourceGraphSnapshots(flow).single()
+            val frameLegacy = URI("http://127.0.0.1:${server.localPort}/pages/frame.html")
+            val imageLegacy = URI("http://127.0.0.1:${server.localPort}/img.gif")
+            assertTrue(graph.nodes.any { it.legacyUri == frameLegacy && it.kind == ResourceKind.FRAME })
+            assertTrue(graph.nodes.any { it.legacyUri == imageLegacy && it.kind == ResourceKind.IMAGE })
+            assertTrue(graph.edges.any { it.childLegacyUri == frameLegacy && it.relation == ResourceRelation.FRAME_SRC })
+            assertTrue(graph.edges.any { it.childLegacyUri == imageLegacy && it.relation == ResourceRelation.IMG_SRC })
+            assertEquals(ResourceState.READY, graph.nodes.single { it.legacyUri.path == "/pages/index.html" }.state)
+        } finally {
+            proxy.close()
+            runCatching { server.close() }
+            thread.join(2_000)
+        }
+    }
+
+    @Test
+    fun `HEAD HTML response does not create a navigation resource graph`() {
+        val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val thread = serveOnce(server) {
+            "HTTP/1.1 200 OK\r\n" +
+                "Content-Type: text/html\r\n" +
+                "Content-Length: 123\r\n" +
+                "Connection: close\r\n\r\n"
+        }
+        val proxy = SystemHttpCompatibilityProxy(
+            config = PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000),
+        )
+        val events = LinkedBlockingQueue<TcpProxyEvent>()
+        val flow = httpFlow(peerPort = 2291)
+
+        try {
+            proxy.connect(flow, events::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(events.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                flow,
+                ("HEAD /page HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\n\r\n")
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+
+            collectResponse(events)
+            assertTrue(proxy.resourceGraphSnapshots(flow).isEmpty())
+        } finally {
+            proxy.close()
+            runCatching { server.close() }
+            thread.join(2_000)
+        }
+    }
+
     private fun collectResponse(events: LinkedBlockingQueue<TcpProxyEvent>): String {
         val bytes = ArrayList<Byte>()
         while (true) {

@@ -82,4 +82,67 @@ class ResourceGraphTest {
 
         assertEquals(setOf(first.id, second.id), registry.contextsFor(sharedLegacy).map { it.id }.toSet())
     }
+    @Test
+    fun `registry evicts the oldest navigation context and URI associations`() {
+        val registry = NavigationResourceRegistry(maxContexts = 2)
+        val shared = URI("http://cdn.test/old.gif")
+        val first = registry.startNavigation(URI("http://legacy.test/one"))
+        registry.discover(
+            first,
+            first.rootLegacyUri,
+            shared,
+            URI("https://cdn.test/old.gif"),
+            ResourceRelation.IMG_SRC,
+            ResourceKind.IMAGE,
+        )
+        val second = registry.startNavigation(URI("http://legacy.test/two"))
+        val third = registry.startNavigation(URI("http://legacy.test/three"))
+
+        assertEquals(listOf(second.id, third.id), registry.snapshots().map { it.id })
+        assertTrue(registry.contextsFor(shared).isEmpty())
+    }
+
+    @Test
+    fun `graph bounds nodes and edges and does not index dropped resources`() {
+        val registry = NavigationResourceRegistry(
+            maxContexts = 1,
+            maxNodesPerContext = 2,
+            maxEdgesPerContext = 1,
+        )
+        val graph = registry.startNavigation(URI("http://legacy.test/root"))
+        val kept = URI("http://legacy.test/kept.gif")
+        val dropped = URI("http://legacy.test/dropped.gif")
+
+        registry.discover(
+            graph,
+            graph.rootLegacyUri,
+            kept,
+            URI("https://legacy.test/kept.gif"),
+            ResourceRelation.IMG_SRC,
+            ResourceKind.IMAGE,
+        )
+        registry.discover(
+            graph,
+            graph.rootLegacyUri,
+            dropped,
+            URI("https://legacy.test/dropped.gif"),
+            ResourceRelation.IMG_SRC,
+            ResourceKind.IMAGE,
+        )
+        registry.discover(
+            graph,
+            URI("http://legacy.test/other-parent"),
+            kept,
+            URI("https://legacy.test/kept.gif"),
+            ResourceRelation.CSS_URL,
+            ResourceKind.IMAGE,
+        )
+
+        val snapshot = graph.snapshot()
+        assertEquals(2, snapshot.nodes.size)
+        assertEquals(1, snapshot.edges.size)
+        assertTrue(registry.contextsFor(kept).isNotEmpty())
+        assertTrue(registry.contextsFor(dropped).isEmpty())
+    }
+
 }
