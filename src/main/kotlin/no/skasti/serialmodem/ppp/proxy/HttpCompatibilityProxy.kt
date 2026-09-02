@@ -686,6 +686,38 @@ internal class SystemHttpCompatibilityProxy(
         )
         if (body.isEmpty()) return original
 
+        val context =
+            ResourceTransformationContext(
+                navigationIds = graphs.map { it.id }.toSet(),
+                legacyUri = parentLegacyUri,
+                upstreamUri = upstreamUri,
+                kind = graphs.firstNotNullOfOrNull { it.nodeSnapshot(parentLegacyUri)?.kind }
+                    ?: ResourceKind.OTHER,
+                relation = graphs.asSequence()
+                    .flatMap { it.snapshot().edges.asSequence() }
+                    .firstOrNull { it.childLegacyUri == parentLegacyUri }
+                    ?.relation,
+                role = graphs.firstNotNullOfOrNull { it.nodeSnapshot(parentLegacyUri)?.role }
+                    ?: ReferenceRole.SUBRESOURCE,
+                requestHeaders = emptyMap(),
+                rewriteText = { source ->
+                    rewriteBodyUrlsWithBase(
+                        flow = flow,
+                        session = session,
+                        graphs = graphs,
+                        parentLegacyUri = parentLegacyUri,
+                        headers = headers,
+                        source = source,
+                        baseUri = resolutionBaseUri,
+                        forceAbsoluteRelativeReferences = forceAbsoluteRelativeReferences,
+                    )
+                },
+            )
+
+        if (!resourceTransformations.isCacheable(context, original)) {
+            return resourceTransformations.transform(context, original)
+        }
+
         val key = ResourceRepresentationKey(
             legacyUri = parentLegacyUri,
             upstreamUri = upstreamUri,
@@ -695,32 +727,7 @@ internal class SystemHttpCompatibilityProxy(
 
         return inFlightResourceWork.getOrStart(key) {
             representationCache.get(key) ?: resourceTransformations.transform(
-                ResourceTransformationContext(
-                    navigationIds = graphs.map { it.id }.toSet(),
-                    legacyUri = parentLegacyUri,
-                    upstreamUri = upstreamUri,
-                    kind = graphs.firstNotNullOfOrNull { it.nodeSnapshot(parentLegacyUri)?.kind }
-                        ?: ResourceKind.OTHER,
-                    relation = graphs.asSequence()
-                        .flatMap { it.snapshot().edges.asSequence() }
-                        .firstOrNull { it.childLegacyUri == parentLegacyUri }
-                        ?.relation,
-                    role = graphs.firstNotNullOfOrNull { it.nodeSnapshot(parentLegacyUri)?.role }
-                        ?: ReferenceRole.SUBRESOURCE,
-                    requestHeaders = emptyMap(),
-                    rewriteText = { source ->
-                        rewriteBodyUrlsWithBase(
-                            flow = flow,
-                            session = session,
-                            graphs = graphs,
-                            parentLegacyUri = parentLegacyUri,
-                            headers = headers,
-                            source = source,
-                            baseUri = resolutionBaseUri,
-                            forceAbsoluteRelativeReferences = forceAbsoluteRelativeReferences,
-                        )
-                    },
-                ),
+                context,
                 original,
             ).also { transformed ->
                 representationCache.put(key, transformed)
