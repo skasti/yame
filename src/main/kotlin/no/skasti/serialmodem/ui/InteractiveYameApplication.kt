@@ -7,6 +7,7 @@ import no.skasti.serialmodem.logging.YameLogModule
 import no.skasti.serialmodem.modem.HayesModem
 import no.skasti.serialmodem.modem.HayesModemConfig
 import no.skasti.serialmodem.ppp.ip.Ipv4Address
+import no.skasti.serialmodem.ppp.proxy.ResourceRegistryHooks
 import no.skasti.serialmodem.serial.SerialConnection
 
 class InteractiveYameApplication(
@@ -41,6 +42,7 @@ class InteractiveYameApplication(
     private var activeModem: HayesModem? = null
     private var monitorThread: Thread? = null
 
+    private val resourceRegistryHooks = ResourceRegistryHooks()
     private val observer = TuiYameObserver(
         initialPortName = initialPortName,
         initialBaud = initialBaud,
@@ -58,6 +60,14 @@ class InteractiveYameApplication(
         onRefreshPorts = ::refreshPorts,
         terminal = terminal,
     )
+
+    init {
+        resourceRegistryHooks.onRootAdded += observer::handleResourceRootAdded
+        resourceRegistryHooks.onRootRemoved += observer::handleResourceRootRemoved
+        resourceRegistryHooks.onRootUsed += observer::handleResourceRootUsed
+        resourceRegistryHooks.onResourceAdded += observer::handleResourceAdded
+        resourceRegistryHooks.onResourceRemoved += observer::handleResourceRemoved
+    }
 
     fun run() {
         observer.use {
@@ -253,6 +263,7 @@ class InteractiveYameApplication(
                 logManager.eventSink(event)
                 observer.onEvent(event)
             },
+            resourceRegistryHooks = resourceRegistryHooks,
         )
         val connection = SerialConnection(
             portName = portName,
