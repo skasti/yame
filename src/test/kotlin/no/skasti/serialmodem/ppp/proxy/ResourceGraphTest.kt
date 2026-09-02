@@ -168,4 +168,66 @@ class ResourceGraphTest {
         assertEquals(ReferenceRole.NAVIGATION, discover(frameFirst = false).role)
     }
 
+    @Test
+    fun `registry hooks report add use and eviction removal`() {
+        val hooks = ResourceRegistryHooks()
+        val addedRoots = mutableListOf<ResourceRegistryRoot>()
+        val usedRoots = mutableListOf<ResourceRegistryRoot>()
+        val removedRoots = mutableListOf<ResourceRegistryRoot>()
+        val addedResources = mutableListOf<ResourceRegistryResource>()
+        val removedResources = mutableListOf<ResourceRegistryResource>()
+        hooks.onRootAdded += addedRoots::add
+        hooks.onRootUsed += usedRoots::add
+        hooks.onRootRemoved += removedRoots::add
+        hooks.onResourceAdded += addedResources::add
+        hooks.onResourceRemoved += removedResources::add
+
+        val registry = NavigationResourceRegistry(maxContexts = 1, hooks = hooks)
+        val firstRoot = URI("http://legacy.test/one")
+        val first = registry.startNavigation(firstRoot)
+        val child = URI("http://cdn.test/site.css")
+        registry.discover(
+            first,
+            first.rootLegacyUri,
+            child,
+            URI("https://cdn.test/site.css"),
+            ResourceRelation.LINK_STYLESHEET,
+            ResourceKind.STYLESHEET,
+        )
+
+        assertEquals(listOf(firstRoot), addedRoots.map { it.rootLegacyUri })
+        assertEquals(2, usedRoots.count { it.graphId == first.id })
+        assertEquals(listOf(child), addedResources.map { it.resourceLegacyUri })
+
+        val second = registry.startNavigation(URI("http://legacy.test/two"))
+
+        assertEquals(listOf(first.id), removedRoots.map { it.graphId })
+        assertTrue(removedResources.any { it.graphId == first.id && it.resourceLegacyUri == child })
+        assertTrue(second.id != first.id)
+    }
+
+    @Test
+    fun `resource hook only fires when a resource is first added`() {
+        val hooks = ResourceRegistryHooks()
+        val addedResources = mutableListOf<ResourceRegistryResource>()
+        hooks.onResourceAdded += addedResources::add
+        val registry = NavigationResourceRegistry(hooks = hooks)
+        val graph = registry.startNavigation(URI("http://legacy.test/root"))
+        val child = URI("http://cdn.test/shared.gif")
+
+        repeat(2) {
+            registry.discover(
+                graph,
+                graph.rootLegacyUri,
+                child,
+                URI("https://cdn.test/shared.gif"),
+                ResourceRelation.IMG_SRC,
+                ResourceKind.IMAGE,
+            )
+        }
+
+        assertEquals(listOf(child), addedResources.map { it.resourceLegacyUri })
+    }
+
+
 }
