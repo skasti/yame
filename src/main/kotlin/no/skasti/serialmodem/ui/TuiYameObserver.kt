@@ -285,7 +285,7 @@ class TuiYameObserver(
                 )
             }
 
-            is YameEvent.HttpProxyAction -> Unit
+            is YameEvent.HttpProxyAction -> return
         }
         render()
     }
