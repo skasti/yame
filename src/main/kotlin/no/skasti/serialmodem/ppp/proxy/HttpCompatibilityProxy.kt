@@ -99,6 +99,7 @@ internal class SystemHttpCompatibilityProxy(
         val referenceRole: ReferenceRole = ReferenceRole.NAVIGATION,
         val establishesNavigationGraph: Boolean = false,
         val requestHeaders: Map<String, List<String>> = emptyMap(),
+        val requestMethod: String = "GET",
     )
 
     private enum class ExpectationDisposition { NONE, CONTINUE, UNSUPPORTED }
@@ -438,6 +439,7 @@ internal class SystemHttpCompatibilityProxy(
                         exposeCookies = sameOrigin(originalUri, uri),
                         locationAlreadyLegacy = true,
                         referenceRole = referenceRole,
+                        requestMethod = request.method,
                     )
                 }
 
@@ -517,6 +519,7 @@ internal class SystemHttpCompatibilityProxy(
                         { it.first.lowercase(Locale.ROOT) },
                         { it.second },
                     ),
+                requestMethod = request.method,
             )
         }
     }
@@ -553,6 +556,7 @@ internal class SystemHttpCompatibilityProxy(
                         resolutionBaseUri = response.effectiveBaseUri ?: response.uri,
                         forceAbsoluteRelativeReferences = response.effectiveBaseUri != null,
                         referenceRole = response.referenceRole,
+                        requestMethod = response.requestMethod,
                     )
                 }
             val transformedHeaders = transformedRepresentation?.headers ?: response.headers
@@ -668,6 +672,7 @@ internal class SystemHttpCompatibilityProxy(
         resolutionBaseUri: URI,
         forceAbsoluteRelativeReferences: Boolean,
         referenceRole: ReferenceRole,
+        requestMethod: String,
     ): ResourceRepresentation {
         val source =
             Resource(
@@ -678,8 +683,6 @@ internal class SystemHttpCompatibilityProxy(
                     body = body,
                 ),
             )
-        if (body.isEmpty()) return source.representation
-
         val context =
             ResourceTransformationContext(
                 navigationIds = graphs.map { it.id }.toSet(),
@@ -694,6 +697,7 @@ internal class SystemHttpCompatibilityProxy(
                 role = graphs.firstNotNullOfOrNull { it.nodeSnapshot(parentLegacyUri)?.role }
                     ?: referenceRole,
                 requestHeaders = requestHeaders,
+                requestMethod = requestMethod,
                 transformationProfile = config.transformationProfile,
                 rewriteText = { sourceText ->
                     rewriteBodyUrlsWithBase(
@@ -734,7 +738,7 @@ internal class SystemHttpCompatibilityProxy(
                 resourceTransformations.transform(context, source)
             }
 
-        if (transformed.cacheable) {
+        if (transformed.cacheable && requestMethod.equals("GET", ignoreCase = true) && statusCode != 304) {
             resourceCache.put(
                 cacheKey,
                 CachedResource(
