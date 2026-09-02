@@ -56,6 +56,11 @@ internal interface ResourceTransformer {
     val priority: Int get() = 0
     val cacheable: Boolean get() = true
 
+    fun supports(
+        context: ResourceTransformationContext,
+        state: ResourceTransformationState,
+    ): Boolean
+
     fun transform(
         context: ResourceTransformationContext,
         state: ResourceTransformationState,
@@ -71,17 +76,6 @@ internal class ResourceTransformationPipeline(
                 .thenBy { it.priority }
                 .thenBy { it.id },
         )
-
-    fun supports(
-        context: ResourceTransformationContext,
-        resource: Resource,
-    ): Boolean {
-        var state = ResourceTransformationState(resource)
-        for (transformer in transformers) {
-            if (transformer.supports(context, state)) return true
-        }
-        return false
-    }
 
     fun transform(
         context: ResourceTransformationContext,
