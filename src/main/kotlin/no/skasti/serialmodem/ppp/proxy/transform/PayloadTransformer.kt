@@ -2,6 +2,7 @@ package no.skasti.serialmodem.ppp.proxy.transform
 
 import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets
+import java.util.Locale
 
 internal class LegacyTextResourceTransformer : ResourceTransformer {
     override val id: String = "legacy-text-url-rewrite"
@@ -18,7 +19,7 @@ internal class LegacyTextResourceTransformer : ResourceTransformer {
         val contentType = firstHeader(representation.headers, "content-type")
             ?.substringBefore(';')
             ?.trim()
-            ?.lowercase()
+            ?.lowercase(Locale.ROOT)
             ?: return false
         return contentType in REWRITABLE_CONTENT_TYPES
     }
@@ -58,7 +59,7 @@ internal fun transformedHeadersFrom(
     sourceHeaders: Map<String, List<String>>,
 ): Map<String, List<String>> =
     sourceHeaders.filterKeys { name ->
-        name.lowercase() !in SOURCE_ONLY_REPRESENTATION_HEADERS
+        name.lowercase(Locale.ROOT) !in SOURCE_ONLY_REPRESENTATION_HEADERS
     }
 
 internal fun rewriteEncodedTextBody(
