@@ -56,11 +56,6 @@ internal interface ResourceTransformer {
     val priority: Int get() = 0
     val cacheable: Boolean get() = true
 
-    fun supports(
-        context: ResourceTransformationContext,
-        state: ResourceTransformationState,
-    ): Boolean
-
     fun transform(
         context: ResourceTransformationContext,
         state: ResourceTransformationState,
