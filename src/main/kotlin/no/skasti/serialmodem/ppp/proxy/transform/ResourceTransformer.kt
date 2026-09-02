@@ -30,6 +30,25 @@ internal data class ResourceRepresentation(
     val body: ByteArray,
 )
 
+internal data class TransformedRepresentation(
+    val profile: String,
+    val representation: ResourceRepresentation,
+)
+
+internal data class Resource(
+    val upstreamUri: URI,
+    val source: ResourceRepresentation,
+    val transformed: TransformedRepresentation? = null,
+) {
+    val representation: ResourceRepresentation
+        get() = transformed?.representation ?: source
+}
+
+internal data class ResourceTransformationState(
+    val resource: Resource,
+    val cacheable: Boolean = true,
+)
+
 internal interface ResourceTransformer {
     val id: String
     val phase: ResourceTransformPhase
@@ -38,13 +57,13 @@ internal interface ResourceTransformer {
 
     fun supports(
         context: ResourceTransformationContext,
-        representation: ResourceRepresentation,
+        state: ResourceTransformationState,
     ): Boolean
 
     fun transform(
         context: ResourceTransformationContext,
-        representation: ResourceRepresentation,
-    ): ResourceRepresentation
+        state: ResourceTransformationState,
+    ): ResourceTransformationState
 }
 
 internal class ResourceTransformationPipeline(
@@ -59,31 +78,26 @@ internal class ResourceTransformationPipeline(
 
     fun supports(
         context: ResourceTransformationContext,
-        representation: ResourceRepresentation,
-    ): Boolean = transformers.any { it.supports(context, representation) }
-
-    fun isCacheable(
-        context: ResourceTransformationContext,
-        representation: ResourceRepresentation,
-    ): Boolean =
-        transformers
-            .filter { it.supports(context, representation) }
-            .all { it.cacheable }
+        resource: Resource,
+    ): Boolean {
+        var state = ResourceTransformationState(resource)
+        for (transformer in transformers) {
+            if (transformer.supports(context, state)) return true
+        }
+        return false
+    }
 
     fun transform(
         context: ResourceTransformationContext,
-        representation: ResourceRepresentation,
-    ): ResourceRepresentation {
-        val transformed =
-            transformers.fold(representation) { current, transformer ->
-                if (transformer.supports(context, current)) transformer.transform(context, current) else current
+        resource: Resource,
+    ): ResourceTransformationState =
+        transformers.fold(ResourceTransformationState(resource)) { current, transformer ->
+            if (!transformer.supports(context, current)) {
+                current
+            } else {
+                transformer.transform(context, current).copy(
+                    cacheable = current.cacheable && transformer.cacheable,
+                )
             }
-        return if (transformed.body.contentEquals(representation.body)) {
-            transformed
-        } else {
-            transformed.copy(
-                headers = stripStaleRepresentationMetadata(transformed.headers),
-            )
         }
-    }
 }
