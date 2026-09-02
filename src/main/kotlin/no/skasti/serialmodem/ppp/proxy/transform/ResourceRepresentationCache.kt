@@ -118,24 +118,30 @@ internal class ResourceCache(
     private val entries = linkedMapOf<ResourceCacheKey, Entry>()
     private var totalBytes = 0L
 
-    fun get(key: ResourceCacheKey): CachedResource? =
-        synchronized(lock) {
-            val entry = entries.remove(key) ?: return@synchronized null
-            entries[key] = entry
-            entry.cached.deepCopy()
-        }
+    fun get(key: ResourceCacheKey): CachedResource? {
+        val cached =
+            synchronized(lock) {
+                val entry = entries.remove(key) ?: return@synchronized null
+                entries[key] = entry
+                entry.cached
+            }
+        return cached?.deepCopy()
+    }
 
     fun getIfSourceFingerprint(
         key: ResourceCacheKey,
         sourceFingerprint: String,
-    ): CachedResource? =
-        synchronized(lock) {
-            val entry = entries[key] ?: return@synchronized null
-            if (entry.sourceFingerprint != sourceFingerprint) return@synchronized null
-            entries.remove(key)
-            entries[key] = entry
-            entry.cached.deepCopy()
-        }
+    ): CachedResource? {
+        val cached =
+            synchronized(lock) {
+                val entry = entries[key] ?: return@synchronized null
+                if (entry.sourceFingerprint != sourceFingerprint) return@synchronized null
+                entries.remove(key)
+                entries[key] = entry
+                entry.cached
+            }
+        return cached?.deepCopy()
+    }
 
     fun put(
         key: ResourceCacheKey,
@@ -145,6 +151,7 @@ internal class ResourceCache(
         if (cached.cachePolicy.noStore) return false
         val size = cached.resource.totalBodyBytes()
         if (size > maxBytes) return false
+        val stored = cached.deepCopy()
 
         synchronized(lock) {
             entries.remove(key)?.let { totalBytes -= it.bytes }
@@ -153,7 +160,7 @@ internal class ResourceCache(
                 entries.remove(oldest.key)
                 totalBytes -= oldest.value.bytes
             }
-            entries[key] = Entry(cached.deepCopy(), size, sourceFingerprint)
+            entries[key] = Entry(stored, size, sourceFingerprint)
             totalBytes += size
         }
         return true
