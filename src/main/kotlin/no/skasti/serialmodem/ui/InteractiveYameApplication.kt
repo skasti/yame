@@ -9,6 +9,7 @@ import no.skasti.serialmodem.modem.HayesModemConfig
 import no.skasti.serialmodem.ppp.ip.Ipv4Address
 import no.skasti.serialmodem.ppp.proxy.ResourceRegistryHooks
 import no.skasti.serialmodem.serial.SerialConnection
+import java.util.concurrent.Executors
 
 class InteractiveYameApplication(
     initialPortName: String?,
@@ -42,7 +43,12 @@ class InteractiveYameApplication(
     private var activeModem: HayesModem? = null
     private var monitorThread: Thread? = null
 
-    private val resourceRegistryHooks = ResourceRegistryHooks()
+    private val resourceUiExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "yame-resource-ui").apply { isDaemon = true }
+    }
+    private val resourceRegistryHooks = ResourceRegistryHooks { task ->
+        resourceUiExecutor.execute(task)
+    }
     private val observer = TuiYameObserver(
         initialPortName = initialPortName,
         initialBaud = initialBaud,
@@ -427,6 +433,7 @@ class InteractiveYameApplication(
     override fun close() {
         shutdown()
         observer.close()
+        resourceUiExecutor.shutdownNow()
     }
 
     private companion object {
