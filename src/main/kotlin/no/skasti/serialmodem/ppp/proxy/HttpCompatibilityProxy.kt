@@ -8,9 +8,14 @@ import no.skasti.serialmodem.ppp.proxy.cookies.CookieOverride
 import no.skasti.serialmodem.ppp.proxy.routing.LegacyOriginRouteTable
 import no.skasti.serialmodem.ppp.proxy.transform.LegacyTextResourceTransformer
 import no.skasti.serialmodem.ppp.proxy.transform.InFlightResourceWork
+import no.skasti.serialmodem.ppp.proxy.transform.CachedResource
+import no.skasti.serialmodem.ppp.proxy.transform.Resource
+import no.skasti.serialmodem.ppp.proxy.transform.ResourceCache
+import no.skasti.serialmodem.ppp.proxy.transform.ResourceCacheKey
 import no.skasti.serialmodem.ppp.proxy.transform.ResourceRepresentation
-import no.skasti.serialmodem.ppp.proxy.transform.ResourceRepresentationCache
-import no.skasti.serialmodem.ppp.proxy.transform.ResourceRepresentationKey
+import no.skasti.serialmodem.ppp.proxy.transform.cachePolicyFrom
+import no.skasti.serialmodem.ppp.proxy.transform.resourceSourceVersion
+import no.skasti.serialmodem.ppp.proxy.transform.validatorsFrom
 import no.skasti.serialmodem.ppp.proxy.transform.ResourceTransformationContext
 import no.skasti.serialmodem.ppp.proxy.transform.ResourceTransformationPipeline
 import no.skasti.serialmodem.ppp.tcp.TcpProxy
@@ -27,6 +32,7 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.charset.StandardCharsets
 import java.time.Duration
+import java.time.Instant
 import java.util.Locale
 import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentHashMap
@@ -103,7 +109,7 @@ internal class SystemHttpCompatibilityProxy(
     private val sessionStates = ConcurrentHashMap<SessionKey, SessionState>()
     private val originRoutes = LegacyOriginRouteTable()
     private val resourceTransformations = ResourceTransformationPipeline(listOf(LegacyTextResourceTransformer()))
-    private val representationCache = ResourceRepresentationCache(
+    private val resourceCache = ResourceCache(
         maxEntries = config.maxRepresentationCacheEntries,
         maxBytes = config.maxRepresentationCacheBytes,
     )
@@ -455,30 +461,37 @@ internal class SystemHttpCompatibilityProxy(
                         response.body().close()
                         FinalResponseBody.Buffered(ByteArray(0))
                     }
-                    status != 206 && resourceTransformations.supports(
-                        ResourceTransformationContext(
-                            navigationIds = state.session.resources.contextsFor(legacyUri).map { it.id }.toSet(),
-                            legacyUri = legacyUri,
-                            upstreamUri = uri,
-                            kind = state.session.resources.contextsFor(legacyUri)
-                                .firstNotNullOfOrNull { it.nodeSnapshot(legacyUri)?.kind }
-                                ?: if (referenceRole == ReferenceRole.NAVIGATION) ResourceKind.DOCUMENT else ResourceKind.OTHER,
-                            relation = state.session.resources.contextsFor(legacyUri)
-                                .asSequence()
-                                .flatMap { it.snapshot().edges.asSequence() }
-                                .firstOrNull { it.childLegacyUri == legacyUri }
-                                ?.relation,
-                            role = referenceRole,
-                            requestHeaders = request.headers
-                                .groupBy({ it.first.lowercase(Locale.ROOT) }, { it.second }),
-                            rewriteText = { it },
-                        ),
-                        ResourceRepresentation(
-                            statusCode = status,
-                            headers = responseHeaders,
-                            body = ByteArray(0),
-                        ),
-                    ) -> {
+                    status != 206 && run {
+                        val resourceContexts = state.session.resources.contextsFor(legacyUri)
+                        val transformationContext =
+                            ResourceTransformationContext(
+                                navigationIds = resourceContexts.map { it.id }.toSet(),
+                                legacyUri = legacyUri,
+                                upstreamUri = uri,
+                                kind = resourceContexts.firstNotNullOfOrNull { it.nodeSnapshot(legacyUri)?.kind }
+                                    ?: if (referenceRole == ReferenceRole.NAVIGATION) ResourceKind.DOCUMENT else ResourceKind.OTHER,
+                                relation = resourceContexts.asSequence()
+                                    .flatMap { it.snapshot().edges.asSequence() }
+                                    .firstOrNull { it.childLegacyUri == legacyUri }
+                                    ?.relation,
+                                role = referenceRole,
+                                requestHeaders = request.headers
+                                    .groupBy({ it.first.lowercase(Locale.ROOT) }, { it.second }),
+                                transformationProfile = config.transformationProfile,
+                                rewriteText = { it },
+                            )
+                        resourceTransformations.supports(
+                            transformationContext,
+                            Resource(
+                                upstreamUri = uri,
+                                source = ResourceRepresentation(
+                                    statusCode = status,
+                                    headers = responseHeaders,
+                                    body = ByteArray(0),
+                                ),
+                            ),
+                        )
+                    } -> {
                         if (upstreamContentLength > config.maxResponseBytes.toLong()) {
                             response.body().close()
                             throw ResponseTooLarge(
@@ -591,9 +604,8 @@ internal class SystemHttpCompatibilityProxy(
             legacyHeaders.forEach { (name, values) ->
                 val normalized = name.lowercase(Locale.ROOT)
                 val hiddenCrossOriginCookie = !response.exposeCookies && normalized in RESPONSE_COOKIE_HEADERS
-                val staleRepresentationMetadata = bodyRewritten && normalized in RESPONSE_HEADERS_TO_STRIP_WHEN_BODY_REWRITTEN
                 if (normalized !in RESPONSE_HEADERS_TO_STRIP && normalized !in nominated &&
-                    !hiddenCrossOriginCookie && !staleRepresentationMetadata) {
+                    !hiddenCrossOriginCookie) {
                     values.forEach { append("$name: $it\r\n") }
                 }
             }
@@ -687,12 +699,16 @@ internal class SystemHttpCompatibilityProxy(
         resolutionBaseUri: URI,
         forceAbsoluteRelativeReferences: Boolean,
     ): ResourceRepresentation {
-        val original = ResourceRepresentation(
-            statusCode = statusCode,
-            headers = headers,
-            body = body,
-        )
-        if (body.isEmpty()) return original
+        val source =
+            Resource(
+                upstreamUri = upstreamUri,
+                source = ResourceRepresentation(
+                    statusCode = statusCode,
+                    headers = headers,
+                    body = body,
+                ),
+            )
+        if (body.isEmpty()) return source.representation
 
         val context =
             ResourceTransformationContext(
@@ -708,39 +724,50 @@ internal class SystemHttpCompatibilityProxy(
                 role = graphs.firstNotNullOfOrNull { it.nodeSnapshot(parentLegacyUri)?.role }
                     ?: ReferenceRole.SUBRESOURCE,
                 requestHeaders = requestHeaders,
-                rewriteText = { source ->
+                transformationProfile = config.transformationProfile,
+                rewriteText = { sourceText ->
                     rewriteBodyUrlsWithBase(
                         flow = flow,
                         session = session,
                         graphs = graphs,
                         parentLegacyUri = parentLegacyUri,
                         headers = headers,
-                        source = source,
+                        source = sourceText,
                         baseUri = resolutionBaseUri,
                         forceAbsoluteRelativeReferences = forceAbsoluteRelativeReferences,
                     )
                 },
             )
 
-        if (!resourceTransformations.isCacheable(context, original)) {
-            return resourceTransformations.transform(context, original)
-        }
+        val key =
+            ResourceCacheKey(
+                legacyUri = parentLegacyUri,
+                upstreamUri = upstreamUri,
+                sourceVersion = resourceSourceVersion(source),
+                profile = config.transformationProfile,
+            )
+        resourceCache.get(key)?.let { return it.resource.representation }
 
-        val key = ResourceRepresentationKey(
-            legacyUri = parentLegacyUri,
-            upstreamUri = upstreamUri,
-            profile = config.transformationProfile,
-        )
-        representationCache.get(key)?.let { return it }
-
-        return inFlightResourceWork.getOrStart(key) {
-            representationCache.get(key) ?: resourceTransformations.transform(
-                context,
-                original,
-            ).also { transformed ->
-                representationCache.put(key, transformed)
+        val transformed =
+            inFlightResourceWork.getOrStart(key) {
+                resourceCache.get(key)?.let {
+                    return@getOrStart no.skasti.serialmodem.ppp.proxy.transform.ResourceTransformationState(it.resource)
+                }
+                resourceTransformations.transform(context, source)
             }
+
+        if (transformed.cacheable) {
+            resourceCache.put(
+                key,
+                CachedResource(
+                    resource = transformed.resource,
+                    storedAt = Instant.now(),
+                    cachePolicy = cachePolicyFrom(headers),
+                    validators = validatorsFrom(headers),
+                ),
+            )
         }
+        return transformed.resource.representation
     }
 
     private fun recordAbsoluteBodyReferences(
@@ -1518,7 +1545,7 @@ internal class SystemHttpCompatibilityProxy(
         closed = true
         originRoutes.clear()
         sessionStates.clear()
-        representationCache.clear()
+        resourceCache.clear()
         inFlightResourceWork.clear()
         flows.values.toList().forEach(::removeFlow)
         executor.shutdownNow()
@@ -1551,7 +1578,6 @@ internal class SystemHttpCompatibilityProxy(
         val REQUEST_HEADERS_TO_STRIP = setOf("host", "connection", "proxy-connection", "proxy-authorization", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade", "content-length", "accept-encoding", "expect", "cookie", "cookie2")
         val SENSITIVE_REQUEST_HEADERS = setOf("authorization", "cookie", "cookie2")
         val RESPONSE_HEADERS_TO_STRIP = setOf("connection", "proxy-connection", "keep-alive", "transfer-encoding", "trailer", "upgrade", "content-length")
-        val RESPONSE_HEADERS_TO_STRIP_WHEN_BODY_REWRITTEN = setOf("etag", "content-md5", "digest", "content-digest", "repr-digest", "content-range", "accept-ranges")
         val RESPONSE_COOKIE_HEADERS = setOf("set-cookie", "set-cookie2")
         val URI_RESPONSE_HEADERS_TO_REWRITE = setOf("location", "content-location", "refresh", "link")
         val CSS_URL_REFERENCE_PATTERN =
