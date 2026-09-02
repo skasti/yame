@@ -1235,42 +1235,49 @@ internal object YameDashboardRenderer {
         }
 
         val selected = selectedHostIndex.coerceIn(0, hosts.lastIndex)
-        val allLines = mutableListOf<DashboardLine>()
-        hosts.forEachIndexed { index, host ->
-            val marker = if (host.expanded) "▼" else "▶"
-            val selection = if (index == selected) "›" else " "
-            allLines += DashboardLine(
-                clip("$selection $marker ${host.host}  (${host.urls.size})", contentWidth),
-                if (index == selected) DashboardTone.SELECTED else DashboardTone.ACCENT,
-            )
-            if (host.expanded) {
-                host.urls.forEach { url ->
-                    val path = runCatching { URI(url) }.getOrNull()?.let { uri ->
-                        buildString {
-                            append(uri.rawPath?.takeIf { it.isNotEmpty() } ?: "/")
-                            uri.rawQuery?.let { append('?').append(it) }
-                        }
-                    } ?: url
-                    allLines += DashboardLine(
-                        clip("    $path", contentWidth),
-                        DashboardTone.MUTED,
-                    )
-                }
-            }
-        }
-
+        val rows = visibleRows.coerceAtLeast(1)
         var selectedLine = 0
         for (index in 0 until selected) {
             selectedLine += 1 + if (hosts[index].expanded) hosts[index].urls.size else 0
         }
+        val itemCount = hosts.sumOf { host ->
+            1 + if (host.expanded) host.urls.size else 0
+        }
         val start = viewportStart(
-            selectedIndex = selectedLine.coerceIn(0, (allLines.size - 1).coerceAtLeast(0)),
-            itemCount = allLines.size,
-            visibleRows = visibleRows.coerceAtLeast(1),
+            selectedIndex = selectedLine.coerceIn(0, (itemCount - 1).coerceAtLeast(0)),
+            itemCount = itemCount,
+            visibleRows = rows,
         )
-        return allLines.drop(start).take(visibleRows.coerceAtLeast(1))
-    }
 
+        return sequence {
+            hosts.forEachIndexed { index, host ->
+                val marker = if (host.expanded) "▼" else "▶"
+                val selection = if (index == selected) "›" else " "
+                yield(
+                    DashboardLine(
+                        clip("$selection $marker ${host.host}  (${host.urls.size})", contentWidth),
+                        if (index == selected) DashboardTone.SELECTED else DashboardTone.ACCENT,
+                    ),
+                )
+                if (host.expanded) {
+                    host.urls.forEach { url ->
+                        val path = runCatching { URI(url) }.getOrNull()?.let { uri ->
+                            buildString {
+                                append(uri.rawPath?.takeIf { it.isNotEmpty() } ?: "/")
+                                uri.rawQuery?.let { append('?').append(it) }
+                            }
+                        } ?: url
+                        yield(
+                            DashboardLine(
+                                clip("    $path", contentWidth),
+                                DashboardTone.MUTED,
+                            ),
+                        )
+                    }
+                }
+            }
+        }.drop(start).take(rows).toList()
+    }
     private fun paletteLines(
         palette: TuiCommandPalette,
         visibleRows: Int,
