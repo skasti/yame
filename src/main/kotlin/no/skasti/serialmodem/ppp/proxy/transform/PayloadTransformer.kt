@@ -3,33 +3,17 @@ package no.skasti.serialmodem.ppp.proxy.transform
 import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets
 
-internal data class PayloadTransformationContext(
-    val headers: Map<String, List<String>>,
-    val rewriteText: (String) -> String,
-)
+internal class LegacyTextResourceTransformer : ResourceTransformer {
+    override val id: String = "legacy-text-url-rewrite"
+    override val phase: ResourceTransformPhase = ResourceTransformPhase.COMPATIBILITY
 
-internal interface PayloadTransformer {
-    fun supports(context: PayloadTransformationContext): Boolean
-    fun transform(context: PayloadTransformationContext, payload: ByteArray): ByteArray
-}
-
-internal class PayloadTransformationPipeline(
-    private val transformers: List<PayloadTransformer>,
-) {
-    fun supports(context: PayloadTransformationContext): Boolean =
-        transformers.any { it.supports(context) }
-
-    fun transform(context: PayloadTransformationContext, payload: ByteArray): ByteArray =
-        transformers.fold(payload) { current, transformer ->
-            if (transformer.supports(context)) transformer.transform(context, current) else current
-        }
-}
-
-internal class LegacyTextPayloadTransformer : PayloadTransformer {
-    override fun supports(context: PayloadTransformationContext): Boolean {
-        val contentEncoding = firstHeader(context.headers, "content-encoding")
+    override fun supports(
+        context: ResourceTransformationContext,
+        representation: ResourceRepresentation,
+    ): Boolean {
+        val contentEncoding = firstHeader(representation.headers, "content-encoding")
         if (contentEncoding != null && !contentEncoding.equals("identity", ignoreCase = true)) return false
-        val contentType = firstHeader(context.headers, "content-type")
+        val contentType = firstHeader(representation.headers, "content-type")
             ?.substringBefore(';')
             ?.trim()
             ?.lowercase()
@@ -37,12 +21,35 @@ internal class LegacyTextPayloadTransformer : PayloadTransformer {
         return contentType in REWRITABLE_CONTENT_TYPES
     }
 
-    override fun transform(context: PayloadTransformationContext, payload: ByteArray): ByteArray =
-        rewriteEncodedTextBody(context.headers, payload, context.rewriteText)
+    override fun transform(
+        context: ResourceTransformationContext,
+        representation: ResourceRepresentation,
+    ): ResourceRepresentation {
+        val rewritten = rewriteEncodedTextBody(
+            representation.headers,
+            representation.body,
+            context.rewriteText,
+        )
+        return if (rewritten === representation.body) {
+            representation
+        } else {
+            representation.copy(
+                headers = stripStaleRepresentationMetadata(representation.headers),
+                body = rewritten,
+            )
+        }
+    }
 }
 
 private fun firstHeader(headers: Map<String, List<String>>, name: String): String? =
     headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value?.firstOrNull()
+
+internal fun stripStaleRepresentationMetadata(
+    headers: Map<String, List<String>>,
+): Map<String, List<String>> =
+    headers.filterKeys { name ->
+        name.lowercase() !in STALE_REPRESENTATION_HEADERS
+    }
 
 internal fun rewriteEncodedTextBody(
     headers: Map<String, List<String>>,
@@ -78,7 +85,6 @@ private fun bomCharset(body: ByteArray): Charset? =
 private val CHARSET_PARAMETER_PATTERN =
     Regex("""(?i)(?:^|;)\s*charset\s*=\s*(?:"([^"]+)"|'([^']+)'|([^;\s]+))""")
 
-
 private val REWRITABLE_CONTENT_TYPES = setOf(
     "text/html",
     "application/xhtml+xml",
@@ -86,4 +92,15 @@ private val REWRITABLE_CONTENT_TYPES = setOf(
     "text/javascript",
     "application/javascript",
     "application/x-javascript",
+)
+
+private val STALE_REPRESENTATION_HEADERS = setOf(
+    "etag",
+    "content-md5",
+    "digest",
+    "content-digest",
+    "repr-digest",
+    "content-range",
+    "accept-ranges",
+    "content-length",
 )
