@@ -397,7 +397,9 @@ class SystemHttpCompatibilityProxy(
                         response.body().close()
                         FinalResponseBody.Buffered(ByteArray(0))
                     }
-                    status != 206 && bodyCanContainNavigableUrls(responseHeaders) -> {
+                    status != 206 && payloadTransformations.supports(
+                        PayloadTransformationContext(responseHeaders) { it },
+                    ) -> {
                         if (upstreamContentLength > config.maxResponseBytes.toLong()) {
                             response.body().close()
                             throw ResponseTooLarge(

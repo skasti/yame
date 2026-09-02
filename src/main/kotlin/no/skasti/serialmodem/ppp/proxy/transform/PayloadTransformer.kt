@@ -16,6 +16,9 @@ internal interface PayloadTransformer {
 internal class PayloadTransformationPipeline(
     private val transformers: List<PayloadTransformer>,
 ) {
+    fun supports(context: PayloadTransformationContext): Boolean =
+        transformers.any { it.supports(context) }
+
     fun transform(context: PayloadTransformationContext, payload: ByteArray): ByteArray =
         transformers.fold(payload) { current, transformer ->
             if (transformer.supports(context)) transformer.transform(context, current) else current
