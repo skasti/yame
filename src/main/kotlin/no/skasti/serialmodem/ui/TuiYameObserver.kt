@@ -345,15 +345,19 @@ class TuiYameObserver(
 
         val hosts = linkedMapOf<String, Aggregate>()
         httpGraphs.values.forEach { graph ->
+            val graphHosts = linkedSetOf<String>()
             sequenceOf(graph.rootLegacyUri)
                 .plus(graph.resources.asSequence())
                 .forEach { uri ->
                     val host = uri.host?.lowercase() ?: return@forEach
                     val aggregate = hosts.getOrPut(host) { Aggregate() }
                     aggregate.urls += uri.toString()
-                    aggregate.useCount += graph.useCount
                     aggregate.lastUsedNanos = maxOf(aggregate.lastUsedNanos, graph.lastUsedNanos)
+                    graphHosts += host
                 }
+            graphHosts.forEach { host ->
+                hosts.getValue(host).useCount += graph.useCount
+            }
         }
 
         return hosts
@@ -775,21 +779,23 @@ class TuiYameObserver(
         if (closed || !screenStarted) return
         animation.update(
             YameDashboardRenderer.render(
-                state = DashboardState(
-                    portName = portName,
-                    baud = baud,
-                    connected = connected,
-                    dnsUpstream = dnsUpstream,
-                    httpProxyEnabled = httpProxyEnabled,
-                    logs = logs.toList(),
-                    dnsLookups = dnsLookups.toList(),
-                    transfers = transfers.values.toList(),
-                    httpHosts = httpHostSnapshots(),
-                    selectedHttpHostIndex = httpHostSnapshots()
-                        .indexOfFirst { it.host == selectedHttpHost }
-                        .coerceAtLeast(0),
-                    commandPalette = commandPalette,
-                ),
+                state = httpHostSnapshots().let { httpHosts ->
+                    DashboardState(
+                        portName = portName,
+                        baud = baud,
+                        connected = connected,
+                        dnsUpstream = dnsUpstream,
+                        httpProxyEnabled = httpProxyEnabled,
+                        logs = logs.toList(),
+                        dnsLookups = dnsLookups.toList(),
+                        transfers = transfers.values.toList(),
+                        httpHosts = httpHosts,
+                        selectedHttpHostIndex = httpHosts
+                            .indexOfFirst { it.host == selectedHttpHost }
+                            .coerceAtLeast(0),
+                        commandPalette = commandPalette,
+                    )
+                },
                 width = terminal.size.width,
                 height = terminal.size.height,
                 styles = DashboardStyles.colorful,
