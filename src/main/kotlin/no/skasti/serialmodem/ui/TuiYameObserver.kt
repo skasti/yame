@@ -72,6 +72,7 @@ class TuiYameObserver(
     private val animation = terminal.textAnimation<String> { it }
     private var inputThread: Thread? = null
     private var screenStarted = false
+    private var lastRenderedFrame: String? = null
 
     @Volatile
     private var closed = false
@@ -780,32 +781,34 @@ class TuiYameObserver(
         if (notify) onQuit()
     }
 
+    @Synchronized
     private fun render() {
         if (closed || !screenStarted) return
-        animation.update(
-            YameDashboardRenderer.render(
-                state = httpHostSnapshots().let { httpHosts ->
-                    DashboardState(
-                        portName = portName,
-                        baud = baud,
-                        connected = connected,
-                        dnsUpstream = dnsUpstream,
-                        httpProxyEnabled = httpProxyEnabled,
-                        logs = logs.toList(),
-                        dnsLookups = dnsLookups.toList(),
-                        transfers = transfers.values.toList(),
-                        httpHosts = httpHosts,
-                        selectedHttpHostIndex = httpHosts
-                            .indexOfFirst { it.host == selectedHttpHost }
-                            .coerceAtLeast(0),
-                        commandPalette = commandPalette,
-                    )
-                },
-                width = terminal.size.width,
-                height = terminal.size.height,
-                styles = DashboardStyles.colorful,
-            ),
+        val frame = YameDashboardRenderer.render(
+            state = httpHostSnapshots().let { httpHosts ->
+                DashboardState(
+                    portName = portName,
+                    baud = baud,
+                    connected = connected,
+                    dnsUpstream = dnsUpstream,
+                    httpProxyEnabled = httpProxyEnabled,
+                    logs = logs.toList(),
+                    dnsLookups = dnsLookups.toList(),
+                    transfers = transfers.values.toList(),
+                    httpHosts = httpHosts,
+                    selectedHttpHostIndex = httpHosts
+                        .indexOfFirst { it.host == selectedHttpHost }
+                        .coerceAtLeast(0),
+                    commandPalette = commandPalette,
+                )
+            },
+            width = terminal.size.width,
+            height = terminal.size.height,
+            styles = DashboardStyles.colorful,
         )
+        if (frame == lastRenderedFrame) return
+        lastRenderedFrame = frame
+        animation.update(frame)
     }
 
     @Synchronized
