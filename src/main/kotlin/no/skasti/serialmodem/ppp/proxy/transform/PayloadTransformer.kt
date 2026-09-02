@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets
 internal class LegacyTextResourceTransformer : ResourceTransformer {
     override val id: String = "legacy-text-url-rewrite"
     override val phase: ResourceTransformPhase = ResourceTransformPhase.COMPATIBILITY
+    override val cacheable: Boolean = false
 
     override fun supports(
         context: ResourceTransformationContext,
