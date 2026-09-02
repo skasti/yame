@@ -34,7 +34,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
-class SystemHttpCompatibilityProxy(
+internal class SystemHttpCompatibilityProxy(
     private val config: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig(enabled = true),
     private val logger: (String) -> Unit = {},
     private val eventSink: (YameEvent) -> Unit = {},
