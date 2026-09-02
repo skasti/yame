@@ -1,5 +1,9 @@
-package no.skasti.serialmodem.ppp
+package no.skasti.serialmodem.ppp.session
 
+import no.skasti.serialmodem.ppp.PppAddresses
+import no.skasti.serialmodem.ppp.PppControlOption
+import no.skasti.serialmodem.ppp.PppControlPacket
+import no.skasti.serialmodem.ppp.PppFrame
 import no.skasti.serialmodem.observer.TransferState
 import no.skasti.serialmodem.observer.YameEvent
 import no.skasti.serialmodem.ppp.dns.PppDnsConfig

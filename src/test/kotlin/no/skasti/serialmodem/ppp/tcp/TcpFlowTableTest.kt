@@ -1,5 +1,4 @@
-package no.skasti.serialmodem.ppp
-
+package no.skasti.serialmodem.ppp.tcp
 import no.skasti.serialmodem.ppp.ip.Ipv4Address
 import no.skasti.serialmodem.ppp.tcp.TcpConnectionState
 import no.skasti.serialmodem.ppp.tcp.TcpFlowEvent

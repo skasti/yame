@@ -1,5 +1,4 @@
-package no.skasti.serialmodem.ppp
-
+package no.skasti.serialmodem.ppp.udp
 import no.skasti.serialmodem.ppp.ip.Ipv4Address
 import no.skasti.serialmodem.ppp.udp.SystemUdpProxy
 import no.skasti.serialmodem.ppp.udp.UdpFlow

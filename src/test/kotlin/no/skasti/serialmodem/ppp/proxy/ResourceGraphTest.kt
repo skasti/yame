@@ -1,5 +1,4 @@
-package no.skasti.serialmodem.ppp
-
+package no.skasti.serialmodem.ppp.proxy
 import no.skasti.serialmodem.ppp.proxy.NavigationResourceRegistry
 import no.skasti.serialmodem.ppp.proxy.ReferenceRole
 import no.skasti.serialmodem.ppp.proxy.ResourceKind

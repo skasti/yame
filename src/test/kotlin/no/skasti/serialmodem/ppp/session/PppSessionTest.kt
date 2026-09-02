@@ -1,5 +1,7 @@
-package no.skasti.serialmodem.ppp
+package no.skasti.serialmodem.ppp.session
 
+import no.skasti.serialmodem.ppp.PppFrame
+import no.skasti.serialmodem.ppp.PppFramer
 import no.skasti.serialmodem.ppp.lcp.LcpPacket
 import no.skasti.serialmodem.ppp.session.PppSession
 import kotlin.test.Test
