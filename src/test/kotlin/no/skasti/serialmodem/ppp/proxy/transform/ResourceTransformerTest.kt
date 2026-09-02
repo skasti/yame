@@ -7,6 +7,9 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
+import kotlin.test.assertSame
+import kotlin.test.assertTrue
 
 class ResourceTransformerTest {
     @Test
@@ -23,15 +26,15 @@ class ResourceTransformerTest {
 
             override fun supports(
                 context: ResourceTransformationContext,
-                representation: ResourceRepresentation,
+                state: ResourceTransformationState,
             ) = true
 
             override fun transform(
                 context: ResourceTransformationContext,
-                representation: ResourceRepresentation,
-            ): ResourceRepresentation {
+                state: ResourceTransformationState,
+            ): ResourceTransformationState {
                 order += id
-                return representation
+                return state
             }
         }
 
@@ -45,7 +48,7 @@ class ResourceTransformerTest {
             ),
         )
 
-        pipeline.transform(context(), representation())
+        pipeline.transform(context(), resource())
 
         assertEquals(
             listOf("structural-early", "structural-late", "a-compat", "z-compat", "encode"),
@@ -54,59 +57,93 @@ class ResourceTransformerTest {
     }
 
     @Test
-    fun `graph discovering text transformer is explicitly not cacheable`() {
-        val pipeline = ResourceTransformationPipeline(listOf(LegacyTextResourceTransformer()))
-        val representation = ResourceRepresentation(
-            statusCode = 200,
-            headers = mapOf("Content-Type" to listOf("text/html")),
-            body = "<img src=\"https://example.test/a.png\">".toByteArray(),
-        )
+    fun `cacheability follows transformers as representation evolves`() {
+        val lateNonCacheable =
+            object : ResourceTransformer {
+                override val id = "late"
+                override val phase = ResourceTransformPhase.OPTIMIZATION
+                override val cacheable = false
 
-        assertFalse(pipeline.isCacheable(context(), representation))
+                override fun supports(
+                    context: ResourceTransformationContext,
+                    state: ResourceTransformationState,
+                ) = state.resource.representation.headers["X-Ready"] == listOf("yes")
+
+                override fun transform(
+                    context: ResourceTransformationContext,
+                    state: ResourceTransformationState,
+                ) = state
+            }
+        val makeApplicable =
+            object : ResourceTransformer {
+                override val id = "early"
+                override val phase = ResourceTransformPhase.STRUCTURAL
+
+                override fun supports(
+                    context: ResourceTransformationContext,
+                    state: ResourceTransformationState,
+                ) = true
+
+                override fun transform(
+                    context: ResourceTransformationContext,
+                    state: ResourceTransformationState,
+                ): ResourceTransformationState {
+                    val current = state.resource.representation
+                    return state.copy(
+                        resource = state.resource.copy(
+                            transformed = TransformedRepresentation(
+                                context.transformationProfile,
+                                current.copy(headers = current.headers + ("X-Ready" to listOf("yes"))),
+                            ),
+                        ),
+                    )
+                }
+            }
+
+        val result = ResourceTransformationPipeline(listOf(lateNonCacheable, makeApplicable))
+            .transform(context(), resource())
+
+        assertFalse(result.cacheable)
     }
 
     @Test
-    fun `changed body strips stale validators while preserving transformer metadata`() {
-        val pipeline = ResourceTransformationPipeline(
-            listOf(
-                object : ResourceTransformer {
-                    override val id = "image-example"
-                    override val phase = ResourceTransformPhase.OPTIMIZATION
-
-                    override fun supports(
-                        context: ResourceTransformationContext,
-                        representation: ResourceRepresentation,
-                    ) = true
-
-                    override fun transform(
-                        context: ResourceTransformationContext,
-                        representation: ResourceRepresentation,
-                    ) = representation.copy(
-                        headers = representation.headers + ("Content-Type" to listOf("image/gif")),
-                        body = byteArrayOf(4, 5),
-                    )
-                },
+    fun `legacy text transform preserves source and creates transformed representation`() {
+        val source = representation(
+            headers = mapOf(
+                "Content-Type" to listOf("text/html"),
+                "ETag" to listOf("\"upstream\""),
+                "Content-Length" to listOf("31"),
             ),
+            body = "<img src=\"https://example.test/a\">".toByteArray(),
         )
+        val resource = Resource(URI("https://modern.test/page"), source)
 
-        val transformed = pipeline.transform(
-            context(),
-            representation(
-                headers = mapOf(
-                    "Content-Type" to listOf("image/png"),
-                    "ETag" to listOf("\"upstream\""),
-                    "Content-Length" to listOf("3"),
-                ),
-            ),
-        )
+        val result = ResourceTransformationPipeline(listOf(LegacyTextResourceTransformer()))
+            .transform(context(rewriteText = { it.replace("https://", "http://") }), resource)
 
-        assertContentEquals(byteArrayOf(4, 5), transformed.body)
-        assertEquals(listOf("image/gif"), transformed.headers["Content-Type"])
-        assertFalse(transformed.headers.keys.any { it.equals("ETag", true) })
-        assertFalse(transformed.headers.keys.any { it.equals("Content-Length", true) })
+        assertSame(source, result.resource.source)
+        assertFalse(result.cacheable)
+        val transformed = requireNotNull(result.resource.transformed)
+        assertEquals("netscape-4.08-v1", transformed.profile)
+        assertTrue(transformed.representation.body.decodeToString().contains("http://example.test/a"))
+        assertFalse(transformed.representation.headers.keys.any { it.equals("ETag", true) })
+        assertFalse(transformed.representation.headers.keys.any { it.equals("Content-Length", true) })
     }
 
-    private fun context() = ResourceTransformationContext(
+    @Test
+    fun `unchanged resource has no transformed representation`() {
+        val resource = resource()
+        val result = ResourceTransformationPipeline(listOf(LegacyTextResourceTransformer()))
+            .transform(context(), resource)
+
+        assertSame(resource.source, result.resource.source)
+        assertNull(result.resource.transformed)
+        assertTrue(result.cacheable)
+    }
+
+    private fun context(
+        rewriteText: (String) -> String = { it },
+    ) = ResourceTransformationContext(
         navigationIds = setOf(1L),
         legacyUri = URI("http://legacy.test/image.png"),
         upstreamUri = URI("https://modern.test/image.png"),
@@ -114,14 +151,21 @@ class ResourceTransformerTest {
         relation = null,
         role = ReferenceRole.SUBRESOURCE,
         requestHeaders = emptyMap(),
-        rewriteText = { it },
+        transformationProfile = "netscape-4.08-v1",
+        rewriteText = rewriteText,
+    )
+
+    private fun resource() = Resource(
+        upstreamUri = URI("https://modern.test/image.png"),
+        source = representation(),
     )
 
     private fun representation(
         headers: Map<String, List<String>> = mapOf("Content-Type" to listOf("text/plain")),
+        body: ByteArray = byteArrayOf(1, 2, 3),
     ) = ResourceRepresentation(
         statusCode = 200,
         headers = headers,
-        body = byteArrayOf(1, 2, 3),
+        body = body,
     )
 }
