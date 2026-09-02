@@ -54,6 +54,18 @@ class ResourceTransformerTest {
     }
 
     @Test
+    fun `graph discovering text transformer is explicitly not cacheable`() {
+        val pipeline = ResourceTransformationPipeline(listOf(LegacyTextResourceTransformer()))
+        val representation = ResourceRepresentation(
+            statusCode = 200,
+            headers = mapOf("Content-Type" to listOf("text/html")),
+            body = "<img src=\"https://example.test/a.png\">".toByteArray(),
+        )
+
+        assertFalse(pipeline.isCacheable(context(), representation))
+    }
+
+    @Test
     fun `changed body strips stale validators while preserving transformer metadata`() {
         val pipeline = ResourceTransformationPipeline(
             listOf(
