@@ -10,8 +10,9 @@ internal class LegacyTextResourceTransformer : ResourceTransformer {
 
     override fun supports(
         context: ResourceTransformationContext,
-        representation: ResourceRepresentation,
+        state: ResourceTransformationState,
     ): Boolean {
+        val representation = state.resource.representation
         val contentEncoding = firstHeader(representation.headers, "content-encoding")
         if (contentEncoding != null && !contentEncoding.equals("identity", ignoreCase = true)) return false
         val contentType = firstHeader(representation.headers, "content-type")
@@ -24,32 +25,40 @@ internal class LegacyTextResourceTransformer : ResourceTransformer {
 
     override fun transform(
         context: ResourceTransformationContext,
-        representation: ResourceRepresentation,
-    ): ResourceRepresentation {
+        state: ResourceTransformationState,
+    ): ResourceTransformationState {
+        val current = state.resource.representation
         val rewritten = rewriteEncodedTextBody(
-            representation.headers,
-            representation.body,
+            current.headers,
+            current.body,
             context.rewriteText,
         )
-        return if (rewritten === representation.body) {
-            representation
-        } else {
-            representation.copy(
-                headers = stripStaleRepresentationMetadata(representation.headers),
-                body = rewritten,
-            )
-        }
+        if (rewritten === current.body) return state
+
+        val transformed = ResourceRepresentation(
+            statusCode = current.statusCode,
+            headers = transformedHeadersFrom(current.headers),
+            body = rewritten,
+        )
+        return state.copy(
+            resource = state.resource.copy(
+                transformed = TransformedRepresentation(
+                    profile = context.transformationProfile,
+                    representation = transformed,
+                ),
+            ),
+        )
     }
 }
 
 private fun firstHeader(headers: Map<String, List<String>>, name: String): String? =
     headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value?.firstOrNull()
 
-internal fun stripStaleRepresentationMetadata(
-    headers: Map<String, List<String>>,
+internal fun transformedHeadersFrom(
+    sourceHeaders: Map<String, List<String>>,
 ): Map<String, List<String>> =
-    headers.filterKeys { name ->
-        name.lowercase() !in STALE_REPRESENTATION_HEADERS
+    sourceHeaders.filterKeys { name ->
+        name.lowercase() !in SOURCE_ONLY_REPRESENTATION_HEADERS
     }
 
 internal fun rewriteEncodedTextBody(
@@ -95,7 +104,7 @@ private val REWRITABLE_CONTENT_TYPES = setOf(
     "application/x-javascript",
 )
 
-private val STALE_REPRESENTATION_HEADERS = setOf(
+private val SOURCE_ONLY_REPRESENTATION_HEADERS = setOf(
     "etag",
     "content-md5",
     "digest",
