@@ -58,6 +58,44 @@ internal data class NavigationResourceGraphSnapshot(
     val edges: List<ResourceEdgeSnapshot>,
 )
 
+internal data class ResourceRegistryRoot(
+    val graphId: Long,
+    val rootLegacyUri: URI,
+)
+
+internal data class ResourceRegistryResource(
+    val graphId: Long,
+    val rootLegacyUri: URI,
+    val resource: ResourceNodeSnapshot,
+)
+
+internal class ResourceRegistryEvent<T> {
+    private val handlers = linkedSetOf<(T) -> Unit>()
+
+    @Synchronized
+    operator fun plusAssign(handler: (T) -> Unit) {
+        handlers += handler
+    }
+
+    @Synchronized
+    operator fun minusAssign(handler: (T) -> Unit) {
+        handlers -= handler
+    }
+
+    fun fire(value: T) {
+        val snapshot = synchronized(this) { handlers.toList() }
+        snapshot.forEach { handler -> runCatching { handler(value) } }
+    }
+}
+
+internal class ResourceRegistryHooks {
+    val onRootAdded = ResourceRegistryEvent<ResourceRegistryRoot>()
+    val onRootRemoved = ResourceRegistryEvent<ResourceRegistryRoot>()
+    val onRootUsed = ResourceRegistryEvent<ResourceRegistryRoot>()
+    val onResourceAdded = ResourceRegistryEvent<ResourceRegistryResource>()
+    val onResourceRemoved = ResourceRegistryEvent<ResourceRegistryResource>()
+}
+
 internal class NavigationResourceGraph(
     val id: Long,
     val rootLegacyUri: URI,
@@ -189,6 +227,7 @@ internal class NavigationResourceRegistry(
     private val maxContexts: Int = 64,
     private val maxNodesPerContext: Int = 1_024,
     private val maxEdgesPerContext: Int = 2_048,
+    val hooks: ResourceRegistryHooks = ResourceRegistryHooks(),
 ) {
     init {
         require(maxContexts > 0) { "Navigation context limit must be positive" }
@@ -211,6 +250,9 @@ internal class NavigationResourceRegistry(
         )
         graphs[graph.id] = graph
         associate(rootLegacyUri, graph.id)
+        val root = ResourceRegistryRoot(graph.id, rootLegacyUri)
+        hooks.onRootAdded.fire(root)
+        hooks.onRootUsed.fire(root)
         return graph
     }
 
@@ -229,8 +271,18 @@ internal class NavigationResourceRegistry(
         relation: ResourceRelation,
         kind: ResourceKind,
     ) {
+        val before = graph.snapshot().nodes.associateBy { LegacyHttpUrl.requestObservableKey(it.legacyUri) }
         if (graph.discover(parentLegacyUri, childLegacyUri, upstreamUri, relation, kind)) {
             associate(childLegacyUri, graph.id)
+            hooks.onRootUsed.fire(ResourceRegistryRoot(graph.id, graph.rootLegacyUri))
+            val key = LegacyHttpUrl.requestObservableKey(childLegacyUri)
+            if (key !in before) {
+                graph.snapshot().nodes.firstOrNull { LegacyHttpUrl.requestObservableKey(it.legacyUri) == key }?.let { resource ->
+                    hooks.onResourceAdded.fire(
+                        ResourceRegistryResource(graph.id, graph.rootLegacyUri, resource),
+                    )
+                }
+            }
         }
     }
 
@@ -239,7 +291,14 @@ internal class NavigationResourceRegistry(
 
     private fun evictOldest() {
         val oldestId = graphs.keys.firstOrNull() ?: return
-        graphs.remove(oldestId)
+        val removed = graphs.remove(oldestId) ?: return
+        val removedSnapshot = removed.snapshot()
+        removedSnapshot.nodes.forEach { resource ->
+            hooks.onResourceRemoved.fire(
+                ResourceRegistryResource(removedSnapshot.id, removedSnapshot.rootLegacyUri, resource),
+            )
+        }
+        hooks.onRootRemoved.fire(ResourceRegistryRoot(removedSnapshot.id, removedSnapshot.rootLegacyUri))
         val iterator = contextByLegacyUri.entries.iterator()
         while (iterator.hasNext()) {
             val entry = iterator.next()
