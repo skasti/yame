@@ -2,6 +2,10 @@ package no.skasti.serialmodem.ppp.proxy.transform
 
 import java.net.URI
 import java.time.Instant
+import java.nio.ByteBuffer
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import java.util.HexFormat
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -12,6 +16,11 @@ internal data class ResourceCacheKey(
     val legacyUri: URI,
     val upstreamUri: URI,
     val profile: String,
+)
+
+internal data class ResourceWorkKey(
+    val cacheKey: ResourceCacheKey,
+    val sourceFingerprint: String,
 )
 
 internal data class ResourceValidators(
@@ -113,7 +122,7 @@ internal class ResourceCache(
         }
 
     fun put(
-        key: ResourceCacheKey,
+        key: ResourceWorkKey,
         cached: CachedResource,
     ): Boolean {
         if (cached.cachePolicy.noStore) return false
@@ -149,10 +158,10 @@ internal class InFlightResourceWork {
         val waiters: java.util.concurrent.atomic.AtomicInteger = java.util.concurrent.atomic.AtomicInteger(),
     )
 
-    private val work = ConcurrentHashMap<ResourceCacheKey, Pending>()
+    private val work = ConcurrentHashMap<ResourceWorkKey, Pending>()
 
     fun getOrStart(
-        key: ResourceCacheKey,
+        key: ResourceWorkKey,
         producer: () -> ResourceTransformationState,
     ): ResourceTransformationState {
         val created = Pending()
@@ -209,3 +218,39 @@ private fun ResourceRepresentation.deepCopy(): ResourceRepresentation =
         body = body.copyOf(),
     )
 
+
+internal fun sourceFingerprint(representation: ResourceRepresentation): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    digest.update(ByteBuffer.allocate(Int.SIZE_BYTES).putInt(representation.statusCode).array())
+
+    val normalizedHeaders =
+        representation.headers.entries
+            .groupBy(
+                keySelector = { (name, _) -> name.lowercase(Locale.ROOT) },
+                valueTransform = { it.value },
+            )
+            .mapValues { (_, valueLists) -> valueLists.flatten() }
+            .toSortedMap()
+
+    digest.update(ByteBuffer.allocate(Int.SIZE_BYTES).putInt(normalizedHeaders.size).array())
+    normalizedHeaders.forEach { (name, values) ->
+        digest.updateLengthPrefixed(name.toByteArray(StandardCharsets.UTF_8))
+        digest.update(ByteBuffer.allocate(Int.SIZE_BYTES).putInt(values.size).array())
+        values.forEach { value ->
+            digest.updateLengthPrefixed(value.toByteArray(StandardCharsets.ISO_8859_1))
+        }
+    }
+    digest.updateLengthPrefixed(representation.body)
+    return HexFormat.of().formatHex(digest.digest())
+}
+
+internal fun sameSourceRepresentation(
+    first: ResourceRepresentation,
+    second: ResourceRepresentation,
+): Boolean =
+    sourceFingerprint(first) == sourceFingerprint(second)
+
+private fun MessageDigest.updateLengthPrefixed(bytes: ByteArray) {
+    update(ByteBuffer.allocate(Int.SIZE_BYTES).putInt(bytes.size).array())
+    update(bytes)
+}
