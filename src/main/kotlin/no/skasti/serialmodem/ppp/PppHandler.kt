@@ -17,7 +17,7 @@ interface PppHandler : Closeable {
     override fun close() = Unit
 }
 
-class RetroPppHandler(
+internal class RetroPppHandler(
     private val logger: (String) -> Unit = ::println,
     private val dnsLogger: (String) -> Unit = logger,
     private val transferLogger: (String) -> Unit = logger,
