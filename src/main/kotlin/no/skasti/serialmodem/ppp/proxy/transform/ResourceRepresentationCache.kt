@@ -37,8 +37,11 @@ internal data class ResourceCachePolicy(
 ) {
     fun isFresh(storedAt: Instant, now: Instant = Instant.now()): Boolean {
         if (noCache) return false
-        val maxAgeFreshUntil = maxAgeSeconds?.let(storedAt::plusSeconds)
-        val freshUntil = listOfNotNull(maxAgeFreshUntil, expiresAt).minOrNull() ?: return false
+        val freshUntil =
+            maxAgeSeconds
+                ?.let(storedAt::plusSeconds)
+                ?: expiresAt
+                ?: return false
         return now.isBefore(freshUntil)
     }
 }
