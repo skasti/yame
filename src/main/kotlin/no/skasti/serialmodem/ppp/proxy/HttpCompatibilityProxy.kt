@@ -726,8 +726,7 @@ internal class SystemHttpCompatibilityProxy(
                 profile = config.transformationProfile,
             )
         val fingerprint = sourceFingerprint(source.source)
-        resourceCache.get(cacheKey)
-            ?.takeIf { cached -> sourceFingerprint(cached.resource.source) == fingerprint }
+        resourceCache.getIfSourceFingerprint(cacheKey, fingerprint)
             ?.let { return it.resource.representation }
 
         val workKey =
@@ -737,8 +736,7 @@ internal class SystemHttpCompatibilityProxy(
             )
         val transformed =
             inFlightResourceWork.getOrStart(workKey) {
-                resourceCache.get(cacheKey)
-                    ?.takeIf { cached -> sourceFingerprint(cached.resource.source) == fingerprint }
+                resourceCache.getIfSourceFingerprint(cacheKey, fingerprint)
                     ?.let {
                         return@getOrStart no.skasti.serialmodem.ppp.proxy.transform.ResourceTransformationState(it.resource)
                     }
@@ -754,6 +752,7 @@ internal class SystemHttpCompatibilityProxy(
                     cachePolicy = cachePolicyFrom(headers),
                     validators = validatorsFrom(headers),
                 ),
+                sourceFingerprint = fingerprint,
             )
         }
         return transformed.resource.representation
@@ -1146,7 +1145,6 @@ internal class SystemHttpCompatibilityProxy(
                 ) ?: match.value
             }
         }
-
 
     private fun responseIsNavigationDocument(
         method: String,
