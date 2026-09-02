@@ -4,7 +4,6 @@ import java.net.URI
 import java.time.Instant
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
-import java.security.MessageDigest
 import java.util.Locale
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
@@ -12,7 +11,6 @@ import java.util.concurrent.ConcurrentHashMap
 internal data class ResourceCacheKey(
     val legacyUri: URI,
     val upstreamUri: URI,
-    val sourceVersion: String,
     val profile: String,
 )
 
@@ -211,11 +209,3 @@ private fun ResourceRepresentation.deepCopy(): ResourceRepresentation =
         body = body.copyOf(),
     )
 
-internal fun resourceSourceVersion(resource: Resource): String {
-    val validators = validatorsFrom(resource.source.headers)
-    validators.etag?.let { return "etag:$it" }
-    validators.lastModified?.let { return "last-modified:$it" }
-
-    val digest = MessageDigest.getInstance("SHA-256").digest(resource.source.body)
-    return "sha256:" + digest.joinToString("") { byte -> "%02x".format(byte) }
-}
