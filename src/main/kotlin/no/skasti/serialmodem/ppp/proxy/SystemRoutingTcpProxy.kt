@@ -12,8 +12,14 @@ class SystemRoutingTcpProxy(
     private val httpConfig: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig(),
     private val logger: (String) -> Unit = {},
     private val eventSink: (YameEvent) -> Unit = {},
+    private val resourceRegistryHooks: ResourceRegistryHooks = ResourceRegistryHooks(),
     private val directProxy: TcpProxy = SystemTcpProxy(),
-    private val httpProxy: TcpProxy = SystemHttpCompatibilityProxy(httpConfig, logger, eventSink = eventSink),
+    private val httpProxy: TcpProxy = SystemHttpCompatibilityProxy(
+        httpConfig,
+        logger,
+        eventSink = eventSink,
+        resourceRegistryHooks = resourceRegistryHooks,
+    ),
 ) : TcpProxy {
     private val routes = ConcurrentHashMap<TcpProxyFlow, TcpProxy>()
 
