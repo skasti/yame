@@ -19,6 +19,8 @@ import no.skasti.serialmodem.observer.TransferKind
 import no.skasti.serialmodem.observer.TransferState
 import no.skasti.serialmodem.observer.YameEvent
 import no.skasti.serialmodem.ppp.dns.dnsResponseCodeName
+import no.skasti.serialmodem.ppp.proxy.ResourceRegistryResource
+import no.skasti.serialmodem.ppp.proxy.ResourceRegistryRoot
 import no.skasti.serialmodem.serial.SerialPortDescriptor
 import java.net.URI
 import java.time.LocalTime
@@ -54,9 +56,16 @@ class TuiYameObserver(
     private val logs = ArrayDeque<String>()
     private val dnsLookups = mutableListOf<DashboardDnsLookup>()
     private val transfers = linkedMapOf<String, DashboardTransfer>()
-    private val httpHosts = linkedMapOf<String, LinkedHashSet<String>>()
+    private data class HttpGraphState(
+        val rootLegacyUri: URI,
+        val resources: LinkedHashSet<URI> = linkedSetOf(),
+        var useCount: Long = 0,
+        var lastUsedNanos: Long = 0,
+    )
+
+    private val httpGraphs = linkedMapOf<Long, HttpGraphState>()
     private val expandedHttpHosts = linkedSetOf<String>()
-    private var selectedHttpHostIndex = 0
+    private var selectedHttpHost: String? = null
     private var commandPalette: TuiCommandPalette? = null
     private var keyboardInput: JLineKeyboardInput? = null
 
@@ -275,42 +284,118 @@ class TuiYameObserver(
                 )
             }
 
-            is YameEvent.HttpProxyAction -> {
-                recordHttpUrls(event.message)
-            }
+            is YameEvent.HttpProxyAction -> Unit
         }
         render()
     }
 
-    private fun recordHttpUrls(message: String) {
-        ABSOLUTE_URL_PATTERN.findAll(message).forEach { match ->
-            val uri = runCatching { URI(match.value.trimEnd('.', ',', ';', ')', ']')) }.getOrNull()
-                ?: return@forEach
-            val host = uri.host?.lowercase() ?: return@forEach
-            val urls = httpHosts.getOrPut(host) { linkedSetOf() }
-            urls += uri.toString()
-            while (urls.size > MAX_URLS_PER_HOST) urls.remove(urls.first())
+    @Synchronized
+    internal fun handleResourceRootAdded(root: ResourceRegistryRoot) {
+        httpGraphs[root.graphId] = HttpGraphState(rootLegacyUri = root.rootLegacyUri)
+        touchHttpGraph(root.graphId)
+        normalizeHttpHostSelection()
+        render()
+    }
+
+    @Synchronized
+    internal fun handleResourceRootRemoved(root: ResourceRegistryRoot) {
+        httpGraphs.remove(root.graphId)
+        normalizeHttpHostSelection()
+        render()
+    }
+
+    @Synchronized
+    internal fun handleResourceRootUsed(root: ResourceRegistryRoot) {
+        touchHttpGraph(root.graphId)
+        normalizeHttpHostSelection()
+        render()
+    }
+
+    @Synchronized
+    internal fun handleResourceAdded(resource: ResourceRegistryResource) {
+        httpGraphs[resource.graphId]
+            ?.resources
+            ?.add(resource.resourceLegacyUri)
+        normalizeHttpHostSelection()
+        render()
+    }
+
+    @Synchronized
+    internal fun handleResourceRemoved(resource: ResourceRegistryResource) {
+        httpGraphs[resource.graphId]
+            ?.resources
+            ?.remove(resource.resourceLegacyUri)
+        normalizeHttpHostSelection()
+        render()
+    }
+
+    private fun touchHttpGraph(graphId: Long) {
+        httpGraphs[graphId]?.let { graph ->
+            graph.useCount++
+            graph.lastUsedNanos = System.nanoTime()
         }
-        while (httpHosts.size > MAX_HTTP_HOSTS) {
-            val oldest = httpHosts.keys.first()
-            httpHosts.remove(oldest)
-            expandedHttpHosts.remove(oldest)
+    }
+
+    private fun httpHostSnapshots(): List<DashboardHttpHost> {
+        data class Aggregate(
+            val urls: LinkedHashSet<String> = linkedSetOf(),
+            var useCount: Long = 0,
+            var lastUsedNanos: Long = 0,
+        )
+
+        val hosts = linkedMapOf<String, Aggregate>()
+        httpGraphs.values.forEach { graph ->
+            sequenceOf(graph.rootLegacyUri)
+                .plus(graph.resources.asSequence())
+                .forEach { uri ->
+                    val host = uri.host?.lowercase() ?: return@forEach
+                    val aggregate = hosts.getOrPut(host) { Aggregate() }
+                    aggregate.urls += uri.toString()
+                    aggregate.useCount += graph.useCount
+                    aggregate.lastUsedNanos = maxOf(aggregate.lastUsedNanos, graph.lastUsedNanos)
+                }
         }
-        selectedHttpHostIndex =
-            selectedHttpHostIndex.coerceIn(0, (httpHosts.size - 1).coerceAtLeast(0))
+
+        return hosts
+            .map { (host, aggregate) ->
+                DashboardHttpHost(
+                    host = host,
+                    urls = aggregate.urls.toList(),
+                    expanded = host in expandedHttpHosts,
+                    useCount = aggregate.useCount,
+                    lastUsedNanos = aggregate.lastUsedNanos,
+                )
+            }
+            .sortedWith(
+                compareByDescending<DashboardHttpHost> { it.lastUsedNanos }
+                    .thenByDescending { it.useCount }
+                    .thenBy { it.host },
+            )
+    }
+
+    private fun normalizeHttpHostSelection() {
+        val hosts = httpHostSnapshots()
+        expandedHttpHosts.retainAll(hosts.mapTo(mutableSetOf()) { it.host })
+        selectedHttpHost = selectedHttpHost
+            ?.takeIf { selected -> hosts.any { it.host == selected } }
+            ?: hosts.firstOrNull()?.host
     }
 
     @Synchronized
     private fun moveHttpHostSelection(delta: Int) {
-        if (httpHosts.isEmpty()) return
-        selectedHttpHostIndex =
-            (selectedHttpHostIndex + delta).coerceIn(0, httpHosts.size - 1)
+        val hosts = httpHostSnapshots()
+        if (hosts.isEmpty()) return
+        val current = hosts.indexOfFirst { it.host == selectedHttpHost }
+            .takeIf { it >= 0 }
+            ?: 0
+        val next = (current + delta).coerceIn(0, hosts.lastIndex)
+        selectedHttpHost = hosts[next].host
         render()
     }
 
     @Synchronized
     private fun setSelectedHttpHostExpanded(expanded: Boolean) {
-        val host = httpHosts.keys.elementAtOrNull(selectedHttpHostIndex) ?: return
+        val host = selectedHttpHost ?: return
         if (expanded) expandedHttpHosts += host else expandedHttpHosts -= host
         render()
     }
@@ -699,14 +784,10 @@ class TuiYameObserver(
                     logs = logs.toList(),
                     dnsLookups = dnsLookups.toList(),
                     transfers = transfers.values.toList(),
-                    httpHosts = httpHosts.map { (host, urls) ->
-                        DashboardHttpHost(
-                            host = host,
-                            urls = urls.toList(),
-                            expanded = host in expandedHttpHosts,
-                        )
-                    },
-                    selectedHttpHostIndex = selectedHttpHostIndex,
+                    httpHosts = httpHostSnapshots(),
+                    selectedHttpHostIndex = httpHostSnapshots()
+                        .indexOfFirst { it.host == selectedHttpHost }
+                        .coerceAtLeast(0),
                     commandPalette = commandPalette,
                 ),
                 width = terminal.size.width,
@@ -732,8 +813,6 @@ class TuiYameObserver(
         const val MAX_LOG_LINES = 250
         const val MAX_DNS_LOOKUPS = 40
         const val MAX_TRANSFERS = 20
-        const val MAX_HTTP_HOSTS = 128
-        const val MAX_URLS_PER_HOST = 512
         const val INPUT_POLL_MILLIS = 200L
         const val ENTER_ALTERNATE_SCREEN = "\u001B[?1049h"
         const val LEAVE_ALTERNATE_SCREEN = "\u001B[?1049l"
@@ -741,7 +820,6 @@ class TuiYameObserver(
         const val SHOW_CURSOR = "\u001B[?25h"
         val TIME_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
         val COMMON_BAUD_RATES = listOf(9_600, 19_200, 38_400, 57_600, 115_200)
-        val ABSOLUTE_URL_PATTERN = Regex("""https?://[^\s"'<>]+""", RegexOption.IGNORE_CASE)
         val COMMAND_OPTIONS = listOf(
             TuiCommandOption("/port", "Select serial port", "/port"),
             TuiCommandOption("/baud", "Select baud rate", "/baud"),
@@ -803,6 +881,8 @@ internal data class DashboardHttpHost(
     val host: String,
     val urls: List<String>,
     val expanded: Boolean,
+    val useCount: Long = 0,
+    val lastUsedNanos: Long = 0,
 )
 
 internal enum class TuiPaletteMode {
