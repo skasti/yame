@@ -235,4 +235,30 @@ class ResourceGraphTest {
     }
 
 
+    @Test
+    fun `registry hooks can be dispatched asynchronously while preserving order`() {
+        val queued = ArrayDeque<() -> Unit>()
+        val hooks = ResourceRegistryHooks { task -> queued.addLast(task) }
+        val observed = mutableListOf<String>()
+        hooks.onRootAdded += { observed += "added:${it.rootLegacyUri}" }
+        hooks.onRootUsed += { observed += "used:${it.rootLegacyUri}" }
+
+        val registry = NavigationResourceRegistry(hooks = hooks)
+        val root = URI("http://legacy.test/root")
+        registry.startNavigation(root)
+
+        assertTrue(observed.isEmpty())
+        while (queued.isNotEmpty()) {
+            queued.removeFirst().invoke()
+        }
+        assertEquals(
+            listOf(
+                "added:$root",
+                "used:$root",
+            ),
+            observed,
+        )
+    }
+
+
 }
