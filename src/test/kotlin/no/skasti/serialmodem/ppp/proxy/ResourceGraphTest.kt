@@ -199,10 +199,15 @@ class ResourceGraphTest {
         assertEquals(2, usedRoots.count { it.graphId == first.id })
         assertEquals(listOf(child), addedResources.map { it.resourceLegacyUri })
 
+        val evictionOrder = mutableListOf<String>()
+        hooks.onRootRemoved += { evictionOrder += "root:${it.graphId}" }
+        hooks.onResourceRemoved += { evictionOrder += "resource:${it.graphId}:${it.resourceLegacyUri}" }
+
         val second = registry.startNavigation(URI("http://legacy.test/two"))
 
         assertEquals(listOf(first.id), removedRoots.map { it.graphId })
         assertTrue(removedResources.any { it.graphId == first.id && it.resourceLegacyUri == child })
+        assertTrue(evictionOrder.firstOrNull() == "root:${first.id}")
         assertTrue(second.id != first.id)
     }
 
