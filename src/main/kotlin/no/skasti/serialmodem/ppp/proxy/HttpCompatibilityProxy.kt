@@ -90,6 +90,7 @@ internal class SystemHttpCompatibilityProxy(
         val effectiveBaseUri: URI? = null,
         val referenceRole: ReferenceRole = ReferenceRole.NAVIGATION,
         val establishesNavigationGraph: Boolean = false,
+        val requestHeaders: Map<String, List<String>> = emptyMap(),
     )
 
     private enum class ExpectationDisposition { NONE, CONTINUE, UNSUPPORTED }
@@ -530,6 +531,11 @@ internal class SystemHttpCompatibilityProxy(
                 establishesNavigationGraph =
                     referenceRole == ReferenceRole.NAVIGATION &&
                         responseIsNavigationDocument(method, responseHeaders),
+                requestHeaders =
+                    request.headers.groupBy(
+                        { it.first.lowercase(Locale.ROOT) },
+                        { it.second },
+                    ),
             )
         }
     }
@@ -560,6 +566,7 @@ internal class SystemHttpCompatibilityProxy(
                         parentLegacyUri = response.legacyUri,
                         upstreamUri = response.uri,
                         statusCode = response.statusCode,
+                        requestHeaders = response.requestHeaders,
                         headers = response.headers,
                         body = it,
                         resolutionBaseUri = response.effectiveBaseUri ?: response.uri,
@@ -674,6 +681,7 @@ internal class SystemHttpCompatibilityProxy(
         parentLegacyUri: URI,
         upstreamUri: URI,
         statusCode: Int,
+        requestHeaders: Map<String, List<String>>,
         headers: Map<String, List<String>>,
         body: ByteArray,
         resolutionBaseUri: URI,
@@ -699,7 +707,7 @@ internal class SystemHttpCompatibilityProxy(
                     ?.relation,
                 role = graphs.firstNotNullOfOrNull { it.nodeSnapshot(parentLegacyUri)?.role }
                     ?: ReferenceRole.SUBRESOURCE,
-                requestHeaders = emptyMap(),
+                requestHeaders = requestHeaders,
                 rewriteText = { source ->
                     rewriteBodyUrlsWithBase(
                         flow = flow,
