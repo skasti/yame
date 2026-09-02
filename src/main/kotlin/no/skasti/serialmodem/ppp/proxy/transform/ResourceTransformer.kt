@@ -64,8 +64,17 @@ internal class ResourceTransformationPipeline(
     fun transform(
         context: ResourceTransformationContext,
         representation: ResourceRepresentation,
-    ): ResourceRepresentation =
-        transformers.fold(representation) { current, transformer ->
-            if (transformer.supports(context, current)) transformer.transform(context, current) else current
+    ): ResourceRepresentation {
+        val transformed =
+            transformers.fold(representation) { current, transformer ->
+                if (transformer.supports(context, current)) transformer.transform(context, current) else current
+            }
+        return if (transformed.body.contentEquals(representation.body)) {
+            transformed
+        } else {
+            transformed.copy(
+                headers = stripStaleRepresentationMetadata(transformed.headers),
+            )
         }
+    }
 }
