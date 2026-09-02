@@ -10,6 +10,9 @@ data class PppHttpCompatibilityConfig(
     val maxResourceContexts: Int = 64,
     val maxResourceNodesPerContext: Int = 1_024,
     val maxResourceEdgesPerContext: Int = 2_048,
+    val transformationProfile: String = "netscape-4.08-v1",
+    val maxRepresentationCacheEntries: Int = 256,
+    val maxRepresentationCacheBytes: Long = 64L * 1024 * 1024,
 ) {
     init {
         require(maxRedirects >= 0) { "HTTP compatibility maxRedirects must not be negative" }
@@ -20,5 +23,8 @@ data class PppHttpCompatibilityConfig(
         require(maxResourceContexts > 0) { "HTTP compatibility maxResourceContexts must be positive" }
         require(maxResourceNodesPerContext > 0) { "HTTP compatibility maxResourceNodesPerContext must be positive" }
         require(maxResourceEdgesPerContext > 0) { "HTTP compatibility maxResourceEdgesPerContext must be positive" }
+        require(transformationProfile.isNotBlank()) { "HTTP compatibility transformation profile must not be blank" }
+        require(maxRepresentationCacheEntries > 0) { "HTTP compatibility representation cache entry limit must be positive" }
+        require(maxRepresentationCacheBytes > 0) { "HTTP compatibility representation cache byte limit must be positive" }
     }
 }
