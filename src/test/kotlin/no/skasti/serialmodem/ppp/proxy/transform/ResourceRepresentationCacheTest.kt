@@ -22,7 +22,7 @@ class ResourceRepresentationCacheTest {
 
         val cached = requireNotNull(cache.get(key))
         cached.resource.source.body[0] = 99
-        (cached.resource.source.headers["Content-Type"] as MutableList)[0] = "broken"
+        (cached.resource.source.headers as MutableMap<String, List<String>>)["Content-Type"] = listOf("broken")
         cached.resource.transformed!!.representation.body[0] = 88
 
         val reread = requireNotNull(cache.get(key))
@@ -48,7 +48,7 @@ class ResourceRepresentationCacheTest {
 
     @Test
     fun `cache accounts for source and transformed bytes when evicting`() {
-        val cache = ResourceCache(maxEntries = 2, maxBytes = 7)
+        val cache = ResourceCache(maxEntries = 2, maxBytes = 6)
         val first = key("one", "v1")
         val second = key("two", "v1")
         val third = key("three", "v1")
@@ -85,7 +85,7 @@ class ResourceRepresentationCacheTest {
         val validators = validatorsFrom(headers)
         val storedAt = Instant.parse("2026-09-02T12:00:00Z")
 
-        assertEquals(60, policy.maxAgeSeconds)
+        assertEquals(60L, policy.maxAgeSeconds)
         assertTrue(policy.mustRevalidate)
         assertTrue(policy.isFresh(storedAt, storedAt.plusSeconds(30)))
         assertFalse(policy.isFresh(storedAt, storedAt.plusSeconds(61)))
