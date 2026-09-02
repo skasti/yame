@@ -299,41 +299,45 @@ class TuiYameObserver(
 
     @Synchronized
     internal fun handleResourceRootRemoved(root: ResourceRegistryRoot) {
-        httpGraphs.remove(root.graphId)
+        if (httpGraphs.remove(root.graphId) == null) return
         normalizeHttpHostSelection()
         render()
     }
 
     @Synchronized
     internal fun handleResourceRootUsed(root: ResourceRegistryRoot) {
-        touchHttpGraph(root.graphId)
+        if (!touchHttpGraph(root.graphId)) return
         normalizeHttpHostSelection()
         render()
     }
 
     @Synchronized
     internal fun handleResourceAdded(resource: ResourceRegistryResource) {
-        httpGraphs[resource.graphId]
+        val changed = httpGraphs[resource.graphId]
             ?.resources
             ?.add(resource.resourceLegacyUri)
+            ?: false
+        if (!changed) return
         normalizeHttpHostSelection()
         render()
     }
 
     @Synchronized
     internal fun handleResourceRemoved(resource: ResourceRegistryResource) {
-        httpGraphs[resource.graphId]
+        val changed = httpGraphs[resource.graphId]
             ?.resources
             ?.remove(resource.resourceLegacyUri)
+            ?: false
+        if (!changed) return
         normalizeHttpHostSelection()
         render()
     }
 
-    private fun touchHttpGraph(graphId: Long) {
-        httpGraphs[graphId]?.let { graph ->
-            graph.useCount++
-            graph.lastUsedNanos = System.nanoTime()
-        }
+    private fun touchHttpGraph(graphId: Long): Boolean {
+        val graph = httpGraphs[graphId] ?: return false
+        graph.useCount++
+        graph.lastUsedNanos = System.nanoTime()
+        return true
     }
 
     private fun httpHostSnapshots(): List<DashboardHttpHost> {
@@ -446,9 +450,10 @@ class TuiYameObserver(
                             while (!closed && !stopRequested) {
                                 val key = keyboard.readKey(INPUT_POLL_MILLIS)
                                     ?: continue
+                                val paletteOpen = synchronized(this) { commandPalette != null }
                                 when {
                                     key == "Ctrl+C" -> requestQuit()
-                                    commandPalette != null -> handlePaletteKey(key)
+                                    paletteOpen -> handlePaletteKey(key)
                                     key == "/" -> openCommandPalette()
                                     key.equals("q", ignoreCase = true) -> requestQuit()
                                     key == "ArrowUp" -> moveHttpHostSelection(-1)
