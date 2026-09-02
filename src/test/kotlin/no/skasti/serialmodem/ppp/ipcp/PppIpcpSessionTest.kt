@@ -1,5 +1,7 @@
 package no.skasti.serialmodem.ppp.ipcp
 
+import no.skasti.serialmodem.ppp.lcp.LcpPacket
+
 import no.skasti.serialmodem.ppp.PppAddresses
 import no.skasti.serialmodem.ppp.PppControlOption
 import no.skasti.serialmodem.ppp.PppControlPacket

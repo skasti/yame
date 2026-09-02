@@ -1,5 +1,8 @@
 package no.skasti.serialmodem.ppp.session
 
+import no.skasti.serialmodem.ppp.lcp.LcpOption
+import no.skasti.serialmodem.ppp.lcp.LcpOptionType
+
 import no.skasti.serialmodem.ppp.PppFrame
 import no.skasti.serialmodem.ppp.PppFramer
 import no.skasti.serialmodem.ppp.lcp.LcpPacket

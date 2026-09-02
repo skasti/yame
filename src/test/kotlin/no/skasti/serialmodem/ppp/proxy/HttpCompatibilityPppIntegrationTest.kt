@@ -1,5 +1,10 @@
 package no.skasti.serialmodem.ppp.proxy
 
+import no.skasti.serialmodem.ppp.ipcp.IpcpOptionType
+import no.skasti.serialmodem.ppp.lcp.LcpOption
+import no.skasti.serialmodem.ppp.lcp.LcpOptionType
+import no.skasti.serialmodem.ppp.lcp.LcpPacket
+
 import no.skasti.serialmodem.ppp.PppAddresses
 import no.skasti.serialmodem.ppp.PppControlOption
 import no.skasti.serialmodem.ppp.PppControlPacket
@@ -244,11 +249,11 @@ class HttpCompatibilityPppIntegrationTest {
                     identifier = 9,
                     data =
                         PppControlOption(
-                            type = IpcpOptionType.IPCP_IP_ADDRESS,
+                            type = IpcpOptionType.IP_ADDRESS,
                             data = PEER.toByteArray(),
                         ).encode() +
                                 PppControlOption(
-                                    type = IpcpOptionType.IPCP_PRIMARY_DNS,
+                                    type = IpcpOptionType.PRIMARY_DNS,
                                     data = YAME.toByteArray(),
                                 ).encode(),
                 ).encode(),

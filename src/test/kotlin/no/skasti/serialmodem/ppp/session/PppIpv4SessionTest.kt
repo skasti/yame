@@ -1,5 +1,10 @@
 package no.skasti.serialmodem.ppp.session
 
+import no.skasti.serialmodem.ppp.ipcp.IpcpOptionType
+import no.skasti.serialmodem.ppp.lcp.LcpOption
+import no.skasti.serialmodem.ppp.lcp.LcpOptionType
+import no.skasti.serialmodem.ppp.lcp.LcpPacket
+
 import no.skasti.serialmodem.ppp.PppAddresses
 import no.skasti.serialmodem.ppp.PppControlOption
 import no.skasti.serialmodem.ppp.PppControlPacket
@@ -208,11 +213,11 @@ class PppIpv4SessionTest {
                     identifier = 10,
                     data =
                         PppControlOption(
-                            type = IpcpOptionType.IPCP_IP_ADDRESS,
+                            type = IpcpOptionType.IP_ADDRESS,
                             data = Ipv4Address.parse("10.0.0.2").toByteArray(),
                         ).encode() +
                                 PppControlOption(
-                                    type = IpcpOptionType.IPCP_PRIMARY_DNS,
+                                    type = IpcpOptionType.PRIMARY_DNS,
                                     data = Ipv4Address.parse("10.0.0.1").toByteArray(),
                                 ).encode(),
                 ).encode(),
@@ -435,11 +440,11 @@ class PppIpv4SessionTest {
                     identifier = 10,
                     data =
                         PppControlOption(
-                            type = IpcpOptionType.IPCP_IP_ADDRESS,
+                            type = IpcpOptionType.IP_ADDRESS,
                             data = source.toByteArray(),
                         ).encode() +
                                 PppControlOption(
-                                    type = IpcpOptionType.IPCP_PRIMARY_DNS,
+                                    type = IpcpOptionType.PRIMARY_DNS,
                                     data = Ipv4Address.parse("10.0.0.1").toByteArray(),
                                 ).encode(),
                 ).encode(),
@@ -932,11 +937,11 @@ class PppIpv4SessionTest {
                     identifier = 11,
                     data =
                         PppControlOption(
-                            type = IpcpOptionType.IPCP_IP_ADDRESS,
+                            type = IpcpOptionType.IP_ADDRESS,
                             data = peer.toByteArray(),
                         ).encode() +
                                 PppControlOption(
-                                    type = IpcpOptionType.IPCP_PRIMARY_DNS,
+                                    type = IpcpOptionType.PRIMARY_DNS,
                                     data = Ipv4Address.parse("10.0.0.1").toByteArray(),
                                 ).encode(),
                 ).encode(),
@@ -1048,11 +1053,11 @@ class PppIpv4SessionTest {
                     identifier = 9,
                     data =
                         PppControlOption(
-                            type = IpcpOptionType.IPCP_IP_ADDRESS,
+                            type = IpcpOptionType.IP_ADDRESS,
                             data = Ipv4Address.parse("10.0.0.2").toByteArray(),
                         ).encode() +
                                 PppControlOption(
-                                    type = IpcpOptionType.IPCP_PRIMARY_DNS,
+                                    type = IpcpOptionType.PRIMARY_DNS,
                                     data = Ipv4Address.parse("10.0.0.1").toByteArray(),
                                 ).encode(),
                 ).encode(),
