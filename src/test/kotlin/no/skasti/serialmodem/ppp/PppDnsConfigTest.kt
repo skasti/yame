@@ -1,5 +1,6 @@
 package no.skasti.serialmodem.ppp
 
+import no.skasti.serialmodem.ppp.dns.PppDnsConfig
 import no.skasti.serialmodem.ppp.ip.Ipv4Address
 import kotlin.test.Test
 import kotlin.test.assertEquals

@@ -1,8 +1,8 @@
 package no.skasti.serialmodem.ppp.udp
 
 import no.skasti.serialmodem.ppp.ip.Ipv4Address
-import no.skasti.serialmodem.ppp.ip.Packets
-import no.skasti.serialmodem.ppp.icmp.internetChecksum
+import no.skasti.serialmodem.ppp.ip.Ipv4Packet
+import no.skasti.serialmodem.ppp.ip.internetChecksum
 
 data class UdpPacket(
     val sourcePort: Int,
@@ -67,7 +67,7 @@ data class UdpPacket(
             val pseudoHeader = ByteArray(12 + datagram.size)
             source.toByteArray().copyInto(pseudoHeader, 0)
             destination.toByteArray().copyInto(pseudoHeader, 4)
-            pseudoHeader[9] = Packets.Companion.UDP_PROTOCOL.toByte()
+            pseudoHeader[9] = Ipv4Packet.Companion.UDP_PROTOCOL.toByte()
             writeU16(pseudoHeader, 10, datagram.size)
             datagram.copyInto(pseudoHeader, 12)
             return internetChecksum(pseudoHeader)

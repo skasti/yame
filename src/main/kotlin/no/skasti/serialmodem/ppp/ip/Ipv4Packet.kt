@@ -1,8 +1,6 @@
 package no.skasti.serialmodem.ppp.ip
 
-import no.skasti.serialmodem.ppp.icmp.internetChecksum
-
-data class Packets(
+data class Ipv4Packet(
     val dscpEcn: Int = 0,
     val identification: Int = 0,
     val flagsAndFragmentOffset: Int = 0,
@@ -65,7 +63,7 @@ data class Packets(
         private const val MAX_OPTIONS_LENGTH = 40
         private const val MORE_FRAGMENTS_FLAG = 0x2000
 
-        fun parse(bytes: ByteArray): Packets? {
+        fun parse(bytes: ByteArray): Ipv4Packet? {
             if (bytes.size < MIN_HEADER_LENGTH) return null
 
             val version = (bytes[0].toInt() ushr 4) and 0x0f
@@ -78,7 +76,7 @@ data class Packets(
             if (totalLength < headerLength || totalLength > bytes.size) return null
             if (internetChecksum(bytes, 0, headerLength) != 0) return null
 
-            return Packets(
+            return Ipv4Packet(
                 dscpEcn = bytes[1].toInt() and 0xff,
                 identification = readU16(bytes, 4),
                 flagsAndFragmentOffset = readU16(bytes, 6),

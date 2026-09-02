@@ -2,8 +2,6 @@ package no.skasti.serialmodem.ppp
 
 import no.skasti.serialmodem.ppp.ip.Ipv4Address
 import no.skasti.serialmodem.ppp.ip.Ipv4Cidr
-import no.skasti.serialmodem.ppp.lcp.PppControlOption
-import no.skasti.serialmodem.ppp.lcp.PppControlPacket
 import no.skasti.serialmodem.ppp.session.PppSession
 import kotlin.test.Test
 import kotlin.test.assertContentEquals

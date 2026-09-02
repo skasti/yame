@@ -1,10 +1,9 @@
 package no.skasti.serialmodem.ppp
 
+import no.skasti.serialmodem.ppp.dns.PppDnsConfig
 import no.skasti.serialmodem.ppp.ip.Ipv4Address
 import no.skasti.serialmodem.ppp.ip.Ipv4Cidr
-import no.skasti.serialmodem.ppp.ip.Packets
-import no.skasti.serialmodem.ppp.lcp.PppControlOption
-import no.skasti.serialmodem.ppp.lcp.PppControlPacket
+import no.skasti.serialmodem.ppp.ip.Ipv4Packet
 import no.skasti.serialmodem.ppp.session.PppSession
 import no.skasti.serialmodem.ppp.tcp.SystemTcpProxy
 import no.skasti.serialmodem.ppp.tcp.TcpPacket
@@ -58,8 +57,8 @@ class DnsTcpIntegrationTest {
                 session.receive(
                     PppFrame(
                         protocol = PppSession.IPV4_PROTOCOL,
-                        payload = Packets(
-                            protocol = Packets.UDP_PROTOCOL,
+                        payload = Ipv4Packet(
+                            protocol = Ipv4Packet.UDP_PROTOCOL,
                             source = PEER,
                             destination = YAME,
                             payload = UdpPacket(
@@ -72,7 +71,7 @@ class DnsTcpIntegrationTest {
                 )
 
                 val udpReplyIpv4 = waitForIpv4(sent) { ipv4 ->
-                    ipv4.protocol == Packets.UDP_PROTOCOL
+                    ipv4.protocol == Ipv4Packet.UDP_PROTOCOL
                 }
                 val udpReply = requireNotNull(
                     UdpPacket.parse(
@@ -186,8 +185,8 @@ class DnsTcpIntegrationTest {
         session.receive(
             PppFrame(
                 protocol = PppSession.IPV4_PROTOCOL,
-                payload = Packets(
-                    protocol = Packets.TCP_PROTOCOL,
+                payload = Ipv4Packet(
+                    protocol = Ipv4Packet.TCP_PROTOCOL,
                     source = PEER,
                     destination = YAME,
                     payload = tcp.encode(PEER, YAME),
@@ -197,7 +196,7 @@ class DnsTcpIntegrationTest {
     }
 
     private data class ParsedTcp(
-        val ipv4: Packets,
+        val ipv4: Ipv4Packet,
         val tcp: TcpPacket,
     )
 
@@ -209,8 +208,8 @@ class DnsTcpIntegrationTest {
         while (System.nanoTime() < deadline) {
             sent.forEach { frame ->
                 if (frame.protocol != PppSession.IPV4_PROTOCOL) return@forEach
-                val ipv4 = Packets.parse(frame.payload) ?: return@forEach
-                if (ipv4.protocol != Packets.TCP_PROTOCOL) return@forEach
+                val ipv4 = Ipv4Packet.parse(frame.payload) ?: return@forEach
+                if (ipv4.protocol != Ipv4Packet.TCP_PROTOCOL) return@forEach
                 val tcp = TcpPacket.parse(ipv4.payload, ipv4.source, ipv4.destination) ?: return@forEach
                 if (predicate(tcp)) return ParsedTcp(ipv4, tcp)
             }
@@ -221,13 +220,13 @@ class DnsTcpIntegrationTest {
 
     private fun waitForIpv4(
         sent: List<PppFrame>,
-        predicate: (Packets) -> Boolean,
-    ): Packets {
+        predicate: (Ipv4Packet) -> Boolean,
+    ): Ipv4Packet {
         val deadline = System.nanoTime() + 5_000_000_000L
         while (System.nanoTime() < deadline) {
             sent.forEach { frame ->
                 if (frame.protocol != PppSession.IPV4_PROTOCOL) return@forEach
-                val ipv4 = Packets.parse(frame.payload) ?: return@forEach
+                val ipv4 = Ipv4Packet.parse(frame.payload) ?: return@forEach
                 if (predicate(ipv4)) return ipv4
             }
             Thread.sleep(5)

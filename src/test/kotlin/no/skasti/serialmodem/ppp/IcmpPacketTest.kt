@@ -1,7 +1,7 @@
 package no.skasti.serialmodem.ppp
 
 import no.skasti.serialmodem.ppp.icmp.IcmpPacket
-import no.skasti.serialmodem.ppp.icmp.internetChecksum
+import no.skasti.serialmodem.ppp.ip.internetChecksum
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals

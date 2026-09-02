@@ -1,8 +1,8 @@
 package no.skasti.serialmodem.ppp.tcp
 
 import no.skasti.serialmodem.ppp.ip.Ipv4Address
-import no.skasti.serialmodem.ppp.ip.Packets
-import no.skasti.serialmodem.ppp.icmp.internetChecksum
+import no.skasti.serialmodem.ppp.ip.Ipv4Packet
+import no.skasti.serialmodem.ppp.ip.internetChecksum
 
 data class TcpPacket(
     val sourcePort: Int,
@@ -133,7 +133,7 @@ data class TcpPacket(
             val pseudoHeader = ByteArray(12 + segment.size)
             source.toByteArray().copyInto(pseudoHeader, 0)
             destination.toByteArray().copyInto(pseudoHeader, 4)
-            pseudoHeader[9] = Packets.Companion.TCP_PROTOCOL.toByte()
+            pseudoHeader[9] = Ipv4Packet.Companion.TCP_PROTOCOL.toByte()
             writeU16(pseudoHeader, 10, segment.size)
             segment.copyInto(pseudoHeader, 12)
             return internetChecksum(pseudoHeader)

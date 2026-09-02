@@ -1,6 +1,7 @@
 package no.skasti.serialmodem.ppp
 
 import no.skasti.serialmodem.observer.YameEvent
+import no.skasti.serialmodem.ppp.dns.PppDnsConfig
 import no.skasti.serialmodem.ppp.proxy.PppHttpCompatibilityConfig
 import no.skasti.serialmodem.ppp.proxy.SystemRoutingTcpProxy
 import no.skasti.serialmodem.ppp.session.PppSession

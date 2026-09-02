@@ -1,4 +1,4 @@
-package no.skasti.serialmodem.ppp.icmp
+package no.skasti.serialmodem.ppp.ip
 
 internal fun internetChecksum(
     bytes: ByteArray,

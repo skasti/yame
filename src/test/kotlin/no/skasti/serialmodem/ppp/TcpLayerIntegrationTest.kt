@@ -1,7 +1,7 @@
 package no.skasti.serialmodem.ppp
 
 import no.skasti.serialmodem.ppp.ip.Ipv4Address
-import no.skasti.serialmodem.ppp.ip.Packets
+import no.skasti.serialmodem.ppp.ip.Ipv4Packet
 import no.skasti.serialmodem.ppp.tcp.TcpConnectionState
 import no.skasti.serialmodem.ppp.tcp.TcpFlowEvent
 import no.skasti.serialmodem.ppp.tcp.TcpFlowKey
@@ -42,7 +42,7 @@ class TcpLayerIntegrationTest {
         val (synAckIp, synAck) = parseFromRemote(syn.encodedResponses.single())
         assertEquals(remoteAddress, synAckIp.source)
         assertEquals(peerAddress, synAckIp.destination)
-        assertEquals(Packets.TCP_PROTOCOL, synAckIp.protocol)
+        assertEquals(Ipv4Packet.TCP_PROTOCOL, synAckIp.protocol)
         assertEquals(TcpPacket.SYN or TcpPacket.ACK, synAck.flags)
         assertEquals(5000u, synAck.sequenceNumber)
         assertEquals(1001u, synAck.acknowledgmentNumber)
@@ -136,8 +136,8 @@ class TcpLayerIntegrationTest {
     @Test
     fun `invalid TCP checksum never reaches flow table and unknown flow produces wire-valid RST`() {
         val table = table()
-        val validSyn = Packets(
-            protocol = Packets.TCP_PROTOCOL,
+        val validSyn = Ipv4Packet(
+            protocol = Ipv4Packet.TCP_PROTOCOL,
             source = peerAddress,
             destination = remoteAddress,
             payload = peerPacket(
@@ -146,7 +146,7 @@ class TcpLayerIntegrationTest {
             ).encode(peerAddress, remoteAddress),
         ).encode()
 
-        val parsedIp = requireNotNull(Packets.parse(validSyn))
+        val parsedIp = requireNotNull(Ipv4Packet.parse(validSyn))
         val corruptedTcp = parsedIp.payload.copyOf()
         corruptedTcp[4] = (corruptedTcp[4].toInt() xor 1).toByte()
 
@@ -202,15 +202,15 @@ class TcpLayerIntegrationTest {
         table: TcpFlowTable,
         packet: TcpPacket,
     ): WireFlowResult {
-        val encodedIpv4 = Packets(
-            protocol = Packets.TCP_PROTOCOL,
+        val encodedIpv4 = Ipv4Packet(
+            protocol = Ipv4Packet.TCP_PROTOCOL,
             source = peerAddress,
             destination = remoteAddress,
             payload = packet.encode(peerAddress, remoteAddress),
         ).encode()
 
-        val parsedIpv4 = requireNotNull(Packets.parse(encodedIpv4))
-        assertEquals(Packets.TCP_PROTOCOL, parsedIpv4.protocol)
+        val parsedIpv4 = requireNotNull(Ipv4Packet.parse(encodedIpv4))
+        assertEquals(Ipv4Packet.TCP_PROTOCOL, parsedIpv4.protocol)
         val parsedTcp = requireNotNull(
             TcpPacket.parse(
                 parsedIpv4.payload,
@@ -234,15 +234,15 @@ class TcpLayerIntegrationTest {
     }
 
     private fun encodeFromRemote(packet: TcpPacket): ByteArray =
-        Packets(
-            protocol = Packets.TCP_PROTOCOL,
+        Ipv4Packet(
+            protocol = Ipv4Packet.TCP_PROTOCOL,
             source = remoteAddress,
             destination = peerAddress,
             payload = packet.encode(remoteAddress, peerAddress),
         ).encode()
 
-    private fun parseFromRemote(encodedIpv4: ByteArray): Pair<Packets, TcpPacket> {
-        val ipv4 = requireNotNull(Packets.parse(encodedIpv4))
+    private fun parseFromRemote(encodedIpv4: ByteArray): Pair<Ipv4Packet, TcpPacket> {
+        val ipv4 = requireNotNull(Ipv4Packet.parse(encodedIpv4))
         val tcp = requireNotNull(
             TcpPacket.parse(
                 ipv4.payload,

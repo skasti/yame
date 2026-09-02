@@ -25,24 +25,6 @@ private fun reservedRangeFor(address: Ipv4Address): ReservedIpv4Range? =
 private fun reservedRangeOverlapping(subnet: Ipv4Cidr): ReservedIpv4Range? =
     UNUSABLE_PPP_ENDPOINT_RANGES.firstOrNull { subnet.overlaps(it.subnet) }
 
-data class PppIpConfig(
-    val configuredSubnet: Ipv4Cidr? = null,
-) {
-    init {
-        configuredSubnet?.let {
-            require(it.prefixLength <= 30) {
-                "PPP subnet $it must contain at least two usable host addresses"
-            }
-        }
-    }
-}
-
-data class PppAddresses(
-    val localAddress: Ipv4Address,
-    val peerAddress: Ipv4Address,
-    val allocationSubnet: Ipv4Cidr,
-)
-
 class PppAddressResolver(
     private val config: PppIpConfig = PppIpConfig(),
     localNetworksProvider: () -> List<LocalIpv4Network> = ::discoverLocalIpv4Networks,

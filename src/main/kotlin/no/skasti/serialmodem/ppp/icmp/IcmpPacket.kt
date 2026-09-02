@@ -1,5 +1,7 @@
 package no.skasti.serialmodem.ppp.icmp
 
+import no.skasti.serialmodem.ppp.ip.internetChecksum
+
 data class IcmpPacket(
     val type: Int,
     val code: Int,
