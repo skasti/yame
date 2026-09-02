@@ -10,6 +10,7 @@ import no.skasti.serialmodem.ppp.tcp.TcpProxyFlow
 import java.io.ByteArrayOutputStream
 import java.net.InetAddress
 import java.net.ServerSocket
+import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
