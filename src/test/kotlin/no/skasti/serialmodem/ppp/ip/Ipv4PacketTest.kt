@@ -1,5 +1,4 @@
-package no.skasti.serialmodem.ppp
-
+package no.skasti.serialmodem.ppp.ip
 import no.skasti.serialmodem.ppp.ip.internetChecksum
 import no.skasti.serialmodem.ppp.ip.Ipv4Address
 import no.skasti.serialmodem.ppp.ip.Ipv4Packet

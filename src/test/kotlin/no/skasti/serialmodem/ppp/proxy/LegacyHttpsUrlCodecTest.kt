@@ -1,5 +1,4 @@
-package no.skasti.serialmodem.ppp
-
+package no.skasti.serialmodem.ppp.proxy
 import no.skasti.serialmodem.ppp.ip.Ipv4Address
 import no.skasti.serialmodem.ppp.proxy.ABSOLUTE_HTTP_URL_PATTERN
 import no.skasti.serialmodem.ppp.proxy.BoundedCookieOverrides

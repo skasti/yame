@@ -1,5 +1,4 @@
-package no.skasti.serialmodem.ppp
-
+package no.skasti.serialmodem.ppp.icmp
 import no.skasti.serialmodem.ppp.icmp.IcmpPacket
 import no.skasti.serialmodem.ppp.ip.internetChecksum
 import kotlin.test.Test
