@@ -34,6 +34,7 @@ internal interface ResourceTransformer {
     val id: String
     val phase: ResourceTransformPhase
     val priority: Int get() = 0
+    val cacheable: Boolean get() = true
 
     fun supports(
         context: ResourceTransformationContext,
@@ -60,6 +61,14 @@ internal class ResourceTransformationPipeline(
         context: ResourceTransformationContext,
         representation: ResourceRepresentation,
     ): Boolean = transformers.any { it.supports(context, representation) }
+
+    fun isCacheable(
+        context: ResourceTransformationContext,
+        representation: ResourceRepresentation,
+    ): Boolean =
+        transformers
+            .filter { it.supports(context, representation) }
+            .all { it.cacheable }
 
     fun transform(
         context: ResourceTransformationContext,
