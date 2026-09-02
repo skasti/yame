@@ -18,7 +18,7 @@ import no.skasti.serialmodem.observer.TransferDirection
 import no.skasti.serialmodem.observer.TransferKind
 import no.skasti.serialmodem.observer.TransferState
 import no.skasti.serialmodem.observer.YameEvent
-import no.skasti.serialmodem.ppp.dnsResponseCodeName
+import no.skasti.serialmodem.ppp.dns.dnsResponseCodeName
 import no.skasti.serialmodem.serial.SerialPortDescriptor
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter

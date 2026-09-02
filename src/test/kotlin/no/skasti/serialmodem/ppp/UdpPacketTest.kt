@@ -1,5 +1,7 @@
 package no.skasti.serialmodem.ppp
 
+import no.skasti.serialmodem.ppp.ip.Ipv4Address
+import no.skasti.serialmodem.ppp.udp.UdpPacket
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals

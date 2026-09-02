@@ -1,5 +1,6 @@
-package no.skasti.serialmodem.ppp
+package no.skasti.serialmodem.ppp.icmp
 
+import no.skasti.serialmodem.ppp.ip.Ipv4Address
 import java.io.Closeable
 import java.util.Locale
 import java.util.concurrent.ArrayBlockingQueue

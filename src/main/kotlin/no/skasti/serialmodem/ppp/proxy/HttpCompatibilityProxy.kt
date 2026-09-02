@@ -1,9 +1,14 @@
-package no.skasti.serialmodem.ppp
+package no.skasti.serialmodem.ppp.proxy
 
 import no.skasti.serialmodem.observer.HttpProxyActionKind
 import no.skasti.serialmodem.observer.YameEvent
+import no.skasti.serialmodem.ppp.tcp.SystemTcpProxy
+import no.skasti.serialmodem.ppp.tcp.TcpProxy
+import no.skasti.serialmodem.ppp.tcp.TcpProxyEvent
+import no.skasti.serialmodem.ppp.tcp.TcpProxyFlow
 
 import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.net.CookieManager
 import java.net.CookiePolicy
 import java.net.CookieStore
@@ -606,7 +611,7 @@ class SystemHttpCompatibilityProxy(
         val onEvent: (TcpProxyEvent) -> Unit,
         val session: SessionState,
         val request: ByteArrayOutputStream = ByteArrayOutputStream(),
-        val readMonitor: java.lang.Object = java.lang.Object(),
+        val readMonitor: Object = Object(),
         val slotReleased: AtomicBoolean = AtomicBoolean(),
         val taskStarted: AtomicBoolean = AtomicBoolean(),
         val clientCookies: MutableList<ClientCookie> = mutableListOf(),
@@ -622,7 +627,7 @@ class SystemHttpCompatibilityProxy(
     private data class LegacyRequest(val method: String, val target: String, val headers: List<Pair<String, String>>, val body: ByteArray)
     private sealed interface FinalResponseBody {
         data class Buffered(val bytes: ByteArray) : FinalResponseBody
-        data class Streaming(val input: java.io.InputStream) : FinalResponseBody
+        data class Streaming(val input: InputStream) : FinalResponseBody
     }
     private data class FinalResponse(
         val legacyUri: URI,
@@ -1829,7 +1834,7 @@ class SystemHttpCompatibilityProxy(
                 legacyUri.host.equals(upstreamUri.host, true))
     private fun effectivePort(uri: URI) = when { uri.port >= 0 -> uri.port; uri.scheme.equals("https", true) -> 443; else -> 80 }
 
-    private fun readBounded(state: FlowState, input: java.io.InputStream, limit: Int): ByteArray {
+    private fun readBounded(state: FlowState, input: InputStream, limit: Int): ByteArray {
         val output = ByteArrayOutputStream(minOf(limit, 64 * 1024)); val buffer = ByteArray(RESPONSE_CHUNK_BYTES); var total = 0
         while (true) {
             ensureActive(state); val count = input.read(buffer); if (count < 0) break; if (count == 0) continue

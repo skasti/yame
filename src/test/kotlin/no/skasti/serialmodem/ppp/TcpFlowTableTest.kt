@@ -1,5 +1,11 @@
 package no.skasti.serialmodem.ppp
 
+import no.skasti.serialmodem.ppp.ip.Ipv4Address
+import no.skasti.serialmodem.ppp.tcp.TcpConnectionState
+import no.skasti.serialmodem.ppp.tcp.TcpFlowEvent
+import no.skasti.serialmodem.ppp.tcp.TcpFlowKey
+import no.skasti.serialmodem.ppp.tcp.TcpFlowTable
+import no.skasti.serialmodem.ppp.tcp.TcpPacket
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals

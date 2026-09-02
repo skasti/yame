@@ -1,6 +1,8 @@
-package no.skasti.serialmodem.ppp
+package no.skasti.serialmodem.ppp.ip
 
-data class Ipv4Packet(
+import no.skasti.serialmodem.ppp.icmp.internetChecksum
+
+data class Packets(
     val dscpEcn: Int = 0,
     val identification: Int = 0,
     val flagsAndFragmentOffset: Int = 0,
@@ -63,7 +65,7 @@ data class Ipv4Packet(
         private const val MAX_OPTIONS_LENGTH = 40
         private const val MORE_FRAGMENTS_FLAG = 0x2000
 
-        fun parse(bytes: ByteArray): Ipv4Packet? {
+        fun parse(bytes: ByteArray): Packets? {
             if (bytes.size < MIN_HEADER_LENGTH) return null
 
             val version = (bytes[0].toInt() ushr 4) and 0x0f
@@ -76,14 +78,14 @@ data class Ipv4Packet(
             if (totalLength < headerLength || totalLength > bytes.size) return null
             if (internetChecksum(bytes, 0, headerLength) != 0) return null
 
-            return Ipv4Packet(
+            return Packets(
                 dscpEcn = bytes[1].toInt() and 0xff,
                 identification = readU16(bytes, 4),
                 flagsAndFragmentOffset = readU16(bytes, 6),
                 ttl = bytes[8].toInt() and 0xff,
                 protocol = bytes[9].toInt() and 0xff,
-                source = Ipv4Address.fromBytes(bytes, 12),
-                destination = Ipv4Address.fromBytes(bytes, 16),
+                source = Ipv4Address.Companion.fromBytes(bytes, 12),
+                destination = Ipv4Address.Companion.fromBytes(bytes, 16),
                 options = bytes.copyOfRange(MIN_HEADER_LENGTH, headerLength),
                 payload = bytes.copyOfRange(headerLength, totalLength),
             )

@@ -1,5 +1,14 @@
 package no.skasti.serialmodem.ppp
 
+import no.skasti.serialmodem.ppp.ip.Ipv4Address
+import no.skasti.serialmodem.ppp.ip.Ipv4Cidr
+import no.skasti.serialmodem.ppp.ip.Packets
+import no.skasti.serialmodem.ppp.lcp.PppControlOption
+import no.skasti.serialmodem.ppp.lcp.PppControlPacket
+import no.skasti.serialmodem.ppp.proxy.PppHttpCompatibilityConfig
+import no.skasti.serialmodem.ppp.proxy.SystemRoutingTcpProxy
+import no.skasti.serialmodem.ppp.session.PppSession
+import no.skasti.serialmodem.ppp.tcp.TcpPacket
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.Test
@@ -96,8 +105,8 @@ class HttpCompatibilityPppIntegrationTest {
                 while (processedFrames < sent.size) {
                     val frame = sent[processedFrames++]
                     if (frame.protocol != PppSession.IPV4_PROTOCOL) continue
-                    val ipv4 = Ipv4Packet.parse(frame.payload) ?: continue
-                    if (ipv4.protocol != Ipv4Packet.TCP_PROTOCOL) continue
+                    val ipv4 = Packets.parse(frame.payload) ?: continue
+                    if (ipv4.protocol != Packets.TCP_PROTOCOL) continue
                     val tcp = TcpPacket.parse(ipv4.payload, ipv4.source, ipv4.destination) ?: continue
                     if (tcp.sourcePort != 80 || tcp.destinationPort != peerPort) continue
 
@@ -159,8 +168,8 @@ class HttpCompatibilityPppIntegrationTest {
         session.receive(
             PppFrame(
                 protocol = PppSession.IPV4_PROTOCOL,
-                payload = Ipv4Packet(
-                    protocol = Ipv4Packet.TCP_PROTOCOL,
+                payload = Packets(
+                    protocol = Packets.TCP_PROTOCOL,
                     source = PEER,
                     destination = REMOTE,
                     payload = tcp.encode(PEER, REMOTE),
@@ -170,7 +179,7 @@ class HttpCompatibilityPppIntegrationTest {
     }
 
     private data class ParsedTcp(
-        val ipv4: Ipv4Packet,
+        val ipv4: Packets,
         val tcp: TcpPacket,
     )
 
@@ -182,8 +191,8 @@ class HttpCompatibilityPppIntegrationTest {
         while (System.nanoTime() < deadline) {
             sent.forEach { frame ->
                 if (frame.protocol != PppSession.IPV4_PROTOCOL) return@forEach
-                val ipv4 = Ipv4Packet.parse(frame.payload) ?: return@forEach
-                if (ipv4.protocol != Ipv4Packet.TCP_PROTOCOL) return@forEach
+                val ipv4 = Packets.parse(frame.payload) ?: return@forEach
+                if (ipv4.protocol != Packets.TCP_PROTOCOL) return@forEach
                 val tcp = TcpPacket.parse(ipv4.payload, ipv4.source, ipv4.destination) ?: return@forEach
                 if (predicate(tcp)) return ParsedTcp(ipv4, tcp)
             }
@@ -236,10 +245,10 @@ class HttpCompatibilityPppIntegrationTest {
                             type = PppControlOption.IPCP_IP_ADDRESS,
                             data = PEER.toByteArray(),
                         ).encode() +
-                            PppControlOption(
-                                type = PppControlOption.IPCP_PRIMARY_DNS,
-                                data = YAME.toByteArray(),
-                            ).encode(),
+                                PppControlOption(
+                                    type = PppControlOption.IPCP_PRIMARY_DNS,
+                                    data = YAME.toByteArray(),
+                                ).encode(),
                 ).encode(),
             ),
         )

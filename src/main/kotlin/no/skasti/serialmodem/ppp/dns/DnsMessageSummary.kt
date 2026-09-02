@@ -1,4 +1,4 @@
-package no.skasti.serialmodem.ppp
+package no.skasti.serialmodem.ppp.dns
 
 data class DnsMessageSummary(
     val id: Int,

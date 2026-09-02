@@ -1,5 +1,6 @@
-package no.skasti.serialmodem.ppp
+package no.skasti.serialmodem.ppp.tcp
 
+import no.skasti.serialmodem.ppp.ip.Ipv4Address
 import java.util.ArrayDeque
 import java.util.concurrent.ThreadLocalRandom
 

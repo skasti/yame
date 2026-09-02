@@ -1,5 +1,7 @@
 package no.skasti.serialmodem.ppp
 
+import no.skasti.serialmodem.ppp.dns.dnsResponseCodeName
+import no.skasti.serialmodem.ppp.dns.summarizeDnsMessage
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse

@@ -1,4 +1,4 @@
-package no.skasti.serialmodem.ppp
+package no.skasti.serialmodem.ppp.icmp
 
 data class IcmpPacket(
     val type: Int,

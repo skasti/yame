@@ -1,5 +1,11 @@
 package no.skasti.serialmodem.ppp
 
+import no.skasti.serialmodem.ppp.ip.Ipv4Address
+import no.skasti.serialmodem.ppp.proxy.PppHttpCompatibilityConfig
+import no.skasti.serialmodem.ppp.proxy.SystemHttpCompatibilityProxy
+import no.skasti.serialmodem.ppp.tcp.TcpFlowKey
+import no.skasti.serialmodem.ppp.tcp.TcpProxyEvent
+import no.skasti.serialmodem.ppp.tcp.TcpProxyFlow
 import java.io.ByteArrayOutputStream
 import java.net.InetAddress
 import java.net.ServerSocket

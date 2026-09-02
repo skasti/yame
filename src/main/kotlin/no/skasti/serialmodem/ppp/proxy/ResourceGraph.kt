@@ -1,4 +1,4 @@
-package no.skasti.serialmodem.ppp
+package no.skasti.serialmodem.ppp.proxy
 
 import java.net.URI
 import java.util.concurrent.atomic.AtomicLong

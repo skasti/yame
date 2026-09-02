@@ -1,5 +1,6 @@
-package no.skasti.serialmodem.ppp
+package no.skasti.serialmodem.ppp.tcp
 
+import no.skasti.serialmodem.ppp.ip.Ipv4Address
 import java.io.Closeable
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -84,7 +85,7 @@ class SystemTcpProxy(
         val onEvent: (TcpProxyEvent) -> Unit,
         val writes: LinkedBlockingQueue<WriteCommand>,
         val queuedWriteBytes: AtomicInteger = AtomicInteger(),
-        val readMonitor: java.lang.Object = java.lang.Object(),
+        val readMonitor: Object = Object(),
         @Volatile var connected: Boolean = false,
         @Volatile var readsPaused: Boolean = false,
     )

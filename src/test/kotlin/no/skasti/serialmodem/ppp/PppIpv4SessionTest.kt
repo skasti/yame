@@ -2,6 +2,21 @@ package no.skasti.serialmodem.ppp
 
 import no.skasti.serialmodem.observer.TransferState
 import no.skasti.serialmodem.observer.YameEvent
+import no.skasti.serialmodem.ppp.icmp.IcmpEchoProxy
+import no.skasti.serialmodem.ppp.icmp.IcmpPacket
+import no.skasti.serialmodem.ppp.ip.Ipv4Address
+import no.skasti.serialmodem.ppp.ip.Ipv4Cidr
+import no.skasti.serialmodem.ppp.ip.Packets
+import no.skasti.serialmodem.ppp.lcp.PppControlOption
+import no.skasti.serialmodem.ppp.lcp.PppControlPacket
+import no.skasti.serialmodem.ppp.session.PppSession
+import no.skasti.serialmodem.ppp.tcp.TcpPacket
+import no.skasti.serialmodem.ppp.tcp.TcpProxy
+import no.skasti.serialmodem.ppp.tcp.TcpProxyEvent
+import no.skasti.serialmodem.ppp.tcp.TcpProxyFlow
+import no.skasti.serialmodem.ppp.udp.UdpFlow
+import no.skasti.serialmodem.ppp.udp.UdpPacket
+import no.skasti.serialmodem.ppp.udp.UdpProxy
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -21,10 +36,10 @@ class PppIpv4SessionTest {
             0x00, 0x03,
             0x55, 0x55, 0x55, 0x55,
         )
-        val request = Ipv4Packet(
+        val request = Packets(
             identification = 4,
             ttl = 60,
-            protocol = Ipv4Packet.ICMP_PROTOCOL,
+            protocol = Packets.ICMP_PROTOCOL,
             source = Ipv4Address.parse("10.0.0.2"),
             destination = Ipv4Address.parse("10.0.0.1"),
             payload = IcmpPacket(
@@ -44,12 +59,12 @@ class PppIpv4SessionTest {
         val frame = sent.single()
         assertEquals(PppSession.IPV4_PROTOCOL, frame.protocol)
 
-        val reply = requireNotNull(Ipv4Packet.parse(frame.payload))
+        val reply = requireNotNull(Packets.parse(frame.payload))
         assertEquals(Ipv4Address.parse("10.0.0.1"), reply.source)
         assertEquals(Ipv4Address.parse("10.0.0.2"), reply.destination)
-        assertEquals(Ipv4Packet.DEFAULT_TTL, reply.ttl)
+        assertEquals(Packets.DEFAULT_TTL, reply.ttl)
         assertEquals(4, reply.identification)
-        assertEquals(Ipv4Packet.ICMP_PROTOCOL, reply.protocol)
+        assertEquals(Packets.ICMP_PROTOCOL, reply.protocol)
 
         val icmp = requireNotNull(IcmpPacket.parse(reply.payload))
         assertEquals(IcmpPacket.ECHO_REPLY, icmp.type)
@@ -69,8 +84,8 @@ class PppIpv4SessionTest {
         openIpcp(session, sent, peerMru = 64)
         sent.clear()
 
-        val request = Ipv4Packet(
-            protocol = Ipv4Packet.ICMP_PROTOCOL,
+        val request = Packets(
+            protocol = Packets.ICMP_PROTOCOL,
             source = Ipv4Address.parse("10.0.0.2"),
             destination = Ipv4Address.parse("10.0.0.1"),
             payload = IcmpPacket(
@@ -100,10 +115,10 @@ class PppIpv4SessionTest {
             0x00, 0x07,
             0x55, 0x55, 0x55, 0x55,
         )
-        val request = Ipv4Packet(
+        val request = Packets(
             identification = 17,
             ttl = 60,
-            protocol = Ipv4Packet.ICMP_PROTOCOL,
+            protocol = Packets.ICMP_PROTOCOL,
             source = Ipv4Address.parse("10.0.0.2"),
             destination = Ipv4Address.parse("8.8.8.8"),
             payload = IcmpPacket(
@@ -119,7 +134,7 @@ class PppIpv4SessionTest {
         val frame = sent.single()
         assertEquals(PppSession.IPV4_PROTOCOL, frame.protocol)
 
-        val reply = requireNotNull(Ipv4Packet.parse(frame.payload))
+        val reply = requireNotNull(Packets.parse(frame.payload))
         assertEquals(Ipv4Address.parse("8.8.8.8"), reply.source)
         assertEquals(Ipv4Address.parse("10.0.0.2"), reply.destination)
         assertEquals(17, reply.identification)
@@ -142,8 +157,8 @@ class PppIpv4SessionTest {
         openIpcp(session, sent)
         sent.clear()
 
-        val request = Ipv4Packet(
-            protocol = Ipv4Packet.ICMP_PROTOCOL,
+        val request = Packets(
+            protocol = Packets.ICMP_PROTOCOL,
             source = Ipv4Address.parse("10.0.0.2"),
             destination = Ipv4Address.parse("203.0.113.1"),
             payload = IcmpPacket(
@@ -170,8 +185,8 @@ class PppIpv4SessionTest {
         openIpcp(session, sent)
         sent.clear()
 
-        val request = Ipv4Packet(
-            protocol = Ipv4Packet.ICMP_PROTOCOL,
+        val request = Packets(
+            protocol = Packets.ICMP_PROTOCOL,
             source = Ipv4Address.parse("10.0.0.2"),
             destination = Ipv4Address.parse("8.8.8.8"),
             payload = IcmpPacket(
@@ -193,10 +208,10 @@ class PppIpv4SessionTest {
                             type = PppControlOption.IPCP_IP_ADDRESS,
                             data = Ipv4Address.parse("10.0.0.2").toByteArray(),
                         ).encode() +
-                            PppControlOption(
-                                type = PppControlOption.IPCP_PRIMARY_DNS,
-                                data = Ipv4Address.parse("10.0.0.1").toByteArray(),
-                            ).encode(),
+                                PppControlOption(
+                                    type = PppControlOption.IPCP_PRIMARY_DNS,
+                                    data = Ipv4Address.parse("10.0.0.1").toByteArray(),
+                                ).encode(),
                 ).encode(),
             ),
         )
@@ -233,8 +248,8 @@ class PppIpv4SessionTest {
         openIpcp(session, sent)
         sent.clear()
 
-        val request = Ipv4Packet(
-            protocol = Ipv4Packet.ICMP_PROTOCOL,
+        val request = Packets(
+            protocol = Packets.ICMP_PROTOCOL,
             source = Ipv4Address.parse("10.0.0.2"),
             destination = Ipv4Address.parse("8.8.8.8"),
             payload = IcmpPacket(
@@ -269,8 +284,8 @@ class PppIpv4SessionTest {
         val peer = Ipv4Address.parse("10.0.0.2")
         val yame = Ipv4Address.parse("10.0.0.1")
         val queryPayload = byteArrayOf(0x12, 0x34, 0x01, 0x00)
-        val request = Ipv4Packet(
-            protocol = Ipv4Packet.UDP_PROTOCOL,
+        val request = Packets(
+            protocol = Packets.UDP_PROTOCOL,
             source = peer,
             destination = yame,
             payload = UdpPacket(
@@ -289,7 +304,7 @@ class PppIpv4SessionTest {
         assertContentEquals(queryPayload, forwarded.payload)
 
         val frame = sent.single()
-        val reply = requireNotNull(Ipv4Packet.parse(frame.payload))
+        val reply = requireNotNull(Packets.parse(frame.payload))
         assertEquals(yame, reply.source)
         assertEquals(peer, reply.destination)
         val udp = requireNotNull(
@@ -320,8 +335,8 @@ class PppIpv4SessionTest {
             destinationPort = 53,
             payload = byteArrayOf(0x12, 0x34, 0x01, 0x00),
         )
-        val request = Ipv4Packet(
-            protocol = Ipv4Packet.UDP_PROTOCOL,
+        val request = Packets(
+            protocol = Packets.UDP_PROTOCOL,
             source = source,
             destination = destination,
             payload = udp.encode(source, destination),
@@ -336,8 +351,8 @@ class PppIpv4SessionTest {
         assertContentEquals(byteArrayOf(0x12, 0x34, 0x01, 0x00), sentFlow.payload)
 
         val frame = sent.single()
-        val reply = requireNotNull(Ipv4Packet.parse(frame.payload))
-        assertEquals(Ipv4Packet.UDP_PROTOCOL, reply.protocol)
+        val reply = requireNotNull(Packets.parse(frame.payload))
+        assertEquals(Packets.UDP_PROTOCOL, reply.protocol)
         assertEquals(destination, reply.source)
         assertEquals(source, reply.destination)
 
@@ -373,8 +388,8 @@ class PppIpv4SessionTest {
         ).encode(source, destination)
         encodedUdp[encodedUdp.lastIndex] = (encodedUdp.last().toInt() xor 0x01).toByte()
 
-        val request = Ipv4Packet(
-            protocol = Ipv4Packet.UDP_PROTOCOL,
+        val request = Packets(
+            protocol = Packets.UDP_PROTOCOL,
             source = source,
             destination = destination,
             payload = encodedUdp,
@@ -397,8 +412,8 @@ class PppIpv4SessionTest {
 
         val source = Ipv4Address.parse("10.0.0.2")
         val destination = Ipv4Address.parse("8.8.8.8")
-        val request = Ipv4Packet(
-            protocol = Ipv4Packet.UDP_PROTOCOL,
+        val request = Packets(
+            protocol = Packets.UDP_PROTOCOL,
             source = source,
             destination = destination,
             payload = UdpPacket(
@@ -420,10 +435,10 @@ class PppIpv4SessionTest {
                             type = PppControlOption.IPCP_IP_ADDRESS,
                             data = source.toByteArray(),
                         ).encode() +
-                            PppControlOption(
-                                type = PppControlOption.IPCP_PRIMARY_DNS,
-                                data = Ipv4Address.parse("10.0.0.1").toByteArray(),
-                            ).encode(),
+                                PppControlOption(
+                                    type = PppControlOption.IPCP_PRIMARY_DNS,
+                                    data = Ipv4Address.parse("10.0.0.1").toByteArray(),
+                                ).encode(),
                 ).encode(),
             ),
         )
@@ -468,8 +483,8 @@ class PppIpv4SessionTest {
         val remotePort = 80
 
         fun receiveTcp(packet: TcpPacket) {
-            val ipv4 = Ipv4Packet(
-                protocol = Ipv4Packet.TCP_PROTOCOL,
+            val ipv4 = Packets(
+                protocol = Packets.TCP_PROTOCOL,
                 source = peer,
                 destination = remote,
                 payload = packet.encode(peer, remote),
@@ -488,7 +503,7 @@ class PppIpv4SessionTest {
         )
 
         assertEquals(1, tcpProxy.pauseCount)
-        val synAckIpv4 = requireNotNull(Ipv4Packet.parse(sent.single().payload))
+        val synAckIpv4 = requireNotNull(Packets.parse(sent.single().payload))
         val synAck = requireNotNull(
             TcpPacket.parse(
                 synAckIpv4.payload,
@@ -513,7 +528,7 @@ class PppIpv4SessionTest {
         tcpProxy.emitPayload(ByteArray(8) { it.toByte() })
 
         assertEquals(1, sent.size)
-        val firstIpv4 = requireNotNull(Ipv4Packet.parse(sent.single().payload))
+        val firstIpv4 = requireNotNull(Packets.parse(sent.single().payload))
         val firstPayload = requireNotNull(
             TcpPacket.parse(
                 firstIpv4.payload,
@@ -537,7 +552,7 @@ class PppIpv4SessionTest {
         )
 
         assertEquals(1, sent.size)
-        val secondIpv4 = requireNotNull(Ipv4Packet.parse(sent.single().payload))
+        val secondIpv4 = requireNotNull(Packets.parse(sent.single().payload))
         val secondPayload = requireNotNull(
             TcpPacket.parse(
                 secondIpv4.payload,
@@ -589,8 +604,8 @@ class PppIpv4SessionTest {
         session.receive(
             PppFrame(
                 protocol = PppSession.IPV4_PROTOCOL,
-                payload = Ipv4Packet(
-                    protocol = Ipv4Packet.TCP_PROTOCOL,
+                payload = Packets(
+                    protocol = Packets.TCP_PROTOCOL,
                     source = peer,
                     destination = remote,
                     payload = syn.encode(peer, remote),
@@ -609,8 +624,8 @@ class PppIpv4SessionTest {
         val tcpReplies = sent
             .filter { it.protocol == PppSession.IPV4_PROTOCOL }
             .mapNotNull { frame ->
-                Ipv4Packet.parse(frame.payload)?.let { ipv4 ->
-                    if (ipv4.protocol != Ipv4Packet.TCP_PROTOCOL) {
+                Packets.parse(frame.payload)?.let { ipv4 ->
+                    if (ipv4.protocol != Packets.TCP_PROTOCOL) {
                         null
                     } else {
                         TcpPacket.parse(ipv4.payload, ipv4.source, ipv4.destination)
@@ -643,8 +658,8 @@ class PppIpv4SessionTest {
             session.receive(
                 PppFrame(
                     protocol = PppSession.IPV4_PROTOCOL,
-                    payload = Ipv4Packet(
-                        protocol = Ipv4Packet.TCP_PROTOCOL,
+                    payload = Packets(
+                        protocol = Packets.TCP_PROTOCOL,
                         source = peer,
                         destination = remote,
                         payload = packet.encode(peer, remote),
@@ -663,7 +678,7 @@ class PppIpv4SessionTest {
                 options = byteArrayOf(2, 4, 5, 0xb4.toByte()),
             ),
         )
-        val synAckIpv4 = requireNotNull(Ipv4Packet.parse(sent.single().payload))
+        val synAckIpv4 = requireNotNull(Packets.parse(sent.single().payload))
         val synAck = requireNotNull(
             TcpPacket.parse(
                 synAckIpv4.payload,
@@ -684,7 +699,7 @@ class PppIpv4SessionTest {
 
         sent.clear()
         tcpProxy.emitPayload("lost-once".encodeToByteArray())
-        val firstIpv4 = requireNotNull(Ipv4Packet.parse(sent.single().payload))
+        val firstIpv4 = requireNotNull(Packets.parse(sent.single().payload))
         val first = requireNotNull(
             TcpPacket.parse(firstIpv4.payload, firstIpv4.source, firstIpv4.destination),
         )
@@ -696,7 +711,7 @@ class PppIpv4SessionTest {
         }
 
         assertTrue(sent.size >= 2)
-        val retransmittedIpv4 = requireNotNull(Ipv4Packet.parse(sent[1].payload))
+        val retransmittedIpv4 = requireNotNull(Packets.parse(sent[1].payload))
         val retransmitted = requireNotNull(
             TcpPacket.parse(
                 retransmittedIpv4.payload,
@@ -741,8 +756,8 @@ class PppIpv4SessionTest {
             session.receive(
                 PppFrame(
                     protocol = PppSession.IPV4_PROTOCOL,
-                    payload = Ipv4Packet(
-                        protocol = Ipv4Packet.TCP_PROTOCOL,
+                    payload = Packets(
+                        protocol = Packets.TCP_PROTOCOL,
                         source = peer,
                         destination = remote,
                         payload = packet.encode(peer, remote),
@@ -760,7 +775,7 @@ class PppIpv4SessionTest {
                 windowSize = 8192,
             ),
         )
-        val synAckIpv4 = requireNotNull(Ipv4Packet.parse(sent.single().payload))
+        val synAckIpv4 = requireNotNull(Packets.parse(sent.single().payload))
         val synAck = requireNotNull(
             TcpPacket.parse(synAckIpv4.payload, synAckIpv4.source, synAckIpv4.destination),
         )
@@ -792,7 +807,7 @@ class PppIpv4SessionTest {
 
         assertEquals(1, tcpProxy.sentPayloads.size)
         assertContentEquals(byteArrayOf(1, 2, 3, 4), tcpProxy.sentPayloads.single())
-        val zeroWindowIpv4 = requireNotNull(Ipv4Packet.parse(sent.single().payload))
+        val zeroWindowIpv4 = requireNotNull(Packets.parse(sent.single().payload))
         val zeroWindowAck = requireNotNull(
             TcpPacket.parse(
                 zeroWindowIpv4.payload,
@@ -816,7 +831,7 @@ class PppIpv4SessionTest {
             ),
         )
         assertEquals(1, tcpProxy.sentPayloads.size)
-        val rejectedIpv4 = requireNotNull(Ipv4Packet.parse(sent.single().payload))
+        val rejectedIpv4 = requireNotNull(Packets.parse(sent.single().payload))
         val rejectedAck = requireNotNull(
             TcpPacket.parse(rejectedIpv4.payload, rejectedIpv4.source, rejectedIpv4.destination),
         )
@@ -825,7 +840,7 @@ class PppIpv4SessionTest {
 
         sent.clear()
         tcpProxy.completeWrite(4)
-        val reopenedIpv4 = requireNotNull(Ipv4Packet.parse(sent.single().payload))
+        val reopenedIpv4 = requireNotNull(Packets.parse(sent.single().payload))
         val reopenedAck = requireNotNull(
             TcpPacket.parse(reopenedIpv4.payload, reopenedIpv4.source, reopenedIpv4.destination),
         )
@@ -871,8 +886,8 @@ class PppIpv4SessionTest {
             session.receive(
                 PppFrame(
                     protocol = PppSession.IPV4_PROTOCOL,
-                    payload = Ipv4Packet(
-                        protocol = Ipv4Packet.TCP_PROTOCOL,
+                    payload = Packets(
+                        protocol = Packets.TCP_PROTOCOL,
                         source = peer,
                         destination = remote,
                         payload = packet.encode(peer, remote),
@@ -890,7 +905,7 @@ class PppIpv4SessionTest {
                 windowSize = 8192,
             ),
         )
-        val synAckIpv4 = requireNotNull(Ipv4Packet.parse(sent.single().payload))
+        val synAckIpv4 = requireNotNull(Packets.parse(sent.single().payload))
         val synAck = requireNotNull(
             TcpPacket.parse(synAckIpv4.payload, synAckIpv4.source, synAckIpv4.destination),
         )
@@ -917,10 +932,10 @@ class PppIpv4SessionTest {
                             type = PppControlOption.IPCP_IP_ADDRESS,
                             data = peer.toByteArray(),
                         ).encode() +
-                            PppControlOption(
-                                type = PppControlOption.IPCP_PRIMARY_DNS,
-                                data = Ipv4Address.parse("10.0.0.1").toByteArray(),
-                            ).encode(),
+                                PppControlOption(
+                                    type = PppControlOption.IPCP_PRIMARY_DNS,
+                                    data = Ipv4Address.parse("10.0.0.1").toByteArray(),
+                                ).encode(),
                 ).encode(),
             ),
         )
@@ -1033,10 +1048,10 @@ class PppIpv4SessionTest {
                             type = PppControlOption.IPCP_IP_ADDRESS,
                             data = Ipv4Address.parse("10.0.0.2").toByteArray(),
                         ).encode() +
-                            PppControlOption(
-                                type = PppControlOption.IPCP_PRIMARY_DNS,
-                                data = Ipv4Address.parse("10.0.0.1").toByteArray(),
-                            ).encode(),
+                                PppControlOption(
+                                    type = PppControlOption.IPCP_PRIMARY_DNS,
+                                    data = Ipv4Address.parse("10.0.0.1").toByteArray(),
+                                ).encode(),
                 ).encode(),
             ),
         )

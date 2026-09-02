@@ -1,5 +1,6 @@
-package no.skasti.serialmodem.ppp
+package no.skasti.serialmodem.ppp.udp
 
+import no.skasti.serialmodem.ppp.ip.Ipv4Address
 import java.io.Closeable
 import java.net.InetAddress
 import java.net.InetSocketAddress

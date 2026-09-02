@@ -1,15 +1,45 @@
-package no.skasti.serialmodem.ppp
+package no.skasti.serialmodem.ppp.session
 
 import no.skasti.serialmodem.observer.DnsTransport
 import no.skasti.serialmodem.observer.TransferDirection
 import no.skasti.serialmodem.observer.TransferKind
 import no.skasti.serialmodem.observer.TransferState
 import no.skasti.serialmodem.observer.YameEvent
-
+import no.skasti.serialmodem.ppp.ip.Ipv4Address
+import no.skasti.serialmodem.ppp.ip.Ipv4Cidr
+import no.skasti.serialmodem.ppp.ip.Packets
+import no.skasti.serialmodem.ppp.lcp.LcpOption
+import no.skasti.serialmodem.ppp.lcp.LcpPacket
+import no.skasti.serialmodem.ppp.PppAddresses
+import no.skasti.serialmodem.ppp.lcp.PppControlOption
+import no.skasti.serialmodem.ppp.lcp.PppControlPacket
+import no.skasti.serialmodem.ppp.PppDnsConfig
+import no.skasti.serialmodem.ppp.PppEncoder
+import no.skasti.serialmodem.ppp.PppFrame
+import no.skasti.serialmodem.ppp.PppFramer
+import no.skasti.serialmodem.ppp.dns.summarizeDnsMessage
+import no.skasti.serialmodem.ppp.icmp.IcmpEchoProxy
+import no.skasti.serialmodem.ppp.icmp.IcmpPacket
+import no.skasti.serialmodem.ppp.icmp.SystemPingIcmpEchoProxy
+import no.skasti.serialmodem.ppp.tcp.SystemTcpProxy
+import no.skasti.serialmodem.ppp.tcp.TcpFlowEvent
+import no.skasti.serialmodem.ppp.tcp.TcpFlowKey
+import no.skasti.serialmodem.ppp.tcp.TcpFlowTable
+import no.skasti.serialmodem.ppp.tcp.TcpPacket
+import no.skasti.serialmodem.ppp.tcp.TcpProxy
+import no.skasti.serialmodem.ppp.tcp.TcpProxyEvent
+import no.skasti.serialmodem.ppp.tcp.TcpProxyFlow
+import no.skasti.serialmodem.ppp.udp.SystemUdpProxy
+import no.skasti.serialmodem.ppp.udp.UdpFlow
+import no.skasti.serialmodem.ppp.udp.UdpFlowNamespace
+import no.skasti.serialmodem.ppp.udp.UdpPacket
+import no.skasti.serialmodem.ppp.udp.UdpProxy
 import java.io.Closeable
 import java.util.ArrayDeque
 import java.util.Timer
 import java.util.TimerTask
+import kotlin.collections.filterNot
+import kotlin.collections.plusAssign
 
 class PppSession(
     private val sendFrame: (PppFrame) -> Unit,
@@ -364,7 +394,7 @@ class PppSession(
             return
         }
 
-        val packet = Ipv4Packet.parse(payload)
+        val packet = Packets.parse(payload)
         if (packet == null) {
             sessionLog("IPv4 !! malformed packet or invalid header checksum (${payload.size} bytes)")
             return
@@ -384,21 +414,21 @@ class PppSession(
         }
     }
 
-    private fun receiveLocalIpv4(packet: Ipv4Packet) {
+    private fun receiveLocalIpv4(packet: Packets) {
         if (packet.isFragmented) {
             sessionLog("IPv4 .. fragmented packet to local endpoint not handled")
             return
         }
 
         when (packet.protocol) {
-            Ipv4Packet.ICMP_PROTOCOL -> receiveLocalIcmp(packet)
-            Ipv4Packet.TCP_PROTOCOL -> receiveLocalTcp(packet)
-            Ipv4Packet.UDP_PROTOCOL -> receiveLocalUdp(packet)
+            Packets.ICMP_PROTOCOL -> receiveLocalIcmp(packet)
+            Packets.TCP_PROTOCOL -> receiveLocalTcp(packet)
+            Packets.UDP_PROTOCOL -> receiveLocalUdp(packet)
             else -> sessionLog("IPv4 .. local protocol=${packet.protocol} not handled")
         }
     }
 
-    private fun receiveLocalIcmp(packet: Ipv4Packet) {
+    private fun receiveLocalIcmp(packet: Packets) {
         val icmp = IcmpPacket.parse(packet.payload)
         if (icmp == null) {
             sessionLog("ICMP !! malformed packet or invalid checksum")
@@ -418,11 +448,11 @@ class PppSession(
                 "id=$identifier seq=$sequence",
         )
 
-        val replyPacket = Ipv4Packet(
+        val replyPacket = Packets(
             dscpEcn = packet.dscpEcn,
             identification = packet.identification,
-            ttl = Ipv4Packet.DEFAULT_TTL,
-            protocol = Ipv4Packet.ICMP_PROTOCOL,
+            ttl = Packets.DEFAULT_TTL,
+            protocol = Packets.ICMP_PROTOCOL,
             source = localIpAddress,
             destination = packet.source,
             payload = reply.encode(),
@@ -436,7 +466,7 @@ class PppSession(
         )
     }
 
-    private fun receiveLocalUdp(packet: Ipv4Packet) {
+    private fun receiveLocalUdp(packet: Packets) {
         val udp = UdpPacket.parse(
             bytes = packet.payload,
             source = packet.source,
@@ -519,7 +549,7 @@ class PppSession(
         }
     }
 
-    private fun receiveLocalTcp(packet: Ipv4Packet) {
+    private fun receiveLocalTcp(packet: Packets) {
         val tcp = TcpPacket.parse(
             bytes = packet.payload,
             source = packet.source,
@@ -545,16 +575,16 @@ class PppSession(
         )
     }
 
-    private fun receiveExternalIpv4(packet: Ipv4Packet) {
+    private fun receiveExternalIpv4(packet: Packets) {
         if (packet.isFragmented) {
             sessionLog("IPv4 .. fragmented egress packet not handled")
             return
         }
 
         when (packet.protocol) {
-            Ipv4Packet.ICMP_PROTOCOL -> receiveExternalIcmp(packet)
-            Ipv4Packet.TCP_PROTOCOL -> receiveExternalTcp(packet)
-            Ipv4Packet.UDP_PROTOCOL -> receiveExternalUdp(packet)
+            Packets.ICMP_PROTOCOL -> receiveExternalIcmp(packet)
+            Packets.TCP_PROTOCOL -> receiveExternalTcp(packet)
+            Packets.UDP_PROTOCOL -> receiveExternalUdp(packet)
             else -> sessionLog(
                 "IPv4 .. ${packet.source} -> ${packet.destination} " +
                     "protocol=${packet.protocol} egress not handled yet",
@@ -562,7 +592,7 @@ class PppSession(
         }
     }
 
-    private fun receiveExternalIcmp(packet: Ipv4Packet) {
+    private fun receiveExternalIcmp(packet: Packets) {
         val icmp = IcmpPacket.parse(packet.payload)
         if (icmp == null) {
             sessionLog("ICMP !! malformed packet or invalid checksum")
@@ -612,7 +642,7 @@ class PppSession(
         }
     }
 
-    private fun receiveExternalUdp(packet: Ipv4Packet) {
+    private fun receiveExternalUdp(packet: Packets) {
         val udp = UdpPacket.parse(
             bytes = packet.payload,
             source = packet.source,
@@ -656,7 +686,7 @@ class PppSession(
         }
     }
 
-    private fun receiveExternalTcp(packet: Ipv4Packet) {
+    private fun receiveExternalTcp(packet: Packets) {
         val tcp = TcpPacket.parse(
             bytes = packet.payload,
             source = packet.source,
@@ -676,7 +706,7 @@ class PppSession(
     }
 
     private fun receiveTcp(
-        packet: Ipv4Packet,
+        packet: Packets,
         tcp: TcpPacket,
         connectAddress: Ipv4Address,
         connectPort: Int,
@@ -1134,9 +1164,9 @@ class PppSession(
         packet: TcpPacket,
         dscpEcn: Int,
     ) {
-        val ipv4 = Ipv4Packet(
+        val ipv4 = Packets(
             dscpEcn = dscpEcn,
-            protocol = Ipv4Packet.TCP_PROTOCOL,
+            protocol = Packets.TCP_PROTOCOL,
             source = key.remoteAddress,
             destination = key.peerAddress,
             payload = packet.encode(
@@ -1169,7 +1199,7 @@ class PppSession(
 
     @Synchronized
     private fun sendExternalEchoReply(
-        request: Ipv4Packet,
+        request: Packets,
         reply: IcmpPacket,
         identifier: Int?,
         sequence: Int?,
@@ -1187,11 +1217,11 @@ class PppSession(
             return
         }
 
-        val replyPacket = Ipv4Packet(
+        val replyPacket = Packets(
             dscpEcn = request.dscpEcn,
             identification = request.identification,
-            ttl = Ipv4Packet.DEFAULT_TTL,
-            protocol = Ipv4Packet.ICMP_PROTOCOL,
+            ttl = Packets.DEFAULT_TTL,
+            protocol = Packets.ICMP_PROTOCOL,
             source = request.destination,
             destination = request.source,
             payload = reply.encode(),
@@ -1266,9 +1296,9 @@ class PppSession(
             destinationPort = destinationPort,
             payload = payload,
         )
-        val replyPacket = Ipv4Packet(
+        val replyPacket = Packets(
             dscpEcn = dscpEcn,
-            protocol = Ipv4Packet.UDP_PROTOCOL,
+            protocol = Packets.UDP_PROTOCOL,
             source = source,
             destination = destination,
             payload = udp.encode(
@@ -1297,7 +1327,7 @@ class PppSession(
     }
 
     private fun sendIpv4EchoReply(
-        replyPacket: Ipv4Packet,
+        replyPacket: Packets,
         logSource: Ipv4Address,
         logDestination: Ipv4Address,
         identifier: Int?,

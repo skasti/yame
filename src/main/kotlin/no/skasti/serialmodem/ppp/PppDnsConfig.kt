@@ -1,5 +1,7 @@
 package no.skasti.serialmodem.ppp
 
+import no.skasti.serialmodem.ppp.ip.Ipv4Address
+
 data class PppDnsConfig(
     val upstreamServer: Ipv4Address = DEFAULT_UPSTREAM_SERVER,
     val upstreamPort: Int = DNS_PORT,

@@ -1,5 +1,8 @@
 package no.skasti.serialmodem.ppp
 
+import no.skasti.serialmodem.ppp.ip.Ipv4Address
+import no.skasti.serialmodem.ppp.ip.Ipv4Cidr
+import no.skasti.serialmodem.ppp.ip.LocalIpv4Network
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith

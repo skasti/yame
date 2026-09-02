@@ -1,5 +1,9 @@
 package no.skasti.serialmodem.ppp
 
+import no.skasti.serialmodem.ppp.proxy.NavigationResourceRegistry
+import no.skasti.serialmodem.ppp.proxy.ReferenceRole
+import no.skasti.serialmodem.ppp.proxy.ResourceKind
+import no.skasti.serialmodem.ppp.proxy.ResourceRelation
 import java.net.URI
 import kotlin.test.Test
 import kotlin.test.assertEquals
