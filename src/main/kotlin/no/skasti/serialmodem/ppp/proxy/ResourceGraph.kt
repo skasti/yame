@@ -178,6 +178,22 @@ internal class NavigationResourceGraph(
     }
 
     @Synchronized
+    fun contains(legacyUri: URI): Boolean = key(legacyUri) in nodes
+
+    @Synchronized
+    fun nodeSnapshot(legacyUri: URI): ResourceNodeSnapshot? =
+        nodes[key(legacyUri)]?.let {
+            ResourceNodeSnapshot(
+                legacyUri = it.legacyUri,
+                upstreamUri = it.upstreamUri,
+                role = it.role,
+                kind = it.kind,
+                contentBase = it.contentBase,
+                state = it.state,
+            )
+        }
+
+    @Synchronized
     fun snapshot(): NavigationResourceGraphSnapshot =
         NavigationResourceGraphSnapshot(
             id = id,
@@ -270,13 +286,12 @@ internal class NavigationResourceRegistry(
         relation: ResourceRelation,
         kind: ResourceKind,
     ) {
-        val before = graph.snapshot().nodes.associateBy { LegacyHttpUrl.requestObservableKey(it.legacyUri) }
+        val wasKnown = graph.contains(childLegacyUri)
         if (graph.discover(parentLegacyUri, childLegacyUri, upstreamUri, relation, kind)) {
             associate(childLegacyUri, graph.id)
             hooks.onRootUsed.fire(ResourceRegistryRoot(graph.id, graph.rootLegacyUri))
-            val key = LegacyHttpUrl.requestObservableKey(childLegacyUri)
-            if (key !in before) {
-                graph.snapshot().nodes.firstOrNull { LegacyHttpUrl.requestObservableKey(it.legacyUri) == key }?.let { resource ->
+            if (!wasKnown) {
+                graph.nodeSnapshot(childLegacyUri)?.let { resource ->
                     hooks.onResourceAdded.fire(
                         ResourceRegistryResource(graph.id, graph.rootLegacyUri, resource.legacyUri),
                     )
