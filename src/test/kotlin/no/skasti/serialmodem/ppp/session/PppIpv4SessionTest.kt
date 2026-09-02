@@ -1001,7 +1001,7 @@ class PppIpv4SessionTest {
             if (peerMru != null) {
                 add(
                     LcpOption(
-                        type = LcpOption.MRU,
+                        type = LcpOptionType.MRU,
                         data = byteArrayOf(
                             (peerMru ushr 8).toByte(),
                             peerMru.toByte(),

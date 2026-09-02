@@ -219,7 +219,7 @@ class PppSessionTest {
         )
 
         val unsupported = LcpOption(
-            type = LcpOption.AUTHENTICATION_PROTOCOL,
+            type = LcpOptionType.AUTHENTICATION_PROTOCOL,
             data = byteArrayOf(0xc0.toByte(), 0x23),
         )
         session.receive(
@@ -256,7 +256,7 @@ class PppSessionTest {
         session.start()
 
         val unsupported = LcpOption(
-            type = LcpOption.AUTHENTICATION_PROTOCOL,
+            type = LcpOptionType.AUTHENTICATION_PROTOCOL,
             data = byteArrayOf(0xc0.toByte(), 0x23),
         )
         session.receive(
