@@ -14,7 +14,6 @@ import no.skasti.serialmodem.ppp.proxy.transform.ResourceCache
 import no.skasti.serialmodem.ppp.proxy.transform.ResourceCacheKey
 import no.skasti.serialmodem.ppp.proxy.transform.ResourceRepresentation
 import no.skasti.serialmodem.ppp.proxy.transform.cachePolicyFrom
-import no.skasti.serialmodem.ppp.proxy.transform.resourceSourceVersion
 import no.skasti.serialmodem.ppp.proxy.transform.validatorsFrom
 import no.skasti.serialmodem.ppp.proxy.transform.ResourceTransformationContext
 import no.skasti.serialmodem.ppp.proxy.transform.ResourceTransformationPipeline
@@ -743,7 +742,6 @@ internal class SystemHttpCompatibilityProxy(
             ResourceCacheKey(
                 legacyUri = parentLegacyUri,
                 upstreamUri = upstreamUri,
-                sourceVersion = resourceSourceVersion(source),
                 profile = config.transformationProfile,
             )
         resourceCache.get(key)?.let { return it.resource.representation }
