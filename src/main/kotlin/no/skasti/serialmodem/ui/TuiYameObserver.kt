@@ -293,7 +293,6 @@ class TuiYameObserver(
     @Synchronized
     internal fun handleResourceRootAdded(root: ResourceRegistryRoot) {
         httpGraphs[root.graphId] = HttpGraphState(rootLegacyUri = root.rootLegacyUri)
-        touchHttpGraph(root.graphId)
         normalizeHttpHostSelection()
         render()
     }
