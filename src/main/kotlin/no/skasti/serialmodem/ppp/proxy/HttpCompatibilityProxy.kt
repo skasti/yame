@@ -7,7 +7,10 @@ import no.skasti.serialmodem.ppp.proxy.cookies.BoundedCookieStore
 import no.skasti.serialmodem.ppp.proxy.cookies.CookieOverride
 import no.skasti.serialmodem.ppp.proxy.routing.LegacyOriginRouteTable
 import no.skasti.serialmodem.ppp.proxy.transform.LegacyTextResourceTransformer
+import no.skasti.serialmodem.ppp.proxy.transform.InFlightResourceWork
 import no.skasti.serialmodem.ppp.proxy.transform.ResourceRepresentation
+import no.skasti.serialmodem.ppp.proxy.transform.ResourceRepresentationCache
+import no.skasti.serialmodem.ppp.proxy.transform.ResourceRepresentationKey
 import no.skasti.serialmodem.ppp.proxy.transform.ResourceTransformationContext
 import no.skasti.serialmodem.ppp.proxy.transform.ResourceTransformationPipeline
 import no.skasti.serialmodem.ppp.tcp.TcpProxy
@@ -99,6 +102,11 @@ internal class SystemHttpCompatibilityProxy(
     private val sessionStates = ConcurrentHashMap<SessionKey, SessionState>()
     private val originRoutes = LegacyOriginRouteTable()
     private val resourceTransformations = ResourceTransformationPipeline(listOf(LegacyTextResourceTransformer()))
+    private val representationCache = ResourceRepresentationCache(
+        maxEntries = config.maxRepresentationCacheEntries,
+        maxBytes = config.maxRepresentationCacheBytes,
+    )
+    private val inFlightResourceWork = InFlightResourceWork()
     private val minimumGeneration = AtomicLong(Long.MIN_VALUE)
     @Volatile private var closed = false
 
@@ -542,23 +550,27 @@ internal class SystemHttpCompatibilityProxy(
             )
         }
         try {
-            val legacyHeaders = rewriteLegacyHeaders(state.flow, response.headers, response.locationAlreadyLegacy)
-        val bufferedBody = (response.body as? FinalResponseBody.Buffered)?.bytes
-        val legacyBody =
-            bufferedBody?.let {
-                rewriteLegacyBody(
-                    flow = state.flow,
-                    session = state.session,
-                    graphs = resourceGraphs,
-                    parentLegacyUri = response.legacyUri,
-                    headers = response.headers,
-                    body = it,
-                    resolutionBaseUri = response.effectiveBaseUri ?: response.uri,
-                    forceAbsoluteRelativeReferences = response.effectiveBaseUri != null,
-                )
-            }
-        val bodyRewritten = bufferedBody != null && legacyBody !== bufferedBody
-        val rewritten = legacyHeaders != response.headers || bodyRewritten
+            val bufferedBody = (response.body as? FinalResponseBody.Buffered)?.bytes
+            val transformedRepresentation =
+                bufferedBody?.let {
+                    rewriteLegacyRepresentation(
+                        flow = state.flow,
+                        session = state.session,
+                        graphs = resourceGraphs,
+                        parentLegacyUri = response.legacyUri,
+                        upstreamUri = response.uri,
+                        statusCode = response.statusCode,
+                        headers = response.headers,
+                        body = it,
+                        resolutionBaseUri = response.effectiveBaseUri ?: response.uri,
+                        forceAbsoluteRelativeReferences = response.effectiveBaseUri != null,
+                    )
+                }
+            val transformedHeaders = transformedRepresentation?.headers ?: response.headers
+            val legacyHeaders = rewriteLegacyHeaders(state.flow, transformedHeaders, response.locationAlreadyLegacy)
+            val legacyBody = transformedRepresentation?.body
+            val bodyRewritten = bufferedBody != null && legacyBody != null && !legacyBody.contentEquals(bufferedBody)
+            val rewritten = legacyHeaders != response.headers || bodyRewritten
         val contentLength =
             when {
                 bufferedBody != null && response.contentLength != null &&
@@ -655,50 +667,65 @@ internal class SystemHttpCompatibilityProxy(
             }
         }
 
-    private fun rewriteLegacyBody(
+    private fun rewriteLegacyRepresentation(
         flow: TcpProxyFlow,
         session: SessionState,
         graphs: List<NavigationResourceGraph>,
         parentLegacyUri: URI,
+        upstreamUri: URI,
+        statusCode: Int,
         headers: Map<String, List<String>>,
         body: ByteArray,
         resolutionBaseUri: URI,
         forceAbsoluteRelativeReferences: Boolean,
-    ): ByteArray {
-        if (body.isEmpty()) return body
-        return resourceTransformations.transform(
-            ResourceTransformationContext(
-                navigationIds = graphs.map { it.id }.toSet(),
-                legacyUri = parentLegacyUri,
-                upstreamUri = resolutionBaseUri,
-                kind = graphs.firstNotNullOfOrNull { it.nodeSnapshot(parentLegacyUri)?.kind }
-                    ?: ResourceKind.OTHER,
-                relation = graphs.asSequence()
-                    .flatMap { it.snapshot().edges.asSequence() }
-                    .firstOrNull { it.childLegacyUri == parentLegacyUri }
-                    ?.relation,
-                role = graphs.firstNotNullOfOrNull { it.nodeSnapshot(parentLegacyUri)?.role }
-                    ?: ReferenceRole.SUBRESOURCE,
-                requestHeaders = emptyMap(),
-                rewriteText = { source ->
-                    rewriteBodyUrlsWithBase(
-                        flow = flow,
-                        session = session,
-                        graphs = graphs,
-                        parentLegacyUri = parentLegacyUri,
-                        headers = headers,
-                        source = source,
-                        baseUri = resolutionBaseUri,
-                        forceAbsoluteRelativeReferences = forceAbsoluteRelativeReferences,
-                    )
-                },
-            ),
-            ResourceRepresentation(
-                statusCode = 200,
-                headers = headers,
-                body = body,
-            ),
-        ).body
+    ): ResourceRepresentation {
+        val original = ResourceRepresentation(
+            statusCode = statusCode,
+            headers = headers,
+            body = body,
+        )
+        if (body.isEmpty()) return original
+
+        val key = ResourceRepresentationKey(
+            legacyUri = parentLegacyUri,
+            upstreamUri = upstreamUri,
+            profile = config.transformationProfile,
+        )
+        representationCache.get(key)?.let { return it }
+
+        return inFlightResourceWork.getOrStart(key) {
+            representationCache.get(key) ?: resourceTransformations.transform(
+                ResourceTransformationContext(
+                    navigationIds = graphs.map { it.id }.toSet(),
+                    legacyUri = parentLegacyUri,
+                    upstreamUri = upstreamUri,
+                    kind = graphs.firstNotNullOfOrNull { it.nodeSnapshot(parentLegacyUri)?.kind }
+                        ?: ResourceKind.OTHER,
+                    relation = graphs.asSequence()
+                        .flatMap { it.snapshot().edges.asSequence() }
+                        .firstOrNull { it.childLegacyUri == parentLegacyUri }
+                        ?.relation,
+                    role = graphs.firstNotNullOfOrNull { it.nodeSnapshot(parentLegacyUri)?.role }
+                        ?: ReferenceRole.SUBRESOURCE,
+                    requestHeaders = emptyMap(),
+                    rewriteText = { source ->
+                        rewriteBodyUrlsWithBase(
+                            flow = flow,
+                            session = session,
+                            graphs = graphs,
+                            parentLegacyUri = parentLegacyUri,
+                            headers = headers,
+                            source = source,
+                            baseUri = resolutionBaseUri,
+                            forceAbsoluteRelativeReferences = forceAbsoluteRelativeReferences,
+                        )
+                    },
+                ),
+                original,
+            ).also { transformed ->
+                representationCache.put(key, transformed)
+            }
+        }
     }
 
     private fun recordAbsoluteBodyReferences(
@@ -1476,6 +1503,8 @@ internal class SystemHttpCompatibilityProxy(
         closed = true
         originRoutes.clear()
         sessionStates.clear()
+        representationCache.clear()
+        inFlightResourceWork.clear()
         flows.values.toList().forEach(::removeFlow)
         executor.shutdownNow()
         runCatching { executor.awaitTermination(CLOSE_JOIN_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS) }
