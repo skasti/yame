@@ -12,9 +12,12 @@ import no.skasti.serialmodem.ppp.proxy.transform.CachedResource
 import no.skasti.serialmodem.ppp.proxy.transform.Resource
 import no.skasti.serialmodem.ppp.proxy.transform.ResourceCache
 import no.skasti.serialmodem.ppp.proxy.transform.ResourceCacheKey
+import no.skasti.serialmodem.ppp.proxy.transform.ResourceWorkKey
 import no.skasti.serialmodem.ppp.proxy.transform.ResourceRepresentation
 import no.skasti.serialmodem.ppp.proxy.transform.cachePolicyFrom
 import no.skasti.serialmodem.ppp.proxy.transform.validatorsFrom
+import no.skasti.serialmodem.ppp.proxy.transform.sameSourceRepresentation
+import no.skasti.serialmodem.ppp.proxy.transform.sourceFingerprint
 import no.skasti.serialmodem.ppp.proxy.transform.ResourceTransformationContext
 import no.skasti.serialmodem.ppp.proxy.transform.ResourceTransformationPipeline
 import no.skasti.serialmodem.ppp.tcp.TcpProxy
@@ -738,25 +741,34 @@ internal class SystemHttpCompatibilityProxy(
                 },
             )
 
-        val key =
+        val cacheKey =
             ResourceCacheKey(
                 legacyUri = parentLegacyUri,
                 upstreamUri = upstreamUri,
                 profile = config.transformationProfile,
             )
-        resourceCache.get(key)?.let { return it.resource.representation }
+        resourceCache.get(cacheKey)
+            ?.takeIf { cached -> sameSourceRepresentation(cached.resource.source, source.source) }
+            ?.let { return it.resource.representation }
 
+        val workKey =
+            ResourceWorkKey(
+                cacheKey = cacheKey,
+                sourceFingerprint = sourceFingerprint(source.source),
+            )
         val transformed =
-            inFlightResourceWork.getOrStart(key) {
-                resourceCache.get(key)?.let {
-                    return@getOrStart no.skasti.serialmodem.ppp.proxy.transform.ResourceTransformationState(it.resource)
-                }
+            inFlightResourceWork.getOrStart(workKey) {
+                resourceCache.get(cacheKey)
+                    ?.takeIf { cached -> sameSourceRepresentation(cached.resource.source, source.source) }
+                    ?.let {
+                        return@getOrStart no.skasti.serialmodem.ppp.proxy.transform.ResourceTransformationState(it.resource)
+                    }
                 resourceTransformations.transform(context, source)
             }
 
         if (transformed.cacheable) {
             resourceCache.put(
-                key,
+                cacheKey,
                 CachedResource(
                     resource = transformed.resource,
                     storedAt = Instant.now(),
