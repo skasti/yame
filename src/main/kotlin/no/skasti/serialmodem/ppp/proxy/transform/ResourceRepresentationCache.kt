@@ -111,6 +111,7 @@ internal class ResourceCache(
     private data class Entry(
         val cached: CachedResource,
         val bytes: Long,
+        val sourceFingerprint: String,
     )
 
     private val lock = Any()
@@ -124,6 +125,18 @@ internal class ResourceCache(
             entry.cached.deepCopy()
         }
 
+    fun getIfSourceFingerprint(
+        key: ResourceCacheKey,
+        sourceFingerprint: String,
+    ): CachedResource? =
+        synchronized(lock) {
+            val entry = entries[key] ?: return@synchronized null
+            if (entry.sourceFingerprint != sourceFingerprint) return@synchronized null
+            entries.remove(key)
+            entries[key] = entry
+            entry.cached.deepCopy()
+        }
+
     fun put(
         key: ResourceCacheKey,
         cached: CachedResource,
@@ -131,6 +144,7 @@ internal class ResourceCache(
         if (cached.cachePolicy.noStore) return false
         val size = cached.resource.totalBodyBytes()
         if (size > maxBytes) return false
+        val fingerprint = sourceFingerprint(cached.resource.source)
 
         synchronized(lock) {
             entries.remove(key)?.let { totalBytes -= it.bytes }
@@ -139,7 +153,7 @@ internal class ResourceCache(
                 entries.remove(oldest.key)
                 totalBytes -= oldest.value.bytes
             }
-            entries[key] = Entry(cached.deepCopy(), size)
+            entries[key] = Entry(cached.deepCopy(), size, fingerprint)
             totalBytes += size
         }
         return true
