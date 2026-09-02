@@ -6,7 +6,7 @@ import no.skasti.serialmodem.logging.YameLogManager
 import no.skasti.serialmodem.logging.YameLogModule
 import no.skasti.serialmodem.modem.HayesModem
 import no.skasti.serialmodem.modem.HayesModemConfig
-import no.skasti.serialmodem.ppp.Ipv4Address
+import no.skasti.serialmodem.ppp.ip.Ipv4Address
 import no.skasti.serialmodem.serial.SerialConnection
 
 class InteractiveYameApplication(

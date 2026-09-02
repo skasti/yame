@@ -6,10 +6,10 @@ import no.skasti.serialmodem.logging.YameLogManager
 import no.skasti.serialmodem.logging.YameLogModule
 import no.skasti.serialmodem.modem.HayesModem
 import no.skasti.serialmodem.modem.HayesModemConfig
-import no.skasti.serialmodem.ppp.Ipv4Address
-import no.skasti.serialmodem.ppp.Ipv4Cidr
-import no.skasti.serialmodem.ppp.PppDnsConfig
-import no.skasti.serialmodem.ppp.PppHttpCompatibilityConfig
+import no.skasti.serialmodem.ppp.ip.Ipv4Address
+import no.skasti.serialmodem.ppp.ip.Ipv4Cidr
+import no.skasti.serialmodem.ppp.dns.PppDnsConfig
+import no.skasti.serialmodem.ppp.proxy.PppHttpCompatibilityConfig
 import no.skasti.serialmodem.ppp.PppIpConfig
 import no.skasti.serialmodem.serial.SerialConnection
 import no.skasti.serialmodem.tone.DialString

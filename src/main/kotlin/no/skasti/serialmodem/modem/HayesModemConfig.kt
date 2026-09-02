@@ -1,7 +1,7 @@
 package no.skasti.serialmodem.modem
 
-import no.skasti.serialmodem.ppp.PppDnsConfig
-import no.skasti.serialmodem.ppp.PppHttpCompatibilityConfig
+import no.skasti.serialmodem.ppp.dns.PppDnsConfig
+import no.skasti.serialmodem.ppp.proxy.PppHttpCompatibilityConfig
 import no.skasti.serialmodem.ppp.PppIpConfig
 import no.skasti.serialmodem.tone.HandshakeProfile
 import no.skasti.serialmodem.tone.TonePlayer

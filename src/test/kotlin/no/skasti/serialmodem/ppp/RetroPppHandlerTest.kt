@@ -1,5 +1,8 @@
 package no.skasti.serialmodem.ppp
 
+import no.skasti.serialmodem.ppp.lcp.LcpPacket
+
+import no.skasti.serialmodem.ppp.session.PppSession
 import java.io.ByteArrayOutputStream
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
