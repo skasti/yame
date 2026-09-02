@@ -33,6 +33,25 @@ class ResourceRepresentationCacheTest {
     }
 
     @Test
+    fun `fingerprint-aware lookup returns only matching sources and still copies hits defensively`() {
+        val cache = ResourceCache(maxEntries = 4, maxBytes = 1024)
+        val key = cacheKey("profile-a")
+        val cached = cachedResource(byteArrayOf(1, 2, 3), byteArrayOf(4, 5))
+        val fingerprint = sourceFingerprint(cached.resource.source)
+        cache.put(key, cached, sourceFingerprint = fingerprint)
+
+        assertNull(cache.getIfSourceFingerprint(key, sourceFingerprint(representation(byteArrayOf(9, 9, 9)))))
+
+        val hit = requireNotNull(cache.getIfSourceFingerprint(key, fingerprint))
+        hit.resource.source.body[0] = 99
+        hit.resource.transformed!!.representation.body[0] = 88
+
+        val reread = requireNotNull(cache.getIfSourceFingerprint(key, fingerprint))
+        assertContentEquals(byteArrayOf(1, 2, 3), reread.resource.source.body)
+        assertContentEquals(byteArrayOf(4, 5), reread.resource.transformed!!.representation.body)
+    }
+
+    @Test
     fun `cache replaces resource for same identity and keeps profiles separate`() {
         val cache = ResourceCache(maxEntries = 4, maxBytes = 1024)
         val profileA = cacheKey("profile-a")
