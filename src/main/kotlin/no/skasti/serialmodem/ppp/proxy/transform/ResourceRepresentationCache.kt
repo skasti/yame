@@ -69,21 +69,33 @@ internal class ResourceRepresentationCache(
 }
 
 internal class InFlightResourceWork {
-    private val work = ConcurrentHashMap<ResourceRepresentationKey, CompletableFuture<ResourceRepresentation>>()
+    private data class Pending(
+        val future: CompletableFuture<ResourceRepresentation> = CompletableFuture(),
+        val waiters: java.util.concurrent.atomic.AtomicInteger = java.util.concurrent.atomic.AtomicInteger(),
+    )
+
+    private val work = ConcurrentHashMap<ResourceRepresentationKey, Pending>()
 
     fun getOrStart(
         key: ResourceRepresentationKey,
         producer: () -> ResourceRepresentation,
     ): ResourceRepresentation {
-        val created = CompletableFuture<ResourceRepresentation>()
+        val created = Pending()
         val existing = work.putIfAbsent(key, created)
-        if (existing != null) return existing.join()
+        if (existing != null) {
+            existing.waiters.incrementAndGet()
+            try {
+                return existing.future.join()
+            } finally {
+                existing.waiters.decrementAndGet()
+            }
+        }
         try {
             val result = producer()
-            created.complete(result)
+            created.future.complete(result)
             return result
         } catch (error: Throwable) {
-            created.completeExceptionally(error)
+            created.future.completeExceptionally(error)
             throw error
         } finally {
             work.remove(key, created)
@@ -91,9 +103,12 @@ internal class InFlightResourceWork {
     }
 
     fun clear() {
-        work.values.forEach { it.cancel(true) }
+        work.values.forEach { it.future.cancel(true) }
         work.clear()
     }
 
     internal fun size(): Int = work.size
+
+    internal fun waiterCount(key: ResourceRepresentationKey): Int =
+        work[key]?.waiters?.get() ?: 0
 }
