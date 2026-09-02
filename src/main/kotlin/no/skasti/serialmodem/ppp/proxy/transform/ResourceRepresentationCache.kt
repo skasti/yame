@@ -1,46 +1,125 @@
 package no.skasti.serialmodem.ppp.proxy.transform
 
 import java.net.URI
+import java.time.Instant
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 
-internal data class ResourceRepresentationKey(
+internal data class ResourceCacheKey(
     val legacyUri: URI,
     val upstreamUri: URI,
     val profile: String,
 )
 
-internal class ResourceRepresentationCache(
+internal data class ResourceValidators(
+    val etag: String? = null,
+    val lastModified: String? = null,
+)
+
+internal data class ResourceCachePolicy(
+    val maxAgeSeconds: Long? = null,
+    val expiresAt: Instant? = null,
+    val noCache: Boolean = false,
+    val noStore: Boolean = false,
+    val mustRevalidate: Boolean = false,
+) {
+    fun isFresh(storedAt: Instant, now: Instant = Instant.now()): Boolean {
+        if (noCache) return false
+        val maxAgeFreshUntil = maxAgeSeconds?.let(storedAt::plusSeconds)
+        val freshUntil = listOfNotNull(maxAgeFreshUntil, expiresAt).minOrNull() ?: return false
+        return now.isBefore(freshUntil)
+    }
+}
+
+internal data class CachedResource(
+    val resource: Resource,
+    val storedAt: Instant,
+    val cachePolicy: ResourceCachePolicy,
+    val validators: ResourceValidators,
+)
+
+internal fun cachePolicyFrom(headers: Map<String, List<String>>): ResourceCachePolicy {
+    val directives =
+        headers.entries
+            .filter { (name, _) -> name.equals("cache-control", ignoreCase = true) }
+            .flatMap { it.value }
+            .flatMap { it.split(',') }
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+
+    var maxAgeSeconds: Long? = null
+    var noCache = false
+    var noStore = false
+    var mustRevalidate = false
+    directives.forEach { directive ->
+        val separator = directive.indexOf('=')
+        val name = (if (separator >= 0) directive.substring(0, separator) else directive)
+            .trim()
+            .lowercase(Locale.ROOT)
+        val value = if (separator >= 0) directive.substring(separator + 1).trim().trim('"') else null
+        when (name) {
+            "max-age" -> maxAgeSeconds = value?.toLongOrNull()?.takeIf { it >= 0 }
+            "no-cache" -> noCache = true
+            "no-store" -> noStore = true
+            "must-revalidate" -> mustRevalidate = true
+        }
+    }
+
+    val expiresAt =
+        firstHeader(headers, "expires")
+            ?.let { runCatching { ZonedDateTime.parse(it, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant() }.getOrNull() }
+
+    return ResourceCachePolicy(
+        maxAgeSeconds = maxAgeSeconds,
+        expiresAt = expiresAt,
+        noCache = noCache,
+        noStore = noStore,
+        mustRevalidate = mustRevalidate,
+    )
+}
+
+internal fun validatorsFrom(headers: Map<String, List<String>>): ResourceValidators =
+    ResourceValidators(
+        etag = firstHeader(headers, "etag"),
+        lastModified = firstHeader(headers, "last-modified"),
+    )
+
+internal class ResourceCache(
     private val maxEntries: Int,
     private val maxBytes: Long,
 ) {
     init {
-        require(maxEntries > 0) { "Resource representation cache entry limit must be positive" }
-        require(maxBytes > 0) { "Resource representation cache byte limit must be positive" }
+        require(maxEntries > 0) { "Resource cache entry limit must be positive" }
+        require(maxBytes > 0) { "Resource cache byte limit must be positive" }
     }
 
     private data class Entry(
-        val representation: ResourceRepresentation,
+        val cached: CachedResource,
         val bytes: Long,
     )
 
     private val lock = Any()
-    private val entries = linkedMapOf<ResourceRepresentationKey, Entry>()
+    private val entries = linkedMapOf<ResourceCacheKey, Entry>()
     private var totalBytes = 0L
 
-    fun get(key: ResourceRepresentationKey): ResourceRepresentation? =
+    fun get(key: ResourceCacheKey): CachedResource? =
         synchronized(lock) {
             val entry = entries.remove(key) ?: return@synchronized null
             entries[key] = entry
-            entry.representation.copy(body = entry.representation.body.copyOf())
+            entry.cached.deepCopy()
         }
 
     fun put(
-        key: ResourceRepresentationKey,
-        representation: ResourceRepresentation,
+        key: ResourceCacheKey,
+        cached: CachedResource,
     ): Boolean {
-        val size = representation.body.size.toLong()
+        if (cached.cachePolicy.noStore) return false
+        val size = cached.resource.totalBodyBytes()
         if (size > maxBytes) return false
+
         synchronized(lock) {
             entries.remove(key)?.let { totalBytes -= it.bytes }
             while (entries.isNotEmpty() && (entries.size >= maxEntries || totalBytes + size > maxBytes)) {
@@ -48,11 +127,7 @@ internal class ResourceRepresentationCache(
                 entries.remove(oldest.key)
                 totalBytes -= oldest.value.bytes
             }
-            val stored = representation.copy(
-                headers = representation.headers.mapValues { (_, values) -> values.toList() },
-                body = representation.body.copyOf(),
-            )
-            entries[key] = Entry(stored, size)
+            entries[key] = Entry(cached.deepCopy(), size)
             totalBytes += size
         }
         return true
@@ -70,16 +145,16 @@ internal class ResourceRepresentationCache(
 
 internal class InFlightResourceWork {
     private data class Pending(
-        val future: CompletableFuture<ResourceRepresentation> = CompletableFuture(),
+        val future: CompletableFuture<ResourceTransformationState> = CompletableFuture(),
         val waiters: java.util.concurrent.atomic.AtomicInteger = java.util.concurrent.atomic.AtomicInteger(),
     )
 
-    private val work = ConcurrentHashMap<ResourceRepresentationKey, Pending>()
+    private val work = ConcurrentHashMap<ResourceCacheKey, Pending>()
 
     fun getOrStart(
-        key: ResourceRepresentationKey,
-        producer: () -> ResourceRepresentation,
-    ): ResourceRepresentation {
+        key: ResourceCacheKey,
+        producer: () -> ResourceTransformationState,
+    ): ResourceTransformationState {
         val created = Pending()
         val existing = work.putIfAbsent(key, created)
         if (existing != null) {
@@ -109,6 +184,27 @@ internal class InFlightResourceWork {
 
     internal fun size(): Int = work.size
 
-    internal fun waiterCount(key: ResourceRepresentationKey): Int =
+    internal fun waiterCount(key: ResourceCacheKey): Int =
         work[key]?.waiters?.get() ?: 0
 }
+
+private fun firstHeader(headers: Map<String, List<String>>, name: String): String? =
+    headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value?.firstOrNull()
+
+private fun Resource.totalBodyBytes(): Long =
+    source.body.size.toLong() + (transformed?.representation?.body?.size?.toLong() ?: 0L)
+
+private fun CachedResource.deepCopy(): CachedResource =
+    copy(resource = resource.deepCopy())
+
+private fun Resource.deepCopy(): Resource =
+    copy(
+        source = source.deepCopy(),
+        transformed = transformed?.copy(representation = transformed.representation.deepCopy()),
+    )
+
+private fun ResourceRepresentation.deepCopy(): ResourceRepresentation =
+    copy(
+        headers = headers.mapValues { (_, values) -> values.toList() },
+        body = body.copyOf(),
+    )
