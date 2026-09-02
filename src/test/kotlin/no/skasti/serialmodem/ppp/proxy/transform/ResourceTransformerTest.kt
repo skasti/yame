@@ -13,13 +13,13 @@ class ResourceTransformerTest {
     fun `pipeline orders transformers by phase priority and id`() {
         val order = mutableListOf<String>()
         fun transformer(
-            id: String,
-            phase: ResourceTransformPhase,
-            priority: Int,
+            transformerId: String,
+            transformPhase: ResourceTransformPhase,
+            transformPriority: Int,
         ) = object : ResourceTransformer {
-            override val id = id
-            override val phase = phase
-            override val priority = priority
+            override val id = transformerId
+            override val phase = transformPhase
+            override val priority = transformPriority
 
             override fun supports(
                 context: ResourceTransformationContext,
