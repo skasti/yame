@@ -713,6 +713,11 @@ internal class SystemHttpCompatibilityProxy(
                 },
             )
 
+        val cacheEligible = requestMethod.equals("GET", ignoreCase = true) && statusCode != 304
+        if (!cacheEligible) {
+            return resourceTransformations.transform(context, source).resource.representation
+        }
+
         val cacheKey =
             ResourceCacheKey(
                 legacyUri = parentLegacyUri,
@@ -738,7 +743,7 @@ internal class SystemHttpCompatibilityProxy(
                 resourceTransformations.transform(context, source)
             }
 
-        if (transformed.cacheable && requestMethod.equals("GET", ignoreCase = true) && statusCode != 304) {
+        if (transformed.cacheable) {
             resourceCache.put(
                 cacheKey,
                 CachedResource(
