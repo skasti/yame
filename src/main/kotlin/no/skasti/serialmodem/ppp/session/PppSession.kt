@@ -1425,7 +1425,7 @@ class PppSession(
         }
 
         val nakOptions = mutableListOf<PppControlOption>()
-        val addressOption = options.firstOrNull { it.type == IpcpOptionType.IPCP_IP_ADDRESS }
+        val addressOption = options.firstOrNull { it.type == IpcpOptionType.IP_ADDRESS }
         val requestedAddress = addressOption
             ?.let { Ipv4Address.fromBytes(it.data) }
             ?: Ipv4Address.ZERO
@@ -1434,22 +1434,22 @@ class PppSession(
 
         for (option in options) {
             when (option.type) {
-                IpcpOptionType.IPCP_IP_ADDRESS -> {
+                IpcpOptionType.IP_ADDRESS -> {
                     if (
                         requestedAddress == Ipv4Address.ZERO ||
                         requestedAddress != selectedAddress
                     ) {
                         nakOptions += PppControlOption(
-                            type = IpcpOptionType.IPCP_IP_ADDRESS,
+                            type = IpcpOptionType.IP_ADDRESS,
                             data = selectedAddress.toByteArray(),
                         )
                     }
                 }
 
-                IpcpOptionType.IPCP_PRIMARY_DNS,
-                IpcpOptionType.IPCP_SECONDARY_DNS,
+                IpcpOptionType.PRIMARY_DNS,
+                IpcpOptionType.SECONDARY_DNS,
                 -> {
-                    if (option.type == IpcpOptionType.IPCP_PRIMARY_DNS) {
+                    if (option.type == IpcpOptionType.PRIMARY_DNS) {
                         primaryDnsSeen = true
                         ipcpDnsPrompted = true
                         ipcpDnsPromptRequestIdentifier = null
@@ -1468,7 +1468,7 @@ class PppSession(
 
         if (addressOption == null) {
             nakOptions += PppControlOption(
-                type = IpcpOptionType.IPCP_IP_ADDRESS,
+                type = IpcpOptionType.IP_ADDRESS,
                 data = selectedAddress.toByteArray(),
             )
         }
@@ -1479,7 +1479,7 @@ class PppSession(
                 ipcpDnsPromptRequestData?.contentEquals(packet.data) == true
         if (!primaryDnsSeen && (!ipcpDnsPrompted || repeatedDnsPromptRequest)) {
             nakOptions += PppControlOption(
-                type = IpcpOptionType.IPCP_PRIMARY_DNS,
+                type = IpcpOptionType.PRIMARY_DNS,
                 data = localIpAddress.toByteArray(),
             )
             if (!ipcpDnsPrompted) {
@@ -1527,9 +1527,9 @@ class PppSession(
 
     private fun isSupportedPeerIpcpOption(option: PppControlOption): Boolean =
         when (option.type) {
-            IpcpOptionType.IPCP_IP_ADDRESS,
-            IpcpOptionType.IPCP_PRIMARY_DNS,
-            IpcpOptionType.IPCP_SECONDARY_DNS,
+            IpcpOptionType.IP_ADDRESS,
+            IpcpOptionType.PRIMARY_DNS,
+            IpcpOptionType.SECONDARY_DNS,
             -> option.data.size == 4
 
             else -> false
@@ -1571,7 +1571,7 @@ class PppSession(
         nextIpcpIdentifier = (nextIpcpIdentifier + 1) and 0xff
 
         val address = PppControlOption(
-            type = IpcpOptionType.IPCP_IP_ADDRESS,
+            type = IpcpOptionType.IP_ADDRESS,
             data = localIpAddress.toByteArray(),
         )
         localIpcpConfigureRequest = PppControlPacket(
