@@ -116,6 +116,18 @@ class ResourceRepresentationCacheTest {
     }
 
     @Test
+    fun `max-age takes precedence over Expires`() {
+        val storedAt = Instant.parse("2026-09-02T12:00:00Z")
+        val policy = ResourceCachePolicy(
+            maxAgeSeconds = 120,
+            expiresAt = storedAt.plusSeconds(30),
+        )
+
+        assertTrue(policy.isFresh(storedAt, storedAt.plusSeconds(60)))
+        assertFalse(policy.isFresh(storedAt, storedAt.plusSeconds(121)))
+    }
+
+    @Test
     fun `in flight work coalesces only identical source representations`() {
         val coordinator = InFlightResourceWork()
         val calls = AtomicInteger()
