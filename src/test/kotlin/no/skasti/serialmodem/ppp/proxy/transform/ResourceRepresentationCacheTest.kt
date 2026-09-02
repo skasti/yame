@@ -10,6 +10,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -17,7 +18,7 @@ class ResourceRepresentationCacheTest {
     @Test
     fun `cache returns defensive copies of source transformed body and headers`() {
         val cache = ResourceCache(maxEntries = 4, maxBytes = 1024)
-        val key = key("profile-a", "v1")
+        val key = cacheKey("profile-a")
         cache.put(key, cachedResource(byteArrayOf(1, 2, 3), byteArrayOf(4, 5)))
 
         val cached = requireNotNull(cache.get(key))
@@ -32,26 +33,47 @@ class ResourceRepresentationCacheTest {
     }
 
     @Test
-    fun `cache separates source versions and profiles`() {
+    fun `cache replaces resource for same identity and keeps profiles separate`() {
         val cache = ResourceCache(maxEntries = 4, maxBytes = 1024)
-        val first = key("profile-a", "v1")
-        val second = key("profile-a", "v2")
-        val third = key("profile-b", "v1")
-        cache.put(first, cachedResource(byteArrayOf(1), null))
-        cache.put(second, cachedResource(byteArrayOf(2), null))
-        cache.put(third, cachedResource(byteArrayOf(3), null))
+        val profileA = cacheKey("profile-a")
+        val profileB = cacheKey("profile-b")
 
-        assertContentEquals(byteArrayOf(1), requireNotNull(cache.get(first)).resource.source.body)
-        assertContentEquals(byteArrayOf(2), requireNotNull(cache.get(second)).resource.source.body)
-        assertContentEquals(byteArrayOf(3), requireNotNull(cache.get(third)).resource.source.body)
+        cache.put(profileA, cachedResource(byteArrayOf(1), null))
+        cache.put(profileA, cachedResource(byteArrayOf(2), null))
+        cache.put(profileB, cachedResource(byteArrayOf(3), null))
+
+        assertContentEquals(byteArrayOf(2), requireNotNull(cache.get(profileA)).resource.source.body)
+        assertContentEquals(byteArrayOf(3), requireNotNull(cache.get(profileB)).resource.source.body)
+        assertEquals(2, cache.snapshot().first)
+    }
+
+    @Test
+    fun `source fingerprint covers status headers and body with fixed width hex`() {
+        val base = representation(byteArrayOf(0x80.toByte(), 0xff.toByte()))
+        val sameDifferentHeaderCase = base.copy(
+            headers = mapOf("content-type" to listOf("application/octet-stream")),
+        )
+        val differentStatus = base.copy(statusCode = 201)
+        val differentHeader = base.copy(headers = mapOf("Content-Type" to listOf("image/gif")))
+        val differentBody = base.copy(body = byteArrayOf(0x80.toByte(), 0xfe.toByte()))
+
+        val fingerprint = sourceFingerprint(base)
+
+        assertEquals(64, fingerprint.length)
+        assertEquals(fingerprint, sourceFingerprint(sameDifferentHeaderCase))
+        assertNotEquals(fingerprint, sourceFingerprint(differentStatus))
+        assertNotEquals(fingerprint, sourceFingerprint(differentHeader))
+        assertNotEquals(fingerprint, sourceFingerprint(differentBody))
+        assertTrue(sameSourceRepresentation(base, sameDifferentHeaderCase))
+        assertFalse(sameSourceRepresentation(base, differentHeader))
     }
 
     @Test
     fun `cache accounts for source and transformed bytes when evicting`() {
         val cache = ResourceCache(maxEntries = 2, maxBytes = 6)
-        val first = key("one", "v1")
-        val second = key("two", "v1")
-        val third = key("three", "v1")
+        val first = cacheKey("one")
+        val second = cacheKey("two")
+        val third = cacheKey("three")
 
         assertTrue(cache.put(first, cachedResource(byteArrayOf(1, 1), byteArrayOf(1))))
         assertTrue(cache.put(second, cachedResource(byteArrayOf(2, 2), null)))
@@ -70,7 +92,7 @@ class ResourceRepresentationCacheTest {
             cachePolicy = ResourceCachePolicy(noStore = true),
         )
 
-        assertFalse(cache.put(key("profile", "v1"), cached))
+        assertFalse(cache.put(cacheKey("profile"), cached))
         assertEquals(0 to 0L, cache.snapshot())
     }
 
@@ -94,13 +116,14 @@ class ResourceRepresentationCacheTest {
     }
 
     @Test
-    fun `in flight work coalesces concurrent producers`() {
+    fun `in flight work coalesces only identical source representations`() {
         val coordinator = InFlightResourceWork()
         val calls = AtomicInteger()
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
         val pool = Executors.newFixedThreadPool(2)
-        val key = key("same", "v1")
+        val source = representation(byteArrayOf(7))
+        val key = workKey("same", source)
 
         try {
             val first = pool.submit<ResourceTransformationState> {
@@ -108,14 +131,14 @@ class ResourceRepresentationCacheTest {
                     calls.incrementAndGet()
                     entered.countDown()
                     assertTrue(release.await(2, TimeUnit.SECONDS))
-                    state(byteArrayOf(7))
+                    state(source)
                 }
             }
             assertTrue(entered.await(2, TimeUnit.SECONDS))
             val second = pool.submit<ResourceTransformationState> {
                 coordinator.getOrStart(key) {
                     calls.incrementAndGet()
-                    state(byteArrayOf(8))
+                    state(representation(byteArrayOf(8)))
                 }
             }
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
@@ -135,11 +158,15 @@ class ResourceRepresentationCacheTest {
         }
     }
 
-    private fun key(profile: String, version: String) = ResourceCacheKey(
+    private fun cacheKey(profile: String) = ResourceCacheKey(
         legacyUri = URI("http://legacy.test/resource"),
         upstreamUri = URI("https://modern.test/resource"),
-        sourceVersion = version,
         profile = profile,
+    )
+
+    private fun workKey(profile: String, source: ResourceRepresentation) = ResourceWorkKey(
+        cacheKey = cacheKey(profile),
+        sourceFingerprint = sourceFingerprint(source),
     )
 
     private fun cachedResource(sourceBody: ByteArray, transformedBody: ByteArray?) = CachedResource(
@@ -155,10 +182,10 @@ class ResourceRepresentationCacheTest {
         validators = ResourceValidators(),
     )
 
-    private fun state(body: ByteArray) = ResourceTransformationState(
+    private fun state(source: ResourceRepresentation) = ResourceTransformationState(
         resource = Resource(
             upstreamUri = URI("https://modern.test/resource"),
-            source = representation(body),
+            source = source,
         ),
     )
 
