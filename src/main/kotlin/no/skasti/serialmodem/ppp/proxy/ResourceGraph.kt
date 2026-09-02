@@ -307,12 +307,12 @@ internal class NavigationResourceRegistry(
         val oldestId = graphs.keys.firstOrNull() ?: return
         val removed = graphs.remove(oldestId) ?: return
         val removedSnapshot = removed.snapshot()
+        hooks.onRootRemoved.fire(ResourceRegistryRoot(removedSnapshot.id, removedSnapshot.rootLegacyUri))
         removedSnapshot.nodes.forEach { resource ->
             hooks.onResourceRemoved.fire(
                 ResourceRegistryResource(removedSnapshot.id, removedSnapshot.rootLegacyUri, resource.legacyUri),
             )
         }
-        hooks.onRootRemoved.fire(ResourceRegistryRoot(removedSnapshot.id, removedSnapshot.rootLegacyUri))
         val iterator = contextByLegacyUri.entries.iterator()
         while (iterator.hasNext()) {
             val entry = iterator.next()
