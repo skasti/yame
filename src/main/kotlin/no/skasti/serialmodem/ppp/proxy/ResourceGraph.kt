@@ -60,7 +60,13 @@ internal data class NavigationResourceGraphSnapshot(
 internal class NavigationResourceGraph(
     val id: Long,
     val rootLegacyUri: URI,
+    private val maxNodes: Int,
+    private val maxEdges: Int,
 ) {
+    init {
+        require(maxNodes > 0) { "Resource graph node limit must be positive" }
+        require(maxEdges > 0) { "Resource graph edge limit must be positive" }
+    }
     private data class MutableNode(
         val legacyUri: URI,
         var upstreamUri: URI?,
@@ -91,7 +97,9 @@ internal class NavigationResourceGraph(
         upstreamUri: URI,
         relation: ResourceRelation,
         kind: ResourceKind,
-    ) {
+    ): Boolean {
+        val key = key(childLegacyUri)
+        if (key !in nodes && nodes.size >= maxNodes) return false
         upsertNode(
             legacyUri = childLegacyUri,
             upstreamUri = upstreamUri,
@@ -100,7 +108,9 @@ internal class NavigationResourceGraph(
             contentBase = null,
             state = ResourceState.DISCOVERED,
         )
-        edges += ResourceEdgeSnapshot(parentLegacyUri, childLegacyUri, relation)
+        val edge = ResourceEdgeSnapshot(parentLegacyUri, childLegacyUri, relation)
+        if (edge in edges || edges.size < maxEdges) edges += edge
+        return true
     }
 
     @Synchronized
@@ -170,14 +180,30 @@ internal class NavigationResourceGraph(
     private fun key(uri: URI): String = LegacyHttpUrl.requestObservableKey(uri)
 }
 
-internal class NavigationResourceRegistry {
+internal class NavigationResourceRegistry(
+    private val maxContexts: Int = 64,
+    private val maxNodesPerContext: Int = 1_024,
+    private val maxEdgesPerContext: Int = 2_048,
+) {
+    init {
+        require(maxContexts > 0) { "Navigation context limit must be positive" }
+        require(maxNodesPerContext > 0) { "Resource graph node limit must be positive" }
+        require(maxEdgesPerContext > 0) { "Resource graph edge limit must be positive" }
+    }
+
     private val nextId = AtomicLong(1)
     private val graphs = linkedMapOf<Long, NavigationResourceGraph>()
     private val contextByLegacyUri = mutableMapOf<String, LinkedHashSet<Long>>()
 
     @Synchronized
     fun startNavigation(rootLegacyUri: URI): NavigationResourceGraph {
-        val graph = NavigationResourceGraph(nextId.getAndIncrement(), rootLegacyUri)
+        while (graphs.size >= maxContexts) evictOldest()
+        val graph = NavigationResourceGraph(
+            id = nextId.getAndIncrement(),
+            rootLegacyUri = rootLegacyUri,
+            maxNodes = maxNodesPerContext,
+            maxEdges = maxEdgesPerContext,
+        )
         graphs[graph.id] = graph
         associate(rootLegacyUri, graph.id)
         return graph
@@ -198,12 +224,24 @@ internal class NavigationResourceRegistry {
         relation: ResourceRelation,
         kind: ResourceKind,
     ) {
-        graph.discover(parentLegacyUri, childLegacyUri, upstreamUri, relation, kind)
-        associate(childLegacyUri, graph.id)
+        if (graph.discover(parentLegacyUri, childLegacyUri, upstreamUri, relation, kind)) {
+            associate(childLegacyUri, graph.id)
+        }
     }
 
     @Synchronized
     fun snapshots(): List<NavigationResourceGraphSnapshot> = graphs.values.map { it.snapshot() }
+
+    private fun evictOldest() {
+        val oldestId = graphs.keys.firstOrNull() ?: return
+        graphs.remove(oldestId)
+        val iterator = contextByLegacyUri.entries.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            entry.value.remove(oldestId)
+            if (entry.value.isEmpty()) iterator.remove()
+        }
+    }
 
     private fun associate(uri: URI, graphId: Long) {
         contextByLegacyUri

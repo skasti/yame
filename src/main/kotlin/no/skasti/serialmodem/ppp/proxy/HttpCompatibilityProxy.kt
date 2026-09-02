@@ -48,7 +48,7 @@ class SystemHttpCompatibilityProxy(
     private data class SessionState(
         val cookieManager: CookieManager = CookieManager(BoundedCookieStore(), CookiePolicy.ACCEPT_ORIGINAL_SERVER),
         val cookieOverrides: BoundedCookieOverrides = BoundedCookieOverrides(),
-        val resources: NavigationResourceRegistry = NavigationResourceRegistry(),
+        val resources: NavigationResourceRegistry,
     )
     private data class FlowState(
         val flow: TcpProxyFlow,
@@ -84,6 +84,7 @@ class SystemHttpCompatibilityProxy(
         val locationAlreadyLegacy: Boolean = false,
         val effectiveBaseUri: URI? = null,
         val referenceRole: ReferenceRole = ReferenceRole.NAVIGATION,
+        val establishesNavigation: Boolean = false,
     )
 
     private enum class ExpectationDisposition { NONE, CONTINUE, UNSUPPORTED }
@@ -116,7 +117,15 @@ class SystemHttpCompatibilityProxy(
             FlowState(
                 flow = flow,
                 onEvent = onEvent,
-                session = sessionStates.computeIfAbsent(sessionKey(flow)) { SessionState() },
+                session = sessionStates.computeIfAbsent(sessionKey(flow)) {
+                    SessionState(
+                        resources = NavigationResourceRegistry(
+                            maxContexts = config.maxResourceContexts,
+                            maxNodesPerContext = config.maxResourceNodesPerContext,
+                            maxEdgesPerContext = config.maxResourceEdgesPerContext,
+                        ),
+                    )
+                },
             )
         if (flows.putIfAbsent(flow, state) != null) {
             releaseSlot(state)
@@ -449,16 +458,14 @@ class SystemHttpCompatibilityProxy(
                 effectiveBaseUri =
                     if (mappedContentBase || (hideExactRedirect && redirects > 0 && uri != initialUpstreamUri)) uri else null,
                 referenceRole = referenceRole,
+                establishesNavigation = navigationLikeResponse && referenceRole == ReferenceRole.NAVIGATION,
             )
         }
     }
 
     private fun emitFinalResponse(state: FlowState, response: FinalResponse) {
-        val navigationLikeResponse =
-            response.referenceRole == ReferenceRole.NAVIGATION &&
-                responseEstablishesNavigationOrigin("GET", response.statusCode, response.headers)
         val resourceGraphs =
-            if (navigationLikeResponse) {
+            if (response.establishesNavigation) {
                 listOf(state.session.resources.startNavigation(response.legacyUri))
             } else {
                 state.session.resources.contextsFor(response.legacyUri)
@@ -467,11 +474,12 @@ class SystemHttpCompatibilityProxy(
             graph.markFetched(
                 legacyUri = response.legacyUri,
                 upstreamUri = response.uri,
-                contentBase = response.effectiveBaseUri,
-                state = ResourceState.READY,
+                contentBase = response.effectiveBaseUri ?: response.uri,
+                state = ResourceState.FETCHING,
             )
         }
-        val legacyHeaders = rewriteLegacyHeaders(state.flow, response.headers, response.locationAlreadyLegacy)
+        try {
+            val legacyHeaders = rewriteLegacyHeaders(state.flow, response.headers, response.locationAlreadyLegacy)
         val bufferedBody = (response.body as? FinalResponseBody.Buffered)?.bytes
         val legacyBody =
             bufferedBody?.let {
@@ -482,7 +490,8 @@ class SystemHttpCompatibilityProxy(
                     parentLegacyUri = response.legacyUri,
                     headers = response.headers,
                     body = it,
-                    effectiveBaseUri = response.effectiveBaseUri,
+                    resolutionBaseUri = response.effectiveBaseUri ?: response.uri,
+                    forceAbsoluteRelativeReferences = response.effectiveBaseUri != null,
                 )
             }
         val bodyRewritten = bufferedBody != null && legacyBody !== bufferedBody
@@ -546,7 +555,26 @@ class SystemHttpCompatibilityProxy(
                 }
             }
         }
-        finishFlow(state)
+            resourceGraphs.forEach { graph ->
+                graph.markFetched(
+                    legacyUri = response.legacyUri,
+                    upstreamUri = response.uri,
+                    contentBase = response.effectiveBaseUri ?: response.uri,
+                    state = ResourceState.READY,
+                )
+            }
+            finishFlow(state)
+        } catch (error: Throwable) {
+            resourceGraphs.forEach { graph ->
+                graph.markFetched(
+                    legacyUri = response.legacyUri,
+                    upstreamUri = response.uri,
+                    contentBase = response.effectiveBaseUri ?: response.uri,
+                    state = ResourceState.FAILED,
+                )
+            }
+            throw error
+        }
     }
 
     private fun rewriteLegacyHeaders(
@@ -571,32 +599,22 @@ class SystemHttpCompatibilityProxy(
         parentLegacyUri: URI,
         headers: Map<String, List<String>>,
         body: ByteArray,
-        effectiveBaseUri: URI?,
+        resolutionBaseUri: URI,
+        forceAbsoluteRelativeReferences: Boolean,
     ): ByteArray {
         if (body.isEmpty()) return body
         return payloadTransformations.transform(
             PayloadTransformationContext(headers) { source ->
-                if (effectiveBaseUri != null) {
-                    rewriteBodyUrlsWithBase(
-                        flow,
-                        session,
-                        graphs,
-                        parentLegacyUri,
-                        headers,
-                        source,
-                        effectiveBaseUri,
-                    )
-                } else {
-                    recordAbsoluteBodyReferences(
-                        flow = flow,
-                        session = session,
-                        graphs = graphs,
-                        parentLegacyUri = parentLegacyUri,
-                        headers = headers,
-                        source = source,
-                    )
-                    rewriteBodyAbsoluteUrls(flow, source)
-                }
+                rewriteBodyUrlsWithBase(
+                    flow = flow,
+                    session = session,
+                    graphs = graphs,
+                    parentLegacyUri = parentLegacyUri,
+                    headers = headers,
+                    source = source,
+                    baseUri = resolutionBaseUri,
+                    forceAbsoluteRelativeReferences = forceAbsoluteRelativeReferences,
+                )
             },
             body,
         )
@@ -650,6 +668,7 @@ class SystemHttpCompatibilityProxy(
         headers: Map<String, List<String>>,
         source: String,
         baseUri: URI,
+        forceAbsoluteRelativeReferences: Boolean,
     ): String {
         val contentType = firstHeader(headers, "content-type")
             ?.substringBefore(';')
@@ -657,9 +676,9 @@ class SystemHttpCompatibilityProxy(
             ?.lowercase(Locale.ROOT)
             ?: return rewriteBodyAbsoluteUrls(flow, source)
         return when (contentType) {
-            "text/css" -> rewriteCssUrlsWithBase(flow, session, graphs, parentLegacyUri, source, baseUri)
+            "text/css" -> rewriteCssUrlsWithBase(flow, session, graphs, parentLegacyUri, source, baseUri, forceAbsoluteRelativeReferences)
             "text/html", "application/xhtml+xml" ->
-                rewriteHtmlUrlsWithBase(flow, session, graphs, parentLegacyUri, source, baseUri)
+                rewriteHtmlUrlsWithBase(flow, session, graphs, parentLegacyUri, source, baseUri, forceAbsoluteRelativeReferences)
             else -> rewriteBodyAbsoluteUrls(flow, source)
         }
     }
@@ -671,17 +690,18 @@ class SystemHttpCompatibilityProxy(
         parentLegacyUri: URI,
         source: String,
         baseUri: URI,
+        forceAbsoluteRelativeReferences: Boolean,
     ): String {
         var rewritten = CSS_URL_REFERENCE_PATTERN.replace(source) { match ->
             replaceDiscoveredUrlReferenceInMatch(
                 flow, session, graphs, parentLegacyUri, match, listOf(1, 2, 3), baseUri,
-                ResourceRelation.CSS_URL, ResourceKind.OTHER,
+                ResourceRelation.CSS_URL, ResourceKind.OTHER, forceAbsoluteRelativeReferences,
             )
         }
         rewritten = CSS_IMPORT_REFERENCE_PATTERN.replace(rewritten) { match ->
             replaceDiscoveredUrlReferenceInMatch(
                 flow, session, graphs, parentLegacyUri, match, listOf(1, 2), baseUri,
-                ResourceRelation.CSS_IMPORT, ResourceKind.STYLESHEET,
+                ResourceRelation.CSS_IMPORT, ResourceKind.STYLESHEET, forceAbsoluteRelativeReferences,
             )
         }
         return rewriteBodyAbsoluteUrlsOutsideGeneratedMappings(flow, rewritten)
@@ -694,6 +714,7 @@ class SystemHttpCompatibilityProxy(
         parentLegacyUri: URI,
         source: String,
         baseUri: URI,
+        forceAbsoluteRelativeReferences: Boolean,
     ): String {
         val documentBaseUri = htmlDocumentBaseUri(source, baseUri)
         var rewritten = HTML_URL_ATTRIBUTE_PATTERN.replace(source) { match ->
@@ -715,14 +736,15 @@ class SystemHttpCompatibilityProxy(
                 rawUrl = urlGroup.value,
                 relation = relation,
                 kind = resourceKindForRelation(relation),
+                forceAbsoluteRelativeReferences = forceAbsoluteRelativeReferences,
             ) ?: return@replace match.value
             replaceMatchGroup(match, urlGroup, replacement)
         }
         rewritten = rewriteInlineCssWithBase(
-            flow, session, graphs, parentLegacyUri, rewritten, documentBaseUri,
+            flow, session, graphs, parentLegacyUri, rewritten, documentBaseUri, forceAbsoluteRelativeReferences,
         )
         rewritten = rewriteMetaRefreshWithBase(
-            flow, session, graphs, parentLegacyUri, rewritten, documentBaseUri,
+            flow, session, graphs, parentLegacyUri, rewritten, documentBaseUri, forceAbsoluteRelativeReferences,
         )
         return rewriteBodyAbsoluteUrlsOutsideGeneratedMappings(flow, rewritten)
     }
@@ -734,6 +756,7 @@ class SystemHttpCompatibilityProxy(
         parentLegacyUri: URI,
         source: String,
         baseUri: URI,
+        forceAbsoluteRelativeReferences: Boolean,
     ): String =
         HTML_META_TAG_PATTERN.replace(source) { tagMatch ->
             if (!isMetaRefreshTag(tagMatch.value)) return@replace tagMatch.value
@@ -754,6 +777,7 @@ class SystemHttpCompatibilityProxy(
                     rawUrl = urlGroup.value,
                     relation = ResourceRelation.META_REFRESH,
                     kind = ResourceKind.DOCUMENT,
+                    forceAbsoluteRelativeReferences = forceAbsoluteRelativeReferences,
                 ) ?: return@replace urlMatch.value
                 replaceMatchGroup(urlMatch, urlGroup, replacement)
             }
@@ -788,13 +812,14 @@ class SystemHttpCompatibilityProxy(
         parentLegacyUri: URI,
         source: String,
         baseUri: URI,
+        forceAbsoluteRelativeReferences: Boolean,
     ): String {
         var rewritten = HTML_STYLE_BLOCK_PATTERN.replace(source) { match ->
             val cssGroup = match.groups[1] ?: return@replace match.value
             replaceMatchGroup(
                 match,
                 cssGroup,
-                rewriteCssFragmentWithBase(flow, session, graphs, parentLegacyUri, cssGroup.value, baseUri),
+                rewriteCssFragmentWithBase(flow, session, graphs, parentLegacyUri, cssGroup.value, baseUri, forceAbsoluteRelativeReferences),
             )
         }
         rewritten = HTML_STYLE_ATTRIBUTE_PATTERN.replace(rewritten) { match ->
@@ -803,7 +828,7 @@ class SystemHttpCompatibilityProxy(
             replaceMatchGroup(
                 match,
                 cssGroup,
-                rewriteCssFragmentWithBase(flow, session, graphs, parentLegacyUri, cssGroup.value, baseUri),
+                rewriteCssFragmentWithBase(flow, session, graphs, parentLegacyUri, cssGroup.value, baseUri, forceAbsoluteRelativeReferences),
             )
         }
         return rewritten
@@ -816,17 +841,18 @@ class SystemHttpCompatibilityProxy(
         parentLegacyUri: URI,
         source: String,
         baseUri: URI,
+        forceAbsoluteRelativeReferences: Boolean,
     ): String {
         var rewritten = CSS_URL_REFERENCE_PATTERN.replace(source) { match ->
             replaceDiscoveredUrlReferenceInMatch(
                 flow, session, graphs, parentLegacyUri, match, listOf(1, 2, 3), baseUri,
-                ResourceRelation.CSS_URL, ResourceKind.OTHER,
+                ResourceRelation.CSS_URL, ResourceKind.OTHER, forceAbsoluteRelativeReferences,
             )
         }
         rewritten = CSS_IMPORT_REFERENCE_PATTERN.replace(rewritten) { match ->
             replaceDiscoveredUrlReferenceInMatch(
                 flow, session, graphs, parentLegacyUri, match, listOf(1, 2), baseUri,
-                ResourceRelation.CSS_IMPORT, ResourceKind.STYLESHEET,
+                ResourceRelation.CSS_IMPORT, ResourceKind.STYLESHEET, forceAbsoluteRelativeReferences,
             )
         }
         return rewritten
@@ -842,6 +868,7 @@ class SystemHttpCompatibilityProxy(
         baseUri: URI,
         relation: ResourceRelation,
         kind: ResourceKind,
+        forceAbsoluteRelativeReferences: Boolean,
     ): String {
         val urlGroup = rawGroups.mapNotNull { match.groups[it] }.firstOrNull() ?: return match.value
         val replacement = rewriteAndDiscoverUrlReference(
@@ -853,6 +880,7 @@ class SystemHttpCompatibilityProxy(
             rawUrl = urlGroup.value,
             relation = relation,
             kind = kind,
+            forceAbsoluteRelativeReferences = forceAbsoluteRelativeReferences,
         ) ?: return match.value
         return replaceMatchGroup(match, urlGroup, replacement)
     }
@@ -866,6 +894,7 @@ class SystemHttpCompatibilityProxy(
         rawUrl: String,
         relation: ResourceRelation,
         kind: ResourceKind,
+        forceAbsoluteRelativeReferences: Boolean,
     ): String? {
         if (rawUrl.isBlank() || rawUrl.startsWith('#')) return null
         val reference = runCatching { URI(rawUrl) }.getOrNull() ?: return null
@@ -887,7 +916,7 @@ class SystemHttpCompatibilityProxy(
                 kind = kind,
             )
         }
-        return rewritten
+        return if (!reference.isAbsolute && !forceAbsoluteRelativeReferences) rawUrl else rewritten
     }
 
     private fun replaceUrlReferenceInMatch(
