@@ -84,7 +84,7 @@ class SystemHttpCompatibilityProxy(
         val locationAlreadyLegacy: Boolean = false,
         val effectiveBaseUri: URI? = null,
         val referenceRole: ReferenceRole = ReferenceRole.NAVIGATION,
-        val establishesNavigation: Boolean = false,
+        val establishesNavigationGraph: Boolean = false,
     )
 
     private enum class ExpectationDisposition { NONE, CONTINUE, UNSUPPORTED }
@@ -278,30 +278,67 @@ class SystemHttpCompatibilityProxy(
     }
 
     private fun processRequest(state: FlowState, bytes: ByteArray) {
+        var fetchGraphs: List<NavigationResourceGraph> = emptyList()
+        var fetchLegacyUri: URI? = null
+        var fetchUpstreamUri: URI? = null
         try {
             ensureActive(state)
             val request = parseRequest(bytes)
+            val legacyUri = legacyUri(state.flow, request)
+            val upstreamUri = originRoutes.resolve(state.flow, legacyUri)
+            fetchLegacyUri = legacyUri
+            fetchUpstreamUri = upstreamUri
+            fetchGraphs = state.session.resources.contextsFor(legacyUri)
+            fetchGraphs.forEach { graph ->
+                graph.markFetched(
+                    legacyUri = legacyUri,
+                    upstreamUri = upstreamUri,
+                    contentBase = upstreamUri,
+                    state = ResourceState.FETCHING,
+                )
+            }
             val response = fetchFinalResponse(state, request)
             ensureActive(state)
             emitFinalResponse(state, response)
         } catch (_: CancellationException) {
+            markFetchFailed(fetchGraphs, fetchLegacyUri, fetchUpstreamUri)
         } catch (error: InterruptedException) {
+            markFetchFailed(fetchGraphs, fetchLegacyUri, fetchUpstreamUri)
             Thread.currentThread().interrupt()
         } catch (error: BadLegacyRequest) {
+            markFetchFailed(fetchGraphs, fetchLegacyUri, fetchUpstreamUri)
             logger("HTTP compatibility !! bad request: ${error.message}")
             emitEvent(state, HttpProxyActionKind.ERROR, error.message ?: "Invalid HTTP request")
             emitErrorUnlessStarted(state, 400, "Bad Request", error.message ?: "Invalid HTTP request")
         } catch (error: ResponseTooLarge) {
+            markFetchFailed(fetchGraphs, fetchLegacyUri, fetchUpstreamUri)
             logger("HTTP compatibility !! ${error.message}")
             emitEvent(state, HttpProxyActionKind.ERROR, error.message ?: "Upstream response too large")
             emitErrorUnlessStarted(state, 502, "Bad Gateway", error.message ?: "Upstream response too large")
         } catch (error: Throwable) {
+            markFetchFailed(fetchGraphs, fetchLegacyUri, fetchUpstreamUri)
             logger("HTTP compatibility !! upstream failed: ${error.message ?: error.javaClass.simpleName}")
             emitEvent(state, HttpProxyActionKind.ERROR, error.message ?: error.javaClass.simpleName)
             emitErrorUnlessStarted(state, 502, "Bad Gateway", "YAME could not fetch the upstream resource")
         } finally {
             synchronized(state) { state.processing = false; state.task = null }
             if (flows[state.flow] !== state) releaseSlot(state)
+        }
+    }
+
+    private fun markFetchFailed(
+        graphs: List<NavigationResourceGraph>,
+        legacyUri: URI?,
+        upstreamUri: URI?,
+    ) {
+        if (legacyUri == null || upstreamUri == null) return
+        graphs.forEach { graph ->
+            graph.markFetched(
+                legacyUri = legacyUri,
+                upstreamUri = upstreamUri,
+                contentBase = upstreamUri,
+                state = ResourceState.FAILED,
+            )
         }
     }
 
@@ -458,14 +495,16 @@ class SystemHttpCompatibilityProxy(
                 effectiveBaseUri =
                     if (mappedContentBase || (hideExactRedirect && redirects > 0 && uri != initialUpstreamUri)) uri else null,
                 referenceRole = referenceRole,
-                establishesNavigation = navigationLikeResponse && referenceRole == ReferenceRole.NAVIGATION,
+                establishesNavigationGraph =
+                    referenceRole == ReferenceRole.NAVIGATION &&
+                        responseIsNavigationDocument(method, responseHeaders),
             )
         }
     }
 
     private fun emitFinalResponse(state: FlowState, response: FinalResponse) {
         val resourceGraphs =
-            if (response.establishesNavigation) {
+            if (response.establishesNavigationGraph) {
                 listOf(state.session.resources.startNavigation(response.legacyUri))
             } else {
                 state.session.resources.contextsFor(response.legacyUri)
@@ -692,10 +731,10 @@ class SystemHttpCompatibilityProxy(
         baseUri: URI,
         forceAbsoluteRelativeReferences: Boolean,
     ): String {
-        var rewritten = CSS_URL_REFERENCE_PATTERN.replace(source) { match ->
+        var rewritten = CSS_IMPORT_URL_REFERENCE_PATTERN.replace(source) { match ->
             replaceDiscoveredUrlReferenceInMatch(
                 flow, session, graphs, parentLegacyUri, match, listOf(1, 2, 3), baseUri,
-                ResourceRelation.CSS_URL, ResourceKind.OTHER, forceAbsoluteRelativeReferences,
+                ResourceRelation.CSS_IMPORT, ResourceKind.STYLESHEET, forceAbsoluteRelativeReferences,
             )
         }
         rewritten = CSS_IMPORT_REFERENCE_PATTERN.replace(rewritten) { match ->
@@ -703,6 +742,16 @@ class SystemHttpCompatibilityProxy(
                 flow, session, graphs, parentLegacyUri, match, listOf(1, 2), baseUri,
                 ResourceRelation.CSS_IMPORT, ResourceKind.STYLESHEET, forceAbsoluteRelativeReferences,
             )
+        }
+        rewritten = CSS_URL_REFERENCE_PATTERN.replace(rewritten) { match ->
+            if (isCssImportUrl(rewritten, match.range.first)) {
+                match.value
+            } else {
+                replaceDiscoveredUrlReferenceInMatch(
+                    flow, session, graphs, parentLegacyUri, match, listOf(1, 2, 3), baseUri,
+                    ResourceRelation.CSS_URL, ResourceKind.OTHER, forceAbsoluteRelativeReferences,
+                )
+            }
         }
         return rewriteBodyAbsoluteUrlsOutsideGeneratedMappings(flow, rewritten)
     }
@@ -843,10 +892,10 @@ class SystemHttpCompatibilityProxy(
         baseUri: URI,
         forceAbsoluteRelativeReferences: Boolean,
     ): String {
-        var rewritten = CSS_URL_REFERENCE_PATTERN.replace(source) { match ->
+        var rewritten = CSS_IMPORT_URL_REFERENCE_PATTERN.replace(source) { match ->
             replaceDiscoveredUrlReferenceInMatch(
                 flow, session, graphs, parentLegacyUri, match, listOf(1, 2, 3), baseUri,
-                ResourceRelation.CSS_URL, ResourceKind.OTHER, forceAbsoluteRelativeReferences,
+                ResourceRelation.CSS_IMPORT, ResourceKind.STYLESHEET, forceAbsoluteRelativeReferences,
             )
         }
         rewritten = CSS_IMPORT_REFERENCE_PATTERN.replace(rewritten) { match ->
@@ -855,7 +904,22 @@ class SystemHttpCompatibilityProxy(
                 ResourceRelation.CSS_IMPORT, ResourceKind.STYLESHEET, forceAbsoluteRelativeReferences,
             )
         }
+        rewritten = CSS_URL_REFERENCE_PATTERN.replace(rewritten) { match ->
+            if (isCssImportUrl(rewritten, match.range.first)) {
+                match.value
+            } else {
+                replaceDiscoveredUrlReferenceInMatch(
+                    flow, session, graphs, parentLegacyUri, match, listOf(1, 2, 3), baseUri,
+                    ResourceRelation.CSS_URL, ResourceKind.OTHER, forceAbsoluteRelativeReferences,
+                )
+            }
+        }
         return rewritten
+    }
+
+    private fun isCssImportUrl(source: String, urlStart: Int): Boolean {
+        val prefix = source.substring(0, urlStart)
+        return Regex("""(?is)@import\s*$""").containsMatchIn(prefix.takeLast(64))
     }
 
     private fun replaceDiscoveredUrlReferenceInMatch(
@@ -965,6 +1029,19 @@ class SystemHttpCompatibilityProxy(
         }
 
 
+    private fun responseIsNavigationDocument(
+        method: String,
+        headers: Map<String, List<String>>,
+    ): Boolean {
+        if (!method.equals("GET", ignoreCase = true)) return false
+        val contentType = firstHeader(headers, "content-type")
+            ?.substringBefore(';')
+            ?.trim()
+            ?.lowercase(Locale.ROOT)
+            ?: return false
+        return contentType in NAVIGATION_CONTENT_TYPES
+    }
+
     private fun responseEstablishesNavigationOrigin(
         method: String,
         status: Int,
@@ -1026,6 +1103,7 @@ class SystemHttpCompatibilityProxy(
         val tag = source.substring(tagStart, tagEnd + 1)
         val prefix = source.substring(tagStart, urlStart).lowercase(Locale.ROOT)
         return when {
+            Regex("""<\s*base\b[^>]*\bhref\s*=\s*["']?[^"']*$""").containsMatchIn(prefix) -> ResourceRelation.BASE_HREF
             Regex("""<\s*a\b[^>]*\bhref\s*=\s*["']?[^"']*$""").containsMatchIn(prefix) -> ResourceRelation.A_HREF
             Regex("""<\s*area\b[^>]*\bhref\s*=\s*["']?[^"']*$""").containsMatchIn(prefix) -> ResourceRelation.AREA_HREF
             Regex("""<\s*form\b[^>]*\baction\s*=\s*["']?[^"']*$""").containsMatchIn(prefix) -> ResourceRelation.FORM_ACTION
@@ -1045,6 +1123,7 @@ class SystemHttpCompatibilityProxy(
             ResourceRelation.A_HREF,
             ResourceRelation.AREA_HREF,
             ResourceRelation.META_REFRESH -> ResourceKind.DOCUMENT
+            ResourceRelation.BASE_HREF -> ResourceKind.OTHER
             ResourceRelation.FORM_ACTION -> ResourceKind.FORM
             ResourceRelation.LINK_STYLESHEET,
             ResourceRelation.CSS_IMPORT -> ResourceKind.STYLESHEET
@@ -1393,6 +1472,8 @@ class SystemHttpCompatibilityProxy(
             Regex("""(?i)url\(\s*(?:"([^"]*)"|'([^']*)'|([^\s"'\)]+))\s*\)""")
         val CSS_IMPORT_REFERENCE_PATTERN =
             Regex("""(?i)@import\s+(?:"([^"]*)"|'([^']*)')""")
+        val CSS_IMPORT_URL_REFERENCE_PATTERN =
+            Regex("""(?i)@import\s+url\(\s*(?:"([^"]*)"|'([^']*)'|([^\s"'\)]+))\s*\)""")
         val HTML_URL_ATTRIBUTE_PATTERN =
             Regex("""(?i)\b(?:src|href|action|background|poster)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>]+))""")
         val HTML_ATTRIBUTE_PATTERN =

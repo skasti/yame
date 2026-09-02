@@ -19,6 +19,7 @@ internal enum class ResourceRelation(val role: ReferenceRole) {
     AREA_HREF(ReferenceRole.NAVIGATION),
     FORM_ACTION(ReferenceRole.NAVIGATION),
     META_REFRESH(ReferenceRole.NAVIGATION),
+    BASE_HREF(ReferenceRole.SUBRESOURCE),
     LINK_STYLESHEET(ReferenceRole.SUBRESOURCE),
     IMG_SRC(ReferenceRole.SUBRESOURCE),
     SCRIPT_SRC(ReferenceRole.SUBRESOURCE),
@@ -169,8 +170,12 @@ internal class NavigationResourceGraph(
         if (previous == null) {
             nodes[key] = MutableNode(legacyUri, upstreamUri, role, kind, contentBase, state)
         } else {
-            if (role == ReferenceRole.NAVIGATION) previous.role = ReferenceRole.NAVIGATION
-            if (previous.kind == ResourceKind.OTHER) previous.kind = kind
+            if (role == ReferenceRole.NAVIGATION) {
+                previous.role = ReferenceRole.NAVIGATION
+                previous.kind = kind
+            } else if (previous.role != ReferenceRole.NAVIGATION && previous.kind == ResourceKind.OTHER) {
+                previous.kind = kind
+            }
             if (upstreamUri != null) previous.upstreamUri = upstreamUri
             if (contentBase != null) previous.contentBase = contentBase
             if (state.ordinal > previous.state.ordinal) previous.state = state
