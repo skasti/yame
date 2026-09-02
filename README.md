@@ -164,6 +164,14 @@ For example, the proxy panel may look like:
 
 Detailed request/redirect/response activity remains available in `logs/proxy.log`; the dashboard panel is intentionally a navigable current-state overview rather than another event log.
 
+Collapsed host overview:
+
+![YAME TUI with collapsed proxy hosts](docs/assets/tui-proxy-collapsed.svg)
+
+Expanded host with known resource paths:
+
+![YAME TUI with expanded proxy host](docs/assets/tui-proxy-expanded.svg)
+
 Useful palette commands include `/port`, `/baud`, `/dns-upstream`, `/http-proxy`, `/reconnect`, `/disconnect`, `/refresh-ports`, `/clear-log`, and `/quit`.
 
 A port can still be selected explicitly:
