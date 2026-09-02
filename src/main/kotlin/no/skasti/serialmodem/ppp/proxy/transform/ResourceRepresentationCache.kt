@@ -240,7 +240,7 @@ internal fun sourceFingerprint(representation: ResourceRepresentation): String {
         digest.updateLengthPrefixed(name.toByteArray(StandardCharsets.UTF_8))
         digest.update(ByteBuffer.allocate(Int.SIZE_BYTES).putInt(values.size).array())
         values.forEach { value ->
-            digest.updateLengthPrefixed(value.toByteArray(StandardCharsets.ISO_8859_1))
+            digest.updateLengthPrefixed(value.toByteArray(StandardCharsets.UTF_8))
         }
     }
     digest.updateLengthPrefixed(representation.body)
