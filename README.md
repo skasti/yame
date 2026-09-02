@@ -144,7 +144,33 @@ The dashboard contains:
 - **Log** — the existing modem/PPP diagnostic output
 - **DNS lookups** — recent UDP and TCP DNS requests, result codes, truncation, and answer counts
 - **Transfers** — TCP flows with connection state, bytes in both directions, and average transfer rate
-- **HTTP / HTTPS compatibility proxy** — routing decisions, upstream requests, redirects, responses, and failures
+- **HTTP / HTTPS compatibility proxy** — an expandable overview of hosts and the resource URLs YAME currently knows about from the active resource registry
+
+When the command palette is closed, use **Up/Down** to select a proxy host, **Enter/Right** to expand it, and **Left** to collapse it. Hosts are kept unique and ordered with recently used hosts first, with usage frequency as a secondary signal. Expanded hosts show the unique paths and queries currently represented by active navigation resource graphs; entries disappear when their registry context is evicted.
+
+For example, the proxy panel may look like:
+
+```text
+┌─ HTTP / HTTPS compatibility proxy ───────────────┐
+│ › ▼ nrk.no  (6)                                  │
+│     /                                            │
+│     /nyheter                                     │
+│     /static/site.css                             │
+│     /images/logo.gif                             │
+│   ▶ gfx.nrk.no  (3)                              │
+│   ▶ example.org  (1)                             │
+└──────────────────────────────────────────────────┘
+```
+
+Detailed request/redirect/response activity remains available in `logs/proxy.log`; the dashboard panel is intentionally a navigable current-state overview rather than another event log.
+
+Collapsed host overview:
+
+![YAME TUI with collapsed proxy hosts](docs/assets/tui-proxy-collapsed.svg)
+
+Expanded host with known resource paths:
+
+![YAME TUI with expanded proxy host](docs/assets/tui-proxy-expanded.svg)
 
 Useful palette commands include `/port`, `/baud`, `/dns-upstream`, `/http-proxy`, `/reconnect`, `/disconnect`, `/refresh-ports`, `/clear-log`, and `/quit`.
 
@@ -196,7 +222,7 @@ Disable compatibility mode when transparent TCP/80 forwarding is desired:
 ./gradlew run --args="--port <port> --no-http-https-proxy"
 ```
 
-In the dashboard, use `/http-proxy` to switch between compatibility and transparent forwarding.
+In the dashboard, use `/http-proxy` to switch between compatibility and transparent forwarding. The compatibility panel is populated directly from YAME's navigation resource registry rather than by parsing proxy log messages, so it reflects the currently retained resource graphs and follows registry eviction.
 The dashboard header also shows the running YAME version and build Git commit, which is useful when testing local `installDist` builds.
 
 YAME always writes module-specific logs under `logs/`: `modem.log`, `serial.log`, `ppp.log`,

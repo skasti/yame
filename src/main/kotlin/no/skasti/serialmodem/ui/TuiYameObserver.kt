@@ -19,7 +19,10 @@ import no.skasti.serialmodem.observer.TransferKind
 import no.skasti.serialmodem.observer.TransferState
 import no.skasti.serialmodem.observer.YameEvent
 import no.skasti.serialmodem.ppp.dns.dnsResponseCodeName
+import no.skasti.serialmodem.ppp.proxy.ResourceRegistryResource
+import no.skasti.serialmodem.ppp.proxy.ResourceRegistryRoot
 import no.skasti.serialmodem.serial.SerialPortDescriptor
+import java.net.URI
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
@@ -53,13 +56,23 @@ class TuiYameObserver(
     private val logs = ArrayDeque<String>()
     private val dnsLookups = mutableListOf<DashboardDnsLookup>()
     private val transfers = linkedMapOf<String, DashboardTransfer>()
-    private val httpActivity = ArrayDeque<DashboardHttpActivity>()
+    private data class HttpGraphState(
+        val rootLegacyUri: URI,
+        val resources: LinkedHashSet<URI> = linkedSetOf(),
+        var useCount: Long = 0,
+        var lastUsedNanos: Long = 0,
+    )
+
+    private val httpGraphs = linkedMapOf<Long, HttpGraphState>()
+    private val expandedHttpHosts = linkedSetOf<String>()
+    private var selectedHttpHost: String? = null
     private var commandPalette: TuiCommandPalette? = null
     private var keyboardInput: JLineKeyboardInput? = null
 
     private val animation = terminal.textAnimation<String> { it }
     private var inputThread: Thread? = null
     private var screenStarted = false
+    private var lastRenderedFrame: String? = null
 
     @Volatile
     private var closed = false
@@ -272,19 +285,126 @@ class TuiYameObserver(
                 )
             }
 
-            is YameEvent.HttpProxyAction -> {
-                httpActivity.addLast(
-                    DashboardHttpActivity(
-                        time = LocalTime.now().format(TIME_FORMAT),
-                        kind = event.kind,
-                        message = event.message,
-                    ),
-                )
-                while (httpActivity.size > MAX_HTTP_LINES) {
-                    httpActivity.removeFirst()
+            is YameEvent.HttpProxyAction -> return
+        }
+        render()
+    }
+
+    @Synchronized
+    internal fun handleResourceRootAdded(root: ResourceRegistryRoot) {
+        httpGraphs[root.graphId] = HttpGraphState(rootLegacyUri = root.rootLegacyUri)
+        normalizeHttpHostSelection()
+        render()
+    }
+
+    @Synchronized
+    internal fun handleResourceRootRemoved(root: ResourceRegistryRoot) {
+        if (httpGraphs.remove(root.graphId) == null) return
+        normalizeHttpHostSelection()
+        render()
+    }
+
+    @Synchronized
+    internal fun handleResourceRootUsed(root: ResourceRegistryRoot) {
+        if (!touchHttpGraph(root.graphId)) return
+        normalizeHttpHostSelection()
+        render()
+    }
+
+    @Synchronized
+    internal fun handleResourceAdded(resource: ResourceRegistryResource) {
+        val changed = httpGraphs[resource.graphId]
+            ?.resources
+            ?.add(resource.resourceLegacyUri)
+            ?: false
+        if (!changed) return
+        normalizeHttpHostSelection()
+        render()
+    }
+
+    @Synchronized
+    internal fun handleResourceRemoved(resource: ResourceRegistryResource) {
+        val changed = httpGraphs[resource.graphId]
+            ?.resources
+            ?.remove(resource.resourceLegacyUri)
+            ?: false
+        if (!changed) return
+        normalizeHttpHostSelection()
+        render()
+    }
+
+    private fun touchHttpGraph(graphId: Long): Boolean {
+        val graph = httpGraphs[graphId] ?: return false
+        graph.useCount++
+        graph.lastUsedNanos = System.nanoTime()
+        return true
+    }
+
+    private fun httpHostSnapshots(): List<DashboardHttpHost> {
+        data class Aggregate(
+            val urls: LinkedHashSet<String> = linkedSetOf(),
+            var useCount: Long = 0,
+            var lastUsedNanos: Long = 0,
+        )
+
+        val hosts = linkedMapOf<String, Aggregate>()
+        httpGraphs.values.forEach { graph ->
+            val graphHosts = linkedSetOf<String>()
+            sequenceOf(graph.rootLegacyUri)
+                .plus(graph.resources.asSequence())
+                .forEach { uri ->
+                    val host = uri.host?.lowercase() ?: return@forEach
+                    val aggregate = hosts.getOrPut(host) { Aggregate() }
+                    aggregate.urls += uri.toString()
+                    aggregate.lastUsedNanos = maxOf(aggregate.lastUsedNanos, graph.lastUsedNanos)
+                    graphHosts += host
                 }
+            graphHosts.forEach { host ->
+                hosts.getValue(host).useCount += graph.useCount
             }
         }
+
+        return hosts
+            .map { (host, aggregate) ->
+                DashboardHttpHost(
+                    host = host,
+                    urls = aggregate.urls.toList(),
+                    expanded = host in expandedHttpHosts,
+                    useCount = aggregate.useCount,
+                    lastUsedNanos = aggregate.lastUsedNanos,
+                )
+            }
+            .sortedWith(
+                compareByDescending<DashboardHttpHost> { it.lastUsedNanos }
+                    .thenByDescending { it.useCount }
+                    .thenBy { it.host },
+            )
+    }
+
+    private fun normalizeHttpHostSelection() {
+        val hosts = httpHostSnapshots()
+        expandedHttpHosts.retainAll(hosts.mapTo(mutableSetOf()) { it.host })
+        selectedHttpHost = selectedHttpHost
+            ?.takeIf { selected -> hosts.any { it.host == selected } }
+            ?: hosts.firstOrNull()?.host
+    }
+
+    @Synchronized
+    private fun moveHttpHostSelection(delta: Int) {
+        val hosts = httpHostSnapshots()
+        if (hosts.isEmpty()) return
+        val current = hosts.indexOfFirst { it.host == selectedHttpHost }
+            .takeIf { it >= 0 }
+            ?: 0
+        val next = (current + delta).coerceIn(0, hosts.lastIndex)
+        selectedHttpHost = hosts[next].host
+        render()
+    }
+
+    @Synchronized
+    private fun setSelectedHttpHostExpanded(expanded: Boolean) {
+        val host = selectedHttpHost ?: return
+        if (expanded) expandedHttpHosts += host else expandedHttpHosts -= host
         render()
     }
 
@@ -330,11 +450,16 @@ class TuiYameObserver(
                             while (!closed && !stopRequested) {
                                 val key = keyboard.readKey(INPUT_POLL_MILLIS)
                                     ?: continue
+                                val paletteOpen = synchronized(this) { commandPalette != null }
                                 when {
                                     key == "Ctrl+C" -> requestQuit()
-                                    commandPalette != null -> handlePaletteKey(key)
+                                    paletteOpen -> handlePaletteKey(key)
                                     key == "/" -> openCommandPalette()
                                     key.equals("q", ignoreCase = true) -> requestQuit()
+                                    key == "ArrowUp" -> moveHttpHostSelection(-1)
+                                    key == "ArrowDown" -> moveHttpHostSelection(1)
+                                    key == "ArrowRight" || key == "Enter" -> setSelectedHttpHostExpanded(true)
+                                    key == "ArrowLeft" -> setSelectedHttpHostExpanded(false)
                                 }
                             }
                         } finally {
@@ -655,11 +780,12 @@ class TuiYameObserver(
         if (notify) onQuit()
     }
 
+    @Synchronized
     private fun render() {
         if (closed || !screenStarted) return
-        animation.update(
-            YameDashboardRenderer.render(
-                state = DashboardState(
+        val frame = YameDashboardRenderer.render(
+            state = httpHostSnapshots().let { httpHosts ->
+                DashboardState(
                     portName = portName,
                     baud = baud,
                     connected = connected,
@@ -668,14 +794,20 @@ class TuiYameObserver(
                     logs = logs.toList(),
                     dnsLookups = dnsLookups.toList(),
                     transfers = transfers.values.toList(),
-                    httpActivity = httpActivity.toList(),
+                    httpHosts = httpHosts,
+                    selectedHttpHostIndex = httpHosts
+                        .indexOfFirst { it.host == selectedHttpHost }
+                        .coerceAtLeast(0),
                     commandPalette = commandPalette,
-                ),
-                width = terminal.size.width,
-                height = terminal.size.height,
-                styles = DashboardStyles.colorful,
-            ),
+                )
+            },
+            width = terminal.size.width,
+            height = terminal.size.height,
+            styles = DashboardStyles.colorful,
         )
+        if (frame == lastRenderedFrame) return
+        lastRenderedFrame = frame
+        animation.update(frame)
     }
 
     @Synchronized
@@ -694,7 +826,6 @@ class TuiYameObserver(
         const val MAX_LOG_LINES = 250
         const val MAX_DNS_LOOKUPS = 40
         const val MAX_TRANSFERS = 20
-        const val MAX_HTTP_LINES = 80
         const val INPUT_POLL_MILLIS = 200L
         const val ENTER_ALTERNATE_SCREEN = "\u001B[?1049h"
         const val LEAVE_ALTERNATE_SCREEN = "\u001B[?1049l"
@@ -759,10 +890,12 @@ internal data class DashboardTransfer(
         }
 }
 
-internal data class DashboardHttpActivity(
-    val time: String,
-    val kind: HttpProxyActionKind,
-    val message: String,
+internal data class DashboardHttpHost(
+    val host: String,
+    val urls: List<String>,
+    val expanded: Boolean,
+    val useCount: Long = 0,
+    val lastUsedNanos: Long = 0,
 )
 
 internal enum class TuiPaletteMode {
@@ -797,7 +930,8 @@ internal data class DashboardState(
     val logs: List<String>,
     val dnsLookups: List<DashboardDnsLookup>,
     val transfers: List<DashboardTransfer>,
-    val httpActivity: List<DashboardHttpActivity>,
+    val httpHosts: List<DashboardHttpHost>,
+    val selectedHttpHostIndex: Int,
     val commandPalette: TuiCommandPalette?,
 )
 
@@ -918,7 +1052,12 @@ internal object YameDashboardRenderer {
                 title = "HTTP / HTTPS compatibility proxy",
                 width = rightWidth,
                 height = lowerHeight,
-                lines = httpLines(state.httpActivity, lowerHeight - 2),
+                lines = httpHostLines(
+                    state.httpHosts,
+                    state.selectedHttpHostIndex,
+                    lowerHeight - 2,
+                    rightWidth - 4,
+                ),
                 styles = styles,
             )
         }
@@ -978,8 +1117,12 @@ internal object YameDashboardRenderer {
             ?.let {
                 lines += DashboardLine(compactTransfer(it), transferTone(it.state))
             }
-        state.httpActivity.lastOrNull()?.let {
-            lines += DashboardLine("HTTP ${it.message}", httpTone(it.kind))
+        state.httpHosts.getOrNull(state.selectedHttpHostIndex)?.let { host ->
+            val marker = if (host.expanded) "▼" else "▶"
+            lines += DashboardLine(
+                "HTTP $marker ${host.host} (${host.urls.size})",
+                DashboardTone.ACCENT,
+            )
         }
         state.logs.lastOrNull()?.let {
             lines += DashboardLine(it)
@@ -1081,31 +1224,60 @@ internal object YameDashboardRenderer {
             }
     }
 
-    private fun httpLines(
-        activity: List<DashboardHttpActivity>,
+    private fun httpHostLines(
+        hosts: List<DashboardHttpHost>,
+        selectedHostIndex: Int,
         visibleRows: Int,
+        contentWidth: Int,
     ): List<DashboardLine> {
-        if (activity.isEmpty()) {
-            return listOf(DashboardLine("(no compatibility proxy activity)", DashboardTone.MUTED))
+        if (hosts.isEmpty()) {
+            return listOf(DashboardLine("(no compatibility proxy hosts yet)", DashboardTone.MUTED))
         }
 
-        return activity
-            .takeLast(visibleRows.coerceAtLeast(1))
-            .map { item ->
-                val marker = when (item.kind) {
-                    HttpProxyActionKind.ROUTED -> "↪"
-                    HttpProxyActionKind.REQUEST -> "→"
-                    HttpProxyActionKind.REDIRECT -> "↻"
-                    HttpProxyActionKind.RESPONSE -> "←"
-                    HttpProxyActionKind.ERROR -> "!"
-                }
-                DashboardLine(
-                    "${item.time} $marker ${item.message}",
-                    httpTone(item.kind),
-                )
-            }
-    }
+        val selected = selectedHostIndex.coerceIn(0, hosts.lastIndex)
+        val rows = visibleRows.coerceAtLeast(1)
+        var selectedLine = 0
+        for (index in 0 until selected) {
+            selectedLine += 1 + if (hosts[index].expanded) hosts[index].urls.size else 0
+        }
+        val itemCount = hosts.sumOf { host ->
+            1 + if (host.expanded) host.urls.size else 0
+        }
+        val start = viewportStart(
+            selectedIndex = selectedLine.coerceIn(0, (itemCount - 1).coerceAtLeast(0)),
+            itemCount = itemCount,
+            visibleRows = rows,
+        )
 
+        return sequence {
+            hosts.forEachIndexed { index, host ->
+                val marker = if (host.expanded) "▼" else "▶"
+                val selection = if (index == selected) "›" else " "
+                yield(
+                    DashboardLine(
+                        clip("$selection $marker ${host.host}  (${host.urls.size})", contentWidth),
+                        if (index == selected) DashboardTone.SELECTED else DashboardTone.ACCENT,
+                    ),
+                )
+                if (host.expanded) {
+                    host.urls.forEach { url ->
+                        val path = runCatching { URI(url) }.getOrNull()?.let { uri ->
+                            buildString {
+                                append(uri.rawPath?.takeIf { it.isNotEmpty() } ?: "/")
+                                uri.rawQuery?.let { append('?').append(it) }
+                            }
+                        } ?: url
+                        yield(
+                            DashboardLine(
+                                clip("    $path", contentWidth),
+                                DashboardTone.MUTED,
+                            ),
+                        )
+                    }
+                }
+            }
+        }.drop(start).take(rows).toList()
+    }
     private fun paletteLines(
         palette: TuiCommandPalette,
         visibleRows: Int,

@@ -58,6 +58,54 @@ internal data class NavigationResourceGraphSnapshot(
     val edges: List<ResourceEdgeSnapshot>,
 )
 
+internal data class ResourceRegistryRoot(
+    val graphId: Long,
+    val rootLegacyUri: URI,
+)
+
+internal data class ResourceRegistryResource(
+    val graphId: Long,
+    val rootLegacyUri: URI,
+    val resourceLegacyUri: URI,
+)
+
+internal class ResourceRegistryEvent<T>(
+    private val dispatch: ((() -> Unit) -> Unit),
+) {
+    private val handlers = linkedSetOf<(T) -> Unit>()
+
+    @Synchronized
+    operator fun plusAssign(handler: (T) -> Unit) {
+        handlers += handler
+    }
+
+    @Synchronized
+    operator fun minusAssign(handler: (T) -> Unit) {
+        handlers -= handler
+    }
+
+    fun fire(value: T) {
+        val snapshot = synchronized(this) { handlers.toList() }
+        snapshot.forEach { handler ->
+            runCatching {
+                dispatch {
+                    runCatching { handler(value) }
+                }
+            }
+        }
+    }
+}
+
+internal class ResourceRegistryHooks(
+    private val dispatch: ((() -> Unit) -> Unit) = { task -> task() },
+) {
+    val onRootAdded = ResourceRegistryEvent<ResourceRegistryRoot>(dispatch)
+    val onRootRemoved = ResourceRegistryEvent<ResourceRegistryRoot>(dispatch)
+    val onRootUsed = ResourceRegistryEvent<ResourceRegistryRoot>(dispatch)
+    val onResourceAdded = ResourceRegistryEvent<ResourceRegistryResource>(dispatch)
+    val onResourceRemoved = ResourceRegistryEvent<ResourceRegistryResource>(dispatch)
+}
+
 internal class NavigationResourceGraph(
     val id: Long,
     val rootLegacyUri: URI,
@@ -140,6 +188,22 @@ internal class NavigationResourceGraph(
     }
 
     @Synchronized
+    fun contains(legacyUri: URI): Boolean = key(legacyUri) in nodes
+
+    @Synchronized
+    fun nodeSnapshot(legacyUri: URI): ResourceNodeSnapshot? =
+        nodes[key(legacyUri)]?.let {
+            ResourceNodeSnapshot(
+                legacyUri = it.legacyUri,
+                upstreamUri = it.upstreamUri,
+                role = it.role,
+                kind = it.kind,
+                contentBase = it.contentBase,
+                state = it.state,
+            )
+        }
+
+    @Synchronized
     fun snapshot(): NavigationResourceGraphSnapshot =
         NavigationResourceGraphSnapshot(
             id = id,
@@ -189,6 +253,7 @@ internal class NavigationResourceRegistry(
     private val maxContexts: Int = 64,
     private val maxNodesPerContext: Int = 1_024,
     private val maxEdgesPerContext: Int = 2_048,
+    val hooks: ResourceRegistryHooks = ResourceRegistryHooks(),
 ) {
     init {
         require(maxContexts > 0) { "Navigation context limit must be positive" }
@@ -196,31 +261,60 @@ internal class NavigationResourceRegistry(
         require(maxEdgesPerContext > 0) { "Resource graph edge limit must be positive" }
     }
 
-    private val nextId = AtomicLong(1)
+    private sealed interface PendingEvent {
+        fun fire(hooks: ResourceRegistryHooks)
+
+        data class RootAdded(val value: ResourceRegistryRoot) : PendingEvent {
+            override fun fire(hooks: ResourceRegistryHooks) = hooks.onRootAdded.fire(value)
+        }
+        data class RootRemoved(val value: ResourceRegistryRoot) : PendingEvent {
+            override fun fire(hooks: ResourceRegistryHooks) = hooks.onRootRemoved.fire(value)
+        }
+        data class RootUsed(val value: ResourceRegistryRoot) : PendingEvent {
+            override fun fire(hooks: ResourceRegistryHooks) = hooks.onRootUsed.fire(value)
+        }
+        data class ResourceAdded(val value: ResourceRegistryResource) : PendingEvent {
+            override fun fire(hooks: ResourceRegistryHooks) = hooks.onResourceAdded.fire(value)
+        }
+        data class ResourceRemoved(val value: ResourceRegistryResource) : PendingEvent {
+            override fun fire(hooks: ResourceRegistryHooks) = hooks.onResourceRemoved.fire(value)
+        }
+    }
+
+    private val lock = Any()
     private val graphs = linkedMapOf<Long, NavigationResourceGraph>()
     private val contextByLegacyUri = mutableMapOf<String, LinkedHashSet<Long>>()
 
-    @Synchronized
     fun startNavigation(rootLegacyUri: URI): NavigationResourceGraph {
-        while (graphs.size >= maxContexts) evictOldest()
-        val graph = NavigationResourceGraph(
-            id = nextId.getAndIncrement(),
-            rootLegacyUri = rootLegacyUri,
-            maxNodes = maxNodesPerContext,
-            maxEdges = maxEdgesPerContext,
-        )
-        graphs[graph.id] = graph
-        associate(rootLegacyUri, graph.id)
+        val pending = mutableListOf<PendingEvent>()
+        val graph = synchronized(lock) {
+            while (graphs.size >= maxContexts) {
+                evictOldestLocked(pending)
+            }
+            NavigationResourceGraph(
+                id = nextId.getAndIncrement(),
+                rootLegacyUri = rootLegacyUri,
+                maxNodes = maxNodesPerContext,
+                maxEdges = maxEdgesPerContext,
+            ).also { graph ->
+                graphs[graph.id] = graph
+                associateLocked(rootLegacyUri, graph.id)
+                val root = ResourceRegistryRoot(graph.id, rootLegacyUri)
+                pending += PendingEvent.RootAdded(root)
+                pending += PendingEvent.RootUsed(root)
+            }
+        }
+        pending.forEach { it.fire(hooks) }
         return graph
     }
 
-    @Synchronized
     fun contextsFor(legacyUri: URI): List<NavigationResourceGraph> =
-        contextByLegacyUri[LegacyHttpUrl.requestObservableKey(legacyUri)]
-            ?.mapNotNull(graphs::get)
-            .orEmpty()
+        synchronized(lock) {
+            contextByLegacyUri[LegacyHttpUrl.requestObservableKey(legacyUri)]
+                ?.mapNotNull(graphs::get)
+                .orEmpty()
+        }
 
-    @Synchronized
     fun discover(
         graph: NavigationResourceGraph,
         parentLegacyUri: URI,
@@ -229,17 +323,39 @@ internal class NavigationResourceRegistry(
         relation: ResourceRelation,
         kind: ResourceKind,
     ) {
-        if (graph.discover(parentLegacyUri, childLegacyUri, upstreamUri, relation, kind)) {
-            associate(childLegacyUri, graph.id)
+        val pending = mutableListOf<PendingEvent>()
+        synchronized(lock) {
+            val wasKnown = graph.contains(childLegacyUri)
+            if (graph.discover(parentLegacyUri, childLegacyUri, upstreamUri, relation, kind)) {
+                associateLocked(childLegacyUri, graph.id)
+                pending += PendingEvent.RootUsed(ResourceRegistryRoot(graph.id, graph.rootLegacyUri))
+                if (!wasKnown) {
+                    graph.nodeSnapshot(childLegacyUri)?.let { resource ->
+                        pending += PendingEvent.ResourceAdded(
+                            ResourceRegistryResource(graph.id, graph.rootLegacyUri, resource.legacyUri),
+                        )
+                    }
+                }
+            }
         }
+        pending.forEach { it.fire(hooks) }
     }
 
-    @Synchronized
-    fun snapshots(): List<NavigationResourceGraphSnapshot> = graphs.values.map { it.snapshot() }
+    fun snapshots(): List<NavigationResourceGraphSnapshot> =
+        synchronized(lock) { graphs.values.map { it.snapshot() } }
 
-    private fun evictOldest() {
+    private fun evictOldestLocked(pending: MutableList<PendingEvent>) {
         val oldestId = graphs.keys.firstOrNull() ?: return
-        graphs.remove(oldestId)
+        val removed = graphs.remove(oldestId) ?: return
+        val removedSnapshot = removed.snapshot()
+        pending += PendingEvent.RootRemoved(
+            ResourceRegistryRoot(removedSnapshot.id, removedSnapshot.rootLegacyUri),
+        )
+        removedSnapshot.nodes.forEach { resource ->
+            pending += PendingEvent.ResourceRemoved(
+                ResourceRegistryResource(removedSnapshot.id, removedSnapshot.rootLegacyUri, resource.legacyUri),
+            )
+        }
         val iterator = contextByLegacyUri.entries.iterator()
         while (iterator.hasNext()) {
             val entry = iterator.next()
@@ -248,9 +364,13 @@ internal class NavigationResourceRegistry(
         }
     }
 
-    private fun associate(uri: URI, graphId: Long) {
+    private fun associateLocked(uri: URI, graphId: Long) {
         contextByLegacyUri
             .getOrPut(LegacyHttpUrl.requestObservableKey(uri)) { linkedSetOf() }
             .add(graphId)
+    }
+
+    private companion object {
+        val nextId = AtomicLong(1)
     }
 }

@@ -8,12 +8,18 @@ import no.skasti.serialmodem.ppp.tcp.TcpProxyEvent
 import no.skasti.serialmodem.ppp.tcp.TcpProxyFlow
 import java.util.concurrent.ConcurrentHashMap
 
-class SystemRoutingTcpProxy(
+internal class SystemRoutingTcpProxy(
     private val httpConfig: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig(),
     private val logger: (String) -> Unit = {},
     private val eventSink: (YameEvent) -> Unit = {},
+    private val resourceRegistryHooks: ResourceRegistryHooks = ResourceRegistryHooks(),
     private val directProxy: TcpProxy = SystemTcpProxy(),
-    private val httpProxy: TcpProxy = SystemHttpCompatibilityProxy(httpConfig, logger, eventSink = eventSink),
+    private val httpProxy: TcpProxy = SystemHttpCompatibilityProxy(
+        httpConfig,
+        logger,
+        eventSink = eventSink,
+        resourceRegistryHooks = resourceRegistryHooks,
+    ),
 ) : TcpProxy {
     private val routes = ConcurrentHashMap<TcpProxyFlow, TcpProxy>()
 

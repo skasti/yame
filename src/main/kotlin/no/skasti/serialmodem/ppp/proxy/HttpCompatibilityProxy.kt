@@ -34,10 +34,11 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
-class SystemHttpCompatibilityProxy(
+internal class SystemHttpCompatibilityProxy(
     private val config: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig(enabled = true),
     private val logger: (String) -> Unit = {},
     private val eventSink: (YameEvent) -> Unit = {},
+    private val resourceRegistryHooks: ResourceRegistryHooks = ResourceRegistryHooks(),
     private val httpClient: HttpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofMillis(config.requestTimeoutMillis))
         .followRedirects(HttpClient.Redirect.NEVER)
@@ -123,6 +124,7 @@ class SystemHttpCompatibilityProxy(
                             maxContexts = config.maxResourceContexts,
                             maxNodesPerContext = config.maxResourceNodesPerContext,
                             maxEdgesPerContext = config.maxResourceEdgesPerContext,
+                            hooks = resourceRegistryHooks,
                         ),
                     )
                 },
