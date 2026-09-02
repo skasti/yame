@@ -3,6 +3,7 @@ package no.skasti.serialmodem.ppp
 import no.skasti.serialmodem.observer.YameEvent
 import no.skasti.serialmodem.ppp.dns.PppDnsConfig
 import no.skasti.serialmodem.ppp.proxy.PppHttpCompatibilityConfig
+import no.skasti.serialmodem.ppp.proxy.ResourceRegistryHooks
 import no.skasti.serialmodem.ppp.proxy.SystemRoutingTcpProxy
 import no.skasti.serialmodem.ppp.session.PppSession
 import java.io.Closeable
@@ -22,6 +23,7 @@ class RetroPppHandler(
     private val transferLogger: (String) -> Unit = logger,
     private val proxyLogger: (String) -> Unit = logger,
     private val eventSink: (YameEvent) -> Unit = {},
+    private val resourceRegistryHooks: ResourceRegistryHooks = ResourceRegistryHooks(),
     private val ipConfig: PppIpConfig = PppIpConfig(),
     private val dnsConfig: PppDnsConfig = PppDnsConfig(),
     private val httpCompatibilityConfig: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig(),
@@ -62,6 +64,7 @@ class RetroPppHandler(
                 httpConfig = httpCompatibilityConfig,
                 logger = proxyLogger,
                 eventSink = eventSink,
+                resourceRegistryHooks = resourceRegistryHooks,
             ),
         )
     }
