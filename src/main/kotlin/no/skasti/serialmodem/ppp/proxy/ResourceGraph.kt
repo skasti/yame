@@ -87,8 +87,10 @@ class ResourceRegistryEvent<T>(
     fun fire(value: T) {
         val snapshot = synchronized(this) { handlers.toList() }
         snapshot.forEach { handler ->
-            dispatch {
-                runCatching { handler(value) }
+            runCatching {
+                dispatch {
+                    runCatching { handler(value) }
+                }
             }
         }
     }
