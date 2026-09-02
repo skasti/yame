@@ -122,7 +122,7 @@ internal class ResourceCache(
         }
 
     fun put(
-        key: ResourceWorkKey,
+        key: ResourceCacheKey,
         cached: CachedResource,
     ): Boolean {
         if (cached.cachePolicy.noStore) return false
@@ -193,7 +193,7 @@ internal class InFlightResourceWork {
 
     internal fun size(): Int = work.size
 
-    internal fun waiterCount(key: ResourceCacheKey): Int =
+    internal fun waiterCount(key: ResourceWorkKey): Int =
         work[key]?.waiters?.get() ?: 0
 }
 
