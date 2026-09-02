@@ -70,6 +70,11 @@ class ResourceRepresentationCacheTest {
                     representation(byteArrayOf(8))
                 }
             }
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+            while (coordinator.waiterCount(key) == 0 && System.nanoTime() < deadline) {
+                Thread.yield()
+            }
+            assertEquals(1, coordinator.waiterCount(key))
             release.countDown()
 
             assertContentEquals(byteArrayOf(7), first.get(2, TimeUnit.SECONDS).body)
