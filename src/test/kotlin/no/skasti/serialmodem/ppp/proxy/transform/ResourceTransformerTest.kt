@@ -131,6 +131,46 @@ class ResourceTransformerTest {
     }
 
     @Test
+    fun `pipeline can transform a bodyless resource from headers alone`() {
+        val transformer =
+            object : ResourceTransformer {
+                override val id = "header-only"
+                override val phase = ResourceTransformPhase.COMPATIBILITY
+
+                override fun supports(
+                    context: ResourceTransformationContext,
+                    state: ResourceTransformationState,
+                ) = state.resource.representation.headers["X-Modern"] == listOf("yes")
+
+                override fun transform(
+                    context: ResourceTransformationContext,
+                    state: ResourceTransformationState,
+                ): ResourceTransformationState {
+                    val current = state.resource.representation
+                    return state.copy(
+                        resource = state.resource.copy(
+                            transformed = TransformedRepresentation(
+                                context.transformationProfile,
+                                current.copy(headers = current.headers + ("X-Legacy" to listOf("yes"))),
+                            ),
+                        ),
+                    )
+                }
+            }
+        val source = representation(
+            headers = mapOf("X-Modern" to listOf("yes")),
+            body = ByteArray(0),
+        )
+
+        val result =
+            ResourceTransformationPipeline(listOf(transformer))
+                .transform(context(), Resource(URI("https://modern.test/empty"), source))
+
+        assertEquals(listOf("yes"), result.resource.representation.headers["X-Legacy"])
+        assertTrue(result.resource.representation.body.isEmpty())
+    }
+
+    @Test
     fun `unchanged resource has no transformed representation`() {
         val resource = resource()
         val result = ResourceTransformationPipeline(listOf(LegacyTextResourceTransformer()))
@@ -151,6 +191,7 @@ class ResourceTransformerTest {
         relation = null,
         role = ReferenceRole.SUBRESOURCE,
         requestHeaders = emptyMap(),
+        requestMethod = "GET",
         transformationProfile = "netscape-4.08-v1",
         rewriteText = rewriteText,
     )
