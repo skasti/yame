@@ -458,53 +458,19 @@ internal class SystemHttpCompatibilityProxy(
             val preservesRepresentationLength = isHead || status == 304
             val upstreamContentLength = response.headers().firstValueAsLong("content-length").orElse(-1L)
             val responseBody =
-                when {
-                    preservesRepresentationLength -> {
+                if (preservesRepresentationLength) {
+                    response.body().close()
+                    FinalResponseBody.Buffered(ByteArray(0))
+                } else {
+                    if (upstreamContentLength > config.maxResponseBytes.toLong()) {
                         response.body().close()
-                        FinalResponseBody.Buffered(ByteArray(0))
-                    }
-                    status != 206 && run {
-                        val resourceContexts = state.session.resources.contextsFor(legacyUri)
-                        val transformationContext =
-                            ResourceTransformationContext(
-                                navigationIds = resourceContexts.map { it.id }.toSet(),
-                                legacyUri = legacyUri,
-                                upstreamUri = uri,
-                                kind = resourceContexts.firstNotNullOfOrNull { it.nodeSnapshot(legacyUri)?.kind }
-                                    ?: if (referenceRole == ReferenceRole.NAVIGATION) ResourceKind.DOCUMENT else ResourceKind.OTHER,
-                                relation = resourceContexts.asSequence()
-                                    .flatMap { it.snapshot().edges.asSequence() }
-                                    .firstOrNull { it.childLegacyUri == legacyUri }
-                                    ?.relation,
-                                role = referenceRole,
-                                requestHeaders = request.headers
-                                    .groupBy({ it.first.lowercase(Locale.ROOT) }, { it.second }),
-                                transformationProfile = config.transformationProfile,
-                                rewriteText = { it },
-                            )
-                        resourceTransformations.supports(
-                            transformationContext,
-                            Resource(
-                                upstreamUri = uri,
-                                source = ResourceRepresentation(
-                                    statusCode = status,
-                                    headers = responseHeaders,
-                                    body = ByteArray(0),
-                                ),
-                            ),
-                        )
-                    } -> {
-                        if (upstreamContentLength > config.maxResponseBytes.toLong()) {
-                            response.body().close()
-                            throw ResponseTooLarge(
-                                "Rewritable upstream response is $upstreamContentLength bytes; limit is ${config.maxResponseBytes}",
-                            )
-                        }
-                        FinalResponseBody.Buffered(
-                            response.body().use { input -> readBounded(state, input, config.maxResponseBytes) },
+                        throw ResponseTooLarge(
+                            "Upstream response is $upstreamContentLength bytes; limit is ${config.maxResponseBytes}",
                         )
                     }
-                    else -> FinalResponseBody.Streaming(response.body())
+                    FinalResponseBody.Buffered(
+                        response.body().use { input -> readBounded(state, input, config.maxResponseBytes) },
+                    )
                 }
             val navigationLikeResponse = responseEstablishesNavigationOrigin(method, status, responseHeaders)
             when {
@@ -586,6 +552,7 @@ internal class SystemHttpCompatibilityProxy(
                         body = it,
                         resolutionBaseUri = response.effectiveBaseUri ?: response.uri,
                         forceAbsoluteRelativeReferences = response.effectiveBaseUri != null,
+                        referenceRole = response.referenceRole,
                     )
                 }
             val transformedHeaders = transformedRepresentation?.headers ?: response.headers
@@ -700,6 +667,7 @@ internal class SystemHttpCompatibilityProxy(
         body: ByteArray,
         resolutionBaseUri: URI,
         forceAbsoluteRelativeReferences: Boolean,
+        referenceRole: ReferenceRole,
     ): ResourceRepresentation {
         val source =
             Resource(
@@ -718,13 +686,13 @@ internal class SystemHttpCompatibilityProxy(
                 legacyUri = parentLegacyUri,
                 upstreamUri = upstreamUri,
                 kind = graphs.firstNotNullOfOrNull { it.nodeSnapshot(parentLegacyUri)?.kind }
-                    ?: ResourceKind.OTHER,
+                    ?: resourceKindForResponse(headers, referenceRole),
                 relation = graphs.asSequence()
                     .flatMap { it.snapshot().edges.asSequence() }
                     .firstOrNull { it.childLegacyUri == parentLegacyUri }
                     ?.relation,
                 role = graphs.firstNotNullOfOrNull { it.nodeSnapshot(parentLegacyUri)?.role }
-                    ?: ReferenceRole.SUBRESOURCE,
+                    ?: referenceRole,
                 requestHeaders = requestHeaders,
                 transformationProfile = config.transformationProfile,
                 rewriteText = { sourceText ->
@@ -778,6 +746,25 @@ internal class SystemHttpCompatibilityProxy(
             )
         }
         return transformed.resource.representation
+    }
+
+    private fun resourceKindForResponse(
+        headers: Map<String, List<String>>,
+        role: ReferenceRole,
+    ): ResourceKind {
+        val contentType =
+            firstHeader(headers, "content-type")
+                ?.substringBefore(';')
+                ?.trim()
+                ?.lowercase(Locale.ROOT)
+        return when {
+            contentType == "text/css" -> ResourceKind.STYLESHEET
+            contentType?.startsWith("image/") == true -> ResourceKind.IMAGE
+            contentType in setOf("text/javascript", "application/javascript", "application/x-javascript") -> ResourceKind.SCRIPT
+            contentType in setOf("text/html", "application/xhtml+xml") && role == ReferenceRole.NAVIGATION -> ResourceKind.DOCUMENT
+            contentType in setOf("text/html", "application/xhtml+xml") -> ResourceKind.FRAME
+            else -> ResourceKind.OTHER
+        }
     }
 
     private fun recordAbsoluteBodyReferences(
