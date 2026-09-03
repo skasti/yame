@@ -7,6 +7,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -54,6 +55,36 @@ class ResourceTransformerTest {
             listOf("structural-early", "structural-late", "a-compat", "z-compat", "encode"),
             order,
         )
+    }
+
+    @Test
+    fun `pipeline rejects duplicate transformer ids`() {
+        fun transformer(phase: ResourceTransformPhase) =
+            object : ResourceTransformer {
+                override val id = "duplicate"
+                override val phase = phase
+
+                override fun supports(
+                    context: ResourceTransformationContext,
+                    state: ResourceTransformationState,
+                ) = true
+
+                override fun transform(
+                    context: ResourceTransformationContext,
+                    state: ResourceTransformationState,
+                ) = state
+            }
+
+        val error = assertFailsWith<IllegalArgumentException> {
+            ResourceTransformationPipeline(
+                listOf(
+                    transformer(ResourceTransformPhase.STRUCTURAL),
+                    transformer(ResourceTransformPhase.COMPATIBILITY),
+                ),
+            )
+        }
+
+        assertTrue(error.message.orEmpty().contains("duplicate"))
     }
 
     @Test
