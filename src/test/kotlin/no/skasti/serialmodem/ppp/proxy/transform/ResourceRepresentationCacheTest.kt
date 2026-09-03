@@ -240,6 +240,7 @@ class ResourceRepresentationCacheTest {
     private fun workKey(profile: String, source: ResourceRepresentation) = ResourceWorkKey(
         cacheKey = cacheKey(profile),
         sourceFingerprint = sourceFingerprint(source),
+        scope = "test-flow",
     )
 
     private fun cachedResource(sourceBody: ByteArray, transformedBody: ByteArray?) = CachedResource(
