@@ -62,6 +62,12 @@ internal fun transformedHeadersFrom(
         name.lowercase(Locale.ROOT) !in SOURCE_ONLY_REPRESENTATION_HEADERS
     }
 
+// ETag and Last-Modified are intentionally preserved. Within one YAME process the
+// transformation pipeline is effectively static and deterministic: unchanged
+// upstream source state therefore implies unchanged client-visible output.
+// Validators can safely describe that stable source state even when the payload
+// bytes themselves have been rewritten.
+
 internal fun rewriteEncodedTextBody(
     headers: Map<String, List<String>>,
     body: ByteArray,
@@ -106,7 +112,6 @@ private val REWRITABLE_CONTENT_TYPES = setOf(
 )
 
 private val SOURCE_ONLY_REPRESENTATION_HEADERS = setOf(
-    "etag",
     "content-md5",
     "digest",
     "content-digest",
