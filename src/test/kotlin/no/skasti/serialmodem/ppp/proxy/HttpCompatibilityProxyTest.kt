@@ -12,8 +12,10 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.URI
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -1237,6 +1239,99 @@ class HttpCompatibilityProxyTest {
             assertEquals(ResourceKind.STYLESHEET, graph.nodes.single { it.legacyUri == theme }.kind)
             assertTrue(graph.edges.none { it.childLegacyUri == theme && it.relation == ResourceRelation.CSS_URL })
         } finally {
+            proxy.close()
+            runCatching { server.close() }
+            serverThread.join(2_000)
+        }
+    }
+
+    @Test
+    fun `concurrent identical GETs share one upstream fetch`() {
+        val server = ServerSocket(0, 2, InetAddress.getLoopbackAddress())
+        val upstreamRequests = AtomicInteger()
+        val firstRequestReceived = CountDownLatch(1)
+        val releaseFirstResponse = CountDownLatch(1)
+        val secondUpstreamAccepted = CountDownLatch(1)
+        val body = "shared upstream representation"
+
+        val serverThread = Thread {
+            server.use { listening ->
+                val first = listening.accept()
+                upstreamRequests.incrementAndGet()
+                val firstHandler = Thread {
+                    first.use { socket ->
+                        readRequest(socket)
+                        firstRequestReceived.countDown()
+                        assertTrue(releaseFirstResponse.await(2, TimeUnit.SECONDS))
+                        val response =
+                            "HTTP/1.1 200 OK\r\n" +
+                                "Content-Type: text/plain\r\n" +
+                                "Content-Length: ${body.toByteArray(StandardCharsets.UTF_8).size}\r\n" +
+                                "Connection: close\r\n\r\n" +
+                                body
+                        socket.getOutputStream().write(response.toByteArray(StandardCharsets.ISO_8859_1))
+                        socket.getOutputStream().flush()
+                    }
+                }.apply {
+                    isDaemon = true
+                    start()
+                }
+
+                listening.soTimeout = 750
+                runCatching {
+                    listening.accept().use { socket ->
+                        upstreamRequests.incrementAndGet()
+                        secondUpstreamAccepted.countDown()
+                        readRequest(socket)
+                        val response =
+                            "HTTP/1.1 200 OK\r\n" +
+                                "Content-Type: text/plain\r\n" +
+                                "Content-Length: ${body.toByteArray(StandardCharsets.UTF_8).size}\r\n" +
+                                "Connection: close\r\n\r\n" +
+                                body
+                        socket.getOutputStream().write(response.toByteArray(StandardCharsets.ISO_8859_1))
+                        socket.getOutputStream().flush()
+                    }
+                }
+                firstHandler.join(2_000)
+            }
+        }.apply {
+            isDaemon = true
+            start()
+        }
+
+        val proxy = SystemHttpCompatibilityProxy(
+            config = PppHttpCompatibilityConfig(
+                requestTimeoutMillis = 2_000,
+                maxFlows = 2,
+            ),
+        )
+        val firstEvents = LinkedBlockingQueue<TcpProxyEvent>()
+        val secondEvents = LinkedBlockingQueue<TcpProxyEvent>()
+        val firstFlow = httpFlow(peerPort = 2301)
+        val secondFlow = httpFlow(peerPort = 2302)
+        val request =
+            ("GET /shared HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\n\r\n")
+                .toByteArray(StandardCharsets.US_ASCII)
+
+        try {
+            proxy.connect(firstFlow, firstEvents::offer)
+            proxy.connect(secondFlow, secondEvents::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(firstEvents.poll(2, TimeUnit.SECONDS)))
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(secondEvents.poll(2, TimeUnit.SECONDS)))
+
+            proxy.send(firstFlow, request).getOrThrow()
+            assertTrue(firstRequestReceived.await(2, TimeUnit.SECONDS))
+            proxy.send(secondFlow, request).getOrThrow()
+
+            assertTrue(!secondUpstreamAccepted.await(500, TimeUnit.MILLISECONDS))
+            releaseFirstResponse.countDown()
+
+            assertTrue(collectResponse(firstEvents).contains(body))
+            assertTrue(collectResponse(secondEvents).contains(body))
+            assertEquals(1, upstreamRequests.get())
+        } finally {
+            releaseFirstResponse.countDown()
             proxy.close()
             runCatching { server.close() }
             serverThread.join(2_000)
