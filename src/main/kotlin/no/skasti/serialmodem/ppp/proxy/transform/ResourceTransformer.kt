@@ -99,6 +99,9 @@ internal class ResourceTransformationPipeline(
                 current
             } else {
                 val next = transformer.transform(context, current)
+                require(next.resource.source === current.resource.source) {
+                    "Resource transformer '${transformer.id}' must preserve the source representation"
+                }
                 next.copy(
                     cacheable = current.cacheable && transformer.cacheable && next.cacheable,
                 )
