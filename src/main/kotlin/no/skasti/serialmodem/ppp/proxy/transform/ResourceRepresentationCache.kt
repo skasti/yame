@@ -10,6 +10,7 @@ import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CompletionException
 import java.util.concurrent.ConcurrentHashMap
 
 internal data class ResourceCacheKey(
@@ -193,7 +194,11 @@ internal class InFlightResourceWork {
         if (existing != null) {
             existing.waiters.incrementAndGet()
             try {
-                return existing.future.join()
+                return try {
+                    existing.future.join()
+                } catch (error: CompletionException) {
+                    throw (error.cause ?: error)
+                }
             } finally {
                 existing.waiters.decrementAndGet()
             }
