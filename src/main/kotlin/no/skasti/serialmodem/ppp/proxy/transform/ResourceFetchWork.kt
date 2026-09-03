@@ -6,6 +6,7 @@ import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.HexFormat
+import java.util.Locale
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
 import java.util.concurrent.ConcurrentHashMap
@@ -77,10 +78,10 @@ internal fun resourceRequestFingerprint(
     effectiveCookieHeaders: List<String>,
 ): String {
     val digest = MessageDigest.getInstance("SHA-256")
-    digest.updateLengthPrefixed(method.uppercase().toByteArray(StandardCharsets.UTF_8))
+    digest.updateLengthPrefixed(method.uppercase(Locale.ROOT).toByteArray(StandardCharsets.UTF_8))
     digest.update(ByteBuffer.allocate(Int.SIZE_BYTES).putInt(headers.size).array())
     headers.forEach { (name, value) ->
-        digest.updateLengthPrefixed(name.lowercase().toByteArray(StandardCharsets.UTF_8))
+        digest.updateLengthPrefixed(name.lowercase(Locale.ROOT).toByteArray(StandardCharsets.UTF_8))
         digest.updateLengthPrefixed(value.toByteArray(StandardCharsets.UTF_8))
     }
     digest.update(ByteBuffer.allocate(Int.SIZE_BYTES).putInt(effectiveCookieHeaders.size).array())
