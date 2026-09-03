@@ -189,6 +189,48 @@ class ResourceRepresentationCacheTest {
         }
     }
 
+    @Test
+    fun `in flight waiter observes producer exception type`() {
+        val coordinator = InFlightResourceWork()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val pool = Executors.newFixedThreadPool(2)
+        val source = representation(byteArrayOf(9))
+        val key = workKey("failure", source)
+
+        try {
+            val producer = pool.submit<ResourceTransformationState> {
+                coordinator.getOrStart(key) {
+                    entered.countDown()
+                    assertTrue(release.await(2, TimeUnit.SECONDS))
+                    throw IllegalStateException("boom")
+                }
+            }
+            assertTrue(entered.await(2, TimeUnit.SECONDS))
+            val waiter = pool.submit<ResourceTransformationState> {
+                coordinator.getOrStart(key) {
+                    error("waiter producer must not run")
+                }
+            }
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+            while (coordinator.waiterCount(key) == 0 && System.nanoTime() < deadline) {
+                Thread.yield()
+            }
+            release.countDown()
+
+            val producerError = runCatching { producer.get(2, TimeUnit.SECONDS) }.exceptionOrNull()
+            val waiterError = runCatching { waiter.get(2, TimeUnit.SECONDS) }.exceptionOrNull()
+
+            assertEquals(IllegalStateException::class, producerError?.cause?.let { it::class })
+            assertEquals(IllegalStateException::class, waiterError?.cause?.let { it::class })
+            assertEquals("boom", producerError?.cause?.message)
+            assertEquals("boom", waiterError?.cause?.message)
+        } finally {
+            release.countDown()
+            pool.shutdownNow()
+        }
+    }
+
     private fun cacheKey(profile: String) = ResourceCacheKey(
         legacyUri = URI("http://legacy.test/resource"),
         upstreamUri = URI("https://modern.test/resource"),
