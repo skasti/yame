@@ -79,13 +79,19 @@ internal fun resourceRequestFingerprint(
 ): String {
     val digest = MessageDigest.getInstance("SHA-256")
     digest.updateLengthPrefixed(method.uppercase(Locale.ROOT).toByteArray(StandardCharsets.UTF_8))
-    digest.update(ByteBuffer.allocate(Int.SIZE_BYTES).putInt(headers.size).array())
-    headers.forEach { (name, value) ->
-        digest.updateLengthPrefixed(name.lowercase(Locale.ROOT).toByteArray(StandardCharsets.UTF_8))
+    val normalizedHeaders =
+        headers
+            .map { (name, value) -> name.lowercase(Locale.ROOT) to value }
+            .sortedWith(compareBy<Pair<String, String>> { it.first }.thenBy { it.second })
+    digest.update(ByteBuffer.allocate(Int.SIZE_BYTES).putInt(normalizedHeaders.size).array())
+    normalizedHeaders.forEach { (name, value) ->
+        digest.updateLengthPrefixed(name.toByteArray(StandardCharsets.UTF_8))
         digest.updateLengthPrefixed(value.toByteArray(StandardCharsets.UTF_8))
     }
-    digest.update(ByteBuffer.allocate(Int.SIZE_BYTES).putInt(effectiveCookieHeaders.size).array())
-    effectiveCookieHeaders.forEach {
+
+    val normalizedCookies = effectiveCookieHeaders.sorted()
+    digest.update(ByteBuffer.allocate(Int.SIZE_BYTES).putInt(normalizedCookies.size).array())
+    normalizedCookies.forEach {
         digest.updateLengthPrefixed(it.toByteArray(StandardCharsets.UTF_8))
     }
     digest.updateLengthPrefixed(body)
