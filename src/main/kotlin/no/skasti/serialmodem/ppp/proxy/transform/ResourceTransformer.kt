@@ -71,6 +71,18 @@ internal interface ResourceTransformer {
 internal class ResourceTransformationPipeline(
     transformers: List<ResourceTransformer>,
 ) {
+    init {
+        val duplicateIds =
+            transformers.groupingBy { it.id }
+                .eachCount()
+                .filterValues { it > 1 }
+                .keys
+                .sorted()
+        require(duplicateIds.isEmpty()) {
+            "Resource transformer ids must be unique: ${duplicateIds.joinToString()}"
+        }
+    }
+
     private val transformers =
         transformers.sortedWith(
             compareBy<ResourceTransformer> { it.phase.ordinal }
