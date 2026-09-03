@@ -733,6 +733,7 @@ internal class SystemHttpCompatibilityProxy(
             ResourceWorkKey(
                 cacheKey = cacheKey,
                 sourceFingerprint = fingerprint,
+                scope = "${flow.generation}:${flow.key}",
             )
         val transformed =
             inFlightResourceWork.getOrStart(workKey) {
