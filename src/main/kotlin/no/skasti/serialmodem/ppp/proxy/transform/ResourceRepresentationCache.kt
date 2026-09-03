@@ -22,6 +22,7 @@ internal data class ResourceCacheKey(
 internal data class ResourceWorkKey(
     val cacheKey: ResourceCacheKey,
     val sourceFingerprint: String,
+    val scope: String,
 )
 
 internal data class ResourceValidators(
