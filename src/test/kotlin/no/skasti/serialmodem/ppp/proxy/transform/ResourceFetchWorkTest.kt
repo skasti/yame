@@ -102,6 +102,32 @@ class ResourceFetchWorkTest {
         )
     }
 
+    @Test
+    fun `request fingerprint ignores header and cookie ordering`() {
+        val first = resourceRequestFingerprint(
+            method = "GET",
+            headers = listOf(
+                "Accept" to "image/gif",
+                "X-Test" to "b",
+                "X-Test" to "a",
+            ),
+            body = ByteArray(0),
+            effectiveCookieHeaders = listOf("session=b", "prefs=a"),
+        )
+        val second = resourceRequestFingerprint(
+            method = "GET",
+            headers = listOf(
+                "x-test" to "a",
+                "accept" to "image/gif",
+                "X-Test" to "b",
+            ),
+            body = ByteArray(0),
+            effectiveCookieHeaders = listOf("prefs=a", "session=b"),
+        )
+
+        assertEquals(first, second)
+    }
+
     private fun fetchKey(variant: String) = ResourceFetchKey(
         scope = "1:10.0.0.2",
         legacyUri = URI("http://legacy.test/resource"),
