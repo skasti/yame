@@ -13,6 +13,9 @@ import no.skasti.serialmodem.ppp.proxy.transform.Resource
 import no.skasti.serialmodem.ppp.proxy.transform.ResourceCache
 import no.skasti.serialmodem.ppp.proxy.transform.ResourceCacheKey
 import no.skasti.serialmodem.ppp.proxy.transform.ResourceWorkKey
+import no.skasti.serialmodem.ppp.proxy.transform.ResourceFetchKey
+import no.skasti.serialmodem.ppp.proxy.transform.InFlightResourceFetchWork
+import no.skasti.serialmodem.ppp.proxy.transform.resourceRequestFingerprint
 import no.skasti.serialmodem.ppp.proxy.transform.ResourceRepresentation
 import no.skasti.serialmodem.ppp.proxy.transform.cachePolicyFrom
 import no.skasti.serialmodem.ppp.proxy.transform.validatorsFrom
@@ -116,6 +119,7 @@ internal class SystemHttpCompatibilityProxy(
         maxBytes = config.maxRepresentationCacheBytes,
     )
     private val inFlightResourceWork = InFlightResourceWork()
+    private val inFlightResourceFetchWork = InFlightResourceFetchWork<FinalResponse>()
     private val minimumGeneration = AtomicLong(Long.MIN_VALUE)
     @Volatile private var closed = false
 
@@ -317,7 +321,43 @@ internal class SystemHttpCompatibilityProxy(
                     state = ResourceState.FETCHING,
                 )
             }
-            val response = fetchFinalResponse(state, request)
+            seedClientCookies(state, request.headers)
+            val response =
+                if (request.method.equals("GET", ignoreCase = true)) {
+                    val followedExactMapping = originRoutes.isExactMapping(state.flow, legacyUri, upstreamUri)
+                    val referenceRole =
+                        if (followedExactMapping) {
+                            originRoutes.referenceRole(state.flow, legacyUri) ?: ReferenceRole.NAVIGATION
+                        } else {
+                            ReferenceRole.NAVIGATION
+                        }
+                    val usesTargetAsContentBase =
+                        followedExactMapping &&
+                            referenceRole == ReferenceRole.SUBRESOURCE &&
+                            originRoutes.usesTargetAsContentBase(state.flow, legacyUri)
+                    val forwardSensitiveHeaders = canForwardSensitiveHeaders(legacyUri, upstreamUri)
+                    val fetchKey =
+                        ResourceFetchKey(
+                            scope = resourceWorkScope(state.flow),
+                            legacyUri = legacyUri,
+                            upstreamUri = upstreamUri,
+                            role = referenceRole,
+                            usesTargetAsContentBase = usesTargetAsContentBase,
+                            requestFingerprint =
+                                resourceRequestFingerprint(
+                                    method = request.method,
+                                    headers = request.headers,
+                                    body = request.body,
+                                    effectiveCookieHeaders =
+                                        cookieHeaders(state, upstreamUri, forwardSensitiveHeaders),
+                                ),
+                        )
+                    inFlightResourceFetchWork.getOrStart(fetchKey) {
+                        fetchFinalResponse(state, request)
+                    }
+                } else {
+                    fetchFinalResponse(state, request)
+                }
             ensureActive(state)
             emitFinalResponse(state, response)
         } catch (_: CancellationException) {
@@ -377,7 +417,6 @@ internal class SystemHttpCompatibilityProxy(
         val mappedContentBase =
             followedExactMapping && hideExactRedirect && originRoutes.usesTargetAsContentBase(state.flow, legacyUri)
         val originalUri = legacyUri
-        seedClientCookies(state, request.headers)
         var method = request.method
         var body = request.body
         var redirects = 0
@@ -733,7 +772,7 @@ internal class SystemHttpCompatibilityProxy(
             ResourceWorkKey(
                 cacheKey = cacheKey,
                 sourceFingerprint = fingerprint,
-                scope = "${flow.generation}:${flow.key}",
+                scope = resourceWorkScope(flow),
             )
         val transformed =
             inFlightResourceWork.getOrStart(workKey) {
@@ -1520,6 +1559,10 @@ internal class SystemHttpCompatibilityProxy(
         }
     }
     private fun isActive(state: FlowState) = !closed && !state.cancelled && state.flow.generation >= minimumGeneration.get() && flows[state.flow] === state
+
+    private fun resourceWorkScope(flow: TcpProxyFlow): String =
+        "${flow.generation}:${flow.key.peerAddress}"
+
     internal fun resourceGraphSnapshots(flow: TcpProxyFlow): List<NavigationResourceGraphSnapshot> =
         sessionStates[sessionKey(flow)]?.resources?.snapshots().orEmpty()
 
@@ -1556,6 +1599,7 @@ internal class SystemHttpCompatibilityProxy(
         sessionStates.clear()
         resourceCache.clear()
         inFlightResourceWork.clear()
+        inFlightResourceFetchWork.clear()
         flows.values.toList().forEach(::removeFlow)
         executor.shutdownNow()
         runCatching { executor.awaitTermination(CLOSE_JOIN_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS) }
