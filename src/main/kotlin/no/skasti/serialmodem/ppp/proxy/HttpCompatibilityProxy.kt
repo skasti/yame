@@ -741,21 +741,23 @@ internal class SystemHttpCompatibilityProxy(
                     ?.let {
                         return@getOrStart no.skasti.serialmodem.ppp.proxy.transform.ResourceTransformationState(it.resource)
                     }
-                resourceTransformations.transform(context, source)
+
+                val produced = resourceTransformations.transform(context, source)
+                if (produced.cacheable) {
+                    resourceCache.put(
+                        cacheKey,
+                        CachedResource(
+                            resource = produced.resource,
+                            storedAt = Instant.now(),
+                            cachePolicy = cachePolicyFrom(headers),
+                            validators = validatorsFrom(headers),
+                        ),
+                        sourceFingerprint = fingerprint,
+                    )
+                }
+                produced
             }
 
-        if (transformed.cacheable) {
-            resourceCache.put(
-                cacheKey,
-                CachedResource(
-                    resource = transformed.resource,
-                    storedAt = Instant.now(),
-                    cachePolicy = cachePolicyFrom(headers),
-                    validators = validatorsFrom(headers),
-                ),
-                sourceFingerprint = fingerprint,
-            )
-        }
         return transformed.resource.representation
     }
 
