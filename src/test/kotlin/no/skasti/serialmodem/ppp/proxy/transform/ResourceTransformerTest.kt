@@ -112,6 +112,7 @@ class ResourceTransformerTest {
             headers = mapOf(
                 "Content-Type" to listOf("text/html"),
                 "ETag" to listOf("\"upstream\""),
+                "Last-Modified" to listOf("Wed, 02 Sep 2026 12:30:00 GMT"),
                 "Content-Length" to listOf("31"),
             ),
             body = "<img src=\"https://example.test/a\">".toByteArray(),
@@ -126,7 +127,11 @@ class ResourceTransformerTest {
         val transformed = requireNotNull(result.resource.transformed)
         assertEquals("netscape-4.08-v1", transformed.profile)
         assertTrue(transformed.representation.body.decodeToString().contains("http://example.test/a"))
-        assertFalse(transformed.representation.headers.keys.any { it.equals("ETag", true) })
+        assertEquals(listOf("\"upstream\""), transformed.representation.headers["ETag"])
+        assertEquals(
+            listOf("Wed, 02 Sep 2026 12:30:00 GMT"),
+            transformed.representation.headers["Last-Modified"],
+        )
         assertFalse(transformed.representation.headers.keys.any { it.equals("Content-Length", true) })
     }
 
