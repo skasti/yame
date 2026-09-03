@@ -113,7 +113,10 @@ class ResourceTransformerTest {
                 "Content-Type" to listOf("text/html"),
                 "ETag" to listOf("\"upstream\""),
                 "Last-Modified" to listOf("Wed, 02 Sep 2026 12:30:00 GMT"),
+                "Cache-Control" to listOf("public, max-age=3600"),
+                "Expires" to listOf("Wed, 02 Sep 2026 13:30:00 GMT"),
                 "Content-Length" to listOf("31"),
+                "Content-MD5" to listOf("source-digest"),
             ),
             body = "<img src=\"https://example.test/a\">".toByteArray(),
         )
@@ -132,7 +135,13 @@ class ResourceTransformerTest {
             listOf("Wed, 02 Sep 2026 12:30:00 GMT"),
             transformed.representation.headers["Last-Modified"],
         )
+        assertEquals(listOf("public, max-age=3600"), transformed.representation.headers["Cache-Control"])
+        assertEquals(
+            listOf("Wed, 02 Sep 2026 13:30:00 GMT"),
+            transformed.representation.headers["Expires"],
+        )
         assertFalse(transformed.representation.headers.keys.any { it.equals("Content-Length", true) })
+        assertFalse(transformed.representation.headers.keys.any { it.equals("Content-MD5", true) })
     }
 
     @Test
