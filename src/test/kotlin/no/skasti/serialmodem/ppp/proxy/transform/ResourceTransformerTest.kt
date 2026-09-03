@@ -176,6 +176,36 @@ class ResourceTransformerTest {
     }
 
     @Test
+    fun `pipeline rejects transformers that replace source representation`() {
+        val transformer =
+            object : ResourceTransformer {
+                override val id = "bad-source-mutation"
+                override val phase = ResourceTransformPhase.COMPATIBILITY
+
+                override fun supports(
+                    context: ResourceTransformationContext,
+                    state: ResourceTransformationState,
+                ) = true
+
+                override fun transform(
+                    context: ResourceTransformationContext,
+                    state: ResourceTransformationState,
+                ): ResourceTransformationState =
+                    state.copy(
+                        resource = state.resource.copy(
+                            source = state.resource.source.copy(body = byteArrayOf(9)),
+                        ),
+                    )
+            }
+
+        val error = assertFailsWith<IllegalArgumentException> {
+            ResourceTransformationPipeline(listOf(transformer)).transform(context(), resource())
+        }
+
+        assertTrue(error.message.orEmpty().contains("must preserve the source representation"))
+    }
+
+    @Test
     fun `pipeline can transform a bodyless resource from headers alone`() {
         val transformer =
             object : ResourceTransformer {
