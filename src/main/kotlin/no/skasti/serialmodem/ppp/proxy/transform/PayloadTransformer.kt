@@ -2,47 +2,71 @@ package no.skasti.serialmodem.ppp.proxy.transform
 
 import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets
+import java.util.Locale
 
-internal data class PayloadTransformationContext(
-    val headers: Map<String, List<String>>,
-    val rewriteText: (String) -> String,
-)
+internal class LegacyTextResourceTransformer : ResourceTransformer {
+    override val id: String = "legacy-text-url-rewrite"
+    override val phase: ResourceTransformPhase = ResourceTransformPhase.COMPATIBILITY
+    override val cacheable: Boolean = false
 
-internal interface PayloadTransformer {
-    fun supports(context: PayloadTransformationContext): Boolean
-    fun transform(context: PayloadTransformationContext, payload: ByteArray): ByteArray
-}
-
-internal class PayloadTransformationPipeline(
-    private val transformers: List<PayloadTransformer>,
-) {
-    fun supports(context: PayloadTransformationContext): Boolean =
-        transformers.any { it.supports(context) }
-
-    fun transform(context: PayloadTransformationContext, payload: ByteArray): ByteArray =
-        transformers.fold(payload) { current, transformer ->
-            if (transformer.supports(context)) transformer.transform(context, current) else current
-        }
-}
-
-internal class LegacyTextPayloadTransformer : PayloadTransformer {
-    override fun supports(context: PayloadTransformationContext): Boolean {
-        val contentEncoding = firstHeader(context.headers, "content-encoding")
+    override fun supports(
+        context: ResourceTransformationContext,
+        state: ResourceTransformationState,
+    ): Boolean {
+        val representation = state.resource.representation
+        val contentEncoding = firstHeader(representation.headers, "content-encoding")
         if (contentEncoding != null && !contentEncoding.equals("identity", ignoreCase = true)) return false
-        val contentType = firstHeader(context.headers, "content-type")
+        val contentType = firstHeader(representation.headers, "content-type")
             ?.substringBefore(';')
             ?.trim()
-            ?.lowercase()
+            ?.lowercase(Locale.ROOT)
             ?: return false
         return contentType in REWRITABLE_CONTENT_TYPES
     }
 
-    override fun transform(context: PayloadTransformationContext, payload: ByteArray): ByteArray =
-        rewriteEncodedTextBody(context.headers, payload, context.rewriteText)
+    override fun transform(
+        context: ResourceTransformationContext,
+        state: ResourceTransformationState,
+    ): ResourceTransformationState {
+        val current = state.resource.representation
+        val rewritten = rewriteEncodedTextBody(
+            current.headers,
+            current.body,
+            context.rewriteText,
+        )
+        if (rewritten === current.body) return state
+
+        val transformed = ResourceRepresentation(
+            statusCode = current.statusCode,
+            headers = transformedHeadersFrom(current.headers),
+            body = rewritten,
+        )
+        return state.copy(
+            resource = state.resource.copy(
+                transformed = TransformedRepresentation(
+                    profile = context.transformationProfile,
+                    representation = transformed,
+                ),
+            ),
+        )
+    }
 }
 
 private fun firstHeader(headers: Map<String, List<String>>, name: String): String? =
     headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value?.firstOrNull()
+
+internal fun transformedHeadersFrom(
+    sourceHeaders: Map<String, List<String>>,
+): Map<String, List<String>> =
+    sourceHeaders.filterKeys { name ->
+        name.lowercase(Locale.ROOT) !in SOURCE_ONLY_REPRESENTATION_HEADERS
+    }
+
+// ETag and Last-Modified are intentionally preserved. Within one YAME process the
+// transformation pipeline is effectively static and deterministic: unchanged
+// upstream source state therefore implies unchanged client-visible output.
+// Validators can safely describe that stable source state even when the payload
+// bytes themselves have been rewritten.
 
 internal fun rewriteEncodedTextBody(
     headers: Map<String, List<String>>,
@@ -78,7 +102,6 @@ private fun bomCharset(body: ByteArray): Charset? =
 private val CHARSET_PARAMETER_PATTERN =
     Regex("""(?i)(?:^|;)\s*charset\s*=\s*(?:"([^"]+)"|'([^']+)'|([^;\s]+))""")
 
-
 private val REWRITABLE_CONTENT_TYPES = setOf(
     "text/html",
     "application/xhtml+xml",
@@ -86,4 +109,14 @@ private val REWRITABLE_CONTENT_TYPES = setOf(
     "text/javascript",
     "application/javascript",
     "application/x-javascript",
+)
+
+private val SOURCE_ONLY_REPRESENTATION_HEADERS = setOf(
+    "content-md5",
+    "digest",
+    "content-digest",
+    "repr-digest",
+    "content-range",
+    "accept-ranges",
+    "content-length",
 )

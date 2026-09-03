@@ -6,9 +6,22 @@ import no.skasti.serialmodem.ppp.proxy.cookies.BoundedCookieOverrides
 import no.skasti.serialmodem.ppp.proxy.cookies.BoundedCookieStore
 import no.skasti.serialmodem.ppp.proxy.cookies.CookieOverride
 import no.skasti.serialmodem.ppp.proxy.routing.LegacyOriginRouteTable
-import no.skasti.serialmodem.ppp.proxy.transform.LegacyTextPayloadTransformer
-import no.skasti.serialmodem.ppp.proxy.transform.PayloadTransformationContext
-import no.skasti.serialmodem.ppp.proxy.transform.PayloadTransformationPipeline
+import no.skasti.serialmodem.ppp.proxy.transform.LegacyTextResourceTransformer
+import no.skasti.serialmodem.ppp.proxy.transform.InFlightResourceWork
+import no.skasti.serialmodem.ppp.proxy.transform.CachedResource
+import no.skasti.serialmodem.ppp.proxy.transform.Resource
+import no.skasti.serialmodem.ppp.proxy.transform.ResourceCache
+import no.skasti.serialmodem.ppp.proxy.transform.ResourceCacheKey
+import no.skasti.serialmodem.ppp.proxy.transform.ResourceWorkKey
+import no.skasti.serialmodem.ppp.proxy.transform.ResourceFetchKey
+import no.skasti.serialmodem.ppp.proxy.transform.InFlightResourceFetchWork
+import no.skasti.serialmodem.ppp.proxy.transform.resourceRequestFingerprint
+import no.skasti.serialmodem.ppp.proxy.transform.ResourceRepresentation
+import no.skasti.serialmodem.ppp.proxy.transform.cachePolicyFrom
+import no.skasti.serialmodem.ppp.proxy.transform.validatorsFrom
+import no.skasti.serialmodem.ppp.proxy.transform.sourceFingerprint
+import no.skasti.serialmodem.ppp.proxy.transform.ResourceTransformationContext
+import no.skasti.serialmodem.ppp.proxy.transform.ResourceTransformationPipeline
 import no.skasti.serialmodem.ppp.tcp.TcpProxy
 import no.skasti.serialmodem.ppp.tcp.TcpProxyEvent
 import no.skasti.serialmodem.ppp.tcp.TcpProxyFlow
@@ -23,6 +36,7 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.charset.StandardCharsets
 import java.time.Duration
+import java.time.Instant
 import java.util.Locale
 import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentHashMap
@@ -86,6 +100,8 @@ internal class SystemHttpCompatibilityProxy(
         val effectiveBaseUri: URI? = null,
         val referenceRole: ReferenceRole = ReferenceRole.NAVIGATION,
         val establishesNavigationGraph: Boolean = false,
+        val requestHeaders: Map<String, List<String>> = emptyMap(),
+        val requestMethod: String = "GET",
     )
 
     private enum class ExpectationDisposition { NONE, CONTINUE, UNSUPPORTED }
@@ -97,7 +113,13 @@ internal class SystemHttpCompatibilityProxy(
     private val flows = ConcurrentHashMap<TcpProxyFlow, FlowState>()
     private val sessionStates = ConcurrentHashMap<SessionKey, SessionState>()
     private val originRoutes = LegacyOriginRouteTable()
-    private val payloadTransformations = PayloadTransformationPipeline(listOf(LegacyTextPayloadTransformer()))
+    private val resourceTransformations = ResourceTransformationPipeline(listOf(LegacyTextResourceTransformer()))
+    private val resourceCache = ResourceCache(
+        maxEntries = config.maxRepresentationCacheEntries,
+        maxBytes = config.maxRepresentationCacheBytes,
+    )
+    private val inFlightResourceWork = InFlightResourceWork()
+    private val inFlightResourceFetchWork = InFlightResourceFetchWork<FinalResponse>()
     private val minimumGeneration = AtomicLong(Long.MIN_VALUE)
     @Volatile private var closed = false
 
@@ -299,7 +321,43 @@ internal class SystemHttpCompatibilityProxy(
                     state = ResourceState.FETCHING,
                 )
             }
-            val response = fetchFinalResponse(state, request)
+            seedClientCookies(state, request.headers)
+            val response =
+                if (request.method.equals("GET", ignoreCase = true)) {
+                    val followedExactMapping = originRoutes.isExactMapping(state.flow, legacyUri, upstreamUri)
+                    val referenceRole =
+                        if (followedExactMapping) {
+                            originRoutes.referenceRole(state.flow, legacyUri) ?: ReferenceRole.NAVIGATION
+                        } else {
+                            ReferenceRole.NAVIGATION
+                        }
+                    val usesTargetAsContentBase =
+                        followedExactMapping &&
+                            referenceRole == ReferenceRole.SUBRESOURCE &&
+                            originRoutes.usesTargetAsContentBase(state.flow, legacyUri)
+                    val forwardSensitiveHeaders = canForwardSensitiveHeaders(legacyUri, upstreamUri)
+                    val fetchKey =
+                        ResourceFetchKey(
+                            scope = resourceWorkScope(state.flow),
+                            legacyUri = legacyUri,
+                            upstreamUri = upstreamUri,
+                            role = referenceRole,
+                            usesTargetAsContentBase = usesTargetAsContentBase,
+                            requestFingerprint =
+                                resourceRequestFingerprint(
+                                    method = request.method,
+                                    headers = request.headers,
+                                    body = request.body,
+                                    effectiveCookieHeaders =
+                                        cookieHeaders(state, upstreamUri, forwardSensitiveHeaders),
+                                ),
+                        )
+                    inFlightResourceFetchWork.getOrStart(fetchKey) {
+                        fetchFinalResponse(state, request)
+                    }
+                } else {
+                    fetchFinalResponse(state, request)
+                }
             ensureActive(state)
             emitFinalResponse(state, response)
         } catch (_: CancellationException) {
@@ -359,7 +417,6 @@ internal class SystemHttpCompatibilityProxy(
         val mappedContentBase =
             followedExactMapping && hideExactRedirect && originRoutes.usesTargetAsContentBase(state.flow, legacyUri)
         val originalUri = legacyUri
-        seedClientCookies(state, request.headers)
         var method = request.method
         var body = request.body
         var redirects = 0
@@ -420,6 +477,7 @@ internal class SystemHttpCompatibilityProxy(
                         exposeCookies = sameOrigin(originalUri, uri),
                         locationAlreadyLegacy = true,
                         referenceRole = referenceRole,
+                        requestMethod = request.method,
                     )
                 }
 
@@ -440,25 +498,19 @@ internal class SystemHttpCompatibilityProxy(
             val preservesRepresentationLength = isHead || status == 304
             val upstreamContentLength = response.headers().firstValueAsLong("content-length").orElse(-1L)
             val responseBody =
-                when {
-                    preservesRepresentationLength -> {
+                if (preservesRepresentationLength) {
+                    response.body().close()
+                    FinalResponseBody.Buffered(ByteArray(0))
+                } else {
+                    if (upstreamContentLength > config.maxResponseBytes.toLong()) {
                         response.body().close()
-                        FinalResponseBody.Buffered(ByteArray(0))
-                    }
-                    status != 206 && payloadTransformations.supports(
-                        PayloadTransformationContext(responseHeaders) { it },
-                    ) -> {
-                        if (upstreamContentLength > config.maxResponseBytes.toLong()) {
-                            response.body().close()
-                            throw ResponseTooLarge(
-                                "Rewritable upstream response is $upstreamContentLength bytes; limit is ${config.maxResponseBytes}",
-                            )
-                        }
-                        FinalResponseBody.Buffered(
-                            response.body().use { input -> readBounded(state, input, config.maxResponseBytes) },
+                        throw ResponseTooLarge(
+                            "Upstream response is $upstreamContentLength bytes; limit is ${config.maxResponseBytes}",
                         )
                     }
-                    else -> FinalResponseBody.Streaming(response.body())
+                    FinalResponseBody.Buffered(
+                        response.body().use { input -> readBounded(state, input, config.maxResponseBytes) },
+                    )
                 }
             val navigationLikeResponse = responseEstablishesNavigationOrigin(method, status, responseHeaders)
             when {
@@ -500,6 +552,12 @@ internal class SystemHttpCompatibilityProxy(
                 establishesNavigationGraph =
                     referenceRole == ReferenceRole.NAVIGATION &&
                         responseIsNavigationDocument(method, responseHeaders),
+                requestHeaders =
+                    request.headers.groupBy(
+                        { it.first.lowercase(Locale.ROOT) },
+                        { it.second },
+                    ),
+                requestMethod = request.method,
             )
         }
     }
@@ -520,23 +578,30 @@ internal class SystemHttpCompatibilityProxy(
             )
         }
         try {
-            val legacyHeaders = rewriteLegacyHeaders(state.flow, response.headers, response.locationAlreadyLegacy)
-        val bufferedBody = (response.body as? FinalResponseBody.Buffered)?.bytes
-        val legacyBody =
-            bufferedBody?.let {
-                rewriteLegacyBody(
-                    flow = state.flow,
-                    session = state.session,
-                    graphs = resourceGraphs,
-                    parentLegacyUri = response.legacyUri,
-                    headers = response.headers,
-                    body = it,
-                    resolutionBaseUri = response.effectiveBaseUri ?: response.uri,
-                    forceAbsoluteRelativeReferences = response.effectiveBaseUri != null,
-                )
-            }
-        val bodyRewritten = bufferedBody != null && legacyBody !== bufferedBody
-        val rewritten = legacyHeaders != response.headers || bodyRewritten
+            val bufferedBody = (response.body as? FinalResponseBody.Buffered)?.bytes
+            val transformedRepresentation =
+                bufferedBody?.let {
+                    rewriteLegacyRepresentation(
+                        flow = state.flow,
+                        session = state.session,
+                        graphs = resourceGraphs,
+                        parentLegacyUri = response.legacyUri,
+                        upstreamUri = response.uri,
+                        statusCode = response.statusCode,
+                        requestHeaders = response.requestHeaders,
+                        headers = response.headers,
+                        body = it,
+                        resolutionBaseUri = response.effectiveBaseUri ?: response.uri,
+                        forceAbsoluteRelativeReferences = response.effectiveBaseUri != null,
+                        referenceRole = response.referenceRole,
+                        requestMethod = response.requestMethod,
+                    )
+                }
+            val transformedHeaders = transformedRepresentation?.headers ?: response.headers
+            val legacyHeaders = rewriteLegacyHeaders(state.flow, transformedHeaders, response.locationAlreadyLegacy)
+            val legacyBody = transformedRepresentation?.body
+            val bodyRewritten = bufferedBody != null && legacyBody != null && !legacyBody.contentEquals(bufferedBody)
+            val rewritten = legacyHeaders != response.headers || bodyRewritten
         val contentLength =
             when {
                 bufferedBody != null && response.contentLength != null &&
@@ -550,9 +615,8 @@ internal class SystemHttpCompatibilityProxy(
             legacyHeaders.forEach { (name, values) ->
                 val normalized = name.lowercase(Locale.ROOT)
                 val hiddenCrossOriginCookie = !response.exposeCookies && normalized in RESPONSE_COOKIE_HEADERS
-                val staleRepresentationMetadata = bodyRewritten && normalized in RESPONSE_HEADERS_TO_STRIP_WHEN_BODY_REWRITTEN
                 if (normalized !in RESPONSE_HEADERS_TO_STRIP && normalized !in nominated &&
-                    !hiddenCrossOriginCookie && !staleRepresentationMetadata) {
+                    !hiddenCrossOriginCookie) {
                     values.forEach { append("$name: $it\r\n") }
                 }
             }
@@ -633,32 +697,126 @@ internal class SystemHttpCompatibilityProxy(
             }
         }
 
-    private fun rewriteLegacyBody(
+    private fun rewriteLegacyRepresentation(
         flow: TcpProxyFlow,
         session: SessionState,
         graphs: List<NavigationResourceGraph>,
         parentLegacyUri: URI,
+        upstreamUri: URI,
+        statusCode: Int,
+        requestHeaders: Map<String, List<String>>,
         headers: Map<String, List<String>>,
         body: ByteArray,
         resolutionBaseUri: URI,
         forceAbsoluteRelativeReferences: Boolean,
-    ): ByteArray {
-        if (body.isEmpty()) return body
-        return payloadTransformations.transform(
-            PayloadTransformationContext(headers) { source ->
-                rewriteBodyUrlsWithBase(
-                    flow = flow,
-                    session = session,
-                    graphs = graphs,
-                    parentLegacyUri = parentLegacyUri,
+        referenceRole: ReferenceRole,
+        requestMethod: String,
+    ): ResourceRepresentation {
+        val source =
+            Resource(
+                upstreamUri = upstreamUri,
+                source = ResourceRepresentation(
+                    statusCode = statusCode,
                     headers = headers,
-                    source = source,
-                    baseUri = resolutionBaseUri,
-                    forceAbsoluteRelativeReferences = forceAbsoluteRelativeReferences,
-                )
-            },
-            body,
-        )
+                    body = body,
+                ),
+            )
+        if (statusCode == 206) return source.representation
+
+        val context =
+            ResourceTransformationContext(
+                navigationIds = graphs.map { it.id }.toSet(),
+                legacyUri = parentLegacyUri,
+                upstreamUri = upstreamUri,
+                kind = graphs.firstNotNullOfOrNull { it.nodeSnapshot(parentLegacyUri)?.kind }
+                    ?: resourceKindForResponse(headers, referenceRole),
+                relation = graphs.asSequence()
+                    .flatMap { it.snapshot().edges.asSequence() }
+                    .firstOrNull { it.childLegacyUri == parentLegacyUri }
+                    ?.relation,
+                role = graphs.firstNotNullOfOrNull { it.nodeSnapshot(parentLegacyUri)?.role }
+                    ?: referenceRole,
+                requestHeaders = requestHeaders,
+                requestMethod = requestMethod,
+                transformationProfile = config.transformationProfile,
+                rewriteText = { sourceText ->
+                    rewriteBodyUrlsWithBase(
+                        flow = flow,
+                        session = session,
+                        graphs = graphs,
+                        parentLegacyUri = parentLegacyUri,
+                        headers = headers,
+                        source = sourceText,
+                        baseUri = resolutionBaseUri,
+                        forceAbsoluteRelativeReferences = forceAbsoluteRelativeReferences,
+                    )
+                },
+            )
+
+        val cacheEligible = requestMethod.equals("GET", ignoreCase = true) && statusCode != 304
+        if (!cacheEligible) {
+            return resourceTransformations.transform(context, source).resource.representation
+        }
+
+        val cacheKey =
+            ResourceCacheKey(
+                legacyUri = parentLegacyUri,
+                upstreamUri = upstreamUri,
+                profile = config.transformationProfile,
+            )
+        val fingerprint = sourceFingerprint(source.source)
+        resourceCache.getIfSourceFingerprint(cacheKey, fingerprint)
+            ?.let { return it.resource.representation }
+
+        val workKey =
+            ResourceWorkKey(
+                cacheKey = cacheKey,
+                sourceFingerprint = fingerprint,
+                scope = resourceWorkScope(flow),
+            )
+        val transformed =
+            inFlightResourceWork.getOrStart(workKey) {
+                resourceCache.getIfSourceFingerprint(cacheKey, fingerprint)
+                    ?.let {
+                        return@getOrStart no.skasti.serialmodem.ppp.proxy.transform.ResourceTransformationState(it.resource)
+                    }
+
+                val produced = resourceTransformations.transform(context, source)
+                if (produced.cacheable) {
+                    resourceCache.put(
+                        cacheKey,
+                        CachedResource(
+                            resource = produced.resource,
+                            storedAt = Instant.now(),
+                            cachePolicy = cachePolicyFrom(headers),
+                            validators = validatorsFrom(headers),
+                        ),
+                        sourceFingerprint = fingerprint,
+                    )
+                }
+                produced
+            }
+
+        return transformed.resource.representation
+    }
+
+    private fun resourceKindForResponse(
+        headers: Map<String, List<String>>,
+        role: ReferenceRole,
+    ): ResourceKind {
+        val contentType =
+            firstHeader(headers, "content-type")
+                ?.substringBefore(';')
+                ?.trim()
+                ?.lowercase(Locale.ROOT)
+        return when {
+            contentType == "text/css" -> ResourceKind.STYLESHEET
+            contentType?.startsWith("image/") == true -> ResourceKind.IMAGE
+            contentType in setOf("text/javascript", "application/javascript", "application/x-javascript") -> ResourceKind.SCRIPT
+            contentType in setOf("text/html", "application/xhtml+xml") && role == ReferenceRole.NAVIGATION -> ResourceKind.DOCUMENT
+            contentType in setOf("text/html", "application/xhtml+xml") -> ResourceKind.FRAME
+            else -> ResourceKind.OTHER
+        }
     }
 
     private fun recordAbsoluteBodyReferences(
@@ -1029,7 +1187,6 @@ internal class SystemHttpCompatibilityProxy(
                 ) ?: match.value
             }
         }
-
 
     private fun responseIsNavigationDocument(
         method: String,
@@ -1402,6 +1559,10 @@ internal class SystemHttpCompatibilityProxy(
         }
     }
     private fun isActive(state: FlowState) = !closed && !state.cancelled && state.flow.generation >= minimumGeneration.get() && flows[state.flow] === state
+
+    private fun resourceWorkScope(flow: TcpProxyFlow): String =
+        "${flow.generation}:${flow.key.peerAddress}"
+
     internal fun resourceGraphSnapshots(flow: TcpProxyFlow): List<NavigationResourceGraphSnapshot> =
         sessionStates[sessionKey(flow)]?.resources?.snapshots().orEmpty()
 
@@ -1436,6 +1597,9 @@ internal class SystemHttpCompatibilityProxy(
         closed = true
         originRoutes.clear()
         sessionStates.clear()
+        resourceCache.clear()
+        inFlightResourceWork.clear()
+        inFlightResourceFetchWork.clear()
         flows.values.toList().forEach(::removeFlow)
         executor.shutdownNow()
         runCatching { executor.awaitTermination(CLOSE_JOIN_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS) }
@@ -1467,7 +1631,6 @@ internal class SystemHttpCompatibilityProxy(
         val REQUEST_HEADERS_TO_STRIP = setOf("host", "connection", "proxy-connection", "proxy-authorization", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade", "content-length", "accept-encoding", "expect", "cookie", "cookie2")
         val SENSITIVE_REQUEST_HEADERS = setOf("authorization", "cookie", "cookie2")
         val RESPONSE_HEADERS_TO_STRIP = setOf("connection", "proxy-connection", "keep-alive", "transfer-encoding", "trailer", "upgrade", "content-length")
-        val RESPONSE_HEADERS_TO_STRIP_WHEN_BODY_REWRITTEN = setOf("etag", "content-md5", "digest", "content-digest", "repr-digest", "content-range", "accept-ranges")
         val RESPONSE_COOKIE_HEADERS = setOf("set-cookie", "set-cookie2")
         val URI_RESPONSE_HEADERS_TO_REWRITE = setOf("location", "content-location", "refresh", "link")
         val CSS_URL_REFERENCE_PATTERN =
