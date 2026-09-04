@@ -2,6 +2,42 @@
 
 YAME materializes upstream HTTP responses as a `Resource` before running the compatibility transformation pipeline. The source representation is retained separately from the client-visible transformed representation.
 
+## Upstream acquisition and legacy delivery are separate phases
+
+The compatibility proxy must fully acquire the finite upstream HTTP response before it emits the corresponding response to the legacy client.
+
+The intended boundary is:
+
+```text
+modern upstream
+    |
+    v
+complete source representation
+    |
+    v
+transformation / discovery / prefetch
+    |
+    v
+complete client representation
+    |
+    v
+TCP / PPP / serial delivery
+    |
+    v
+legacy client
+```
+
+This is an architectural invariant, not an implementation detail. Backpressure from the legacy TCP peer, PPP framing, or the serial link must never determine how quickly the upstream HTTP body is consumed.
+
+Accordingly:
+
+- compatibility responses are represented as owned, buffered bytes before delivery;
+- a resource reaches `SOURCE_READY` only after the complete upstream response has been acquired;
+- it reaches `TRANSFORMING` while the complete source representation is being processed;
+- it reaches `READY` once the complete client representation is available locally, **before** the first response byte is emitted toward the legacy client;
+- downstream delivery failures do not invalidate an already-`READY` resource;
+- reintroducing a streaming upstream-response body into the compatibility path requires an explicit architecture change, because it would couple modern upstream I/O to the slow legacy boundary.
+
 ## Deterministic transformations
 
 For the lifetime of a YAME process, the configured resource transformation pipeline is effectively static. A transformer may inspect source bytes, status, headers, request context, graph metadata, and the configured transformation profile, but the set and implementation of transformers do not mutate while the process is running.
