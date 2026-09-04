@@ -25,9 +25,10 @@ The HTTP compatibility proxy has deliberately pragmatic goals:
 - retain the complete upstream source representation separately from any
   client-visible transformed representation. A resource is `READY` when the
   complete client representation exists locally, before downstream delivery begins;
-- keep resource graph knowledge at HTTP-proxy/process scope. It must survive
-  TCP flow closure, PPP generation changes, and browser restarts; revisiting a
-  navigation root reuses and extends its existing graph rather than replacing it.
+- keep resource graph knowledge at process scope, owned above the PPP session
+  boundary and injected into each HTTP proxy instance. It must survive TCP flow
+  closure, PPP generation changes, and browser restarts; revisiting a navigation
+  root reuses and extends its existing graph rather than replacing it.
   Bound the total working set with explicit LRU-style retention rather than tying
   eviction to browser, TCP, or PPP lifetimes;
 - request `Accept-Encoding: identity` for text that may need rewriting;
