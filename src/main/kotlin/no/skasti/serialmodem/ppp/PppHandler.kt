@@ -33,6 +33,13 @@ internal class RetroPppHandler(
     private var framer = createFramer()
     private var session: PppSession? = null
     private var addressResolver = createAddressResolver()
+    private val resourceGraphs =
+        no.skasti.serialmodem.ppp.proxy.NavigationResourceRegistry(
+            maxContexts = httpCompatibilityConfig.maxResourceContexts,
+            maxNodesPerContext = httpCompatibilityConfig.maxResourceNodesPerContext,
+            maxEdgesPerContext = httpCompatibilityConfig.maxResourceEdgesPerContext,
+            hooks = resourceRegistryHooks,
+        )
 
     override fun attachOutput(output: OutputStream) {
         check(this.output == null) { "PPP output is already attached" }
@@ -65,6 +72,7 @@ internal class RetroPppHandler(
                 logger = proxyLogger,
                 eventSink = eventSink,
                 resourceRegistryHooks = resourceRegistryHooks,
+                resourceGraphs = resourceGraphs,
             ),
         )
     }
