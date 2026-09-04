@@ -7,6 +7,7 @@ import java.io.Closeable
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
+import java.util.concurrent.FutureTask
 import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -157,15 +158,19 @@ internal class HttpTcpProxy(
         payload: ByteArray,
     ): Result<Unit> {
         return try {
-            val task =
-                executor.submit {
+            lateinit var task: FutureTask<Unit>
+            task =
+                FutureTask {
                     try {
                         emitBytes(state, payload)
                     } finally {
-                        state.interimTask = null
+                        if (state.interimTask === task) {
+                            state.interimTask = null
+                        }
                     }
                 }
             state.interimTask = task
+            executor.execute(task)
             if (!isActive(state)) task.cancel(true)
             Result.success(Unit)
         } catch (error: Throwable) {
