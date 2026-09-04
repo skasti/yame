@@ -13,6 +13,13 @@ internal class SystemHttpCompatibilityProxy(
     logger: (String) -> Unit = {},
     eventSink: (YameEvent) -> Unit = {},
     resourceRegistryHooks: ResourceRegistryHooks = ResourceRegistryHooks(),
+    resourceGraphs: NavigationResourceRegistry =
+        NavigationResourceRegistry(
+            maxContexts = config.maxResourceContexts,
+            maxNodesPerContext = config.maxResourceNodesPerContext,
+            maxEdgesPerContext = config.maxResourceEdgesPerContext,
+            hooks = resourceRegistryHooks,
+        ),
     httpClient: HttpClient =
         HttpClient.newBuilder()
             .connectTimeout(Duration.ofMillis(config.requestTimeoutMillis))
@@ -25,6 +32,7 @@ internal class SystemHttpCompatibilityProxy(
             logger = logger,
             eventSink = eventSink,
             resourceRegistryHooks = resourceRegistryHooks,
+            resourceGraphs = resourceGraphs,
             httpClient = httpClient,
         )
 
