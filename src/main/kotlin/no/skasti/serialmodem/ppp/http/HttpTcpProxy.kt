@@ -354,6 +354,10 @@ internal class HttpTcpProxy(
     }
 
     private fun HttpResponse.withTransportHeaders(): HttpResponse {
+        val existingContentLength =
+            headers.firstOrNull { (name, _) ->
+                name.equals("Content-Length", ignoreCase = true)
+            }?.second
         val filtered =
             headers.filterNot { (name, _) ->
                 name.equals("Content-Length", ignoreCase = true) ||
@@ -363,7 +367,7 @@ internal class HttpTcpProxy(
             headers =
                 filtered +
                     listOf(
-                        "Content-Length" to body.size.toString(),
+                        "Content-Length" to (existingContentLength ?: body.size.toString()),
                         "Connection" to "close",
                     ),
         )
