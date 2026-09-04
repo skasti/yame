@@ -292,7 +292,24 @@ internal class SystemHttpCompatibilityHandler(
 
                 val legacyNext = legacyRedirectUri(next)
                 if (!hideExactRedirect && shouldExposeRedirect(legacyUri, next)) {
-                    response.body().close()
+                    val upstreamContentLength =
+                        response.headers().firstValueAsLong("content-length").orElse(-1L)
+                    val isHead = request.method.equals("HEAD", true)
+                    val redirectBody =
+                        if (isHead) {
+                            response.body().close()
+                            ByteArray(0)
+                        } else {
+                            if (upstreamContentLength > config.maxResponseBytes.toLong()) {
+                                response.body().close()
+                                throw ResponseTooLarge(
+                                    "Upstream response is $upstreamContentLength bytes; limit is ${config.maxResponseBytes}",
+                                )
+                            }
+                            response.body().use { input ->
+                                readBounded(state, input, config.maxResponseBytes)
+                            }
+                        }
                     originRoutes.rememberExact(state.flow, legacyNext, next)
                     logger("HTTP compatibility <= client redirect $status $legacyNext")
                     emitEvent(
@@ -305,8 +322,13 @@ internal class SystemHttpCompatibilityHandler(
                         uri = uri,
                         statusCode = status,
                         headers = response.headers().map().withHeader("location", legacyNext.toString()),
-                        body = ByteArray(0),
-                        contentLength = 0,
+                        body = redirectBody,
+                        contentLength =
+                            if (isHead && upstreamContentLength >= 0L) {
+                                upstreamContentLength
+                            } else {
+                                redirectBody.size.toLong()
+                            },
                         exposeCookies = sameOrigin(originalUri, uri),
                         locationAlreadyLegacy = true,
                         referenceRole = referenceRole,
