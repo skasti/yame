@@ -48,6 +48,13 @@ internal class SystemHttpCompatibilityHandler(
     private val logger: (String) -> Unit = {},
     private val eventSink: (YameEvent) -> Unit = {},
     private val resourceRegistryHooks: ResourceRegistryHooks = ResourceRegistryHooks(),
+    private val resourceGraphs: NavigationResourceRegistry =
+        NavigationResourceRegistry(
+            maxContexts = config.maxResourceContexts,
+            maxNodesPerContext = config.maxResourceNodesPerContext,
+            maxEdgesPerContext = config.maxResourceEdgesPerContext,
+            hooks = resourceRegistryHooks,
+        ),
     private val httpClient: HttpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofMillis(config.requestTimeoutMillis))
         .followRedirects(HttpClient.Redirect.NEVER)
@@ -86,13 +93,6 @@ internal class SystemHttpCompatibilityHandler(
     )
 
     private val sessionStates = ConcurrentHashMap<SessionKey, SessionState>()
-    private val resourceGraphs =
-        NavigationResourceRegistry(
-            maxContexts = config.maxResourceContexts,
-            maxNodesPerContext = config.maxResourceNodesPerContext,
-            maxEdgesPerContext = config.maxResourceEdgesPerContext,
-            hooks = resourceRegistryHooks,
-        )
     private val originRoutes = LegacyOriginRouteTable()
     private val resourceTransformations = ResourceTransformationPipeline(listOf(LegacyTextResourceTransformer()))
     private val resourceCache = ResourceCache(
@@ -138,7 +138,8 @@ internal class SystemHttpCompatibilityHandler(
             fetchUpstreamUri = upstreamUri
             fetchGraphs = resourceGraphs.contextsFor(legacyUri)
             fetchGraphs.forEach { graph ->
-                graph.markFetched(
+                resourceGraphs.markFetched(
+                graph = graph,
                     legacyUri = legacyUri,
                     upstreamUri = upstreamUri,
                     contentBase = upstreamUri,
@@ -226,7 +227,8 @@ internal class SystemHttpCompatibilityHandler(
     ) {
         if (legacyUri == null || upstreamUri == null) return
         graphs.forEach { graph ->
-            graph.markFetched(
+            resourceGraphs.markFetched(
+                graph = graph,
                 legacyUri = legacyUri,
                 upstreamUri = upstreamUri,
                 contentBase = upstreamUri,
@@ -419,14 +421,15 @@ internal class SystemHttpCompatibilityHandler(
         state: FlowState,
         response: FinalResponse,
     ): LegacyHttpResponse {
-        val resourceGraphs =
+        val graphs =
             if (response.establishesNavigationGraph) {
                 listOf(resourceGraphs.startNavigation(response.legacyUri))
             } else {
                 resourceGraphs.contextsFor(response.legacyUri)
             }
-        resourceGraphs.forEach { graph ->
-            graph.markFetched(
+        graphs.forEach { graph ->
+            resourceGraphs.markFetched(
+                graph = graph,
                 legacyUri = response.legacyUri,
                 upstreamUri = response.uri,
                 contentBase = response.effectiveBaseUri ?: response.uri,
@@ -435,8 +438,9 @@ internal class SystemHttpCompatibilityHandler(
         }
         var resourceReady = false
         try {
-            resourceGraphs.forEach { graph ->
-                graph.markFetched(
+            graphs.forEach { graph ->
+                resourceGraphs.markFetched(
+                graph = graph,
                     legacyUri = response.legacyUri,
                     upstreamUri = response.uri,
                     contentBase = response.effectiveBaseUri ?: response.uri,
@@ -447,7 +451,7 @@ internal class SystemHttpCompatibilityHandler(
                 prepareLegacyResource(
                     flow = state.flow,
                     session = state.session,
-                    graphs = resourceGraphs,
+                    graphs = graphs,
                     parentLegacyUri = response.legacyUri,
                     upstreamUri = response.uri,
                     statusCode = response.statusCode,
@@ -519,8 +523,9 @@ internal class SystemHttpCompatibilityHandler(
         // READY means the complete client representation exists locally. The HTTP
         // transport layer may now deliver it at legacy-client speed without involving
         // upstream acquisition or transformation.
-        resourceGraphs.forEach { graph ->
-            graph.markFetched(
+        graphs.forEach { graph ->
+            resourceGraphs.markFetched(
+                graph = graph,
                 legacyUri = response.legacyUri,
                 upstreamUri = response.uri,
                 contentBase = response.effectiveBaseUri ?: response.uri,
@@ -531,8 +536,9 @@ internal class SystemHttpCompatibilityHandler(
         return clientResponse
         } catch (error: Throwable) {
             if (!resourceReady) {
-                resourceGraphs.forEach { graph ->
-                    graph.markFetched(
+                graphs.forEach { graph ->
+                    resourceGraphs.markFetched(
+                graph = graph,
                         legacyUri = response.legacyUri,
                         upstreamUri = response.uri,
                         contentBase = response.effectiveBaseUri ?: response.uri,
