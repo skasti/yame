@@ -38,10 +38,13 @@ class HttpCompatibilityProxyTest {
                 body
         }
         val redirectThread = serveOnce(redirectServer) {
+            val body = "redirect response body"
             "HTTP/1.1 302 Found\r\n" +
                 "Location: http://127.0.0.1:${finalServer.localPort}/final\r\n" +
-                "Content-Length: 0\r\n" +
-                "Connection: close\r\n\r\n"
+                "Content-Type: text/plain\r\n" +
+                "Content-Length: ${body.toByteArray().size}\r\n" +
+                "Connection: close\r\n\r\n" +
+                body
         }
 
         val proxy = SystemHttpCompatibilityProxy(
@@ -70,6 +73,7 @@ class HttpCompatibilityProxyTest {
                 redirect.contains("location: http://127.0.0.1:${finalServer.localPort}/final", ignoreCase = true),
                 redirect,
             )
+            assertTrue(redirect.endsWith("redirect response body"), redirect)
 
             proxy.connect(followedFlow, events::offer)
             assertIs<TcpProxyEvent.Connected>(requireNotNull(events.poll(2, TimeUnit.SECONDS)))
