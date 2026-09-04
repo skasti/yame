@@ -64,8 +64,8 @@ internal class SystemHttpCompatibilityProxy(
     override fun invalidateBefore(generation: Long) =
         http.invalidateBefore(generation)
 
-    internal fun resourceGraphSnapshots(flow: TcpProxyFlow): List<NavigationResourceGraphSnapshot> =
-        handler.resourceGraphSnapshots(flow)
+    internal fun resourceGraphSnapshots(): List<NavigationResourceGraphSnapshot> =
+        handler.resourceGraphSnapshots()
 
     override fun close() =
         http.close()
