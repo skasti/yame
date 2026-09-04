@@ -158,6 +158,49 @@ class ResourceGraphTest {
     }
 
     @Test
+    fun `stale fetch attempt cannot overwrite newer ready state`() {
+        val registry = NavigationResourceRegistry()
+        val graph = registry.startNavigation(URI("http://legacy.test/root"))
+        val resource = URI("http://legacy.test/image.gif")
+        val upstream = URI("https://legacy.test/image.gif")
+        registry.discover(
+            graph,
+            graph.rootLegacyUri,
+            resource,
+            upstream,
+            ResourceRelation.IMG_SRC,
+            ResourceKind.IMAGE,
+        )
+
+        val older = requireNotNull(registry.beginFetch(graph, resource, upstream, upstream))
+        val newer = requireNotNull(registry.beginFetch(graph, resource, upstream, upstream))
+
+        assertTrue(
+            registry.markFetchState(
+                graph,
+                newer,
+                resource,
+                upstream,
+                upstream,
+                ResourceState.READY,
+            ),
+        )
+        assertTrue(
+            !registry.markFetchState(
+                graph,
+                older,
+                resource,
+                upstream,
+                upstream,
+                ResourceState.FAILED,
+            ),
+        )
+
+        val node = graph.snapshot().nodes.single { it.legacyUri == resource }
+        assertEquals(ResourceState.READY, node.state)
+    }
+
+    @Test
     fun `graph bounds nodes and edges and does not index dropped resources`() {
         val registry = NavigationResourceRegistry(
             maxNodesPerContext = 2,
