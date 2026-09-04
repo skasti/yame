@@ -5,6 +5,8 @@ import no.skasti.serialmodem.observer.YameEvent
 import no.skasti.serialmodem.ppp.http.HttpRequest as LegacyHttpRequest
 import no.skasti.serialmodem.ppp.http.HttpRequestDecodeResult
 import no.skasti.serialmodem.ppp.http.HttpRequestDecoder
+import no.skasti.serialmodem.ppp.http.HttpResponse as LegacyHttpResponse
+import no.skasti.serialmodem.ppp.http.HttpResponseEncoder
 import no.skasti.serialmodem.ppp.proxy.cookies.BoundedCookieOverrides
 import no.skasti.serialmodem.ppp.proxy.cookies.BoundedCookieStore
 import no.skasti.serialmodem.ppp.proxy.cookies.CookieOverride
@@ -634,20 +636,34 @@ internal class SystemHttpCompatibilityProxy(
                     response.contentLength != response.body.size.toLong() -> response.contentLength
                 else -> legacyBody.size.toLong()
             }
-        val nominated = connectionNominatedHeaders(legacyHeaders.flatMap { (name, values) -> values.map { name to it } })
-        val head = buildString {
-            append("HTTP/1.0 ${response.statusCode} ${reasonPhrase(response.statusCode)}\r\n")
-            legacyHeaders.forEach { (name, values) ->
-                val normalized = name.lowercase(Locale.ROOT)
-                val hiddenCrossOriginCookie = !response.exposeCookies && normalized in RESPONSE_COOKIE_HEADERS
-                if (normalized !in RESPONSE_HEADERS_TO_STRIP && normalized !in nominated &&
-                    !hiddenCrossOriginCookie) {
-                    values.forEach { append("$name: $it\r\n") }
+        val nominated =
+            connectionNominatedHeaders(
+                legacyHeaders.flatMap { (name, values) -> values.map { name to it } },
+            )
+        val clientHeaders =
+            buildList {
+                legacyHeaders.forEach { (name, values) ->
+                    val normalized = name.lowercase(Locale.ROOT)
+                    val hiddenCrossOriginCookie =
+                        !response.exposeCookies && normalized in RESPONSE_COOKIE_HEADERS
+                    if (
+                        normalized !in RESPONSE_HEADERS_TO_STRIP &&
+                        normalized !in nominated &&
+                        !hiddenCrossOriginCookie
+                    ) {
+                        values.forEach { value -> add(name to value) }
+                    }
                 }
+                add("Content-Length" to contentLength.toString())
+                add("Connection" to "close")
             }
-            contentLength?.let { append("Content-Length: $it\r\n") }
-            append("Connection: close\r\n\r\n")
-        }.toByteArray(StandardCharsets.ISO_8859_1)
+        val clientResponse =
+            LegacyHttpResponse(
+                statusCode = response.statusCode,
+                reasonPhrase = reasonPhrase(response.statusCode),
+                headers = clientHeaders,
+                body = legacyBody,
+            )
         val rewriteSuffix = if (rewritten) ", HTTPS references rewritten for legacy client" else ""
         val sizeDescription = "$contentLength bytes"
         logger(
@@ -673,13 +689,7 @@ internal class SystemHttpCompatibilityProxy(
         }
         resourceReady = true
         state.responseStarted = true
-        emitBytes(state, head)
-        var offset = 0
-        while (offset < legacyBody.size) {
-            val end = minOf(offset + RESPONSE_CHUNK_BYTES, legacyBody.size)
-            emitBytes(state, legacyBody.copyOfRange(offset, end))
-            offset = end
-        }
+        emitHttpResponse(state, clientResponse)
             finishFlow(state)
         } catch (error: Throwable) {
             if (!resourceReady) {
@@ -1353,12 +1363,39 @@ internal class SystemHttpCompatibilityProxy(
         }
     }
 
-    private fun emitErrorResponse(state: FlowState, status: Int, reason: String, message: String) {
+    private fun emitErrorResponse(
+        state: FlowState,
+        status: Int,
+        reason: String,
+        message: String,
+    ) {
         if (!isActive(state)) return
         val body = "$status $reason\r\n$message\r\n".toByteArray(StandardCharsets.US_ASCII)
-        emitBytes(state, ("HTTP/1.0 $status $reason\r\nContent-Type: text/plain; charset=us-ascii\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n").toByteArray(StandardCharsets.US_ASCII))
-        emitBytes(state, body)
+        emitHttpResponse(
+            state,
+            LegacyHttpResponse(
+                statusCode = status,
+                reasonPhrase = reason,
+                headers =
+                    listOf(
+                        "Content-Type" to "text/plain; charset=us-ascii",
+                        "Content-Length" to body.size.toString(),
+                        "Connection" to "close",
+                    ),
+                body = body,
+            ),
+        )
         finishFlow(state)
+    }
+
+    private fun emitHttpResponse(
+        state: FlowState,
+        response: LegacyHttpResponse,
+    ) {
+        emitBytes(state, HttpResponseEncoder.encodeHead(response))
+        HttpResponseEncoder.bodyChunks(response, RESPONSE_CHUNK_BYTES).forEach { chunk ->
+            emitBytes(state, chunk)
+        }
     }
     private fun emitBytes(state: FlowState, payload: ByteArray) {
         if (payload.isEmpty() || !isActive(state)) return
