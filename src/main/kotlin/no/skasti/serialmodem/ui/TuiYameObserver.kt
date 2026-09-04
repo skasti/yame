@@ -22,6 +22,7 @@ import no.skasti.serialmodem.ppp.dns.dnsResponseCodeName
 import no.skasti.serialmodem.ppp.proxy.ResourceRegistryResource
 import no.skasti.serialmodem.ppp.proxy.ResourceRegistryRoot
 import no.skasti.serialmodem.serial.SerialPortDescriptor
+import no.skasti.serialmodem.serial.SerialFlowControl
 import java.net.URI
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
@@ -29,12 +30,14 @@ import java.time.format.DateTimeFormatter
 class TuiYameObserver(
     initialPortName: String?,
     initialBaud: Int,
+    initialFlowControl: SerialFlowControl,
     initialDnsUpstream: String,
     initialHttpProxyEnabled: Boolean,
     initialLogLevels: Map<YameLogModule, YameLogLevel> = emptyMap(),
     private val onQuit: () -> Unit = {},
     private val onPortSelected: (String) -> Unit = {},
     private val onBaudSelected: (Int) -> Unit = {},
+    private val onFlowControlSelected: (SerialFlowControl) -> Unit = {},
     private val onDnsUpstreamSelected: (String) -> Unit = {},
     private val onHttpProxySelected: (Boolean) -> Unit = {},
     private val onLogLevelSelected: (YameLogModule, YameLogLevel) -> Unit = { _, _ -> },
@@ -45,6 +48,7 @@ class TuiYameObserver(
 ) : AutoCloseable {
     private var portName = initialPortName
     private var baud = initialBaud
+    private var flowControl = initialFlowControl
     private var dnsUpstream = initialDnsUpstream
     private var httpProxyEnabled = initialHttpProxyEnabled
     private val logLevels = YameLogModule.entries.associateWith {
@@ -94,11 +98,13 @@ class TuiYameObserver(
     fun updateSettings(
         portName: String?,
         baud: Int,
+        flowControl: SerialFlowControl,
         dnsUpstream: String,
         httpProxyEnabled: Boolean,
     ) {
         this.portName = portName
         this.baud = baud
+        this.flowControl = flowControl
         this.dnsUpstream = dnsUpstream
         this.httpProxyEnabled = httpProxyEnabled
         render()
@@ -548,6 +554,24 @@ class TuiYameObserver(
     }
 
     @Synchronized
+    private fun openFlowControlPalette() {
+        commandPalette = TuiCommandPalette(
+            mode = TuiPaletteMode.FLOW_CONTROL,
+            input = "/flow-control",
+            title = "Serial flow control",
+            options = SerialFlowControl.entries.map { option ->
+                TuiCommandOption(
+                    label = option.displayName,
+                    description = if (option == flowControl) "current" else "",
+                    value = option.commandName,
+                )
+            },
+            selectedIndex = SerialFlowControl.entries.indexOf(flowControl),
+        )
+        render()
+    }
+
+    @Synchronized
     private fun openHttpPalette() {
         commandPalette = TuiCommandPalette(
             mode = TuiPaletteMode.HTTP,
@@ -662,6 +686,10 @@ class TuiYameObserver(
                     openBaudPalette()
                     null
                 }
+                "/flow-control" -> {
+                    openFlowControlPalette()
+                    null
+                }
                 "/dns-upstream" -> {
                     openDnsPalette()
                     null
@@ -732,6 +760,13 @@ class TuiYameObserver(
                 }
             }
 
+            TuiPaletteMode.FLOW_CONTROL -> {
+                commandPalette = null
+                runCatching { SerialFlowControl.parse(selected.value) }
+                    .getOrNull()
+                    ?.let { value -> { onFlowControlSelected(value) } }
+            }
+
             TuiPaletteMode.HTTP -> {
                 commandPalette = null
                 val value = selected.value.toBoolean()
@@ -788,6 +823,7 @@ class TuiYameObserver(
                 DashboardState(
                     portName = portName,
                     baud = baud,
+                    flowControl = flowControl,
                     connected = connected,
                     dnsUpstream = dnsUpstream,
                     httpProxyEnabled = httpProxyEnabled,
@@ -836,6 +872,7 @@ class TuiYameObserver(
         val COMMAND_OPTIONS = listOf(
             TuiCommandOption("/port", "Select serial port", "/port"),
             TuiCommandOption("/baud", "Select baud rate", "/baud"),
+            TuiCommandOption("/flow-control", "Select serial flow control", "/flow-control"),
             TuiCommandOption("/dns-upstream", "Change upstream resolver and reconnect", "/dns-upstream"),
             TuiCommandOption("/http-proxy", "Enable or disable HTTP/TLS compatibility", "/http-proxy"),
             TuiCommandOption("/loglevel-modem", "Set modem file log level", "/loglevel-modem"),
@@ -902,6 +939,7 @@ internal enum class TuiPaletteMode {
     COMMANDS,
     PORTS,
     BAUD,
+    FLOW_CONTROL,
     DNS,
     HTTP,
     LOG_LEVEL,
@@ -924,6 +962,7 @@ internal data class TuiCommandPalette(
 internal data class DashboardState(
     val portName: String?,
     val baud: Int,
+    val flowControl: SerialFlowControl = SerialFlowControl.DISABLED,
     val connected: Boolean,
     val dnsUpstream: String,
     val httpProxyEnabled: Boolean,
@@ -1071,7 +1110,8 @@ internal object YameDashboardRenderer {
         val connection = if (state.connected) "CONNECTED" else "NOT CONNECTED"
         val proxy = if (state.httpProxyEnabled) "HTTP proxy ON" else "HTTP proxy OFF"
         val headerText =
-            "[ YAME ${BuildInfo.display}  •  $serial @ ${state.baud}  •  $connection  •  DNS ${state.dnsUpstream}  •  $proxy ]"
+            "[ YAME ${BuildInfo.display}  •  $serial @ ${state.baud}  •  " +
+                "${state.flowControl.displayName}  •  $connection  •  DNS ${state.dnsUpstream}  •  $proxy ]"
         val header = styles.title(
             clip(headerText, renderWidth).padEnd(renderWidth),
         )
@@ -1097,7 +1137,8 @@ internal object YameDashboardRenderer {
         val connection = if (state.connected) "CONNECTED" else "NOT CONNECTED"
         val lines = mutableListOf(
             DashboardLine(
-                "YAME ${BuildInfo.display}  ${state.portName ?: "no port"} @ ${state.baud}  $connection",
+                "YAME ${BuildInfo.display}  ${state.portName ?: "no port"} @ ${state.baud}  " +
+                    "${state.flowControl.displayName}  $connection",
                 DashboardTone.ACCENT,
             ),
             DashboardLine(

@@ -6,7 +6,6 @@ import no.skasti.serialmodem.ppp.lcp.LcpOptionType
 import no.skasti.serialmodem.ppp.PppFrame
 import no.skasti.serialmodem.ppp.PppFramer
 import no.skasti.serialmodem.ppp.lcp.LcpPacket
-import no.skasti.serialmodem.ppp.session.PppSession
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -17,7 +16,7 @@ class PppSessionTest {
     @Test
     fun `starts by sending LCP configure request`() {
         val sent = mutableListOf<PppFrame>()
-        val session = PppSession(sendFrame = sent::add, logger = {})
+        val session = PppSession(sendFrame = sent::add)
 
         session.start()
 
@@ -77,7 +76,7 @@ class PppSessionTest {
     @Test
     fun `acks trumpet configure request and applies peer transmit options`() {
         val sent = mutableListOf<PppFrame>()
-        val session = PppSession(sendFrame = sent::add, logger = {})
+        val session = PppSession(sendFrame = sent::add)
         session.start()
 
         val request = trumpetConfigureRequest(identifier = 0x0b)
@@ -104,7 +103,7 @@ class PppSessionTest {
     @Test
     fun `LCP opens after both directions are configured`() {
         val sent = mutableListOf<PppFrame>()
-        val session = PppSession(sendFrame = sent::add, logger = {})
+        val session = PppSession(sendFrame = sent::add)
         session.start()
 
         session.receive(
@@ -133,7 +132,7 @@ class PppSessionTest {
     @Test
     fun `peer reconfiguration after LCP open restarts local negotiation`() {
         val sent = mutableListOf<PppFrame>()
-        val session = PppSession(sendFrame = sent::add, logger = {})
+        val session = PppSession(sendFrame = sent::add)
         session.start()
 
         val firstPeerRequest = trumpetConfigureRequest(identifier = 0x0b)
@@ -208,7 +207,7 @@ class PppSessionTest {
     @Test
     fun `new rejected peer request clears previously configured peer state`() {
         val sent = mutableListOf<PppFrame>()
-        val session = PppSession(sendFrame = sent::add, logger = {})
+        val session = PppSession(sendFrame = sent::add)
         session.start()
 
         session.receive(
@@ -252,7 +251,7 @@ class PppSessionTest {
     @Test
     fun `rejects unsupported peer options without opening peer side`() {
         val sent = mutableListOf<PppFrame>()
-        val session = PppSession(sendFrame = sent::add, logger = {})
+        val session = PppSession(sendFrame = sent::add)
         session.start()
 
         val unsupported = LcpOption(

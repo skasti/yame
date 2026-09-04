@@ -17,7 +17,6 @@ import no.skasti.serialmodem.ppp.icmp.IcmpPacket
 import no.skasti.serialmodem.ppp.ip.Ipv4Address
 import no.skasti.serialmodem.ppp.ip.Ipv4Cidr
 import no.skasti.serialmodem.ppp.ip.Ipv4Packet
-import no.skasti.serialmodem.ppp.session.PppSession
 import no.skasti.serialmodem.ppp.tcp.TcpPacket
 import no.skasti.serialmodem.ppp.tcp.TcpProxy
 import no.skasti.serialmodem.ppp.tcp.TcpProxyEvent
@@ -976,6 +975,7 @@ class PppIpv4SessionTest {
         return PppSession(
             sendFrame = sent::add,
             logger = logger,
+            eventSink = eventSink,
             ipAddresses = addresses,
             selectPeerAddress = { requested ->
                 if (requested == Ipv4Address.ZERO) addresses.peerAddress else requested
@@ -986,7 +986,6 @@ class PppIpv4SessionTest {
             tcpHandshakeTimeoutMillis = tcpHandshakeTimeoutMillis,
             tcpRetransmitTimeoutMillis = tcpRetransmitTimeoutMillis,
             dnsConfig = dnsConfig,
-            eventSink = eventSink,
         )
     }
 

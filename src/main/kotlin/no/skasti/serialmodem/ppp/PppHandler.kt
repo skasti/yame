@@ -9,6 +9,7 @@ import no.skasti.serialmodem.ppp.proxy.SystemRoutingTcpProxy
 import no.skasti.serialmodem.ppp.session.PppSession
 import java.io.Closeable
 import java.io.OutputStream
+import kotlin.time.Duration.Companion.milliseconds
 
 interface PppHandler : Closeable {
     fun attachOutput(output: OutputStream)
@@ -41,6 +42,7 @@ internal class RetroPppHandler(
     private var framer = createFramer()
     private var session: PppSession? = null
     private var addressResolver = createAddressResolver()
+    private var frameDelay = 75.milliseconds
 
     override fun attachOutput(output: OutputStream) {
         check(this.output == null) { "PPP output is already attached" }

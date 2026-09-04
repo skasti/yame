@@ -10,11 +10,13 @@ import no.skasti.serialmodem.ppp.RetroPppHandler
 import no.skasti.serialmodem.ppp.ip.Ipv4Address
 import no.skasti.serialmodem.ppp.proxy.ResourceRegistryHooks
 import no.skasti.serialmodem.serial.SerialConnection
+import no.skasti.serialmodem.serial.SerialFlowControl
 import java.util.concurrent.Executors
 
 class InteractiveYameApplication(
     initialPortName: String?,
     initialBaud: Int,
+    initialFlowControl: SerialFlowControl,
     initialModemConfig: HayesModemConfig,
     terminal: Terminal,
     private val logManager: YameLogManager,
@@ -36,6 +38,9 @@ class InteractiveYameApplication(
     private var selectedBaud: Int = initialBaud
 
     @Volatile
+    private var selectedFlowControl: SerialFlowControl = initialFlowControl
+
+    @Volatile
     private var modemConfig: HayesModemConfig = initialModemConfig
 
     private var generation = 0
@@ -53,11 +58,13 @@ class InteractiveYameApplication(
     private val observer = TuiYameObserver(
         initialPortName = initialPortName,
         initialBaud = initialBaud,
+        initialFlowControl = initialFlowControl,
         initialDnsUpstream = initialModemConfig.pppDnsConfig.upstreamServer.toString(),
         initialHttpProxyEnabled = initialModemConfig.pppHttpCompatibilityConfig.enabled,
         onQuit = ::shutdown,
         onPortSelected = ::selectPort,
         onBaudSelected = ::selectBaud,
+        onFlowControlSelected = ::selectFlowControl,
         onDnsUpstreamSelected = ::selectDnsUpstream,
         onHttpProxySelected = ::selectHttpProxy,
         initialLogLevels = YameLogModule.entries.associateWith(logManager::level),
@@ -166,6 +173,13 @@ class InteractiveYameApplication(
         restartConnection()
     }
 
+    private fun selectFlowControl(flowControl: SerialFlowControl) {
+        selectedFlowControl = flowControl
+        autoConnectEnabled = true
+        updateObserverSettings()
+        restartConnection()
+    }
+
     private fun selectDnsUpstream(value: String) {
         val address = runCatching { Ipv4Address.parse(value) }
             .getOrElse {
@@ -226,6 +240,7 @@ class InteractiveYameApplication(
 
         val connectionGeneration: Int
         val baud = selectedBaud
+        val flowControl = selectedFlowControl
         val config = modemConfig
         synchronized(lock) {
             if (
@@ -291,6 +306,7 @@ class InteractiveYameApplication(
         val connection = SerialConnection(
             portName = portName,
             baudRate = baud,
+            flowControl = flowControl,
             logger = { message ->
                 observer.onLog(message)
                 serialFileLogger(message)
@@ -429,6 +445,7 @@ class InteractiveYameApplication(
         observer.updateSettings(
             portName = selectedPortName,
             baud = selectedBaud,
+            flowControl = selectedFlowControl,
             dnsUpstream = modemConfig.pppDnsConfig.upstreamServer.toString(),
             httpProxyEnabled = modemConfig.pppHttpCompatibilityConfig.enabled,
         )

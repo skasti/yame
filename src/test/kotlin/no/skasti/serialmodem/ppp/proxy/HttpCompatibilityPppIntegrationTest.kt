@@ -12,8 +12,6 @@ import no.skasti.serialmodem.ppp.PppFrame
 import no.skasti.serialmodem.ppp.ip.Ipv4Address
 import no.skasti.serialmodem.ppp.ip.Ipv4Cidr
 import no.skasti.serialmodem.ppp.ip.Ipv4Packet
-import no.skasti.serialmodem.ppp.proxy.PppHttpCompatibilityConfig
-import no.skasti.serialmodem.ppp.proxy.SystemRoutingTcpProxy
 import no.skasti.serialmodem.ppp.session.PppSession
 import no.skasti.serialmodem.ppp.tcp.TcpPacket
 import java.nio.charset.StandardCharsets

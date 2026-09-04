@@ -172,7 +172,7 @@ Expanded host with known resource paths:
 
 ![YAME TUI with expanded proxy host](docs/assets/tui-proxy-expanded.svg)
 
-Useful palette commands include `/port`, `/baud`, `/dns-upstream`, `/http-proxy`, `/reconnect`, `/disconnect`, `/refresh-ports`, `/clear-log`, and `/quit`.
+Useful palette commands include `/port`, `/baud`, `/flow-control`, `/dns-upstream`, `/http-proxy`, `/reconnect`, `/disconnect`, `/refresh-ports`, `/clear-log`, and `/quit`.
 
 A port can still be selected explicitly:
 
@@ -199,6 +199,14 @@ Specify another line speed if needed:
 ```shell
 ./gradlew run --args="--port <port> --baud 57600"
 ```
+
+Serial flow control can be selected independently:
+
+```shell
+./gradlew run --args="--port <port> --baud 57600 --flow-control hardware"
+```
+
+Supported values are `disabled` (the default), `xon-xoff`, and `hardware` (RTS/CTS).
 
 YAME advertises its local PPP address as DNS through RFC 1877 IPCP options and forwards those DNS queries to `8.8.8.8` by default. Choose another upstream resolver with:
 
