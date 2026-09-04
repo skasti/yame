@@ -45,9 +45,14 @@ relationships YAME has already discovered. Opening or closing Netscape, creating
 new TCP connections, or reconnecting PPP must therefore not discard resource
 knowledge.
 
-The registry does not perform implicit oldest-graph eviction. Per-graph node and
-edge limits still bound discovery within an individual graph, but existing graph
-knowledge is never removed merely because newer navigation roots are observed.
+Resource graph knowledge is process-scoped but bounded. The registry retains a
+large working set of navigation graphs (512 by default) and uses least-recently-used
+eviction when that global limit is reached. Reusing a root or one of its known
+resources refreshes its recency. Per-graph node and edge limits still bound
+discovery within each graph.
+
+Eviction is a capacity policy, not a browser/TCP/PPP lifetime boundary: closing
+Netscape, opening new TCP flows, or reconnecting PPP never clears the registry.
 
 ## Upstream acquisition and legacy delivery are separate phases
 
