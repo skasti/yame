@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -196,6 +197,63 @@ class HttpTcpProxyTest {
             release.countDown()
             proxy.close()
         }
+    }
+
+    @Test
+    fun `close waits for workers before closing handler state`() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val workerExited = AtomicBoolean(false)
+        val handlerClosedAfterWorker = AtomicBoolean(false)
+        val handler =
+            object : HttpRequestHandler {
+                override fun handle(
+                    connection: HttpConnection,
+                    request: HttpRequest,
+                ): HttpResponse {
+                    entered.countDown()
+                    try {
+                        while (release.count > 0) {
+                            try {
+                                release.await()
+                            } catch (_: InterruptedException) {
+                                // Simulate cleanup that cannot stop at the first interrupt.
+                            }
+                        }
+                        return HttpResponse(200, "OK", headers = emptyList(), body = ByteArray(0))
+                    } finally {
+                        workerExited.set(true)
+                    }
+                }
+
+                override fun close() {
+                    handlerClosedAfterWorker.set(workerExited.get())
+                }
+            }
+        val proxy = HttpTcpProxy(handler, maxFlows = 1, maxRequestBytes = 1024)
+        val events = LinkedBlockingQueue<TcpProxyEvent>()
+        val flow = flow(peerPort = 1240)
+
+        proxy.connect(flow, events::offer)
+        assertIs<TcpProxyEvent.Connected>(requireNotNull(events.poll(2, TimeUnit.SECONDS)))
+        proxy.send(
+            flow,
+            "GET /slow HTTP/1.0\r\nHost: example.test\r\n\r\n"
+                .toByteArray(StandardCharsets.US_ASCII),
+        ).getOrThrow()
+        assertTrue(entered.await(2, TimeUnit.SECONDS))
+
+        val closer =
+            Thread {
+                proxy.close()
+            }.apply { start() }
+
+        Thread.sleep(100)
+        assertTrue(!handlerClosedAfterWorker.get())
+        release.countDown()
+        closer.join(2_000)
+        assertTrue(!closer.isAlive)
+        assertTrue(handlerClosedAfterWorker.get())
     }
 
     private fun collectResponse(events: LinkedBlockingQueue<TcpProxyEvent>): String {
