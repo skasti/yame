@@ -25,6 +25,9 @@ The HTTP compatibility proxy has deliberately pragmatic goals:
 - retain the complete upstream source representation separately from any
   client-visible transformed representation. A resource is `READY` when the
   complete client representation exists locally, before downstream delivery begins;
+- keep resource graph knowledge at HTTP-proxy/process lifetime. It must survive
+  TCP flow closure, PPP generation changes, and browser restarts; revisiting a
+  navigation root reuses and extends its existing graph rather than replacing it;
 - request `Accept-Encoding: identity` for text that may need rewriting;
 - replace absolute `https://` references in supported text responses with clean
   `http://` references and remember the upstream HTTPS target for the PPP
