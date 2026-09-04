@@ -22,6 +22,8 @@ internal class HttpRequestDecoder(
     private var continueEmitted = false
     private var complete = false
     private var parsedRequest: ParsedRequestMetadata? = null
+    private var headerDelimiterMatchLength = 0
+    private var headerEnd: Int? = null
 
     val bufferedBytes: Int
         get() = buffer.size()
@@ -47,6 +49,9 @@ internal class HttpRequestDecoder(
                 "HTTP request exceeds compatibility limit",
             )
         }
+        if (parsedRequest == null && headerEnd == null) {
+            scanForHeaderEnd(payload, buffer.size())
+        }
         buffer.write(payload)
         return inspect()
     }
@@ -66,19 +71,18 @@ internal class HttpRequestDecoder(
         val metadata =
             parsedRequest
                 ?: run {
+                    val headerEnd =
+                        headerEnd
+                            ?: if (buffer.size() >= maxRequestBytes) {
+                                return reject(
+                                    413,
+                                    "Content Too Large",
+                                    "HTTP request headers exceed compatibility limit",
+                                )
+                            } else {
+                                return HttpRequestDecodeResult.NeedMoreData
+                            }
                     val bytes = buffer.toByteArray()
-                    val headerEnd = findHeaderEnd(bytes)
-                    if (headerEnd < 0) {
-                        if (buffer.size() >= maxRequestBytes) {
-                            return reject(
-                                413,
-                                "Content Too Large",
-                                "HTTP request headers exceed compatibility limit",
-                            )
-                        }
-                        return HttpRequestDecodeResult.NeedMoreData
-                    }
-
                     val parsedHeaders =
                         parseHeaders(bytes, headerEnd)
                             ?: return reject(400, "Bad Request", "Malformed HTTP request headers")
@@ -202,19 +206,34 @@ internal class HttpRequestDecoder(
         }
     }
 
-    private fun findHeaderEnd(bytes: ByteArray): Int {
-        if (bytes.size < HEADER_DELIMITER.size) return -1
-        for (i in 0..bytes.size - HEADER_DELIMITER.size) {
-            if (
-                bytes[i] == 13.toByte() &&
-                bytes[i + 1] == 10.toByte() &&
-                bytes[i + 2] == 13.toByte() &&
-                bytes[i + 3] == 10.toByte()
-            ) {
-                return i
+    private fun scanForHeaderEnd(
+        payload: ByteArray,
+        bufferedBefore: Int,
+    ) {
+        payload.forEachIndexed { index, byte ->
+            headerDelimiterMatchLength =
+                when (headerDelimiterMatchLength) {
+                    0 -> if (byte == 13.toByte()) 1 else 0
+                    1 ->
+                        when (byte) {
+                            10.toByte() -> 2
+                            13.toByte() -> 1
+                            else -> 0
+                        }
+                    2 -> if (byte == 13.toByte()) 3 else 0
+                    3 ->
+                        when (byte) {
+                            10.toByte() -> 4
+                            13.toByte() -> 1
+                            else -> 0
+                        }
+                    else -> headerDelimiterMatchLength
+                }
+            if (headerDelimiterMatchLength == HEADER_DELIMITER.size) {
+                headerEnd = bufferedBefore + index - HEADER_DELIMITER.size + 1
+                return
             }
         }
-        return -1
     }
 
     private data class ParsedHeaders(
