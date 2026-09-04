@@ -67,6 +67,7 @@ internal class HttpTcpProxy(
     private val flowSlots = Semaphore(maxFlows)
     private val flows = ConcurrentHashMap<TcpProxyFlow, FlowState>()
     private val minimumGeneration = AtomicLong(Long.MIN_VALUE)
+    private val lifecycleLock = Any()
 
     @Volatile
     private var closed = false
@@ -75,34 +76,39 @@ internal class HttpTcpProxy(
         flow: TcpProxyFlow,
         onEvent: (TcpProxyEvent) -> Unit,
     ) {
-        if (closed) {
-            safeCallback(onEvent, TcpProxyEvent.Failure(IllegalStateException("HTTP proxy is closed")))
-            return
-        }
-        if (flow.generation < minimumGeneration.get()) {
-            safeCallback(
-                onEvent,
-                TcpProxyEvent.Failure(IllegalStateException("TCP flow belongs to an old IPCP generation")),
-            )
-            return
-        }
-        if (!flowSlots.tryAcquire()) {
-            safeCallback(onEvent, TcpProxyEvent.Failure(IllegalStateException("HTTP flow limit reached")))
-            return
-        }
+        synchronized(lifecycleLock) {
+            if (closed) {
+                safeCallback(onEvent, TcpProxyEvent.Failure(IllegalStateException("HTTP proxy is closed")))
+                return
+            }
+            if (flow.generation < minimumGeneration.get()) {
+                safeCallback(
+                    onEvent,
+                    TcpProxyEvent.Failure(IllegalStateException("TCP flow belongs to an old IPCP generation")),
+                )
+                return
+            }
+            if (!flowSlots.tryAcquire()) {
+                safeCallback(onEvent, TcpProxyEvent.Failure(IllegalStateException("HTTP flow limit reached")))
+                return
+            }
 
-        val state =
-            FlowState(
-                flow = flow,
-                onEvent = onEvent,
-                decoder = HttpRequestDecoder(maxRequestBytes),
-            )
-        if (flows.putIfAbsent(flow, state) != null) {
-            releaseSlot(state)
-            safeCallback(onEvent, TcpProxyEvent.Failure(IllegalStateException("HTTP flow already exists")))
-            return
+            val state =
+                FlowState(
+                    flow = flow,
+                    onEvent = onEvent,
+                    decoder = HttpRequestDecoder(maxRequestBytes),
+                )
+            if (flows.putIfAbsent(flow, state) != null) {
+                releaseSlot(state)
+                safeCallback(onEvent, TcpProxyEvent.Failure(IllegalStateException("HTTP flow already exists")))
+                return
+            }
+
+            // Keep admission and Connected notification atomic with close(). Once
+            // close() owns lifecycleLock, no new flow can be inserted or announced.
+            safeCallback(onEvent, TcpProxyEvent.Connected)
         }
-        safeCallback(onEvent, TcpProxyEvent.Connected)
     }
 
     override fun send(
@@ -463,9 +469,13 @@ internal class HttpTcpProxy(
     }
 
     override fun close() {
-        if (closed) return
-        closed = true
-        flows.values.toList().forEach(::removeFlow)
+        val flowsToClose =
+            synchronized(lifecycleLock) {
+                if (closed) return
+                closed = true
+                flows.values.toList()
+            }
+        flowsToClose.forEach(::removeFlow)
         executor.shutdownNow()
 
         val terminated =
