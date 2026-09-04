@@ -2,6 +2,38 @@
 
 YAME materializes upstream HTTP responses as a `Resource` before running the compatibility transformation pipeline. The source representation is retained separately from the client-visible transformed representation.
 
+## HTTP transport boundary
+
+Compatibility logic does not speak TCP directly.
+
+The intended layering is:
+
+```text
+PPP/TCP
+   |
+   v
+HttpTcpProxy
+   |  decodes request bytes
+   |  encodes response bytes
+   v
+HttpRequestHandler
+   |
+   v
+compatibility routing / resource manager
+   |
+   v
+upstream fetch + source resource + transforms
+```
+
+`HttpTcpProxy` owns connection-level HTTP transport concerns such as incremental
+request decoding, `Expect: 100-continue`, HTTP/1.0 response framing,
+`Connection: close`, and downstream read backpressure.
+
+The compatibility handler receives a complete `HttpRequest` and returns a complete
+`HttpResponse`. It must not consume or emit `TcpProxyEvent` values directly.
+That keeps TCP flow control and eventual downstream scheduling separate from
+resource acquisition and transformation.
+
 ## Upstream acquisition and legacy delivery are separate phases
 
 The compatibility proxy must fully acquire the finite upstream HTTP response before it emits the corresponding response to the legacy client.
