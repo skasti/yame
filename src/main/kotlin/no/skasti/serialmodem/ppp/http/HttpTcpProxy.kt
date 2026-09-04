@@ -262,19 +262,28 @@ internal class HttpTcpProxy(
                 return Result.failure(IllegalStateException("HTTP flow is closed"))
             }
 
-            executor.execute(task)
+            try {
+                executor.execute(task)
+            } catch (error: Throwable) {
+                synchronized(state) {
+                    state.processing = false
+                    if (state.task === task) {
+                        state.task = null
+                    }
+                }
+                if (!removeFlow(state) && flows[state.flow] !== state) {
+                    releaseSlot(state)
+                }
+                safeCallback(state.onEvent, TcpProxyEvent.Failure(error))
+                return Result.failure(error)
+            }
             if (!isActive(state)) task.cancel(true)
             Result.success(Unit)
         } catch (error: Throwable) {
             synchronized(state) {
                 state.processing = false
-                if (state.task?.isDone != false) {
-                    state.task = null
-                }
             }
-            if (!removeFlow(state) && flows[state.flow] !== state) {
-                releaseSlot(state)
-            }
+            removeFlow(state)
             safeCallback(state.onEvent, TcpProxyEvent.Failure(error))
             Result.failure(error)
         }
