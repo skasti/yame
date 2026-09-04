@@ -13,12 +13,20 @@ internal class SystemRoutingTcpProxy(
     private val logger: (String) -> Unit = {},
     private val eventSink: (YameEvent) -> Unit = {},
     private val resourceRegistryHooks: ResourceRegistryHooks = ResourceRegistryHooks(),
+    private val resourceGraphs: NavigationResourceRegistry =
+        NavigationResourceRegistry(
+            maxContexts = httpConfig.maxResourceContexts,
+            maxNodesPerContext = httpConfig.maxResourceNodesPerContext,
+            maxEdgesPerContext = httpConfig.maxResourceEdgesPerContext,
+            hooks = resourceRegistryHooks,
+        ),
     private val directProxy: TcpProxy = SystemTcpProxy(),
     private val httpProxy: TcpProxy = SystemHttpCompatibilityProxy(
         httpConfig,
         logger,
         eventSink = eventSink,
         resourceRegistryHooks = resourceRegistryHooks,
+        resourceGraphs = resourceGraphs,
     ),
 ) : TcpProxy {
     private val routes = ConcurrentHashMap<TcpProxyFlow, TcpProxy>()
