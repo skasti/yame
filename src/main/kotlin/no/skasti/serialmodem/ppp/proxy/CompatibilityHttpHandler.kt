@@ -138,7 +138,8 @@ internal class SystemHttpCompatibilityHandler(
             fetchUpstreamUri = upstreamUri
             fetchGraphs = resourceGraphs.contextsFor(legacyUri)
             fetchGraphs.forEach { graph ->
-                graph.markFetched(
+                resourceGraphs.markFetched(
+                graph = graph,
                     legacyUri = legacyUri,
                     upstreamUri = upstreamUri,
                     contentBase = upstreamUri,
@@ -226,7 +227,8 @@ internal class SystemHttpCompatibilityHandler(
     ) {
         if (legacyUri == null || upstreamUri == null) return
         graphs.forEach { graph ->
-            graph.markFetched(
+            resourceGraphs.markFetched(
+                graph = graph,
                 legacyUri = legacyUri,
                 upstreamUri = upstreamUri,
                 contentBase = upstreamUri,
@@ -426,7 +428,8 @@ internal class SystemHttpCompatibilityHandler(
                 resourceGraphs.contextsFor(response.legacyUri)
             }
         resourceGraphs.forEach { graph ->
-            graph.markFetched(
+            resourceGraphs.markFetched(
+                graph = graph,
                 legacyUri = response.legacyUri,
                 upstreamUri = response.uri,
                 contentBase = response.effectiveBaseUri ?: response.uri,
@@ -436,7 +439,8 @@ internal class SystemHttpCompatibilityHandler(
         var resourceReady = false
         try {
             resourceGraphs.forEach { graph ->
-                graph.markFetched(
+                resourceGraphs.markFetched(
+                graph = graph,
                     legacyUri = response.legacyUri,
                     upstreamUri = response.uri,
                     contentBase = response.effectiveBaseUri ?: response.uri,
@@ -520,7 +524,8 @@ internal class SystemHttpCompatibilityHandler(
         // transport layer may now deliver it at legacy-client speed without involving
         // upstream acquisition or transformation.
         resourceGraphs.forEach { graph ->
-            graph.markFetched(
+            resourceGraphs.markFetched(
+                graph = graph,
                 legacyUri = response.legacyUri,
                 upstreamUri = response.uri,
                 contentBase = response.effectiveBaseUri ?: response.uri,
@@ -532,7 +537,8 @@ internal class SystemHttpCompatibilityHandler(
         } catch (error: Throwable) {
             if (!resourceReady) {
                 resourceGraphs.forEach { graph ->
-                    graph.markFetched(
+                    resourceGraphs.markFetched(
+                graph = graph,
                         legacyUri = response.legacyUri,
                         upstreamUri = response.uri,
                         contentBase = response.effectiveBaseUri ?: response.uri,
