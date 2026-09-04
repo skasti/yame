@@ -88,6 +88,7 @@ internal class SystemHttpCompatibilityHandler(
     private val sessionStates = ConcurrentHashMap<SessionKey, SessionState>()
     private val resourceGraphs =
         NavigationResourceRegistry(
+            maxContexts = config.maxResourceContexts,
             maxNodesPerContext = config.maxResourceNodesPerContext,
             maxEdgesPerContext = config.maxResourceEdgesPerContext,
             hooks = resourceRegistryHooks,
