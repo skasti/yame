@@ -68,7 +68,16 @@ internal class HttpRequestDecoder(
                 ?: run {
                     val bytes = buffer.toByteArray()
                     val headerEnd = findHeaderEnd(bytes)
-                    if (headerEnd < 0) return HttpRequestDecodeResult.NeedMoreData
+                    if (headerEnd < 0) {
+                        if (buffer.size() >= maxRequestBytes) {
+                            return reject(
+                                413,
+                                "Content Too Large",
+                                "HTTP request headers exceed compatibility limit",
+                            )
+                        }
+                        return HttpRequestDecodeResult.NeedMoreData
+                    }
 
                     val parsedHeaders =
                         parseHeaders(bytes, headerEnd)
