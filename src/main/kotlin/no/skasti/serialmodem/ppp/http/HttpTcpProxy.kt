@@ -246,14 +246,42 @@ internal class HttpTcpProxy(
                         }
                     }
                 }
-            state.task = task
-            executor.execute(task)
+            val published =
+                synchronized(state) {
+                    if (state.cancelled || flows[state.flow] !== state) {
+                        false
+                    } else {
+                        state.task = task
+                        true
+                    }
+                }
+            if (!published) {
+                synchronized(state) {
+                    state.processing = false
+                }
+                return Result.failure(IllegalStateException("HTTP flow is closed"))
+            }
+
+            try {
+                executor.execute(task)
+            } catch (error: Throwable) {
+                synchronized(state) {
+                    state.processing = false
+                    if (state.task === task) {
+                        state.task = null
+                    }
+                }
+                if (!removeFlow(state) && flows[state.flow] !== state) {
+                    releaseSlot(state)
+                }
+                safeCallback(state.onEvent, TcpProxyEvent.Failure(error))
+                return Result.failure(error)
+            }
             if (!isActive(state)) task.cancel(true)
             Result.success(Unit)
         } catch (error: Throwable) {
             synchronized(state) {
                 state.processing = false
-                state.task = null
             }
             removeFlow(state)
             safeCallback(state.onEvent, TcpProxyEvent.Failure(error))
@@ -376,18 +404,24 @@ internal class HttpTcpProxy(
         state: FlowState,
         cancelTask: Boolean = true,
     ): Boolean {
-        if (!flows.remove(state.flow, state)) return false
-        state.cancelled = true
+        val taskToCancel: Future<*>?
+        val interimToCancel: Future<*>?
+        val releaseImmediately: Boolean
+        synchronized(state) {
+            if (!flows.remove(state.flow, state)) return false
+            state.cancelled = true
+            taskToCancel = if (cancelTask) state.task else null
+            interimToCancel = if (cancelTask) state.interimTask else null
+            releaseImmediately = state.task == null
+        }
         synchronized(state.readMonitor) {
             state.readsPaused = false
             state.readMonitor.notifyAll()
         }
-        if (cancelTask) {
-            state.task?.cancel(true)
-            state.interimTask?.cancel(true)
-        }
+        taskToCancel?.cancel(true)
+        interimToCancel?.cancel(true)
         handler.connectionClosed(state.flow)
-        if (state.task == null) {
+        if (releaseImmediately) {
             releaseSlot(state)
         }
         return true
