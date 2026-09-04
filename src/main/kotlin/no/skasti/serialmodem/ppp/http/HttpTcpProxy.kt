@@ -430,12 +430,13 @@ internal class HttpTcpProxy(
         if (closed) return
         closed = true
         flows.values.toList().forEach(::removeFlow)
-        handler.close()
         executor.shutdownNow()
         try {
             executor.awaitTermination(SHUTDOWN_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
+        } finally {
+            handler.close()
         }
     }
 
