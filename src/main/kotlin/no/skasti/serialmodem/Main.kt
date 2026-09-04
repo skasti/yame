@@ -200,7 +200,7 @@ private data class Options(
 private fun parseArgs(args: Array<String>): Options {
     val defaults = HayesModemConfig()
     var port: String? = null
-    var baud = 115200
+    var baud = 38400
     var flowControl = SerialFlowControl.DISABLED
     var list = false
     var testNumber: String? = null
@@ -370,13 +370,13 @@ private fun printUsage() {
         Usage:
           serial-modem-emulator --list
           serial-modem-emulator --test-tone NUMBER [modem options]
-          serial-modem-emulator [--port PORT] [--baud 115200] [--ui auto|tui|plain] [modem options]
+          serial-modem-emulator [--port PORT] [--baud 38400] [--ui auto|tui|plain] [modem options]
 
         Options:
           -l, --list                  List available serial ports
           -t, --test-tone NUM         Run the modem dialing sequence without a serial port
           -p, --port PORT             Serial port, e.g. COM3 or /dev/ttyUSB0
-          -b, --baud RATE             Baud rate (default: 115200)
+          -b, --baud RATE             Baud rate (default: 38400)
               --flow-control MODE    Serial flow control: disabled, xon-xoff, or hardware (default: disabled)
               --pickup-time DURATION  Ringback time before pickup (default: ${defaults.pickupTime})
               --dial-tone-time DUR    Dial-tone duration (default: ${defaults.dialToneTime})
