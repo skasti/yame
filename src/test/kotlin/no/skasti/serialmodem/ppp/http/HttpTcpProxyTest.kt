@@ -155,7 +155,7 @@ class HttpTcpProxyTest {
                             // Deliberately model work that cannot stop immediately on cancellation.
                         }
                     }
-                    return HttpResponse(200, "OK", body = ByteArray(0))
+                    return HttpResponse(200, "OK", headers = emptyList(), body = ByteArray(0))
                 }
             }
         val proxy = HttpTcpProxy(handler, maxFlows = 1, maxRequestBytes = 1024)
