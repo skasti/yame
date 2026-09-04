@@ -58,7 +58,6 @@ internal class SystemHttpCompatibilityHandler(
     private data class SessionState(
         val cookieManager: CookieManager = CookieManager(BoundedCookieStore(), CookiePolicy.ACCEPT_ORIGINAL_SERVER),
         val cookieOverrides: BoundedCookieOverrides = BoundedCookieOverrides(),
-        val resources: NavigationResourceRegistry,
     )
     private data class FlowState(
         val flow: TcpProxyFlow,
@@ -87,6 +86,12 @@ internal class SystemHttpCompatibilityHandler(
     )
 
     private val sessionStates = ConcurrentHashMap<SessionKey, SessionState>()
+    private val resourceGraphs =
+        NavigationResourceRegistry(
+            maxNodesPerContext = config.maxResourceNodesPerContext,
+            maxEdgesPerContext = config.maxResourceEdgesPerContext,
+            hooks = resourceRegistryHooks,
+        )
     private val originRoutes = LegacyOriginRouteTable()
     private val resourceTransformations = ResourceTransformationPipeline(listOf(LegacyTextResourceTransformer()))
     private val resourceCache = ResourceCache(
@@ -110,15 +115,7 @@ internal class SystemHttpCompatibilityHandler(
                 flow = flow,
                 session =
                     sessionStates.computeIfAbsent(sessionKey(flow)) {
-                        SessionState(
-                            resources =
-                                NavigationResourceRegistry(
-                                    maxContexts = config.maxResourceContexts,
-                                    maxNodesPerContext = config.maxResourceNodesPerContext,
-                                    maxEdgesPerContext = config.maxResourceEdgesPerContext,
-                                    hooks = resourceRegistryHooks,
-                                ),
-                        )
+                        SessionState()
                     },
                 active = { connection.isActive },
             )
@@ -138,7 +135,7 @@ internal class SystemHttpCompatibilityHandler(
             val upstreamUri = originRoutes.resolve(state.flow, legacyUri)
             fetchLegacyUri = legacyUri
             fetchUpstreamUri = upstreamUri
-            fetchGraphs = state.session.resources.contextsFor(legacyUri)
+            fetchGraphs = resourceGraphs.contextsFor(legacyUri)
             fetchGraphs.forEach { graph ->
                 graph.markFetched(
                     legacyUri = legacyUri,
@@ -401,9 +398,9 @@ internal class SystemHttpCompatibilityHandler(
     ): LegacyHttpResponse {
         val resourceGraphs =
             if (response.establishesNavigationGraph) {
-                listOf(state.session.resources.startNavigation(response.legacyUri))
+                listOf(resourceGraphs.startNavigation(response.legacyUri))
             } else {
-                state.session.resources.contextsFor(response.legacyUri)
+                resourceGraphs.contextsFor(response.legacyUri)
             }
         resourceGraphs.forEach { graph ->
             graph.markFetched(
@@ -689,7 +686,7 @@ internal class SystemHttpCompatibilityHandler(
             ) ?: return@forEach
             val legacyUri = runCatching { URI(legacyValue) }.getOrNull() ?: return@forEach
             graphs.forEach { graph ->
-                session.resources.discover(
+                resourceGraphs.discover(
                     graph = graph,
                     parentLegacyUri = parentLegacyUri,
                     childLegacyUri = legacyUri,
@@ -973,7 +970,7 @@ internal class SystemHttpCompatibilityHandler(
         ) ?: return null
         val legacyUri = runCatching { URI(rewritten) }.getOrNull() ?: return rewritten
         graphs.forEach { graph ->
-            session.resources.discover(
+            resourceGraphs.discover(
                 graph = graph,
                 parentLegacyUri = parentLegacyUri,
                 childLegacyUri = legacyUri,
@@ -1332,12 +1329,14 @@ internal class SystemHttpCompatibilityHandler(
     private fun resourceWorkScope(flow: TcpProxyFlow): String =
         "${flow.generation}:${flow.key.peerAddress}"
 
-    internal fun resourceGraphSnapshots(flow: TcpProxyFlow): List<NavigationResourceGraphSnapshot> =
-        sessionStates[sessionKey(flow)]?.resources?.snapshots().orEmpty()
+    internal fun resourceGraphSnapshots(): List<NavigationResourceGraphSnapshot> =
+        resourceGraphs.snapshots()
 
     override fun invalidateBefore(generation: Long) {
         originRoutes.invalidateBefore(generation)
         sessionStates.keys.removeIf { it.generation < generation }
+        // Resource graphs deliberately survive PPP generations, TCP flows, and
+        // browser restarts. They are process-lifetime HTTP proxy knowledge.
     }
 
     override fun close() {
