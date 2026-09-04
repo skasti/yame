@@ -34,6 +34,21 @@ The compatibility handler receives a complete `HttpRequest` and returns a comple
 That keeps TCP flow control and eventual downstream scheduling separate from
 resource acquisition and transformation.
 
+## Resource graph lifetime
+
+Resource graph knowledge is owned by the HTTP proxy and lives for the lifetime of
+the YAME process. It is deliberately **not** scoped to a TCP connection, PPP
+generation, browser process, cookie session, or individual HTTP transaction.
+
+Revisiting the same navigation root reuses its existing graph and preserves the
+relationships YAME has already discovered. Opening or closing Netscape, creating
+new TCP connections, or reconnecting PPP must therefore not discard resource
+knowledge.
+
+The registry does not perform implicit oldest-graph eviction. Per-graph node and
+edge limits still bound discovery within an individual graph, but existing graph
+knowledge is never removed merely because newer navigation roots are observed.
+
 ## Upstream acquisition and legacy delivery are separate phases
 
 The compatibility proxy must fully acquire the finite upstream HTTP response before it emits the corresponding response to the legacy client.
