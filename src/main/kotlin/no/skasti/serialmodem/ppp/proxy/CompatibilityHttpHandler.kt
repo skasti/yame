@@ -421,13 +421,13 @@ internal class SystemHttpCompatibilityHandler(
         state: FlowState,
         response: FinalResponse,
     ): LegacyHttpResponse {
-        val resourceGraphs =
+        val graphs =
             if (response.establishesNavigationGraph) {
                 listOf(resourceGraphs.startNavigation(response.legacyUri))
             } else {
                 resourceGraphs.contextsFor(response.legacyUri)
             }
-        resourceGraphs.forEach { graph ->
+        graphs.forEach { graph ->
             resourceGraphs.markFetched(
                 graph = graph,
                 legacyUri = response.legacyUri,
@@ -438,7 +438,7 @@ internal class SystemHttpCompatibilityHandler(
         }
         var resourceReady = false
         try {
-            resourceGraphs.forEach { graph ->
+            graphs.forEach { graph ->
                 resourceGraphs.markFetched(
                 graph = graph,
                     legacyUri = response.legacyUri,
@@ -451,7 +451,7 @@ internal class SystemHttpCompatibilityHandler(
                 prepareLegacyResource(
                     flow = state.flow,
                     session = state.session,
-                    graphs = resourceGraphs,
+                    graphs = graphs,
                     parentLegacyUri = response.legacyUri,
                     upstreamUri = response.uri,
                     statusCode = response.statusCode,
@@ -523,7 +523,7 @@ internal class SystemHttpCompatibilityHandler(
         // READY means the complete client representation exists locally. The HTTP
         // transport layer may now deliver it at legacy-client speed without involving
         // upstream acquisition or transformation.
-        resourceGraphs.forEach { graph ->
+        graphs.forEach { graph ->
             resourceGraphs.markFetched(
                 graph = graph,
                 legacyUri = response.legacyUri,
@@ -536,7 +536,7 @@ internal class SystemHttpCompatibilityHandler(
         return clientResponse
         } catch (error: Throwable) {
             if (!resourceReady) {
-                resourceGraphs.forEach { graph ->
+                graphs.forEach { graph ->
                     resourceGraphs.markFetched(
                 graph = graph,
                         legacyUri = response.legacyUri,
