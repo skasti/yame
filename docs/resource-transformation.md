@@ -36,9 +36,10 @@ resource acquisition and transformation.
 
 ## Resource graph lifetime
 
-Resource graph knowledge is owned by the HTTP proxy and lives for the lifetime of
-the YAME process. It is deliberately **not** scoped to a TCP connection, PPP
-generation, browser process, cookie session, or individual HTTP transaction.
+Resource graph knowledge is owned above the PPP session boundary and injected
+into each HTTP compatibility proxy instance. It therefore lives for the lifetime
+of the YAME process, not for the lifetime of a TCP connection, PPP generation,
+browser process, cookie session, or individual HTTP transaction.
 
 Revisiting the same navigation root reuses its existing graph and preserves the
 relationships YAME has already discovered. Opening or closing Netscape, creating
