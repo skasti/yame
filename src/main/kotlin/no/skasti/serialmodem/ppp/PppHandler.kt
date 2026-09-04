@@ -2,6 +2,7 @@ package no.skasti.serialmodem.ppp
 
 import no.skasti.serialmodem.observer.YameEvent
 import no.skasti.serialmodem.ppp.dns.PppDnsConfig
+import no.skasti.serialmodem.ppp.proxy.NavigationResourceRegistry
 import no.skasti.serialmodem.ppp.proxy.PppHttpCompatibilityConfig
 import no.skasti.serialmodem.ppp.proxy.ResourceRegistryHooks
 import no.skasti.serialmodem.ppp.proxy.SystemRoutingTcpProxy
@@ -27,6 +28,13 @@ internal class RetroPppHandler(
     private val ipConfig: PppIpConfig = PppIpConfig(),
     private val dnsConfig: PppDnsConfig = PppDnsConfig(),
     private val httpCompatibilityConfig: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig(),
+    private val resourceGraphs: NavigationResourceRegistry =
+        NavigationResourceRegistry(
+            maxContexts = httpCompatibilityConfig.maxResourceContexts,
+            maxNodesPerContext = httpCompatibilityConfig.maxResourceNodesPerContext,
+            maxEdgesPerContext = httpCompatibilityConfig.maxResourceEdgesPerContext,
+            hooks = resourceRegistryHooks,
+        ),
 ) : PppHandler {
     private var output: OutputStream? = null
     private var encoder = PppEncoder()
@@ -65,6 +73,7 @@ internal class RetroPppHandler(
                 logger = proxyLogger,
                 eventSink = eventSink,
                 resourceRegistryHooks = resourceRegistryHooks,
+                resourceGraphs = resourceGraphs,
             ),
         )
     }
