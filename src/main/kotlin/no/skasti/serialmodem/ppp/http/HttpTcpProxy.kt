@@ -54,6 +54,7 @@ internal class HttpTcpProxy(
         @Volatile var readsPaused: Boolean = false,
         @Volatile var cancelled: Boolean = false,
         @Volatile var task: Future<*>? = null,
+        @Volatile var interimTask: Future<*>? = null,
     )
 
     private val executor = Executors.newFixedThreadPool(maxFlows) { runnable ->
@@ -130,13 +131,11 @@ internal class HttpTcpProxy(
 
         return when (decoded) {
             HttpRequestDecodeResult.NeedMoreData -> Result.success(Unit)
-            HttpRequestDecodeResult.ContinueRequired -> {
-                emitBytes(
+            HttpRequestDecodeResult.ContinueRequired ->
+                scheduleInterimResponse(
                     state,
                     "HTTP/1.1 100 Continue\r\n\r\n".toByteArray(Charsets.US_ASCII),
                 )
-                Result.success(Unit)
-            }
             is HttpRequestDecodeResult.Rejected -> {
                 scheduleResponse(
                     state,
@@ -153,11 +152,36 @@ internal class HttpTcpProxy(
         }
     }
 
+    private fun scheduleInterimResponse(
+        state: FlowState,
+        payload: ByteArray,
+    ): Result<Unit> {
+        return try {
+            val task =
+                executor.submit {
+                    try {
+                        emitBytes(state, payload)
+                    } finally {
+                        state.interimTask = null
+                    }
+                }
+            state.interimTask = task
+            if (!isActive(state)) task.cancel(true)
+            Result.success(Unit)
+        } catch (error: Throwable) {
+            state.interimTask = null
+            removeFlow(state)
+            safeCallback(state.onEvent, TcpProxyEvent.Failure(error))
+            Result.failure(error)
+        }
+    }
+
     private fun scheduleRequest(
         state: FlowState,
         request: HttpRequest,
     ): Result<Unit> =
         schedule(state) {
+            state.interimTask?.let { runCatching { it.get() } }
             val connection =
                 HttpConnection(state.flow) {
                     !closed &&
@@ -334,7 +358,10 @@ internal class HttpTcpProxy(
             state.readsPaused = false
             state.readMonitor.notifyAll()
         }
-        if (cancelTask) state.task?.cancel(true)
+        if (cancelTask) {
+            state.task?.cancel(true)
+            state.interimTask?.cancel(true)
+        }
         handler.connectionClosed(state.flow)
         releaseSlot(state)
         return true
