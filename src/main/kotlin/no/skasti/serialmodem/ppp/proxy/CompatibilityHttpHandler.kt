@@ -48,6 +48,13 @@ internal class SystemHttpCompatibilityHandler(
     private val logger: (String) -> Unit = {},
     private val eventSink: (YameEvent) -> Unit = {},
     private val resourceRegistryHooks: ResourceRegistryHooks = ResourceRegistryHooks(),
+    private val resourceGraphs: NavigationResourceRegistry =
+        NavigationResourceRegistry(
+            maxContexts = config.maxResourceContexts,
+            maxNodesPerContext = config.maxResourceNodesPerContext,
+            maxEdgesPerContext = config.maxResourceEdgesPerContext,
+            hooks = resourceRegistryHooks,
+        ),
     private val httpClient: HttpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofMillis(config.requestTimeoutMillis))
         .followRedirects(HttpClient.Redirect.NEVER)
@@ -86,13 +93,6 @@ internal class SystemHttpCompatibilityHandler(
     )
 
     private val sessionStates = ConcurrentHashMap<SessionKey, SessionState>()
-    private val resourceGraphs =
-        NavigationResourceRegistry(
-            maxContexts = config.maxResourceContexts,
-            maxNodesPerContext = config.maxResourceNodesPerContext,
-            maxEdgesPerContext = config.maxResourceEdgesPerContext,
-            hooks = resourceRegistryHooks,
-        )
     private val originRoutes = LegacyOriginRouteTable()
     private val resourceTransformations = ResourceTransformationPipeline(listOf(LegacyTextResourceTransformer()))
     private val resourceCache = ResourceCache(
