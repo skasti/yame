@@ -130,6 +130,34 @@ class ResourceGraphTest {
     }
 
     @Test
+    fun `evicted graph handle cannot be reindexed or mutated`() {
+        val registry = NavigationResourceRegistry(maxContexts = 1)
+        val first = registry.startNavigation(URI("http://legacy.test/one"))
+        val staleChild = URI("http://legacy.test/stale.gif")
+        registry.startNavigation(URI("http://legacy.test/two"))
+
+        registry.discover(
+            first,
+            first.rootLegacyUri,
+            staleChild,
+            URI("https://legacy.test/stale.gif"),
+            ResourceRelation.IMG_SRC,
+            ResourceKind.IMAGE,
+        )
+        registry.markFetched(
+            first,
+            first.rootLegacyUri,
+            URI("https://legacy.test/one"),
+            URI("https://legacy.test/one"),
+            ResourceState.READY,
+        )
+
+        assertTrue(registry.contextsFor(staleChild).isEmpty())
+        assertEquals(1, registry.snapshots().size)
+        assertTrue(registry.snapshots().none { it.id == first.id })
+    }
+
+    @Test
     fun `graph bounds nodes and edges and does not index dropped resources`() {
         val registry = NavigationResourceRegistry(
             maxNodesPerContext = 2,
