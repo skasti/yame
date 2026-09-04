@@ -252,13 +252,11 @@ internal class NavigationResourceGraph(
 }
 
 internal class NavigationResourceRegistry(
-    private val maxContexts: Int = 64,
     private val maxNodesPerContext: Int = 1_024,
     private val maxEdgesPerContext: Int = 2_048,
     val hooks: ResourceRegistryHooks = ResourceRegistryHooks(),
 ) {
     init {
-        require(maxContexts > 0) { "Navigation context limit must be positive" }
         require(maxNodesPerContext > 0) { "Resource graph node limit must be positive" }
         require(maxEdgesPerContext > 0) { "Resource graph edge limit must be positive" }
     }
@@ -285,27 +283,36 @@ internal class NavigationResourceRegistry(
 
     private val lock = Any()
     private val graphs = linkedMapOf<Long, NavigationResourceGraph>()
+    private val graphByRootLegacyUri = mutableMapOf<String, Long>()
     private val contextByLegacyUri = mutableMapOf<String, LinkedHashSet<Long>>()
 
     fun startNavigation(rootLegacyUri: URI): NavigationResourceGraph {
         val pending = mutableListOf<PendingEvent>()
-        val graph = synchronized(lock) {
-            while (graphs.size >= maxContexts) {
-                evictOldestLocked(pending)
+        val graph =
+            synchronized(lock) {
+                val rootKey = LegacyHttpUrl.requestObservableKey(rootLegacyUri)
+                graphByRootLegacyUri[rootKey]
+                    ?.let(graphs::get)
+                    ?.also { existing ->
+                        pending +=
+                            PendingEvent.RootUsed(
+                                ResourceRegistryRoot(existing.id, existing.rootLegacyUri),
+                            )
+                    }
+                    ?: NavigationResourceGraph(
+                        id = nextId.getAndIncrement(),
+                        rootLegacyUri = rootLegacyUri,
+                        maxNodes = maxNodesPerContext,
+                        maxEdges = maxEdgesPerContext,
+                    ).also { created ->
+                        graphs[created.id] = created
+                        graphByRootLegacyUri[rootKey] = created.id
+                        associateLocked(rootLegacyUri, created.id)
+                        val root = ResourceRegistryRoot(created.id, rootLegacyUri)
+                        pending += PendingEvent.RootAdded(root)
+                        pending += PendingEvent.RootUsed(root)
+                    }
             }
-            NavigationResourceGraph(
-                id = nextId.getAndIncrement(),
-                rootLegacyUri = rootLegacyUri,
-                maxNodes = maxNodesPerContext,
-                maxEdges = maxEdgesPerContext,
-            ).also { graph ->
-                graphs[graph.id] = graph
-                associateLocked(rootLegacyUri, graph.id)
-                val root = ResourceRegistryRoot(graph.id, rootLegacyUri)
-                pending += PendingEvent.RootAdded(root)
-                pending += PendingEvent.RootUsed(root)
-            }
-        }
         pending.forEach { it.fire(hooks) }
         return graph
     }
@@ -345,26 +352,6 @@ internal class NavigationResourceRegistry(
 
     fun snapshots(): List<NavigationResourceGraphSnapshot> =
         synchronized(lock) { graphs.values.map { it.snapshot() } }
-
-    private fun evictOldestLocked(pending: MutableList<PendingEvent>) {
-        val oldestId = graphs.keys.firstOrNull() ?: return
-        val removed = graphs.remove(oldestId) ?: return
-        val removedSnapshot = removed.snapshot()
-        pending += PendingEvent.RootRemoved(
-            ResourceRegistryRoot(removedSnapshot.id, removedSnapshot.rootLegacyUri),
-        )
-        removedSnapshot.nodes.forEach { resource ->
-            pending += PendingEvent.ResourceRemoved(
-                ResourceRegistryResource(removedSnapshot.id, removedSnapshot.rootLegacyUri, resource.legacyUri),
-            )
-        }
-        val iterator = contextByLegacyUri.entries.iterator()
-        while (iterator.hasNext()) {
-            val entry = iterator.next()
-            entry.value.remove(oldestId)
-            if (entry.value.isEmpty()) iterator.remove()
-        }
-    }
 
     private fun associateLocked(uri: URI, graphId: Long) {
         contextByLegacyUri
