@@ -344,6 +344,7 @@ internal class NavigationResourceRegistry(
     ) {
         val pending = mutableListOf<PendingEvent>()
         synchronized(lock) {
+            if (graphs[graph.id] !== graph) return
             val wasKnown = graph.contains(childLegacyUri)
             if (graph.discover(parentLegacyUri, childLegacyUri, upstreamUri, relation, kind)) {
                 touchLocked(graph.id)
@@ -359,6 +360,20 @@ internal class NavigationResourceRegistry(
             }
         }
         pending.forEach { it.fire(hooks) }
+    }
+
+    fun markFetched(
+        graph: NavigationResourceGraph,
+        legacyUri: URI,
+        upstreamUri: URI,
+        contentBase: URI?,
+        state: ResourceState,
+    ) {
+        synchronized(lock) {
+            if (graphs[graph.id] !== graph) return
+            touchLocked(graph.id)
+            graph.markFetched(legacyUri, upstreamUri, contentBase, state)
+        }
     }
 
     fun snapshots(): List<NavigationResourceGraphSnapshot> =
