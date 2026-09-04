@@ -26,6 +26,22 @@ class HttpRequestDecoderTest {
     }
 
     @Test
+    fun `finds header delimiter incrementally across one byte payloads`() {
+        val decoder = HttpRequestDecoder(maxRequestBytes = 1024)
+        val request = "GET /split HTTP/1.0\r\nHost: example.test\r\n\r\n"
+            .toByteArray(StandardCharsets.US_ASCII)
+
+        var result: HttpRequestDecodeResult = HttpRequestDecodeResult.NeedMoreData
+        request.forEach { byte ->
+            result = decoder.accept(byteArrayOf(byte))
+        }
+
+        val complete = assertIs<HttpRequestDecodeResult.Complete>(result)
+        assertEquals("/split", complete.request.target)
+        assertEquals("example.test", complete.request.headers.single().second)
+    }
+
+    @Test
     fun `requests 100 continue only once while waiting for body`() {
         val decoder = HttpRequestDecoder(maxRequestBytes = 1024)
         val headers =
