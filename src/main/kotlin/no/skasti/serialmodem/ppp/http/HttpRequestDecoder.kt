@@ -21,6 +21,7 @@ internal class HttpRequestDecoder(
     private val buffer = ByteArrayOutputStream()
     private var continueEmitted = false
     private var complete = false
+    private var parsedRequest: ParsedRequestMetadata? = null
 
     val bufferedBytes: Int
         get() = buffer.size()
@@ -62,40 +63,59 @@ internal class HttpRequestDecoder(
     }
 
     private fun inspect(): HttpRequestDecodeResult {
-        val bytes = buffer.toByteArray()
-        val headerEnd = findHeaderEnd(bytes)
-        if (headerEnd < 0) return HttpRequestDecodeResult.NeedMoreData
+        val metadata =
+            parsedRequest
+                ?: run {
+                    val bytes = buffer.toByteArray()
+                    val headerEnd = findHeaderEnd(bytes)
+                    if (headerEnd < 0) return HttpRequestDecodeResult.NeedMoreData
 
-        val parsedHeaders = parseHeaders(bytes, headerEnd)
-            ?: return reject(400, "Bad Request", "Malformed HTTP request headers")
+                    val parsedHeaders =
+                        parseHeaders(bytes, headerEnd)
+                            ?: return reject(400, "Bad Request", "Malformed HTTP request headers")
+                    val expectation = expectationDisposition(parsedHeaders.headers)
+                    if (expectation == ExpectationDisposition.UNSUPPORTED) {
+                        return reject(417, "Expectation Failed", "Unsupported HTTP Expect header")
+                    }
 
-        val expectation = expectationDisposition(parsedHeaders.headers)
-        if (expectation == ExpectationDisposition.UNSUPPORTED) {
-            return reject(417, "Expectation Failed", "Unsupported HTTP Expect header")
-        }
+                    val contentLengthResult = contentLength(parsedHeaders.headers)
+                    if (contentLengthResult is ContentLengthResult.Invalid) {
+                        return reject(400, "Bad Request", contentLengthResult.message)
+                    }
+                    val contentLength = (contentLengthResult as ContentLengthResult.Valid).bytes
+                    val totalLength = headerEnd + HEADER_DELIMITER.size + contentLength
+                    if (totalLength > maxRequestBytes) {
+                        return reject(413, "Content Too Large", "HTTP request body exceeds compatibility limit")
+                    }
+                    ParsedRequestMetadata(
+                        headerEnd = headerEnd,
+                        parsedHeaders = parsedHeaders,
+                        contentLength = contentLength,
+                        totalLength = totalLength,
+                        expectation = expectation,
+                    ).also { parsedRequest = it }
+                }
 
-        val contentLengthResult = contentLength(parsedHeaders.headers)
-        if (contentLengthResult is ContentLengthResult.Invalid) {
-            return reject(400, "Bad Request", contentLengthResult.message)
-        }
-        val contentLength = (contentLengthResult as ContentLengthResult.Valid).bytes
-        val totalLength = headerEnd + HEADER_DELIMITER.size + contentLength
-        if (totalLength > maxRequestBytes) {
-            return reject(413, "Content Too Large", "HTTP request body exceeds compatibility limit")
-        }
-        if (bytes.size > totalLength) {
+        val buffered = buffer.size()
+        if (buffered > metadata.totalLength) {
             return reject(400, "Bad Request", "HTTP pipelining is not supported by compatibility mode")
         }
-        if (bytes.size < totalLength) {
-            if (expectation == ExpectationDisposition.CONTINUE && !continueEmitted) {
+        if (buffered < metadata.totalLength) {
+            if (metadata.expectation == ExpectationDisposition.CONTINUE && !continueEmitted) {
                 continueEmitted = true
                 return HttpRequestDecodeResult.ContinueRequired
             }
             return HttpRequestDecodeResult.NeedMoreData
         }
 
-        val request = parseCompleteRequest(bytes, headerEnd, parsedHeaders, contentLength)
-            ?: return reject(400, "Bad Request", "Malformed HTTP request")
+        val bytes = buffer.toByteArray()
+        val request =
+            parseCompleteRequest(
+                bytes,
+                metadata.headerEnd,
+                metadata.parsedHeaders,
+                metadata.contentLength,
+            ) ?: return reject(400, "Bad Request", "Malformed HTTP request")
         complete = true
         return HttpRequestDecodeResult.Complete(request)
     }
@@ -191,6 +211,14 @@ internal class HttpRequestDecoder(
     private data class ParsedHeaders(
         val requestLine: String,
         val headers: List<Pair<String, String>>,
+    )
+
+    private data class ParsedRequestMetadata(
+        val headerEnd: Int,
+        val parsedHeaders: ParsedHeaders,
+        val contentLength: Int,
+        val totalLength: Int,
+        val expectation: ExpectationDisposition,
     )
 
     private sealed interface ContentLengthResult {
