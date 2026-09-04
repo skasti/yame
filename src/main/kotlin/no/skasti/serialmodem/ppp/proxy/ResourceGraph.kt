@@ -32,6 +32,8 @@ internal enum class ResourceRelation(val role: ReferenceRole) {
 internal enum class ResourceState {
     DISCOVERED,
     FETCHING,
+    SOURCE_READY,
+    TRANSFORMING,
     READY,
     FAILED,
 }
