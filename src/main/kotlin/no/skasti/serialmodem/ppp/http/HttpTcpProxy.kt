@@ -315,7 +315,7 @@ internal class HttpTcpProxy(
     private fun finishFlow(state: FlowState) {
         if (!isActive(state)) return
         safeCallback(state.onEvent, TcpProxyEvent.EndOfStream)
-        removeFlow(state)
+        removeFlow(state, cancelTask = false)
     }
 
     private fun isActive(state: FlowState): Boolean =
@@ -324,14 +324,17 @@ internal class HttpTcpProxy(
             state.flow.generation >= minimumGeneration.get() &&
             flows[state.flow] === state
 
-    private fun removeFlow(state: FlowState): Boolean {
+    private fun removeFlow(
+        state: FlowState,
+        cancelTask: Boolean = true,
+    ): Boolean {
         if (!flows.remove(state.flow, state)) return false
         state.cancelled = true
         synchronized(state.readMonitor) {
             state.readsPaused = false
             state.readMonitor.notifyAll()
         }
-        state.task?.cancel(true)
+        if (cancelTask) state.task?.cancel(true)
         handler.connectionClosed(state.flow)
         releaseSlot(state)
         return true
