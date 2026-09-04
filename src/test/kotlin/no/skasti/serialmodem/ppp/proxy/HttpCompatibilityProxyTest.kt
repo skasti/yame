@@ -945,7 +945,7 @@ class HttpCompatibilityProxyTest {
         try {
             proxy.connect(flow) { event ->
                 if (event is TcpProxyEvent.Payload && stateAtFirstPayload.isEmpty()) {
-                    proxy.resourceGraphSnapshots(flow)
+                    proxy.resourceGraphSnapshots()
                         .singleOrNull()
                         ?.nodes
                         ?.singleOrNull { it.legacyUri.path == "/page" }
@@ -1172,7 +1172,7 @@ class HttpCompatibilityProxyTest {
             assertTrue(response.contains("src=\"frame.html\""), response)
             assertTrue(response.contains("src=\"/img.gif\""), response)
 
-            val graph = proxy.resourceGraphSnapshots(flow).single()
+            val graph = proxy.resourceGraphSnapshots().single()
             val frameLegacy = URI("http://127.0.0.1:${server.localPort}/pages/frame.html")
             val imageLegacy = URI("http://127.0.0.1:${server.localPort}/img.gif")
             assertTrue(graph.nodes.any { it.legacyUri == frameLegacy && it.kind == ResourceKind.FRAME })
@@ -1212,7 +1212,49 @@ class HttpCompatibilityProxyTest {
             ).getOrThrow()
 
             collectResponse(events)
-            assertTrue(proxy.resourceGraphSnapshots(flow).isEmpty())
+            assertTrue(proxy.resourceGraphSnapshots().isEmpty())
+        } finally {
+            proxy.close()
+            runCatching { server.close() }
+            thread.join(2_000)
+        }
+    }
+
+    @Test
+    fun `resource graph survives PPP generation invalidation`() {
+        val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val body = "<html><img src=\"persistent.gif\"></html>"
+        val thread = serveOnce(server) {
+            "HTTP/1.1 200 OK\r\n" +
+                "Content-Type: text/html; charset=utf-8\r\n" +
+                "Content-Length: ${body.toByteArray(StandardCharsets.UTF_8).size}\r\n" +
+                "Connection: close\r\n\r\n" +
+                body
+        }
+        val proxy = SystemHttpCompatibilityProxy(
+            config = PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000),
+        )
+        val events = LinkedBlockingQueue<TcpProxyEvent>()
+        val flow = httpFlow(peerPort = 2290)
+
+        try {
+            proxy.connect(flow, events::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(events.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                flow,
+                ("GET /persistent HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\n\r\n")
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+            collectResponse(events)
+
+            val beforeReconnect = proxy.resourceGraphSnapshots().single()
+            assertTrue(beforeReconnect.edges.any { it.relation == ResourceRelation.IMG_SRC })
+
+            proxy.invalidateBefore(flow.generation + 1)
+
+            val afterReconnect = proxy.resourceGraphSnapshots().single()
+            assertEquals(beforeReconnect.id, afterReconnect.id)
+            assertEquals(beforeReconnect, afterReconnect)
         } finally {
             proxy.close()
             runCatching { server.close() }
@@ -1247,7 +1289,7 @@ class HttpCompatibilityProxyTest {
             ).getOrThrow()
 
             collectResponse(events)
-            val graph = proxy.resourceGraphSnapshots(flow).single()
+            val graph = proxy.resourceGraphSnapshots().single()
             assertEquals(URI("http://127.0.0.1:${server.localPort}/missing"), graph.rootLegacyUri)
             assertTrue(graph.edges.any { it.relation == ResourceRelation.IMG_SRC })
         } finally {
@@ -1284,7 +1326,7 @@ class HttpCompatibilityProxyTest {
             ).getOrThrow()
 
             collectResponse(events)
-            val graph = proxy.resourceGraphSnapshots(flow).single()
+            val graph = proxy.resourceGraphSnapshots().single()
             assertTrue(graph.edges.any { it.relation == ResourceRelation.BASE_HREF })
             assertTrue(
                 graph.nodes.any { it.legacyUri == URI("http://127.0.0.1:${server.localPort}/assets/logo.gif") },
@@ -1346,7 +1388,7 @@ class HttpCompatibilityProxyTest {
             ).getOrThrow()
             collectResponse(cssEvents)
 
-            val graph = proxy.resourceGraphSnapshots(pageFlow).single()
+            val graph = proxy.resourceGraphSnapshots().single()
             val theme = URI("http://127.0.0.1:${server.localPort}/theme.css")
             assertTrue(graph.edges.any { it.childLegacyUri == theme && it.relation == ResourceRelation.CSS_IMPORT })
             assertEquals(ResourceKind.STYLESHEET, graph.nodes.single { it.legacyUri == theme }.kind)
