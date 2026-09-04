@@ -64,6 +64,21 @@ class HttpRequestDecoderTest {
     }
 
     @Test
+    fun `rejects unterminated headers when request limit is exactly full`() {
+        val request = "GET / HTTP/1.0\r\nHost: example.test\r\nX-Fill: "
+        val maxBytes = request.toByteArray(StandardCharsets.US_ASCII).size + 8
+        val decoder = HttpRequestDecoder(maxRequestBytes = maxBytes)
+        val payload =
+            (request + "12345678")
+                .toByteArray(StandardCharsets.US_ASCII)
+
+        assertEquals(maxBytes, payload.size)
+        val rejected = assertIs<HttpRequestDecodeResult.Rejected>(decoder.accept(payload))
+        assertEquals(413, rejected.status)
+        assertEquals(0, decoder.availableCapacity)
+    }
+
+    @Test
     fun `rejects unsupported expectation`() {
         val decoder = HttpRequestDecoder(maxRequestBytes = 1024)
         val result =
