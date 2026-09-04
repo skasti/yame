@@ -202,7 +202,7 @@ internal class HttpRequestDecoder(
 
     private companion object {
         val HEADER_DELIMITER = "\r\n\r\n".toByteArray(StandardCharsets.US_ASCII)
-        val METHOD_PATTERN = Regex("[A-Z!#$%&'*+.^_\`|~-]+")
-        val HEADER_NAME_PATTERN = Regex("[!#$%&'*+.^_\`|~0-9A-Za-z-]+")
+        val METHOD_PATTERN = Regex("""[A-Z!#$%&\'*+.^_`|~-]+""")
+        val HEADER_NAME_PATTERN = Regex("""[!#$%&\'*+.^_`|~0-9A-Za-z-]+""")
     }
 }
