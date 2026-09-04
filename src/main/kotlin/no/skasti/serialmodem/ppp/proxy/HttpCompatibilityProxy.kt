@@ -84,16 +84,15 @@ internal class SystemHttpCompatibilityProxy(
     )
 
     private data class LegacyRequest(val method: String, val target: String, val headers: List<Pair<String, String>>, val body: ByteArray)
-    private sealed interface FinalResponseBody {
-        data class Buffered(val bytes: ByteArray) : FinalResponseBody
-        data class Streaming(val input: InputStream) : FinalResponseBody
-    }
+    // Compatibility responses are deliberately fully acquired before they cross the
+    // slow legacy boundary. Keep the body as owned bytes here: introducing a streaming
+    // body would couple upstream HTTP progress to TCP/PPP/serial backpressure again.
     private data class FinalResponse(
         val legacyUri: URI,
         val uri: URI,
         val statusCode: Int,
         val headers: Map<String, List<String>>,
-        val body: FinalResponseBody,
+        val body: ByteArray,
         val contentLength: Long?,
         val exposeCookies: Boolean,
         val locationAlreadyLegacy: Boolean = false,
@@ -472,7 +471,7 @@ internal class SystemHttpCompatibilityProxy(
                         uri = uri,
                         statusCode = status,
                         headers = response.headers().map().withHeader("location", legacyNext.toString()),
-                        body = FinalResponseBody.Buffered(ByteArray(0)),
+                        body = ByteArray(0),
                         contentLength = 0,
                         exposeCookies = sameOrigin(originalUri, uri),
                         locationAlreadyLegacy = true,
@@ -500,7 +499,7 @@ internal class SystemHttpCompatibilityProxy(
             val responseBody =
                 if (preservesRepresentationLength) {
                     response.body().close()
-                    FinalResponseBody.Buffered(ByteArray(0))
+                    ByteArray(0)
                 } else {
                     if (upstreamContentLength > config.maxResponseBytes.toLong()) {
                         response.body().close()
@@ -508,9 +507,9 @@ internal class SystemHttpCompatibilityProxy(
                             "Upstream response is $upstreamContentLength bytes; limit is ${config.maxResponseBytes}",
                         )
                     }
-                    FinalResponseBody.Buffered(
-                        response.body().use { input -> readBounded(state, input, config.maxResponseBytes) },
-                    )
+                    response.body().use { input ->
+                        readBounded(state, input, config.maxResponseBytes)
+                    }
                 }
             val navigationLikeResponse = responseEstablishesNavigationOrigin(method, status, responseHeaders)
             when {
@@ -541,9 +540,7 @@ internal class SystemHttpCompatibilityProxy(
                 contentLength =
                     when {
                         preservesRepresentationLength && upstreamContentLength >= 0L -> upstreamContentLength
-                        responseBody is FinalResponseBody.Buffered -> responseBody.bytes.size.toLong()
-                        upstreamContentLength >= 0L -> upstreamContentLength
-                        else -> null
+                        else -> responseBody.size.toLong()
                     },
                 exposeCookies = sameOrigin(originalUri, uri),
                 effectiveBaseUri =
@@ -574,40 +571,50 @@ internal class SystemHttpCompatibilityProxy(
                 legacyUri = response.legacyUri,
                 upstreamUri = response.uri,
                 contentBase = response.effectiveBaseUri ?: response.uri,
-                state = ResourceState.FETCHING,
+                state = ResourceState.SOURCE_READY,
             )
         }
         try {
-            val bufferedBody = (response.body as? FinalResponseBody.Buffered)?.bytes
-            val transformedRepresentation =
-                bufferedBody?.let {
-                    rewriteLegacyRepresentation(
-                        flow = state.flow,
-                        session = state.session,
-                        graphs = resourceGraphs,
-                        parentLegacyUri = response.legacyUri,
-                        upstreamUri = response.uri,
-                        statusCode = response.statusCode,
-                        requestHeaders = response.requestHeaders,
-                        headers = response.headers,
-                        body = it,
-                        resolutionBaseUri = response.effectiveBaseUri ?: response.uri,
-                        forceAbsoluteRelativeReferences = response.effectiveBaseUri != null,
-                        referenceRole = response.referenceRole,
-                        requestMethod = response.requestMethod,
-                    )
-                }
-            val transformedHeaders = transformedRepresentation?.headers ?: response.headers
-            val legacyHeaders = rewriteLegacyHeaders(state.flow, transformedHeaders, response.locationAlreadyLegacy)
-            val legacyBody = transformedRepresentation?.body
-            val bodyRewritten = bufferedBody != null && legacyBody != null && !legacyBody.contentEquals(bufferedBody)
+            resourceGraphs.forEach { graph ->
+                graph.markFetched(
+                    legacyUri = response.legacyUri,
+                    upstreamUri = response.uri,
+                    contentBase = response.effectiveBaseUri ?: response.uri,
+                    state = ResourceState.TRANSFORMING,
+                )
+            }
+            val preparedResource =
+                prepareLegacyResource(
+                    flow = state.flow,
+                    session = state.session,
+                    graphs = resourceGraphs,
+                    parentLegacyUri = response.legacyUri,
+                    upstreamUri = response.uri,
+                    statusCode = response.statusCode,
+                    requestHeaders = response.requestHeaders,
+                    headers = response.headers,
+                    body = response.body,
+                    resolutionBaseUri = response.effectiveBaseUri ?: response.uri,
+                    forceAbsoluteRelativeReferences = response.effectiveBaseUri != null,
+                    referenceRole = response.referenceRole,
+                    requestMethod = response.requestMethod,
+                )
+            val sourceRepresentation = preparedResource.source
+            val clientRepresentation = preparedResource.representation
+            val legacyHeaders =
+                rewriteLegacyHeaders(
+                    state.flow,
+                    clientRepresentation.headers,
+                    response.locationAlreadyLegacy,
+                )
+            val legacyBody = clientRepresentation.body
+            val bodyRewritten = !legacyBody.contentEquals(sourceRepresentation.body)
             val rewritten = legacyHeaders != response.headers || bodyRewritten
         val contentLength =
             when {
-                bufferedBody != null && response.contentLength != null &&
-                    response.contentLength != bufferedBody.size.toLong() -> response.contentLength
-                legacyBody != null -> legacyBody.size.toLong()
-                else -> response.contentLength
+                response.contentLength != null &&
+                    response.contentLength != response.body.size.toLong() -> response.contentLength
+                else -> legacyBody.size.toLong()
             }
         val nominated = connectionNominatedHeaders(legacyHeaders.flatMap { (name, values) -> values.map { name to it } })
         val head = buildString {
@@ -635,39 +642,25 @@ internal class SystemHttpCompatibilityProxy(
             "${response.statusCode} ${response.uri} · $sizeDescription · TLS hidden" +
                 if (rewritten) " · HTTPS links rewritten" else "",
         )
+        // READY means the complete client representation exists locally. Mark it
+        // before emitting even the HTTP response head so slow client delivery cannot
+        // be confused with resource acquisition/transformation.
+        resourceGraphs.forEach { graph ->
+            graph.markFetched(
+                legacyUri = response.legacyUri,
+                upstreamUri = response.uri,
+                contentBase = response.effectiveBaseUri ?: response.uri,
+                state = ResourceState.READY,
+            )
+        }
         state.responseStarted = true
         emitBytes(state, head)
-        when (val body = response.body) {
-            is FinalResponseBody.Buffered -> {
-                val bytes = requireNotNull(legacyBody)
-                var offset = 0
-                while (offset < bytes.size) {
-                    val end = minOf(offset + RESPONSE_CHUNK_BYTES, bytes.size)
-                    emitBytes(state, bytes.copyOfRange(offset, end))
-                    offset = end
-                }
-            }
-            is FinalResponseBody.Streaming -> {
-                body.input.use { input ->
-                    val buffer = ByteArray(RESPONSE_CHUNK_BYTES)
-                    while (true) {
-                        ensureActive(state)
-                        val count = input.read(buffer)
-                        if (count < 0) break
-                        if (count == 0) continue
-                        emitBytes(state, buffer.copyOf(count))
-                    }
-                }
-            }
+        var offset = 0
+        while (offset < legacyBody.size) {
+            val end = minOf(offset + RESPONSE_CHUNK_BYTES, legacyBody.size)
+            emitBytes(state, legacyBody.copyOfRange(offset, end))
+            offset = end
         }
-            resourceGraphs.forEach { graph ->
-                graph.markFetched(
-                    legacyUri = response.legacyUri,
-                    upstreamUri = response.uri,
-                    contentBase = response.effectiveBaseUri ?: response.uri,
-                    state = ResourceState.READY,
-                )
-            }
             finishFlow(state)
         } catch (error: Throwable) {
             resourceGraphs.forEach { graph ->
@@ -697,7 +690,7 @@ internal class SystemHttpCompatibilityProxy(
             }
         }
 
-    private fun rewriteLegacyRepresentation(
+    private fun prepareLegacyResource(
         flow: TcpProxyFlow,
         session: SessionState,
         graphs: List<NavigationResourceGraph>,
@@ -711,7 +704,7 @@ internal class SystemHttpCompatibilityProxy(
         forceAbsoluteRelativeReferences: Boolean,
         referenceRole: ReferenceRole,
         requestMethod: String,
-    ): ResourceRepresentation {
+    ): Resource {
         val source =
             Resource(
                 upstreamUri = upstreamUri,
@@ -721,7 +714,7 @@ internal class SystemHttpCompatibilityProxy(
                     body = body,
                 ),
             )
-        if (statusCode == 206) return source.representation
+        if (statusCode == 206) return source
 
         val context =
             ResourceTransformationContext(
@@ -755,7 +748,7 @@ internal class SystemHttpCompatibilityProxy(
 
         val cacheEligible = requestMethod.equals("GET", ignoreCase = true) && statusCode != 304
         if (!cacheEligible) {
-            return resourceTransformations.transform(context, source).resource.representation
+            return resourceTransformations.transform(context, source).resource
         }
 
         val cacheKey =
@@ -766,7 +759,7 @@ internal class SystemHttpCompatibilityProxy(
             )
         val fingerprint = sourceFingerprint(source.source)
         resourceCache.getIfSourceFingerprint(cacheKey, fingerprint)
-            ?.let { return it.resource.representation }
+            ?.let { return it.resource }
 
         val workKey =
             ResourceWorkKey(
@@ -797,7 +790,7 @@ internal class SystemHttpCompatibilityProxy(
                 produced
             }
 
-        return transformed.resource.representation
+        return transformed.resource
     }
 
     private fun resourceKindForResponse(
