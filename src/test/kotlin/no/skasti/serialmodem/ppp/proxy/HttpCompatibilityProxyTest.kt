@@ -479,7 +479,12 @@ class HttpCompatibilityProxyTest {
                 redirect,
             )
         } finally {
-            proxy.close()
+            try {
+                proxy.close()
+            } catch (error: Throwable) {
+                error.printStackTrace()
+                throw error
+            }
             runCatching { server.close() }
             thread.join(2_000)
         }
