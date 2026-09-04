@@ -9,6 +9,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.FutureTask
 import java.util.concurrent.Semaphore
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -203,6 +204,7 @@ internal class HttpTcpProxy(
         response: HttpResponse,
     ): Result<Unit> =
         schedule(state) {
+            state.interimTask?.let { runCatching { it.get() } }
             emitResponse(state, response)
         }
 
@@ -212,23 +214,40 @@ internal class HttpTcpProxy(
     ): Result<Unit> {
         return try {
             val task =
-                executor.submit {
-                    try {
-                        work()
-                        finishFlow(state)
-                    } catch (error: Throwable) {
-                        if (isActive(state)) {
-                            removeFlow(state)
-                            safeCallback(state.onEvent, TcpProxyEvent.Failure(error))
+                object : FutureTask<Unit>(
+                    java.util.concurrent.Callable {
+                        try {
+                            work()
+                            finishFlow(state)
+                        } catch (error: Throwable) {
+                            if (isActive(state)) {
+                                removeFlow(state)
+                                safeCallback(state.onEvent, TcpProxyEvent.Failure(error))
+                            }
+                        } finally {
+                            synchronized(state) {
+                                state.processing = false
+                            }
                         }
-                    } finally {
-                        synchronized(state) {
-                            state.processing = false
-                            state.task = null
+                    },
+                ) {
+                    override fun run() {
+                        try {
+                            super.run()
+                        } finally {
+                            synchronized(state) {
+                                if (state.task === this) {
+                                    state.task = null
+                                }
+                            }
+                            if (flows[state.flow] !== state) {
+                                releaseSlot(state)
+                            }
                         }
                     }
                 }
             state.task = task
+            executor.execute(task)
             if (!isActive(state)) task.cancel(true)
             Result.success(Unit)
         } catch (error: Throwable) {
@@ -368,7 +387,9 @@ internal class HttpTcpProxy(
             state.interimTask?.cancel(true)
         }
         handler.connectionClosed(state.flow)
-        releaseSlot(state)
+        if (state.task == null) {
+            releaseSlot(state)
+        }
         return true
     }
 
@@ -411,9 +432,15 @@ internal class HttpTcpProxy(
         flows.values.toList().forEach(::removeFlow)
         handler.close()
         executor.shutdownNow()
+        try {
+            executor.awaitTermination(SHUTDOWN_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
     }
 
     private companion object {
         const val DEFAULT_RESPONSE_CHUNK_BYTES = 4_096
+        const val SHUTDOWN_TIMEOUT_MILLIS = 2_000L
     }
 }
