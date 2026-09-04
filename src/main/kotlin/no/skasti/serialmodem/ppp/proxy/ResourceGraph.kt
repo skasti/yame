@@ -71,6 +71,12 @@ internal data class ResourceRegistryResource(
     val resourceLegacyUri: URI,
 )
 
+internal data class ResourceFetchAttempt(
+    val graphId: Long,
+    val legacyUri: URI,
+    val id: Long,
+)
+
 internal class ResourceRegistryEvent<T>(
     private val dispatch: ((() -> Unit) -> Unit),
 ) {
@@ -284,9 +290,15 @@ internal class NavigationResourceRegistry(
     }
 
     private val lock = Any()
+    private data class FetchResourceKey(
+        val graphId: Long,
+        val legacyKey: String,
+    )
+
     private val graphs = linkedMapOf<Long, NavigationResourceGraph>()
     private val graphByRootLegacyUri = mutableMapOf<String, Long>()
     private val contextByLegacyUri = mutableMapOf<String, LinkedHashSet<Long>>()
+    private val currentFetchAttempt = mutableMapOf<FetchResourceKey, Long>()
 
     fun startNavigation(rootLegacyUri: URI): NavigationResourceGraph {
         val pending = mutableListOf<PendingEvent>()
@@ -362,6 +374,51 @@ internal class NavigationResourceRegistry(
         pending.forEach { it.fire(hooks) }
     }
 
+    fun beginFetch(
+        graph: NavigationResourceGraph,
+        legacyUri: URI,
+        upstreamUri: URI,
+        contentBase: URI?,
+    ): ResourceFetchAttempt? =
+        synchronized(lock) {
+            if (graphs[graph.id] !== graph) return@synchronized null
+            val attempt =
+                ResourceFetchAttempt(
+                    graphId = graph.id,
+                    legacyUri = legacyUri,
+                    id = nextFetchAttemptId.getAndIncrement(),
+                )
+            currentFetchAttempt[fetchKey(graph.id, legacyUri)] = attempt.id
+            touchLocked(graph.id)
+            graph.markFetched(legacyUri, upstreamUri, contentBase, ResourceState.FETCHING)
+            attempt
+        }
+
+    fun markFetchState(
+        graph: NavigationResourceGraph,
+        attempt: ResourceFetchAttempt,
+        legacyUri: URI,
+        upstreamUri: URI,
+        contentBase: URI?,
+        state: ResourceState,
+    ): Boolean =
+        synchronized(lock) {
+            if (graphs[graph.id] !== graph) return@synchronized false
+            if (attempt.graphId != graph.id) return@synchronized false
+            val key = fetchKey(graph.id, legacyUri)
+            if (LegacyHttpUrl.requestObservableKey(attempt.legacyUri) != key.legacyKey) {
+                return@synchronized false
+            }
+            if (currentFetchAttempt[key] != attempt.id) return@synchronized false
+
+            touchLocked(graph.id)
+            graph.markFetched(legacyUri, upstreamUri, contentBase, state)
+            if (state == ResourceState.READY || state == ResourceState.FAILED) {
+                currentFetchAttempt.remove(key, attempt.id)
+            }
+            true
+        }
+
     fun markFetched(
         graph: NavigationResourceGraph,
         legacyUri: URI,
@@ -402,7 +459,14 @@ internal class NavigationResourceRegistry(
             entry.value.remove(oldestId)
             if (entry.value.isEmpty()) iterator.remove()
         }
+        currentFetchAttempt.keys.removeIf { it.graphId == oldestId }
     }
+
+    private fun fetchKey(
+        graphId: Long,
+        legacyUri: URI,
+    ): FetchResourceKey =
+        FetchResourceKey(graphId, LegacyHttpUrl.requestObservableKey(legacyUri))
 
     private fun associateLocked(uri: URI, graphId: Long) {
         contextByLegacyUri
@@ -412,5 +476,6 @@ internal class NavigationResourceRegistry(
 
     private companion object {
         val nextId = AtomicLong(1)
+        val nextFetchAttemptId = AtomicLong(1)
     }
 }
