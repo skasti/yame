@@ -325,9 +325,13 @@ internal class NavigationResourceRegistry(
 
     fun contextsFor(legacyUri: URI): List<NavigationResourceGraph> =
         synchronized(lock) {
-            contextByLegacyUri[LegacyHttpUrl.requestObservableKey(legacyUri)]
-                ?.mapNotNull(graphs::get)
-                .orEmpty()
+            val graphIds =
+                contextByLegacyUri[LegacyHttpUrl.requestObservableKey(legacyUri)]
+                    ?.toList()
+                    .orEmpty()
+            val result = graphIds.mapNotNull(graphs::get)
+            graphIds.forEach(::touchLocked)
+            result
         }
 
     fun discover(
