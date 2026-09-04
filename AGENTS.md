@@ -18,6 +18,10 @@ The HTTP compatibility proxy has deliberately pragmatic goals:
   to the legacy client. The compatibility proxy is a store/transform/serve
   boundary: TCP/PPP/serial backpressure from the legacy side must never throttle
   an in-progress upstream HTTP body read;
+- keep TCP byte-stream handling and HTTP semantics in separate layers:
+  `HttpTcpProxy` owns incremental HTTP decoding/encoding and connection-level
+  backpressure, while compatibility/resource code implements `HttpRequestHandler`
+  and must not consume or emit `TcpProxyEvent` directly;
 - retain the complete upstream source representation separately from any
   client-visible transformed representation. A resource is `READY` when the
   complete client representation exists locally, before downstream delivery begins;
