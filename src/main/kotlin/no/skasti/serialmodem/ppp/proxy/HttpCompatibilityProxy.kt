@@ -574,6 +574,7 @@ internal class SystemHttpCompatibilityProxy(
                 state = ResourceState.SOURCE_READY,
             )
         }
+        var resourceReady = false
         try {
             resourceGraphs.forEach { graph ->
                 graph.markFetched(
@@ -631,7 +632,7 @@ internal class SystemHttpCompatibilityProxy(
             append("Connection: close\r\n\r\n")
         }.toByteArray(StandardCharsets.ISO_8859_1)
         val rewriteSuffix = if (rewritten) ", HTTPS references rewritten for legacy client" else ""
-        val sizeDescription = contentLength?.let { "$it bytes" } ?: "streaming response"
+        val sizeDescription = "$contentLength bytes"
         logger(
             "HTTP compatibility <= ${response.statusCode} ${response.uri} " +
                 "($sizeDescription, TLS hidden from peer$rewriteSuffix)",
@@ -653,6 +654,7 @@ internal class SystemHttpCompatibilityProxy(
                 state = ResourceState.READY,
             )
         }
+        resourceReady = true
         state.responseStarted = true
         emitBytes(state, head)
         var offset = 0
@@ -663,13 +665,15 @@ internal class SystemHttpCompatibilityProxy(
         }
             finishFlow(state)
         } catch (error: Throwable) {
-            resourceGraphs.forEach { graph ->
-                graph.markFetched(
-                    legacyUri = response.legacyUri,
-                    upstreamUri = response.uri,
-                    contentBase = response.effectiveBaseUri ?: response.uri,
-                    state = ResourceState.FAILED,
-                )
+            if (!resourceReady) {
+                resourceGraphs.forEach { graph ->
+                    graph.markFetched(
+                        legacyUri = response.legacyUri,
+                        upstreamUri = response.uri,
+                        contentBase = response.effectiveBaseUri ?: response.uri,
+                        state = ResourceState.FAILED,
+                    )
+                }
             }
             throw error
         }
