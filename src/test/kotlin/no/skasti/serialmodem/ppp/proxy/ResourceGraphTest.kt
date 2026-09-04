@@ -110,6 +110,26 @@ class ResourceGraphTest {
     }
 
     @Test
+    fun `registry evicts least recently used graph when global limit is reached`() {
+        val hooks = ResourceRegistryHooks()
+        val removed = mutableListOf<ResourceRegistryRoot>()
+        hooks.onRootRemoved += removed::add
+        val registry = NavigationResourceRegistry(maxContexts = 2, hooks = hooks)
+        val firstRoot = URI("http://legacy.test/one")
+        val secondRoot = URI("http://legacy.test/two")
+        val thirdRoot = URI("http://legacy.test/three")
+        val first = registry.startNavigation(firstRoot)
+        registry.startNavigation(secondRoot)
+
+        // Reusing the first root makes the second graph the LRU candidate.
+        assertEquals(first.id, registry.startNavigation(firstRoot).id)
+        registry.startNavigation(thirdRoot)
+
+        assertEquals(setOf(firstRoot, thirdRoot), registry.snapshots().map { it.rootLegacyUri }.toSet())
+        assertEquals(listOf(secondRoot), removed.map { it.rootLegacyUri })
+    }
+
+    @Test
     fun `graph bounds nodes and edges and does not index dropped resources`() {
         val registry = NavigationResourceRegistry(
             maxNodesPerContext = 2,
