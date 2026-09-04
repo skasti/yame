@@ -127,7 +127,7 @@ internal class SystemHttpCompatibilityHandler(
         state: FlowState,
         request: LegacyHttpRequest,
     ): LegacyHttpResponse {
-        var fetchGraphs: List<NavigationResourceGraph> = emptyList()
+        var fetchAttempts: Map<NavigationResourceGraph, ResourceFetchAttempt> = emptyMap()
         var fetchLegacyUri: URI? = null
         var fetchUpstreamUri: URI? = null
         try {
@@ -136,16 +136,16 @@ internal class SystemHttpCompatibilityHandler(
             val upstreamUri = originRoutes.resolve(state.flow, legacyUri)
             fetchLegacyUri = legacyUri
             fetchUpstreamUri = upstreamUri
-            fetchGraphs = resourceGraphs.contextsFor(legacyUri)
-            fetchGraphs.forEach { graph ->
-                resourceGraphs.markFetched(
-                graph = graph,
-                    legacyUri = legacyUri,
-                    upstreamUri = upstreamUri,
-                    contentBase = upstreamUri,
-                    state = ResourceState.FETCHING,
-                )
-            }
+            fetchAttempts =
+                resourceGraphs.contextsFor(legacyUri)
+                    .mapNotNull { graph ->
+                        resourceGraphs.beginFetch(
+                            graph = graph,
+                            legacyUri = legacyUri,
+                            upstreamUri = upstreamUri,
+                            contentBase = upstreamUri,
+                        )?.let { attempt -> graph to attempt }
+                    }.toMap()
             seedClientCookies(state, request.headers)
             val response =
                 if (request.method.equals("GET", ignoreCase = true)) {
@@ -191,26 +191,26 @@ internal class SystemHttpCompatibilityHandler(
                     fetchFinalResponse(state, request)
                 }
             ensureActive(state)
-            return prepareFinalResponse(state, response)
+            return prepareFinalResponse(state, response, fetchAttempts)
         } catch (error: CancellationException) {
-            markFetchFailed(fetchGraphs, fetchLegacyUri, fetchUpstreamUri)
+            markFetchFailed(fetchAttempts, fetchLegacyUri, fetchUpstreamUri)
             throw error
         } catch (error: InterruptedException) {
-            markFetchFailed(fetchGraphs, fetchLegacyUri, fetchUpstreamUri)
+            markFetchFailed(fetchAttempts, fetchLegacyUri, fetchUpstreamUri)
             Thread.currentThread().interrupt()
             throw CancellationException("HTTP compatibility request interrupted")
         } catch (error: BadLegacyRequest) {
-            markFetchFailed(fetchGraphs, fetchLegacyUri, fetchUpstreamUri)
+            markFetchFailed(fetchAttempts, fetchLegacyUri, fetchUpstreamUri)
             logger("HTTP compatibility !! bad request: ${error.message}")
             emitEvent(state, HttpProxyActionKind.ERROR, error.message ?: "Invalid HTTP request")
             return errorResponse(400, "Bad Request", error.message ?: "Invalid HTTP request")
         } catch (error: ResponseTooLarge) {
-            markFetchFailed(fetchGraphs, fetchLegacyUri, fetchUpstreamUri)
+            markFetchFailed(fetchAttempts, fetchLegacyUri, fetchUpstreamUri)
             logger("HTTP compatibility !! ${error.message}")
             emitEvent(state, HttpProxyActionKind.ERROR, error.message ?: "Upstream response too large")
             return errorResponse(502, "Bad Gateway", error.message ?: "Upstream response too large")
         } catch (error: Throwable) {
-            markFetchFailed(fetchGraphs, fetchLegacyUri, fetchUpstreamUri)
+            markFetchFailed(fetchAttempts, fetchLegacyUri, fetchUpstreamUri)
             logger(
                 "HTTP compatibility !! upstream failed: " +
                     (error.message ?: error.javaClass.simpleName),
@@ -221,14 +221,15 @@ internal class SystemHttpCompatibilityHandler(
     }
 
     private fun markFetchFailed(
-        graphs: List<NavigationResourceGraph>,
+        attempts: Map<NavigationResourceGraph, ResourceFetchAttempt>,
         legacyUri: URI?,
         upstreamUri: URI?,
     ) {
         if (legacyUri == null || upstreamUri == null) return
-        graphs.forEach { graph ->
-            resourceGraphs.markFetched(
+        attempts.forEach { (graph, attempt) ->
+            resourceGraphs.markFetchState(
                 graph = graph,
+                attempt = attempt,
                 legacyUri = legacyUri,
                 upstreamUri = upstreamUri,
                 contentBase = upstreamUri,
@@ -420,6 +421,7 @@ internal class SystemHttpCompatibilityHandler(
     private fun prepareFinalResponse(
         state: FlowState,
         response: FinalResponse,
+        initialFetchAttempts: Map<NavigationResourceGraph, ResourceFetchAttempt>,
     ): LegacyHttpResponse {
         val graphs =
             if (response.establishesNavigationGraph) {
@@ -427,9 +429,22 @@ internal class SystemHttpCompatibilityHandler(
             } else {
                 resourceGraphs.contextsFor(response.legacyUri)
             }
-        graphs.forEach { graph ->
-            resourceGraphs.markFetched(
+        val fetchAttempts =
+            graphs.mapNotNull { graph ->
+                val attempt =
+                    initialFetchAttempts[graph]
+                        ?: resourceGraphs.beginFetch(
+                            graph = graph,
+                            legacyUri = response.legacyUri,
+                            upstreamUri = response.uri,
+                            contentBase = response.effectiveBaseUri ?: response.uri,
+                        )
+                attempt?.let { graph to it }
+            }.toMap()
+        fetchAttempts.forEach { (graph, attempt) ->
+            resourceGraphs.markFetchState(
                 graph = graph,
+                attempt = attempt,
                 legacyUri = response.legacyUri,
                 upstreamUri = response.uri,
                 contentBase = response.effectiveBaseUri ?: response.uri,
@@ -438,9 +453,10 @@ internal class SystemHttpCompatibilityHandler(
         }
         var resourceReady = false
         try {
-            graphs.forEach { graph ->
-                resourceGraphs.markFetched(
-                graph = graph,
+            fetchAttempts.forEach { (graph, attempt) ->
+                resourceGraphs.markFetchState(
+                    graph = graph,
+                    attempt = attempt,
                     legacyUri = response.legacyUri,
                     upstreamUri = response.uri,
                     contentBase = response.effectiveBaseUri ?: response.uri,
@@ -523,9 +539,10 @@ internal class SystemHttpCompatibilityHandler(
         // READY means the complete client representation exists locally. The HTTP
         // transport layer may now deliver it at legacy-client speed without involving
         // upstream acquisition or transformation.
-        graphs.forEach { graph ->
-            resourceGraphs.markFetched(
+        fetchAttempts.forEach { (graph, attempt) ->
+            resourceGraphs.markFetchState(
                 graph = graph,
+                attempt = attempt,
                 legacyUri = response.legacyUri,
                 upstreamUri = response.uri,
                 contentBase = response.effectiveBaseUri ?: response.uri,
@@ -536,9 +553,10 @@ internal class SystemHttpCompatibilityHandler(
         return clientResponse
         } catch (error: Throwable) {
             if (!resourceReady) {
-                graphs.forEach { graph ->
-                    resourceGraphs.markFetched(
-                graph = graph,
+                fetchAttempts.forEach { (graph, attempt) ->
+                    resourceGraphs.markFetchState(
+                        graph = graph,
+                        attempt = attempt,
                         legacyUri = response.legacyUri,
                         upstreamUri = response.uri,
                         contentBase = response.effectiveBaseUri ?: response.uri,
