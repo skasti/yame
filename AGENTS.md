@@ -13,7 +13,14 @@ The HTTP compatibility proxy has deliberately pragmatic goals:
 - accept the legacy client's HTTP request on TCP port 80;
 - use the host JVM's current HTTP/TLS stack upstream;
 - return a finite HTTP/1.0 response with `Connection: close`, no chunked framing,
-  and a correct content length when the body is buffered;
+  and a correct content length;
+- fully acquire the upstream response before emitting the corresponding response
+  to the legacy client. The compatibility proxy is a store/transform/serve
+  boundary: TCP/PPP/serial backpressure from the legacy side must never throttle
+  an in-progress upstream HTTP body read;
+- retain the complete upstream source representation separately from any
+  client-visible transformed representation. A resource is `READY` when the
+  complete client representation exists locally, before downstream delivery begins;
 - request `Accept-Encoding: identity` for text that may need rewriting;
 - replace absolute `https://` references in supported text responses with clean
   `http://` references and remember the upstream HTTPS target for the PPP
