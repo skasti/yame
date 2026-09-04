@@ -246,16 +246,35 @@ internal class HttpTcpProxy(
                         }
                     }
                 }
-            state.task = task
+            val published =
+                synchronized(state) {
+                    if (state.cancelled || flows[state.flow] !== state) {
+                        false
+                    } else {
+                        state.task = task
+                        true
+                    }
+                }
+            if (!published) {
+                synchronized(state) {
+                    state.processing = false
+                }
+                return Result.failure(IllegalStateException("HTTP flow is closed"))
+            }
+
             executor.execute(task)
             if (!isActive(state)) task.cancel(true)
             Result.success(Unit)
         } catch (error: Throwable) {
             synchronized(state) {
                 state.processing = false
-                state.task = null
+                if (state.task?.isDone != false) {
+                    state.task = null
+                }
             }
-            removeFlow(state)
+            if (!removeFlow(state) && flows[state.flow] !== state) {
+                releaseSlot(state)
+            }
             safeCallback(state.onEvent, TcpProxyEvent.Failure(error))
             Result.failure(error)
         }
@@ -376,18 +395,24 @@ internal class HttpTcpProxy(
         state: FlowState,
         cancelTask: Boolean = true,
     ): Boolean {
-        if (!flows.remove(state.flow, state)) return false
-        state.cancelled = true
+        val taskToCancel: Future<*>?
+        val interimToCancel: Future<*>?
+        val releaseImmediately: Boolean
+        synchronized(state) {
+            if (!flows.remove(state.flow, state)) return false
+            state.cancelled = true
+            taskToCancel = if (cancelTask) state.task else null
+            interimToCancel = if (cancelTask) state.interimTask else null
+            releaseImmediately = state.task == null
+        }
         synchronized(state.readMonitor) {
             state.readsPaused = false
             state.readMonitor.notifyAll()
         }
-        if (cancelTask) {
-            state.task?.cancel(true)
-            state.interimTask?.cancel(true)
-        }
+        taskToCancel?.cancel(true)
+        interimToCancel?.cancel(true)
         handler.connectionClosed(state.flow)
-        if (state.task == null) {
+        if (releaseImmediately) {
             releaseSlot(state)
         }
         return true
