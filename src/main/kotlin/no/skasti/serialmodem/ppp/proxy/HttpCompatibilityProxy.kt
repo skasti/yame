@@ -30,6 +30,7 @@ import no.skasti.serialmodem.ppp.proxy.transform.ResourceTransformationPipeline
 import no.skasti.serialmodem.ppp.tcp.TcpProxy
 import no.skasti.serialmodem.ppp.tcp.TcpProxyEvent
 import no.skasti.serialmodem.ppp.tcp.TcpProxyFlow
+import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.net.CookieManager
 import java.net.CookiePolicy
@@ -1615,7 +1616,7 @@ internal class SystemHttpCompatibilityProxy(
     private class ResponseTooLarge(message: String) : IllegalStateException(message)
 
     private companion object {
-        val HEADER_DELIMITER = byteArrayOf(13, 10, 13, 10)
+        val HEADER_NAME_PATTERN = Regex("[!#$%&'*+.^_`|~0-9A-Za-z-]+")
         val REDIRECT_STATUS_CODES = setOf(301, 302, 303, 307, 308)
         val REQUEST_HEADERS_TO_STRIP = setOf("host", "connection", "proxy-connection", "proxy-authorization", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade", "content-length", "accept-encoding", "expect", "cookie", "cookie2")
         val SENSITIVE_REQUEST_HEADERS = setOf("authorization", "cookie", "cookie2")
