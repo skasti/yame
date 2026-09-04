@@ -256,6 +256,71 @@ class HttpTcpProxyTest {
         assertTrue(handlerClosedAfterWorker.get())
     }
 
+    @Test
+    fun `close stays bounded but defers handler close until slow worker exits`() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val workerExited = AtomicBoolean(false)
+        val handlerClosed = CountDownLatch(1)
+        val handlerClosedAfterWorker = AtomicBoolean(false)
+        val handler =
+            object : HttpRequestHandler {
+                override fun handle(
+                    connection: HttpConnection,
+                    request: HttpRequest,
+                ): HttpResponse {
+                    entered.countDown()
+                    try {
+                        while (release.count > 0) {
+                            try {
+                                release.await()
+                            } catch (_: InterruptedException) {
+                                // Simulate blocked upstream work that outlives close timeout.
+                            }
+                        }
+                        return HttpResponse(200, "OK", headers = emptyList(), body = ByteArray(0))
+                    } finally {
+                        workerExited.set(true)
+                    }
+                }
+
+                override fun close() {
+                    handlerClosedAfterWorker.set(workerExited.get())
+                    handlerClosed.countDown()
+                }
+            }
+        val proxy =
+            HttpTcpProxy(
+                handler,
+                maxFlows = 1,
+                maxRequestBytes = 1024,
+                shutdownTimeoutMillis = 50,
+            )
+        val events = LinkedBlockingQueue<TcpProxyEvent>()
+        val flow = flow(peerPort = 1241)
+
+        proxy.connect(flow, events::offer)
+        assertIs<TcpProxyEvent.Connected>(requireNotNull(events.poll(2, TimeUnit.SECONDS)))
+        proxy.send(
+            flow,
+            "GET /slow HTTP/1.0\r\nHost: example.test\r\n\r\n"
+                .toByteArray(StandardCharsets.US_ASCII),
+        ).getOrThrow()
+        assertTrue(entered.await(2, TimeUnit.SECONDS))
+
+        val started = System.nanoTime()
+        proxy.close()
+        val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+
+        assertTrue(elapsedMillis < 500, "close should remain bounded; took ${elapsedMillis}ms")
+        assertEquals(1L, handlerClosed.count)
+        assertTrue(!handlerClosedAfterWorker.get())
+
+        release.countDown()
+        assertTrue(handlerClosed.await(2, TimeUnit.SECONDS))
+        assertTrue(handlerClosedAfterWorker.get())
+    }
+
     private fun collectResponse(events: LinkedBlockingQueue<TcpProxyEvent>): String {
         val bytes = ArrayList<Byte>()
         while (true) {
