@@ -139,6 +139,46 @@ class HttpTcpProxyTest {
     }
 
     @Test
+    fun `close cannot pass a connection while Connected notification is in progress`() {
+        val connectedCallbackEntered = CountDownLatch(1)
+        val releaseConnectedCallback = CountDownLatch(1)
+        val handler =
+            object : HttpRequestHandler {
+                override fun handle(
+                    connection: HttpConnection,
+                    request: HttpRequest,
+                ): HttpResponse = error("request handling is not part of this test")
+            }
+        val proxy = HttpTcpProxy(handler, maxFlows = 1, maxRequestBytes = 1024)
+        val flow = flow(peerPort = 1239)
+
+        val connector =
+            Thread {
+                proxy.connect(flow) { event ->
+                    if (event == TcpProxyEvent.Connected) {
+                        connectedCallbackEntered.countDown()
+                        releaseConnectedCallback.await()
+                    }
+                }
+            }.apply { start() }
+
+        assertTrue(connectedCallbackEntered.await(2, TimeUnit.SECONDS))
+        val closer = Thread { proxy.close() }.apply { start() }
+
+        Thread.sleep(100)
+        assertTrue(
+            closer.isAlive,
+            "close returned while a concurrent flow could still be announced as connected",
+        )
+
+        releaseConnectedCallback.countDown()
+        connector.join(2_000)
+        closer.join(2_000)
+        assertTrue(!connector.isAlive)
+        assertTrue(!closer.isAlive)
+    }
+
+    @Test
     fun `closed running handler retains flow slot until worker exits`() {
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
