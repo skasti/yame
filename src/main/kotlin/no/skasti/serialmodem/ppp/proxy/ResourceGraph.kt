@@ -252,11 +252,13 @@ internal class NavigationResourceGraph(
 }
 
 internal class NavigationResourceRegistry(
+    private val maxContexts: Int = 512,
     private val maxNodesPerContext: Int = 1_024,
     private val maxEdgesPerContext: Int = 2_048,
     val hooks: ResourceRegistryHooks = ResourceRegistryHooks(),
 ) {
     init {
+        require(maxContexts > 0) { "Navigation context limit must be positive" }
         require(maxNodesPerContext > 0) { "Resource graph node limit must be positive" }
         require(maxEdgesPerContext > 0) { "Resource graph edge limit must be positive" }
     }
@@ -294,6 +296,7 @@ internal class NavigationResourceRegistry(
                 graphByRootLegacyUri[rootKey]
                     ?.let(graphs::get)
                     ?.also { existing ->
+                        touchLocked(existing.id)
                         pending +=
                             PendingEvent.RootUsed(
                                 ResourceRegistryRoot(existing.id, existing.rootLegacyUri),
@@ -305,6 +308,9 @@ internal class NavigationResourceRegistry(
                         maxNodes = maxNodesPerContext,
                         maxEdges = maxEdgesPerContext,
                     ).also { created ->
+                        while (graphs.size >= maxContexts) {
+                            evictLeastRecentlyUsedLocked(pending)
+                        }
                         graphs[created.id] = created
                         graphByRootLegacyUri[rootKey] = created.id
                         associateLocked(rootLegacyUri, created.id)
@@ -336,6 +342,7 @@ internal class NavigationResourceRegistry(
         synchronized(lock) {
             val wasKnown = graph.contains(childLegacyUri)
             if (graph.discover(parentLegacyUri, childLegacyUri, upstreamUri, relation, kind)) {
+                touchLocked(graph.id)
                 associateLocked(childLegacyUri, graph.id)
                 pending += PendingEvent.RootUsed(ResourceRegistryRoot(graph.id, graph.rootLegacyUri))
                 if (!wasKnown) {
@@ -352,6 +359,31 @@ internal class NavigationResourceRegistry(
 
     fun snapshots(): List<NavigationResourceGraphSnapshot> =
         synchronized(lock) { graphs.values.map { it.snapshot() } }
+
+    private fun touchLocked(graphId: Long) {
+        val graph = graphs.remove(graphId) ?: return
+        graphs[graphId] = graph
+    }
+
+    private fun evictLeastRecentlyUsedLocked(pending: MutableList<PendingEvent>) {
+        val oldestId = graphs.keys.firstOrNull() ?: return
+        val removed = graphs.remove(oldestId) ?: return
+        graphByRootLegacyUri.remove(LegacyHttpUrl.requestObservableKey(removed.rootLegacyUri))
+        val snapshot = removed.snapshot()
+        pending += PendingEvent.RootRemoved(ResourceRegistryRoot(snapshot.id, snapshot.rootLegacyUri))
+        snapshot.nodes.forEach { resource ->
+            pending +=
+                PendingEvent.ResourceRemoved(
+                    ResourceRegistryResource(snapshot.id, snapshot.rootLegacyUri, resource.legacyUri),
+                )
+        }
+        val iterator = contextByLegacyUri.entries.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            entry.value.remove(oldestId)
+            if (entry.value.isEmpty()) iterator.remove()
+        }
+    }
 
     private fun associateLocked(uri: URI, graphId: Long) {
         contextByLegacyUri
