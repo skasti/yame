@@ -39,11 +39,13 @@ internal class HttpTcpProxy(
     private val maxFlows: Int,
     private val maxRequestBytes: Int,
     private val responseChunkBytes: Int = DEFAULT_RESPONSE_CHUNK_BYTES,
+    private val shutdownTimeoutMillis: Long = SHUTDOWN_TIMEOUT_MILLIS,
 ) : TcpProxy {
     init {
         require(maxFlows > 0) { "maxFlows must be positive" }
         require(maxRequestBytes > 0) { "maxRequestBytes must be positive" }
         require(responseChunkBytes > 0) { "responseChunkBytes must be positive" }
+        require(shutdownTimeoutMillis > 0) { "shutdownTimeoutMillis must be positive" }
     }
 
     private data class FlowState(
@@ -465,12 +467,35 @@ internal class HttpTcpProxy(
         closed = true
         flows.values.toList().forEach(::removeFlow)
         executor.shutdownNow()
-        try {
-            executor.awaitTermination(SHUTDOWN_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
-        } catch (_: InterruptedException) {
-            Thread.currentThread().interrupt()
-        } finally {
+
+        val terminated =
+            try {
+                executor.awaitTermination(shutdownTimeoutMillis, TimeUnit.MILLISECONDS)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                false
+            }
+
+        if (terminated) {
             handler.close()
+        } else {
+            Thread(
+                {
+                    try {
+                        while (!executor.awaitTermination(1, TimeUnit.DAYS)) {
+                            // Keep waiting until all HTTP workers have actually exited.
+                        }
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        return@Thread
+                    }
+                    handler.close()
+                },
+                "http-tcp-proxy-close",
+            ).apply {
+                isDaemon = true
+                start()
+            }
         }
     }
 
