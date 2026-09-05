@@ -379,7 +379,7 @@ class TuiYameObserver(
 
     private fun httpHostSnapshots(): List<DashboardHttpHost> {
         data class Aggregate(
-            val urls: LinkedHashSet<String> = linkedSetOf(),
+            val resources: LinkedHashMap<String, DashboardHttpResource> = linkedMapOf(),
             var useCount: Long = 0,
             var lastUsedNanos: Long = 0,
         )
@@ -387,15 +387,13 @@ class TuiYameObserver(
         val hosts = linkedMapOf<String, Aggregate>()
         httpGraphs.values.forEach { graph ->
             val graphHosts = linkedSetOf<String>()
-            sequenceOf(graph.rootLegacyUri)
-                .plus(graph.resources.asSequence())
-                .forEach { uri ->
-                    val host = uri.host?.lowercase() ?: return@forEach
-                    val aggregate = hosts.getOrPut(host) { Aggregate() }
-                    aggregate.urls += uri.toString()
-                    aggregate.lastUsedNanos = maxOf(aggregate.lastUsedNanos, graph.lastUsedNanos)
-                    graphHosts += host
-                }
+            graph.resources.forEach { (uri, resource) ->
+                val host = uri.host?.lowercase() ?: return@forEach
+                val aggregate = hosts.getOrPut(host) { Aggregate() }
+                aggregate.resources[uri.toString()] = resource
+                aggregate.lastUsedNanos = maxOf(aggregate.lastUsedNanos, graph.lastUsedNanos)
+                graphHosts += host
+            }
             graphHosts.forEach { host ->
                 hosts.getValue(host).useCount += graph.useCount
             }
@@ -405,7 +403,7 @@ class TuiYameObserver(
             .map { (host, aggregate) ->
                 DashboardHttpHost(
                     host = host,
-                    urls = aggregate.urls.toList(),
+                    resources = aggregate.resources.values.toList(),
                     expanded = host in expandedHttpHosts,
                     useCount = aggregate.useCount,
                     lastUsedNanos = aggregate.lastUsedNanos,
@@ -958,12 +956,24 @@ internal data class DashboardTransfer(
         }
 }
 
+internal data class DashboardHttpResource(
+    val url: String,
+    val state: ResourceState = ResourceState.DISCOVERED,
+    val kind: ResourceKind = ResourceKind.OTHER,
+    val prefetched: Boolean = false,
+    val transformations: List<ResourceTransformationSummary> = emptyList(),
+)
+
 internal data class DashboardHttpHost(
     val host: String,
-    val urls: List<String>,
+    val resources: List<DashboardHttpResource>,
     val expanded: Boolean,
     val useCount: Long = 0,
     val lastUsedNanos: Long = 0,
+    val savedBytes: Long =
+        resources.sumOf { resource ->
+            resource.transformations.sumOf { it.savedBytes.toLong() }
+        },
 )
 
 internal enum class TuiPaletteMode {
@@ -1192,7 +1202,7 @@ internal object YameDashboardRenderer {
         state.httpHosts.getOrNull(state.selectedHttpHostIndex)?.let { host ->
             val marker = if (host.expanded) "▼" else "▶"
             lines += DashboardLine(
-                "HTTP $marker ${host.host} (${host.urls.size})",
+                "HTTP $marker ${host.host} (${host.resources.size})",
                 DashboardTone.ACCENT,
             )
         }
@@ -1310,10 +1320,10 @@ internal object YameDashboardRenderer {
         val rows = visibleRows.coerceAtLeast(1)
         var selectedLine = 0
         for (index in 0 until selected) {
-            selectedLine += 1 + if (hosts[index].expanded) hosts[index].urls.size else 0
+            selectedLine += 1 + if (hosts[index].expanded) hosts[index].resources.size else 0
         }
         val itemCount = hosts.sumOf { host ->
-            1 + if (host.expanded) host.urls.size else 0
+            1 + if (host.expanded) host.resources.size else 0
         }
         val start = viewportStart(
             selectedIndex = selectedLine.coerceIn(0, (itemCount - 1).coerceAtLeast(0)),
@@ -1327,7 +1337,7 @@ internal object YameDashboardRenderer {
                 val selection = if (index == selected) "›" else " "
                 yield(
                     DashboardLine(
-                        clip("$selection $marker ${host.host}  (${host.urls.size})", contentWidth),
+                        clip("$selection $marker ${host.host}  (${host.resources.size})", contentWidth),
                         if (index == selected) DashboardTone.SELECTED else DashboardTone.ACCENT,
                     ),
                 )
