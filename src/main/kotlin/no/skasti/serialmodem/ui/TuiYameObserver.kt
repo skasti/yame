@@ -1215,7 +1215,7 @@ internal object YameDashboardRenderer {
             val marker = if (host.expanded) "v" else ">"
             lines += DashboardLine(
                 "HTTP $marker ${host.host} (${host.resources.size})" +
-                    if (host.savedBytes > 0) " · saved ${formatBytes(host.savedBytes)}" else "",
+                    if (host.savedBytes > 0) " | saved ${formatBytes(host.savedBytes)}" else "",
                 DashboardTone.ACCENT,
             )
         }
@@ -1352,7 +1352,7 @@ internal object YameDashboardRenderer {
                     DashboardLine(
                         clip(
                             "$selection $marker ${host.host}  (${host.resources.size})" +
-                                if (host.savedBytes > 0) " · saved ${formatBytes(host.savedBytes)}" else "",
+                                if (host.savedBytes > 0) " | saved ${formatBytes(host.savedBytes)}" else "",
                             contentWidth,
                         ),
                         if (index == selected) DashboardTone.SELECTED else DashboardTone.ACCENT,
@@ -1540,8 +1540,8 @@ internal object YameDashboardRenderer {
             } else {
                 0
             }
-        val detail = summary.detail?.let { " · $it" }.orEmpty()
-        return "  ${formatCompactBytes(summary.sourceBytes.toLong())}→${formatCompactBytes(summary.outputBytes.toLong())} -$savedPercent%$detail"
+        val detail = summary.detail?.let { " | $it" }.orEmpty()
+        return "  ${formatCompactBytes(summary.sourceBytes.toLong())}->${formatCompactBytes(summary.outputBytes.toLong())} -$savedPercent%$detail"
     }
 
     private fun formatCompactBytes(bytes: Long): String =
