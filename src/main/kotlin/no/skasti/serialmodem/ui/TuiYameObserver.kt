@@ -1024,6 +1024,10 @@ internal data class DashboardStyles(
     val danger: (String) -> String = { it },
     val muted: (String) -> String = { it },
     val selected: (String) -> String = { it },
+    val resourceKnown: (String) -> String = { it },
+    val resourceActive: (String) -> String = { it },
+    val resourceReady: (String) -> String = { it },
+    val resourceFailed: (String) -> String = { it },
 ) {
     companion object {
         val colorful = DashboardStyles(
@@ -1035,6 +1039,10 @@ internal data class DashboardStyles(
             danger = { (brightRed + bold)(it) },
             muted = { gray(0.55)(it) },
             selected = { (brightGreen + bold + inverse)(it) },
+            resourceKnown = { gray(0.72)(it) },
+            resourceActive = { yellow(it) },
+            resourceReady = { brightGreen(it) },
+            resourceFailed = { brightRed(it) },
         )
     }
 }
@@ -1047,6 +1055,10 @@ private enum class DashboardTone {
     DANGER,
     MUTED,
     SELECTED,
+    RESOURCE_KNOWN,
+    RESOURCE_ACTIVE,
+    RESOURCE_READY,
+    RESOURCE_FAILED,
 }
 
 private data class DashboardLine(
@@ -1528,6 +1540,10 @@ internal object YameDashboardRenderer {
             DashboardTone.DANGER -> styles.danger(text)
             DashboardTone.MUTED -> styles.muted(text)
             DashboardTone.SELECTED -> styles.selected(text)
+            DashboardTone.RESOURCE_KNOWN -> styles.resourceKnown(text)
+            DashboardTone.RESOURCE_ACTIVE -> styles.resourceActive(text)
+            DashboardTone.RESOURCE_READY -> styles.resourceReady(text)
+            DashboardTone.RESOURCE_FAILED -> styles.resourceFailed(text)
         }
 
     private fun clip(
