@@ -445,20 +445,35 @@ internal class NavigationResourceRegistry(
         legacyUri: URI,
         upstreamUri: URI,
         contentBase: URI?,
-    ): ResourceFetchAttempt? =
-        synchronized(lock) {
-            if (graphs[graph.id] !== graph) return@synchronized null
-            val attempt =
-                ResourceFetchAttempt(
-                    graphId = graph.id,
-                    legacyUri = legacyUri,
-                    id = nextFetchAttemptId.getAndIncrement(),
+        prefetched: Boolean = false,
+    ): ResourceFetchAttempt? {
+        val pending = mutableListOf<PendingEvent>()
+        val attempt =
+            synchronized(lock) {
+                if (graphs[graph.id] !== graph) return@synchronized null
+                val created =
+                    ResourceFetchAttempt(
+                        graphId = graph.id,
+                        legacyUri = legacyUri,
+                        id = nextFetchAttemptId.getAndIncrement(),
+                    )
+                currentFetchAttempt[fetchKey(graph.id, legacyUri)] = created.id
+                touchLocked(graph.id)
+                graph.markFetched(
+                    legacyUri,
+                    upstreamUri,
+                    contentBase,
+                    ResourceState.FETCHING,
+                    prefetched,
                 )
-            currentFetchAttempt[fetchKey(graph.id, legacyUri)] = attempt.id
-            touchLocked(graph.id)
-            graph.markFetched(legacyUri, upstreamUri, contentBase, ResourceState.FETCHING)
-            attempt
-        }
+                registryResource(graph, legacyUri)?.let {
+                    pending += PendingEvent.ResourceUpdated(it)
+                }
+                created
+            }
+        pending.forEach { it.fire(hooks) }
+        return attempt
+    }
 
     fun markFetchState(
         graph: NavigationResourceGraph,
@@ -467,23 +482,31 @@ internal class NavigationResourceRegistry(
         upstreamUri: URI,
         contentBase: URI?,
         state: ResourceState,
-    ): Boolean =
-        synchronized(lock) {
-            if (graphs[graph.id] !== graph) return@synchronized false
-            if (attempt.graphId != graph.id) return@synchronized false
-            val key = fetchKey(graph.id, legacyUri)
-            if (LegacyHttpUrl.requestObservableKey(attempt.legacyUri) != key.legacyKey) {
-                return@synchronized false
-            }
-            if (currentFetchAttempt[key] != attempt.id) return@synchronized false
+    ): Boolean {
+        val pending = mutableListOf<PendingEvent>()
+        val changed =
+            synchronized(lock) {
+                if (graphs[graph.id] !== graph) return@synchronized false
+                if (attempt.graphId != graph.id) return@synchronized false
+                val key = fetchKey(graph.id, legacyUri)
+                if (LegacyHttpUrl.requestObservableKey(attempt.legacyUri) != key.legacyKey) {
+                    return@synchronized false
+                }
+                if (currentFetchAttempt[key] != attempt.id) return@synchronized false
 
-            touchLocked(graph.id)
-            graph.markFetched(legacyUri, upstreamUri, contentBase, state)
-            if (state == ResourceState.READY || state == ResourceState.FAILED) {
-                currentFetchAttempt.remove(key, attempt.id)
+                touchLocked(graph.id)
+                graph.markFetched(legacyUri, upstreamUri, contentBase, state)
+                registryResource(graph, legacyUri)?.let {
+                    pending += PendingEvent.ResourceUpdated(it)
+                }
+                if (state == ResourceState.READY || state == ResourceState.FAILED) {
+                    currentFetchAttempt.remove(key, attempt.id)
+                }
+                true
             }
-            true
-        }
+        pending.forEach { it.fire(hooks) }
+        return changed
+    }
 
     fun markFetched(
         graph: NavigationResourceGraph,
@@ -491,12 +514,38 @@ internal class NavigationResourceRegistry(
         upstreamUri: URI,
         contentBase: URI?,
         state: ResourceState,
+        prefetched: Boolean = false,
     ) {
+        val pending = mutableListOf<PendingEvent>()
         synchronized(lock) {
             if (graphs[graph.id] !== graph) return
             touchLocked(graph.id)
-            graph.markFetched(legacyUri, upstreamUri, contentBase, state)
+            graph.markFetched(legacyUri, upstreamUri, contentBase, state, prefetched)
+            registryResource(graph, legacyUri)?.let {
+                pending += PendingEvent.ResourceUpdated(it)
+            }
         }
+        pending.forEach { it.fire(hooks) }
+    }
+
+    fun recordTransformations(
+        legacyUri: URI,
+        transformations: List<ResourceTransformationSummary>,
+    ) {
+        val pending = mutableListOf<PendingEvent>()
+        synchronized(lock) {
+            contextByLegacyUri[LegacyHttpUrl.requestObservableKey(legacyUri)]
+                ?.mapNotNull(graphs::get)
+                .orEmpty()
+                .forEach { graph ->
+                    if (graph.setTransformations(legacyUri, transformations)) {
+                        registryResource(graph, legacyUri)?.let {
+                            pending += PendingEvent.ResourceUpdated(it)
+                        }
+                    }
+                }
+        }
+        pending.forEach { it.fire(hooks) }
     }
 
     fun snapshots(): List<NavigationResourceGraphSnapshot> =
@@ -516,7 +565,15 @@ internal class NavigationResourceRegistry(
         snapshot.nodes.forEach { resource ->
             pending +=
                 PendingEvent.ResourceRemoved(
-                    ResourceRegistryResource(snapshot.id, snapshot.rootLegacyUri, resource.legacyUri),
+                    ResourceRegistryResource(
+                        graphId = snapshot.id,
+                        rootLegacyUri = snapshot.rootLegacyUri,
+                        resourceLegacyUri = resource.legacyUri,
+                        state = resource.state,
+                        kind = resource.kind,
+                        prefetched = resource.prefetched,
+                        transformations = resource.transformations,
+                    ),
                 )
         }
         val iterator = contextByLegacyUri.entries.iterator()
