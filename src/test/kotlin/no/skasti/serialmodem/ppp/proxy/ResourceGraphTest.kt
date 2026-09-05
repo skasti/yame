@@ -3,6 +3,7 @@ import no.skasti.serialmodem.ppp.proxy.NavigationResourceRegistry
 import no.skasti.serialmodem.ppp.proxy.ReferenceRole
 import no.skasti.serialmodem.ppp.proxy.ResourceKind
 import no.skasti.serialmodem.ppp.proxy.ResourceRelation
+import no.skasti.serialmodem.ppp.proxy.transform.ResourceTransformationSummary
 import java.net.URI
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -309,6 +310,86 @@ class ResourceGraphTest {
         assertEquals(listOf(child), addedResources.map { it.resourceLegacyUri })
     }
 
+
+    @Test
+    fun `resource lifecycle updates are observable with sticky prefetch and transforms`() {
+        val hooks = ResourceRegistryHooks()
+        val updates = mutableListOf<ResourceRegistryResource>()
+        hooks.onResourceUpdated += updates::add
+        val registry = NavigationResourceRegistry(hooks = hooks)
+        val graph = registry.startNavigation(URI("http://legacy.test/root"))
+        val child = URI("http://cdn.test/hero.jpg")
+        val upstream = URI("https://cdn.test/hero.jpg")
+
+        registry.discover(
+            graph,
+            graph.rootLegacyUri,
+            child,
+            upstream,
+            ResourceRelation.IMG_SRC,
+            ResourceKind.IMAGE,
+        )
+        val attempt =
+            requireNotNull(
+                registry.beginFetch(
+                    graph = graph,
+                    legacyUri = child,
+                    upstreamUri = upstream,
+                    contentBase = upstream,
+                    prefetched = true,
+                ),
+            )
+        registry.markFetchState(
+            graph,
+            attempt,
+            child,
+            upstream,
+            upstream,
+            ResourceState.SOURCE_READY,
+        )
+        registry.markFetchState(
+            graph,
+            attempt,
+            child,
+            upstream,
+            upstream,
+            ResourceState.TRANSFORMING,
+        )
+        registry.recordTransformations(
+            child,
+            listOf(
+                ResourceTransformationSummary(
+                    transformerId = "legacy-image-optimization",
+                    sourceBytes = 1000,
+                    outputBytes = 250,
+                ),
+            ),
+        )
+        registry.markFetchState(
+            graph,
+            attempt,
+            child,
+            upstream,
+            upstream,
+            ResourceState.READY,
+        )
+
+        assertEquals(
+            listOf(
+                ResourceState.FETCHING,
+                ResourceState.SOURCE_READY,
+                ResourceState.TRANSFORMING,
+                ResourceState.TRANSFORMING,
+                ResourceState.READY,
+            ),
+            updates.map { it.state },
+        )
+        assertTrue(updates.all { it.prefetched })
+        val node = graph.snapshot().nodes.single { it.legacyUri == child }
+        assertEquals(ResourceState.READY, node.state)
+        assertTrue(node.prefetched)
+        assertEquals(750, node.transformations.single().savedBytes)
+    }
 
     @Test
     fun `registry hooks can be dispatched asynchronously while preserving order`() {
