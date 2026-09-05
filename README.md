@@ -12,10 +12,10 @@ old laptop -> serial/null-modem -> Hayes emulator -> PPP server -> IP/NAT -> Int
 
 The emulator currently:
 
-- opens a serial port at 115200 baud, 8N1
+- opens a serial port at 38400 baud, 8N1
 - supports basic Hayes-style AT command handling
 - accepts unknown AT initialization commands with `OK`
-- answers dial commands (`ATD...` / `ATDT...`) with simulated telephone dialing and modem-handshake sounds before `CONNECT 115200`
+- answers dial commands (`ATD...` / `ATDT...`) with simulated telephone dialing and modem-handshake sounds before `CONNECT 38400`
 - generates a Norwegian 425 Hz dial tone, standard DTMF digits, and 425 Hz ringback cadence
 - simulates a V.8/V.34-style modem answer, negotiation, line probing and training sequence after pickup
 - logs the individual dialing/handshake stages as they become audible
@@ -172,7 +172,7 @@ Expanded host with known resource paths:
 
 ![YAME TUI with expanded proxy host](docs/assets/tui-proxy-expanded.svg)
 
-Useful palette commands include `/port`, `/baud`, `/dns-upstream`, `/http-proxy`, `/reconnect`, `/disconnect`, `/refresh-ports`, `/clear-log`, and `/quit`.
+Useful palette commands include `/port`, `/baud`, `/flow-control`, `/dns-upstream`, `/http-proxy`, `/reconnect`, `/disconnect`, `/refresh-ports`, `/clear-log`, and `/quit`.
 
 A port can still be selected explicitly:
 
@@ -199,6 +199,14 @@ Specify another line speed if needed:
 ```shell
 ./gradlew run --args="--port <port> --baud 57600"
 ```
+
+Serial flow control can be selected independently:
+
+```shell
+./gradlew run --args="--port <port> --baud 57600 --flow-control hardware"
+```
+
+Supported values are `disabled` (the default), `xon-xoff`, and `hardware` (RTS/CTS).
 
 YAME advertises its local PPP address as DNS through RFC 1877 IPCP options and forwards those DNS queries to `8.8.8.8` by default. Choose another upstream resolver with:
 
@@ -300,7 +308,7 @@ AT <= ATDT5551234
 MODEM dialing 5551234
 # dial/ring/handshake audio plays here
 MODEM connected
-AT => CONNECT 115200
+AT => CONNECT 38400
 PPP <= protocol=LCP (0xC021), payload=24 bytes: 01 0B 00 18 01 04 02 40 ...
 ```
 

@@ -38,10 +38,13 @@ class HttpCompatibilityProxyTest {
                 body
         }
         val redirectThread = serveOnce(redirectServer) {
+            val body = "redirect response body"
             "HTTP/1.1 302 Found\r\n" +
                 "Location: http://127.0.0.1:${finalServer.localPort}/final\r\n" +
-                "Content-Length: 0\r\n" +
-                "Connection: close\r\n\r\n"
+                "Content-Type: text/plain\r\n" +
+                "Content-Length: ${body.toByteArray().size}\r\n" +
+                "Connection: close\r\n\r\n" +
+                body
         }
 
         val proxy = SystemHttpCompatibilityProxy(
@@ -70,6 +73,7 @@ class HttpCompatibilityProxyTest {
                 redirect.contains("location: http://127.0.0.1:${finalServer.localPort}/final", ignoreCase = true),
                 redirect,
             )
+            assertTrue(redirect.endsWith("redirect response body"), redirect)
 
             proxy.connect(followedFlow, events::offer)
             assertIs<TcpProxyEvent.Connected>(requireNotNull(events.poll(2, TimeUnit.SECONDS)))
@@ -862,6 +866,119 @@ class HttpCompatibilityProxyTest {
     }
 
     @Test
+    fun `compatibility proxy fully acquires upstream body before emitting response bytes`() {
+        val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val firstHalfSent = CountDownLatch(1)
+        val releaseSecondHalf = CountDownLatch(1)
+        val firstHalf = "upstream-first-half-"
+        val secondHalf = "upstream-second-half"
+        val body = firstHalf + secondHalf
+        val serverThread = Thread {
+            server.use { listening ->
+                listening.accept().use { socket ->
+                    readRequest(socket)
+                    val head =
+                        "HTTP/1.1 200 OK\r\n" +
+                            "Content-Type: text/plain\r\n" +
+                            "Content-Length: ${body.toByteArray(StandardCharsets.UTF_8).size}\r\n" +
+                            "Connection: close\r\n\r\n"
+                    socket.getOutputStream().write(head.toByteArray(StandardCharsets.ISO_8859_1))
+                    socket.getOutputStream().write(firstHalf.toByteArray(StandardCharsets.UTF_8))
+                    socket.getOutputStream().flush()
+                    firstHalfSent.countDown()
+                    assertTrue(releaseSecondHalf.await(2, TimeUnit.SECONDS))
+                    socket.getOutputStream().write(secondHalf.toByteArray(StandardCharsets.UTF_8))
+                    socket.getOutputStream().flush()
+                }
+            }
+        }.apply {
+            isDaemon = true
+            start()
+        }
+        val proxy = SystemHttpCompatibilityProxy(
+            config = PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000),
+        )
+        val events = LinkedBlockingQueue<TcpProxyEvent>()
+        val flow = httpFlow(peerPort = 2192)
+
+        try {
+            proxy.connect(flow, events::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(events.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                flow,
+                ("GET /buffered HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\n\r\n")
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+            assertIs<TcpProxyEvent.WriteCompleted>(requireNotNull(events.poll(2, TimeUnit.SECONDS)))
+            assertTrue(firstHalfSent.await(2, TimeUnit.SECONDS))
+
+            // The upstream socket has already delivered response headers and body bytes,
+            // but no response bytes may cross the legacy boundary until acquisition ends.
+            assertEquals(null, events.poll(250, TimeUnit.MILLISECONDS))
+
+            releaseSecondHalf.countDown()
+            val response = collectResponse(events)
+            assertTrue(response.endsWith(body), response)
+        } finally {
+            releaseSecondHalf.countDown()
+            proxy.close()
+            runCatching { server.close() }
+            serverThread.join(2_000)
+        }
+    }
+
+    @Test
+    fun `resource is ready before first response byte is emitted to client`() {
+        val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val body = "<html><img src=\"image.gif\"></html>"
+        val thread = serveOnce(server) {
+            "HTTP/1.1 200 OK\r\n" +
+                "Content-Type: text/html; charset=utf-8\r\n" +
+                "Content-Length: ${body.toByteArray(StandardCharsets.UTF_8).size}\r\n" +
+                "Connection: close\r\n\r\n" +
+                body
+        }
+        lateinit var proxy: SystemHttpCompatibilityProxy
+        val events = LinkedBlockingQueue<TcpProxyEvent>()
+        val stateAtFirstPayload = LinkedBlockingQueue<ResourceState>()
+        val flow = httpFlow(peerPort = 2196)
+        proxy = SystemHttpCompatibilityProxy(
+            config = PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000),
+        )
+
+        try {
+            proxy.connect(flow) { event ->
+                if (event is TcpProxyEvent.Payload && stateAtFirstPayload.isEmpty()) {
+                    proxy.resourceGraphSnapshots()
+                        .singleOrNull()
+                        ?.nodes
+                        ?.singleOrNull { it.legacyUri.path == "/page" }
+                        ?.state
+                        ?.let(stateAtFirstPayload::offer)
+                }
+                events.offer(event)
+            }
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(events.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                flow,
+                ("GET /page HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\n\r\n")
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+
+            val response = collectResponse(events)
+            assertTrue(response.endsWith(body), response)
+            assertEquals(
+                ResourceState.READY,
+                requireNotNull(stateAtFirstPayload.poll(2, TimeUnit.SECONDS)),
+            )
+        } finally {
+            proxy.close()
+            runCatching { server.close() }
+            thread.join(2_000)
+        }
+    }
+
+    @Test
     fun `truncated buffered response fails before emitting a partial HTTP response`() {
         val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
         val thread = Thread {
@@ -1059,7 +1176,7 @@ class HttpCompatibilityProxyTest {
             assertTrue(response.contains("src=\"frame.html\""), response)
             assertTrue(response.contains("src=\"/img.gif\""), response)
 
-            val graph = proxy.resourceGraphSnapshots(flow).single()
+            val graph = proxy.resourceGraphSnapshots().single()
             val frameLegacy = URI("http://127.0.0.1:${server.localPort}/pages/frame.html")
             val imageLegacy = URI("http://127.0.0.1:${server.localPort}/img.gif")
             assertTrue(graph.nodes.any { it.legacyUri == frameLegacy && it.kind == ResourceKind.FRAME })
@@ -1099,7 +1216,49 @@ class HttpCompatibilityProxyTest {
             ).getOrThrow()
 
             collectResponse(events)
-            assertTrue(proxy.resourceGraphSnapshots(flow).isEmpty())
+            assertTrue(proxy.resourceGraphSnapshots().isEmpty())
+        } finally {
+            proxy.close()
+            runCatching { server.close() }
+            thread.join(2_000)
+        }
+    }
+
+    @Test
+    fun `resource graph survives PPP generation invalidation`() {
+        val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val body = "<html><img src=\"persistent.gif\"></html>"
+        val thread = serveOnce(server) {
+            "HTTP/1.1 200 OK\r\n" +
+                "Content-Type: text/html; charset=utf-8\r\n" +
+                "Content-Length: ${body.toByteArray(StandardCharsets.UTF_8).size}\r\n" +
+                "Connection: close\r\n\r\n" +
+                body
+        }
+        val proxy = SystemHttpCompatibilityProxy(
+            config = PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000),
+        )
+        val events = LinkedBlockingQueue<TcpProxyEvent>()
+        val flow = httpFlow(peerPort = 2290)
+
+        try {
+            proxy.connect(flow, events::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(events.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                flow,
+                ("GET /persistent HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\n\r\n")
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+            collectResponse(events)
+
+            val beforeReconnect = proxy.resourceGraphSnapshots().single()
+            assertTrue(beforeReconnect.edges.any { it.relation == ResourceRelation.IMG_SRC })
+
+            proxy.invalidateBefore(flow.generation + 1)
+
+            val afterReconnect = proxy.resourceGraphSnapshots().single()
+            assertEquals(beforeReconnect.id, afterReconnect.id)
+            assertEquals(beforeReconnect, afterReconnect)
         } finally {
             proxy.close()
             runCatching { server.close() }
@@ -1134,7 +1293,7 @@ class HttpCompatibilityProxyTest {
             ).getOrThrow()
 
             collectResponse(events)
-            val graph = proxy.resourceGraphSnapshots(flow).single()
+            val graph = proxy.resourceGraphSnapshots().single()
             assertEquals(URI("http://127.0.0.1:${server.localPort}/missing"), graph.rootLegacyUri)
             assertTrue(graph.edges.any { it.relation == ResourceRelation.IMG_SRC })
         } finally {
@@ -1171,7 +1330,7 @@ class HttpCompatibilityProxyTest {
             ).getOrThrow()
 
             collectResponse(events)
-            val graph = proxy.resourceGraphSnapshots(flow).single()
+            val graph = proxy.resourceGraphSnapshots().single()
             assertTrue(graph.edges.any { it.relation == ResourceRelation.BASE_HREF })
             assertTrue(
                 graph.nodes.any { it.legacyUri == URI("http://127.0.0.1:${server.localPort}/assets/logo.gif") },
@@ -1233,7 +1392,7 @@ class HttpCompatibilityProxyTest {
             ).getOrThrow()
             collectResponse(cssEvents)
 
-            val graph = proxy.resourceGraphSnapshots(pageFlow).single()
+            val graph = proxy.resourceGraphSnapshots().single()
             val theme = URI("http://127.0.0.1:${server.localPort}/theme.css")
             assertTrue(graph.edges.any { it.childLegacyUri == theme && it.relation == ResourceRelation.CSS_IMPORT })
             assertEquals(ResourceKind.STYLESHEET, graph.nodes.single { it.legacyUri == theme }.kind)

@@ -9,14 +9,11 @@ import no.skasti.serialmodem.ppp.PppAddresses
 import no.skasti.serialmodem.ppp.PppControlOption
 import no.skasti.serialmodem.ppp.PppControlPacket
 import no.skasti.serialmodem.ppp.PppFrame
-import no.skasti.serialmodem.ppp.dns.PppDnsConfig
 import no.skasti.serialmodem.ppp.ip.Ipv4Address
 import no.skasti.serialmodem.ppp.ip.Ipv4Cidr
 import no.skasti.serialmodem.ppp.ip.Ipv4Packet
 import no.skasti.serialmodem.ppp.session.PppSession
-import no.skasti.serialmodem.ppp.tcp.SystemTcpProxy
 import no.skasti.serialmodem.ppp.tcp.TcpPacket
-import no.skasti.serialmodem.ppp.udp.SystemUdpProxy
 import no.skasti.serialmodem.ppp.udp.UdpPacket
 import java.io.DataInputStream
 import java.net.DatagramPacket
@@ -50,8 +47,6 @@ class DnsTcpIntegrationTest {
                 selectPeerAddress = { requested ->
                     if (requested == Ipv4Address.ZERO) addresses.peerAddress else requested
                 },
-                udpProxy = SystemUdpProxy(),
-                tcpProxy = SystemTcpProxy(),
                 dnsConfig = PppDnsConfig(
                     upstreamServer = LOOPBACK,
                     upstreamPort = upstream.port,

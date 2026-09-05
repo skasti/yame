@@ -13,7 +13,24 @@ The HTTP compatibility proxy has deliberately pragmatic goals:
 - accept the legacy client's HTTP request on TCP port 80;
 - use the host JVM's current HTTP/TLS stack upstream;
 - return a finite HTTP/1.0 response with `Connection: close`, no chunked framing,
-  and a correct content length when the body is buffered;
+  and a correct content length;
+- fully acquire the upstream response before emitting the corresponding response
+  to the legacy client. The compatibility proxy is a store/transform/serve
+  boundary: TCP/PPP/serial backpressure from the legacy side must never throttle
+  an in-progress upstream HTTP body read;
+- keep TCP byte-stream handling and HTTP semantics in separate layers:
+  `HttpTcpProxy` owns incremental HTTP decoding/encoding and connection-level
+  backpressure, while compatibility/resource code implements `HttpRequestHandler`
+  and must not consume or emit `TcpProxyEvent` directly;
+- retain the complete upstream source representation separately from any
+  client-visible transformed representation. A resource is `READY` when the
+  complete client representation exists locally, before downstream delivery begins;
+- keep resource graph knowledge at process scope, owned above the PPP session
+  boundary and injected into each HTTP proxy instance. It must survive TCP flow
+  closure, PPP generation changes, and browser restarts; revisiting a navigation
+  root reuses and extends its existing graph rather than replacing it.
+  Bound the total working set with explicit LRU-style retention rather than tying
+  eviction to browser, TCP, or PPP lifetimes;
 - request `Accept-Encoding: identity` for text that may need rewriting;
 - replace absolute `https://` references in supported text responses with clean
   `http://` references and remember the upstream HTTPS target for the PPP

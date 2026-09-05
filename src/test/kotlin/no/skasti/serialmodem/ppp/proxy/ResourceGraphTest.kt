@@ -83,10 +83,11 @@ class ResourceGraphTest {
         assertEquals(setOf(first.id, second.id), registry.contextsFor(sharedLegacy).map { it.id }.toSet())
     }
     @Test
-    fun `registry evicts the oldest navigation context and URI associations`() {
-        val registry = NavigationResourceRegistry(maxContexts = 2)
+    fun `navigation roots are process persistent and reused on later visits`() {
+        val registry = NavigationResourceRegistry()
+        val root = URI("http://legacy.test/one")
         val shared = URI("http://cdn.test/old.gif")
-        val first = registry.startNavigation(URI("http://legacy.test/one"))
+        val first = registry.startNavigation(root)
         registry.discover(
             first,
             first.rootLegacyUri,
@@ -95,17 +96,113 @@ class ResourceGraphTest {
             ResourceRelation.IMG_SRC,
             ResourceKind.IMAGE,
         )
-        val second = registry.startNavigation(URI("http://legacy.test/two"))
-        val third = registry.startNavigation(URI("http://legacy.test/three"))
 
-        assertEquals(listOf(second.id, third.id), registry.snapshots().map { it.id })
-        assertTrue(registry.contextsFor(shared).isEmpty())
+        // Visiting unrelated roots must not evict accumulated resource knowledge.
+        repeat(100) { index ->
+            registry.startNavigation(URI("http://legacy.test/page-$index"))
+        }
+
+        val revisited = registry.startNavigation(root)
+        assertEquals(first.id, revisited.id)
+        assertTrue(revisited.contains(shared))
+        assertEquals(101, registry.snapshots().size)
+        assertEquals(listOf(first.id), registry.contextsFor(shared).map { it.id })
+    }
+
+    @Test
+    fun `registry evicts least recently used graph when global limit is reached`() {
+        val hooks = ResourceRegistryHooks()
+        val removed = mutableListOf<ResourceRegistryRoot>()
+        hooks.onRootRemoved += removed::add
+        val registry = NavigationResourceRegistry(maxContexts = 2, hooks = hooks)
+        val firstRoot = URI("http://legacy.test/one")
+        val secondRoot = URI("http://legacy.test/two")
+        val thirdRoot = URI("http://legacy.test/three")
+        val first = registry.startNavigation(firstRoot)
+        registry.startNavigation(secondRoot)
+
+        // Reusing the first root makes the second graph the LRU candidate.
+        assertEquals(first.id, registry.startNavigation(firstRoot).id)
+        registry.startNavigation(thirdRoot)
+
+        assertEquals(setOf(firstRoot, thirdRoot), registry.snapshots().map { it.rootLegacyUri }.toSet())
+        assertEquals(listOf(secondRoot), removed.map { it.rootLegacyUri })
+    }
+
+    @Test
+    fun `evicted graph handle cannot be reindexed or mutated`() {
+        val registry = NavigationResourceRegistry(maxContexts = 1)
+        val first = registry.startNavigation(URI("http://legacy.test/one"))
+        val staleChild = URI("http://legacy.test/stale.gif")
+        registry.startNavigation(URI("http://legacy.test/two"))
+
+        registry.discover(
+            first,
+            first.rootLegacyUri,
+            staleChild,
+            URI("https://legacy.test/stale.gif"),
+            ResourceRelation.IMG_SRC,
+            ResourceKind.IMAGE,
+        )
+        registry.markFetched(
+            first,
+            first.rootLegacyUri,
+            URI("https://legacy.test/one"),
+            URI("https://legacy.test/one"),
+            ResourceState.READY,
+        )
+
+        assertTrue(registry.contextsFor(staleChild).isEmpty())
+        assertEquals(1, registry.snapshots().size)
+        assertTrue(registry.snapshots().none { it.id == first.id })
+    }
+
+    @Test
+    fun `stale fetch attempt cannot overwrite newer ready state`() {
+        val registry = NavigationResourceRegistry()
+        val graph = registry.startNavigation(URI("http://legacy.test/root"))
+        val resource = URI("http://legacy.test/image.gif")
+        val upstream = URI("https://legacy.test/image.gif")
+        registry.discover(
+            graph,
+            graph.rootLegacyUri,
+            resource,
+            upstream,
+            ResourceRelation.IMG_SRC,
+            ResourceKind.IMAGE,
+        )
+
+        val older = requireNotNull(registry.beginFetch(graph, resource, upstream, upstream))
+        val newer = requireNotNull(registry.beginFetch(graph, resource, upstream, upstream))
+
+        assertTrue(
+            registry.markFetchState(
+                graph,
+                newer,
+                resource,
+                upstream,
+                upstream,
+                ResourceState.READY,
+            ),
+        )
+        assertTrue(
+            !registry.markFetchState(
+                graph,
+                older,
+                resource,
+                upstream,
+                upstream,
+                ResourceState.FAILED,
+            ),
+        )
+
+        val node = graph.snapshot().nodes.single { it.legacyUri == resource }
+        assertEquals(ResourceState.READY, node.state)
     }
 
     @Test
     fun `graph bounds nodes and edges and does not index dropped resources`() {
         val registry = NavigationResourceRegistry(
-            maxContexts = 1,
             maxNodesPerContext = 2,
             maxEdgesPerContext = 1,
         )
@@ -169,46 +266,24 @@ class ResourceGraphTest {
     }
 
     @Test
-    fun `registry hooks report add use and eviction removal`() {
+    fun `registry hooks report root reuse without removal`() {
         val hooks = ResourceRegistryHooks()
         val addedRoots = mutableListOf<ResourceRegistryRoot>()
         val usedRoots = mutableListOf<ResourceRegistryRoot>()
         val removedRoots = mutableListOf<ResourceRegistryRoot>()
-        val addedResources = mutableListOf<ResourceRegistryResource>()
-        val removedResources = mutableListOf<ResourceRegistryResource>()
         hooks.onRootAdded += addedRoots::add
         hooks.onRootUsed += usedRoots::add
         hooks.onRootRemoved += removedRoots::add
-        hooks.onResourceAdded += addedResources::add
-        hooks.onResourceRemoved += removedResources::add
 
-        val registry = NavigationResourceRegistry(maxContexts = 1, hooks = hooks)
-        val firstRoot = URI("http://legacy.test/one")
-        val first = registry.startNavigation(firstRoot)
-        val child = URI("http://cdn.test/site.css")
-        registry.discover(
-            first,
-            first.rootLegacyUri,
-            child,
-            URI("https://cdn.test/site.css"),
-            ResourceRelation.LINK_STYLESHEET,
-            ResourceKind.STYLESHEET,
-        )
+        val registry = NavigationResourceRegistry(hooks = hooks)
+        val root = URI("http://legacy.test/one")
+        val first = registry.startNavigation(root)
+        val revisited = registry.startNavigation(root)
 
-        assertEquals(listOf(firstRoot), addedRoots.map { it.rootLegacyUri })
+        assertEquals(first.id, revisited.id)
+        assertEquals(listOf(root), addedRoots.map { it.rootLegacyUri })
         assertEquals(2, usedRoots.count { it.graphId == first.id })
-        assertEquals(listOf(child), addedResources.map { it.resourceLegacyUri })
-
-        val evictionOrder = mutableListOf<String>()
-        hooks.onRootRemoved += { evictionOrder += "root:${it.graphId}" }
-        hooks.onResourceRemoved += { evictionOrder += "resource:${it.graphId}:${it.resourceLegacyUri}" }
-
-        val second = registry.startNavigation(URI("http://legacy.test/two"))
-
-        assertEquals(listOf(first.id), removedRoots.map { it.graphId })
-        assertTrue(removedResources.any { it.graphId == first.id && it.resourceLegacyUri == child })
-        assertTrue(evictionOrder.firstOrNull() == "root:${first.id}")
-        assertTrue(second.id != first.id)
+        assertTrue(removedRoots.isEmpty())
     }
 
     @Test

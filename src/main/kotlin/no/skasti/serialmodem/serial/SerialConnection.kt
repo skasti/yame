@@ -14,6 +14,7 @@ data class SerialPortDescriptor(
 class SerialConnection(
     portName: String,
     private val baudRate: Int,
+    private val flowControl: SerialFlowControl = SerialFlowControl.DISABLED,
     private val logger: (String) -> Unit = ::println,
 ) : Closeable {
     private val port: SerialPort = SerialPort.getCommPort(portName)
@@ -32,14 +33,17 @@ class SerialConnection(
             SerialPort.ONE_STOP_BIT,
             SerialPort.NO_PARITY,
         )
-        port.setFlowControl(SerialPort.FLOW_CONTROL_DISABLED)
+        port.setFlowControl(flowControl.toJSerialCommValue())
         port.setComPortTimeouts(SerialPort.TIMEOUT_READ_SEMI_BLOCKING, 0, 0)
 
         if (!port.openPort()) {
             error("Could not open serial port ${port.systemPortName}")
         }
 
-        logger("Opened ${port.systemPortName} at $baudRate baud, 8N1, no flow control")
+        logger(
+            "Opened ${port.systemPortName} at $baudRate baud, 8N1, " +
+                "flow control ${flowControl.displayName}",
+        )
     }
 
     fun startReading(

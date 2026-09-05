@@ -2,12 +2,14 @@ package no.skasti.serialmodem.ppp
 
 import no.skasti.serialmodem.observer.YameEvent
 import no.skasti.serialmodem.ppp.dns.PppDnsConfig
+import no.skasti.serialmodem.ppp.proxy.NavigationResourceRegistry
 import no.skasti.serialmodem.ppp.proxy.PppHttpCompatibilityConfig
 import no.skasti.serialmodem.ppp.proxy.ResourceRegistryHooks
 import no.skasti.serialmodem.ppp.proxy.SystemRoutingTcpProxy
 import no.skasti.serialmodem.ppp.session.PppSession
 import java.io.Closeable
 import java.io.OutputStream
+import kotlin.time.Duration.Companion.milliseconds
 
 interface PppHandler : Closeable {
     fun attachOutput(output: OutputStream)
@@ -27,12 +29,20 @@ internal class RetroPppHandler(
     private val ipConfig: PppIpConfig = PppIpConfig(),
     private val dnsConfig: PppDnsConfig = PppDnsConfig(),
     private val httpCompatibilityConfig: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig(),
+    private val resourceGraphs: NavigationResourceRegistry =
+        NavigationResourceRegistry(
+            maxContexts = httpCompatibilityConfig.maxResourceContexts,
+            maxNodesPerContext = httpCompatibilityConfig.maxResourceNodesPerContext,
+            maxEdgesPerContext = httpCompatibilityConfig.maxResourceEdgesPerContext,
+            hooks = resourceRegistryHooks,
+        ),
 ) : PppHandler {
     private var output: OutputStream? = null
     private var encoder = PppEncoder()
     private var framer = createFramer()
     private var session: PppSession? = null
     private var addressResolver = createAddressResolver()
+    private var frameDelay = 75.milliseconds
 
     override fun attachOutput(output: OutputStream) {
         check(this.output == null) { "PPP output is already attached" }
@@ -65,6 +75,7 @@ internal class RetroPppHandler(
                 logger = proxyLogger,
                 eventSink = eventSink,
                 resourceRegistryHooks = resourceRegistryHooks,
+                resourceGraphs = resourceGraphs,
             ),
         )
     }

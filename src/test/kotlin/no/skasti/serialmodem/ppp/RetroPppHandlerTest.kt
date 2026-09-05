@@ -1,9 +1,11 @@
 package no.skasti.serialmodem.ppp
 
 import no.skasti.serialmodem.ppp.lcp.LcpPacket
+import no.skasti.serialmodem.ppp.proxy.NavigationResourceRegistry
 
 import no.skasti.serialmodem.ppp.session.PppSession
 import java.io.ByteArrayOutputStream
+import java.net.URI
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -76,6 +78,28 @@ class RetroPppHandlerTest {
         assertEquals(LcpPacket.CONFIGURE_REQUEST, secondRequest.code)
         assertEquals(firstRequest.identifier, secondRequest.identifier)
         assertContentEquals(firstRequest.data, secondRequest.data)
+    }
+
+    @Test
+    fun `resource graph registry survives PPP redial`() {
+        val registry = NavigationResourceRegistry(maxContexts = 8)
+        val root = URI("http://legacy.test/page")
+        val original = registry.startNavigation(root)
+        val output = ByteArrayOutputStream()
+        val handler =
+            RetroPppHandler(
+                logger = {},
+                resourceGraphs = registry,
+            )
+        handler.attachOutput(output)
+
+        handler.connected()
+        handler.connected()
+
+        val revisited = registry.startNavigation(root)
+        assertEquals(original.id, revisited.id)
+        assertEquals(1, registry.snapshots().size)
+        handler.close()
     }
 
     @Test

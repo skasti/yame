@@ -12,6 +12,7 @@ import no.skasti.serialmodem.ppp.dns.PppDnsConfig
 import no.skasti.serialmodem.ppp.proxy.PppHttpCompatibilityConfig
 import no.skasti.serialmodem.ppp.PppIpConfig
 import no.skasti.serialmodem.serial.SerialConnection
+import no.skasti.serialmodem.serial.SerialFlowControl
 import no.skasti.serialmodem.tone.DialString
 import no.skasti.serialmodem.tone.HandshakeProfile
 import no.skasti.serialmodem.ui.InteractiveYameApplication
@@ -83,6 +84,7 @@ fun main(args: Array<String>) {
         val application = InteractiveYameApplication(
             initialPortName = options.portName,
             initialBaud = options.baudRate,
+            initialFlowControl = options.flowControl,
             initialModemConfig = options.modemConfig,
             logManager = logManager,
             terminal = if (options.uiMode == UiMode.AUTO) {
@@ -146,7 +148,12 @@ fun main(args: Array<String>) {
         proxyLogger = proxyConsoleLogger,
         eventSink = logManager::eventSink,
     )
-    val connection = SerialConnection(portName, options.baudRate, logger = serialConsoleLogger)
+    val connection = SerialConnection(
+        portName = portName,
+        baudRate = options.baudRate,
+        flowControl = options.flowControl,
+        logger = serialConsoleLogger,
+    )
     val shutdown = CountDownLatch(1)
 
     try {
@@ -182,6 +189,7 @@ private enum class UiMode {
 private data class Options(
     val portName: String?,
     val baudRate: Int,
+    val flowControl: SerialFlowControl,
     val listPorts: Boolean,
     val testNumber: String?,
     val uiMode: UiMode,
@@ -192,7 +200,8 @@ private data class Options(
 private fun parseArgs(args: Array<String>): Options {
     val defaults = HayesModemConfig()
     var port: String? = null
-    var baud = 115200
+    var baud = 38400
+    var flowControl = SerialFlowControl.DISABLED
     var list = false
     var testNumber: String? = null
     var pickupTime = defaults.pickupTime
@@ -216,6 +225,12 @@ private fun parseArgs(args: Array<String>): Options {
             "--baud", "-b" -> {
                 require(i + 1 < args.size) { "$arg requires a baud rate" }
                 baud = args[++i].toInt()
+            }
+            "--flow-control" -> {
+                require(i + 1 < args.size) {
+                    "$arg requires disabled, xon-xoff, or hardware"
+                }
+                flowControl = SerialFlowControl.parse(args[++i])
             }
             "--list", "-l" -> list = true
             "--test-tone", "-t" -> {
@@ -283,6 +298,7 @@ private fun parseArgs(args: Array<String>): Options {
     return Options(
         portName = port,
         baudRate = baud,
+        flowControl = flowControl,
         listPorts = list,
         testNumber = testNumber,
         uiMode = uiMode,
@@ -354,13 +370,14 @@ private fun printUsage() {
         Usage:
           serial-modem-emulator --list
           serial-modem-emulator --test-tone NUMBER [modem options]
-          serial-modem-emulator [--port PORT] [--baud 115200] [--ui auto|tui|plain] [modem options]
+          serial-modem-emulator [--port PORT] [--baud 38400] [--ui auto|tui|plain] [modem options]
 
         Options:
           -l, --list                  List available serial ports
           -t, --test-tone NUM         Run the modem dialing sequence without a serial port
           -p, --port PORT             Serial port, e.g. COM3 or /dev/ttyUSB0
-          -b, --baud RATE             Baud rate (default: 115200)
+          -b, --baud RATE             Baud rate (default: 38400)
+              --flow-control MODE    Serial flow control: disabled, xon-xoff, or hardware (default: disabled)
               --pickup-time DURATION  Ringback time before pickup (default: ${defaults.pickupTime})
               --dial-tone-time DUR    Dial-tone duration (default: ${defaults.dialToneTime})
               --handshake-profile P   Handshake profile: ${handshakeProfileNames()} (default: ${defaults.handshakeProfile.name.lowercase()})
