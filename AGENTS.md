@@ -58,6 +58,37 @@ redirect expectations when the two differ. Do not add semantic HTML/CSS/JavaScri
 parsing merely to avoid changing visible URL text. Rewriting every literal
 absolute `https://` URL in a supported text body is intentional.
 
+## Development workflow
+
+Before pushing implementation changes or declaring a task complete:
+
+- run the relevant build and test suite locally when the environment allows it;
+- do not push known uncompilable or failing code;
+- do not describe work as "done", "finished", or equivalent until the build and relevant tests are green;
+- for changes that affect the normal JVM build, the default verification is `./gradlew clean build` unless a narrower command is clearly sufficient;
+- run additional integration or platform-specific tests when the changed area requires them;
+- if the current environment cannot execute the required build/tests, state that limitation explicitly and treat the work as unverified until CI has completed successfully;
+- when CI is the only available verification path, inspect failures, fix them, and continue until CI is green before declaring completion.
+
+## Code quality and design principles
+
+Prefer code that is easy to reason about, test, review, and extend.
+
+- follow separation of concerns: a type or function should have one clear responsibility and should not accumulate unrelated policy, IO, state management, formatting, and protocol behavior;
+- prefer introducing a dedicated type/file when adding a new domain concept, policy, protocol component, transformer, cache, codec, scheduler, or other independently meaningful responsibility;
+- avoid growing large catch-all files or classes when new behavior can live behind a focused abstraction with a clear interface;
+- keep package structure aligned with responsibilities so related production and test code are easy to locate;
+- make invariants and ownership explicit in types and APIs rather than relying on call-order assumptions or duplicated implicit knowledge;
+- avoid multiple independent code paths that answer the same semantic question; prefer one source of truth for state transitions, applicability, identity, cacheability, validation, and similar decisions;
+- treat shared/cached state as immutable from the caller's perspective and use defensive copies or immutable structures at ownership boundaries when needed;
+- use deterministic, canonical representations for identifiers, fingerprints, protocol/header normalization, ordering, and other values that participate in equality or caching;
+- keep concurrency boundaries explicit: publish state before signalling completion, avoid races between shared work and caches, and do not let observers/hooks block critical request or protocol paths;
+- treat external input as untrusted: bound memory, CPU, decoded sizes, recursion/depth, queues, and IO; avoid unnecessary parsing or implicit filesystem/network side effects;
+- prefer fail-safe behavior and explicit fallback paths over partially mutated state;
+- design new behavior so important success, boundary, failure, passthrough, and concurrency paths can be tested deterministically;
+- when fixing a bug, add a regression test when practical, especially for invariants or edge cases likely to recur;
+- avoid speculative abstractions, but refactor when a file/type starts carrying multiple distinct responsibilities or when similar logic is being duplicated.
+
 ## Explicit non-goals for this layer
 
 Do not request or add these as correctness requirements for HTTP URL/TLS
