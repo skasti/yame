@@ -1533,6 +1533,26 @@ internal object YameDashboardRenderer {
             HttpProxyActionKind.ERROR -> DashboardTone.DANGER
         }
 
+    private fun formatTransformationSummary(summary: ResourceTransformationSummary): String {
+        val savedPercent =
+            if (summary.sourceBytes > 0) {
+                (summary.savedBytes * 100L / summary.sourceBytes).coerceIn(0, 100)
+            } else {
+                0
+            }
+        val detail = summary.detail?.let { " · $it" }.orEmpty()
+        return "  ${formatCompactBytes(summary.sourceBytes.toLong())}→${formatCompactBytes(summary.outputBytes.toLong())} -$savedPercent%$detail"
+    }
+
+    private fun formatCompactBytes(bytes: Long): String =
+        when {
+            bytes >= 1024L * 1024L ->
+                "${(bytes.toDouble() / (1024.0 * 1024.0)).let { if (it >= 10) "%.0f".format(it) else "%.1f".format(it) }}M"
+            bytes >= 1024L ->
+                "${(bytes.toDouble() / 1024.0).let { if (it >= 10) "%.0f".format(it) else "%.1f".format(it) }}K"
+            else -> "$bytes"
+        }
+
     private fun compactTransfer(transfer: DashboardTransfer): String =
         "${transfer.kind} ${transfer.destination} ↑${formatBytes(transfer.toHostBytes)} ↓${formatBytes(transfer.toPeerBytes)}"
 
