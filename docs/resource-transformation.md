@@ -132,3 +132,35 @@ Transformers are responsible for removing or regenerating such metadata when the
 If transformation behavior changes between YAME versions or configurations, cached transformed resources must not be reused across incompatible transformation profiles. The transformation profile is therefore part of transformed/cache identity.
 
 Within one running process, however, the pipeline is assumed stable. Code that introduces runtime mutation of the transformer set or semantics must revisit this validator invariant explicitly.
+
+
+## Cache and in-flight work invariants
+
+Resource caching and in-flight coalescing have different identity requirements and should remain separate concepts.
+
+- Cache identity answers which client-ready representation may be reused for a resource/profile.
+- In-flight identity answers whether two concurrent operations are processing the same effective source/request state.
+- Fingerprints must include all semantically relevant status/header/body or request state and must normalize names with locale-independent rules.
+- Header ordering or equivalent input ordering must not create accidental fingerprint differences.
+- Cached/shared values are immutable snapshots. Mutable byte arrays, maps, and header lists must be defensively copied at API boundaries.
+- A producer must publish the cacheable result before completing shared in-flight work. Otherwise a new request can fall into the gap between in-flight completion and cache insertion and duplicate the work.
+- Waiters must not redundantly republish the same cache entry.
+
+## Pipeline-state invariant
+
+Transformer applicability and cacheability are evaluated against the representation as it evolves through the pipeline. Do not make a separate preflight decision against only the original representation when later transforms may change headers, bytes, or transformer applicability.
+
+Bodyless responses may still participate in resource-level transforms when header/status-based transforms are valid. Conversely, partial-body responses such as `206 Partial Content` must bypass ordinary full-representation transformation/cache handling unless explicit range-aware semantics are implemented.
+
+## Untrusted binary input
+
+Image and other binary transformers process untrusted Internet data. They must therefore make expensive work deliberate and bounded:
+
+- enforce encoded-size and decoded-work limits before full decode where possible;
+- inspect dimensions/metadata cheaply before materializing large decoded buffers;
+- disable unnecessary metadata parsing and backward seeking when the decoder API supports it;
+- avoid implicit filesystem/temp-file caches when an explicit bounded in-memory stream is available;
+- keep failure behavior safe: malformed/unsupported data should normally remain untransformed rather than destabilizing the proxy;
+- optimization transforms should not replace the source when the candidate representation is larger unless compatibility requires transcoding regardless of size.
+
+Tests should cover the boundary/negative paths explicitly, not only the happy path.
