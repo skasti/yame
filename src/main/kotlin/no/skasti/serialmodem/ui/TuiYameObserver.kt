@@ -24,8 +24,6 @@ import no.skasti.serialmodem.ppp.proxy.ResourceRegistryResource
 import no.skasti.serialmodem.ppp.proxy.ResourceRegistryRoot
 import no.skasti.serialmodem.ppp.proxy.ResourceState
 import no.skasti.serialmodem.ppp.proxy.transform.ResourceTransformationSummary
-import no.skasti.serialmodem.ppp.proxy.ResourceRegistryResource
-import no.skasti.serialmodem.ppp.proxy.ResourceRegistryRoot
 import no.skasti.serialmodem.serial.SerialPortDescriptor
 import no.skasti.serialmodem.serial.SerialFlowControl
 import java.net.URI
@@ -1374,8 +1372,7 @@ internal object YameDashboardRenderer {
                                 ResourceState.DISCOVERED -> "."
                                 ResourceState.FETCHING,
                                 ResourceState.SOURCE_READY,
-                                ResourceState.TRANSFORMING,
-                                -> "~"
+                                ResourceState.TRANSFORMING -> "~"
                                 ResourceState.READY -> "*"
                                 ResourceState.FAILED -> "!"
                             }
@@ -1384,8 +1381,7 @@ internal object YameDashboardRenderer {
                                 ResourceState.DISCOVERED -> DashboardTone.RESOURCE_KNOWN
                                 ResourceState.FETCHING,
                                 ResourceState.SOURCE_READY,
-                                ResourceState.TRANSFORMING,
-                                -> DashboardTone.RESOURCE_ACTIVE
+                                ResourceState.TRANSFORMING -> DashboardTone.RESOURCE_ACTIVE
                                 ResourceState.READY -> DashboardTone.RESOURCE_READY
                                 ResourceState.FAILED -> DashboardTone.RESOURCE_FAILED
                             }
