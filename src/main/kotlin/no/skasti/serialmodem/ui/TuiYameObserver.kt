@@ -1212,9 +1212,10 @@ internal object YameDashboardRenderer {
                 lines += DashboardLine(compactTransfer(it), transferTone(it.state))
             }
         state.httpHosts.getOrNull(state.selectedHttpHostIndex)?.let { host ->
-            val marker = if (host.expanded) "▼" else "▶"
+            val marker = if (host.expanded) "v" else ">"
             lines += DashboardLine(
-                "HTTP $marker ${host.host} (${host.resources.size})",
+                "HTTP $marker ${host.host} (${host.resources.size})" +
+                    if (host.savedBytes > 0) " · saved ${formatBytes(host.savedBytes)}" else "",
                 DashboardTone.ACCENT,
             )
         }
@@ -1231,7 +1232,7 @@ internal object YameDashboardRenderer {
                     (palette.options.size - 1).coerceAtLeast(0),
                 ),
             )
-            val selection = selected?.let { "  › ${it.label}" }.orEmpty()
+            val selection = selected?.let { "  > ${it.label}" }.orEmpty()
             lines.add(
                 1,
                 DashboardLine(
@@ -1345,26 +1346,53 @@ internal object YameDashboardRenderer {
 
         return sequence {
             hosts.forEachIndexed { index, host ->
-                val marker = if (host.expanded) "▼" else "▶"
-                val selection = if (index == selected) "›" else " "
+                val marker = if (host.expanded) "v" else ">"
+                val selection = if (index == selected) ">" else " "
                 yield(
                     DashboardLine(
-                        clip("$selection $marker ${host.host}  (${host.resources.size})", contentWidth),
+                        clip(
+                            "$selection $marker ${host.host}  (${host.resources.size})" +
+                                if (host.savedBytes > 0) " · saved ${formatBytes(host.savedBytes)}" else "",
+                            contentWidth,
+                        ),
                         if (index == selected) DashboardTone.SELECTED else DashboardTone.ACCENT,
                     ),
                 )
                 if (host.expanded) {
-                    host.urls.forEach { url ->
-                        val path = runCatching { URI(url) }.getOrNull()?.let { uri ->
+                    host.resources.forEach { resource ->
+                        val path = runCatching { URI(resource.url) }.getOrNull()?.let { uri ->
                             buildString {
                                 append(uri.rawPath?.takeIf { it.isNotEmpty() } ?: "/")
                                 uri.rawQuery?.let { append('?').append(it) }
                             }
-                        } ?: url
+                        } ?: resource.url
+                        val summary = resource.transformations.lastOrNull()
+                        val transformText = summary?.let(::formatTransformationSummary).orEmpty()
+                        val prefetchText = if (resource.prefetched) " [P]" else ""
+                        val statusText =
+                            when (resource.state) {
+                                ResourceState.DISCOVERED -> "."
+                                ResourceState.FETCHING,
+                                ResourceState.SOURCE_READY,
+                                ResourceState.TRANSFORMING,
+                                -> "~"
+                                ResourceState.READY -> "*"
+                                ResourceState.FAILED -> "!"
+                            }
+                        val tone =
+                            when (resource.state) {
+                                ResourceState.DISCOVERED -> DashboardTone.RESOURCE_KNOWN
+                                ResourceState.FETCHING,
+                                ResourceState.SOURCE_READY,
+                                ResourceState.TRANSFORMING,
+                                -> DashboardTone.RESOURCE_ACTIVE
+                                ResourceState.READY -> DashboardTone.RESOURCE_READY
+                                ResourceState.FAILED -> DashboardTone.RESOURCE_FAILED
+                            }
                         yield(
                             DashboardLine(
-                                clip("    $path", contentWidth),
-                                DashboardTone.MUTED,
+                                clip("    $statusText $path$prefetchText$transformText", contentWidth),
+                                tone,
                             ),
                         )
                     }
@@ -1408,7 +1436,7 @@ internal object YameDashboardRenderer {
             .take(optionRows)
             .forEachIndexed { offset, option ->
                 val index = start + offset
-                val marker = if (index == selected) "›" else " "
+                val marker = if (index == selected) ">" else " "
                 val description = option.description
                     .takeIf { it.isNotBlank() }
                     ?.let { "  $it" }
