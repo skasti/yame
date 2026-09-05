@@ -19,6 +19,11 @@ import no.skasti.serialmodem.observer.TransferKind
 import no.skasti.serialmodem.observer.TransferState
 import no.skasti.serialmodem.observer.YameEvent
 import no.skasti.serialmodem.ppp.dns.dnsResponseCodeName
+import no.skasti.serialmodem.ppp.proxy.ResourceKind
+import no.skasti.serialmodem.ppp.proxy.ResourceRegistryResource
+import no.skasti.serialmodem.ppp.proxy.ResourceRegistryRoot
+import no.skasti.serialmodem.ppp.proxy.ResourceState
+import no.skasti.serialmodem.ppp.proxy.transform.ResourceTransformationSummary
 import no.skasti.serialmodem.ppp.proxy.ResourceRegistryResource
 import no.skasti.serialmodem.ppp.proxy.ResourceRegistryRoot
 import no.skasti.serialmodem.serial.SerialPortDescriptor
@@ -62,7 +67,7 @@ class TuiYameObserver(
     private val transfers = linkedMapOf<String, DashboardTransfer>()
     private data class HttpGraphState(
         val rootLegacyUri: URI,
-        val resources: LinkedHashSet<URI> = linkedSetOf(),
+        val resources: LinkedHashMap<URI, DashboardHttpResource> = linkedMapOf(),
         var useCount: Long = 0,
         var lastUsedNanos: Long = 0,
     )
@@ -298,7 +303,19 @@ class TuiYameObserver(
 
     @Synchronized
     internal fun handleResourceRootAdded(root: ResourceRegistryRoot) {
-        httpGraphs[root.graphId] = HttpGraphState(rootLegacyUri = root.rootLegacyUri)
+        httpGraphs[root.graphId] =
+            HttpGraphState(
+                rootLegacyUri = root.rootLegacyUri,
+                resources =
+                    linkedMapOf(
+                        root.rootLegacyUri to
+                            DashboardHttpResource(
+                                url = root.rootLegacyUri.toString(),
+                                state = ResourceState.DISCOVERED,
+                                kind = ResourceKind.DOCUMENT,
+                            ),
+                    ),
+            )
         normalizeHttpHostSelection()
         render()
     }
@@ -319,25 +336,39 @@ class TuiYameObserver(
 
     @Synchronized
     internal fun handleResourceAdded(resource: ResourceRegistryResource) {
-        val changed = httpGraphs[resource.graphId]
-            ?.resources
-            ?.add(resource.resourceLegacyUri)
-            ?: false
+        val resources = httpGraphs[resource.graphId]?.resources ?: return
+        val changed = resource.resourceLegacyUri !in resources
+        resources[resource.resourceLegacyUri] = resource.toDashboardResource()
         if (!changed) return
         normalizeHttpHostSelection()
         render()
     }
 
     @Synchronized
+    internal fun handleResourceUpdated(resource: ResourceRegistryResource) {
+        val graph = httpGraphs[resource.graphId] ?: return
+        graph.resources[resource.resourceLegacyUri] = resource.toDashboardResource()
+        normalizeHttpHostSelection()
+        render()
+    }
+
+    @Synchronized
     internal fun handleResourceRemoved(resource: ResourceRegistryResource) {
-        val changed = httpGraphs[resource.graphId]
-            ?.resources
-            ?.remove(resource.resourceLegacyUri)
-            ?: false
+        val resources = httpGraphs[resource.graphId]?.resources ?: return
+        val changed = resources.remove(resource.resourceLegacyUri) != null
         if (!changed) return
         normalizeHttpHostSelection()
         render()
     }
+
+    private fun ResourceRegistryResource.toDashboardResource() =
+        DashboardHttpResource(
+            url = resourceLegacyUri.toString(),
+            state = state,
+            kind = kind,
+            prefetched = prefetched,
+            transformations = transformations,
+        )
 
     private fun touchHttpGraph(graphId: Long): Boolean {
         val graph = httpGraphs[graphId] ?: return false
