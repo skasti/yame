@@ -227,7 +227,7 @@ internal class NavigationResourceGraph(
                 contentBase = it.contentBase,
                 state = it.state,
                 prefetched = it.prefetched,
-                transformations = it.transformations,
+                transformations = it.transformations.toList(),
             )
         }
 
@@ -245,7 +245,7 @@ internal class NavigationResourceGraph(
                     contentBase = it.contentBase,
                     state = it.state,
                     prefetched = it.prefetched,
-                    transformations = it.transformations,
+                    transformations = it.transformations.toList(),
                 )
             },
             edges = edges.toList(),
