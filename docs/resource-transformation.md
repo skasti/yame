@@ -41,13 +41,14 @@ into each HTTP compatibility proxy instance. It therefore lives for the lifetime
 of the YAME process, not for the lifetime of a TCP connection, PPP generation,
 browser process, cookie session, or individual HTTP transaction.
 
-Revisiting the same navigation root reuses its existing graph and preserves the
-relationships YAME has already discovered. Opening or closing Netscape, creating
-new TCP connections, or reconnecting PPP must therefore not discard resource
-knowledge.
+Resources are grouped under a graph rooted at their legacy host and effective
+port. The graph is created on the first request for that host and port, and
+revisiting any resource there reuses it while preserving the relationships YAME
+has already discovered. Opening or closing Netscape, creating new TCP
+connections, or reconnecting PPP must therefore not discard resource knowledge.
 
 Resource graph knowledge is process-scoped but bounded. The registry retains a
-large working set of navigation graphs (512 by default) and uses least-recently-used
+large working set of host resource graphs (512 by default) and uses least-recently-used
 eviction when that global limit is reached. Reusing a root or one of its known
 resources refreshes its recency. Per-graph node and edge limits still bound
 discovery within each graph.

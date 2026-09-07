@@ -146,7 +146,7 @@ The dashboard contains:
 - **Transfers** — TCP flows with connection state, bytes in both directions, and average transfer rate
 - **HTTP / HTTPS compatibility proxy** — an expandable overview of hosts and the resource URLs YAME currently knows about from the active resource registry
 
-When the command palette is closed, use **Up/Down** to select a proxy host, **Enter/Right** to expand it, and **Left** to collapse it. Hosts are kept unique and ordered with recently used hosts first, with usage frequency as a secondary signal. Expanded hosts show the unique paths and queries currently represented by active navigation resource graphs; entries disappear when their registry context is evicted.
+When the command palette is closed, use **Up/Down** to select a proxy host, **Enter/Right** to expand it, and **Left** to collapse it. Hosts are kept unique and ordered with recently used hosts first, with usage frequency as a secondary signal. Expanded hosts show the unique paths and queries currently represented by host resource graphs; entries disappear when their registry context is evicted.
 
 For example, the proxy panel may look like:
 
@@ -232,7 +232,7 @@ Disable compatibility mode when transparent TCP/80 forwarding is desired:
 ./gradlew run --args="--port <port> --no-http-https-proxy"
 ```
 
-In the dashboard, use `/http-proxy` to switch between compatibility and transparent forwarding. The compatibility panel is populated directly from YAME's navigation resource registry rather than by parsing proxy log messages, so it reflects the currently retained resource graphs and follows registry eviction.
+In the dashboard, use `/http-proxy` to switch between compatibility and transparent forwarding. The compatibility panel is populated directly from YAME's host resource registry rather than by parsing proxy log messages, so it reflects the currently retained resource graphs and follows registry eviction.
 The dashboard header also shows the running YAME version and build Git commit, which is useful when testing local `installDist` builds.
 
 YAME always writes module-specific logs under `logs/`: `modem.log`, `serial.log`, `ppp.log`,

@@ -48,6 +48,19 @@ internal object LegacyHttpUrl {
             else -> 80
         }
 
+    fun resourceRoot(uri: URI): URI =
+        URI(
+            buildString {
+                val scheme = requireNotNull(uri.scheme).lowercase(Locale.ROOT)
+                append(scheme).append("://")
+                append(formatHost(requireNotNull(uri.host).lowercase(Locale.ROOT)))
+                val port = effectivePort(uri)
+                val defaultPort = (scheme == "http" && port == 80) || (scheme == "https" && port == 443)
+                if (!defaultPort) append(':').append(port)
+                append('/')
+            },
+        )
+
     fun requestObservableKey(uri: URI): String =
         URI(
             buildString {

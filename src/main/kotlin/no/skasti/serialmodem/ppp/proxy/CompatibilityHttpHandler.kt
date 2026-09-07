@@ -143,6 +143,9 @@ internal class SystemHttpCompatibilityHandler(
             val upstreamUri = originRoutes.resolve(state.flow, legacyUri)
             fetchLegacyUri = legacyUri
             fetchUpstreamUri = upstreamUri
+            if (!request.method.equals("HEAD", ignoreCase = true)) {
+                resourceGraphs.ensureResourceContext(legacyUri)
+            }
             fetchAttempts =
                 resourceGraphs.contextsFor(legacyUri)
                     .mapNotNull { graph ->
@@ -432,10 +435,23 @@ internal class SystemHttpCompatibilityHandler(
     ): LegacyHttpResponse {
         val graphs =
             if (response.establishesNavigationGraph) {
-                listOf(resourceGraphs.startNavigation(response.legacyUri))
+                resourceGraphs.startNavigation(response.legacyUri).also { graph ->
+                    resourceGraphs.discover(
+                        graph = graph,
+                        parentLegacyUri = graph.rootLegacyUri,
+                        childLegacyUri = response.legacyUri,
+                        upstreamUri = response.uri,
+                        relation = ResourceRelation.ROOT,
+                        kind = ResourceKind.DOCUMENT,
+                    )
+                }.let(::listOf)
             } else {
                 resourceGraphs.contextsFor(response.legacyUri)
             }
+        val responseKind = resourceKindForResponse(response.headers, response.referenceRole)
+        graphs.forEach { graph ->
+            resourceGraphs.updateResourceKind(graph, response.legacyUri, responseKind)
+        }
         val fetchAttempts =
             graphs.mapNotNull { graph ->
                 val attempt =

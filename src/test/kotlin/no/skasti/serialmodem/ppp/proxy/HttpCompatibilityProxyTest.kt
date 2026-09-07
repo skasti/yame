@@ -979,6 +979,47 @@ class HttpCompatibilityProxyTest {
     }
 
     @Test
+    fun `first image request creates a host resource graph`() {
+        val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val thread = serveOnce(server) {
+            val body = "GIF89a"
+            "HTTP/1.1 200 OK\r\n" +
+                "Content-Type: image/gif\r\n" +
+                "Content-Length: ${body.toByteArray(StandardCharsets.US_ASCII).size}\r\n" +
+                "Connection: close\r\n\r\n" +
+                body
+        }
+        val proxy = SystemHttpCompatibilityProxy(
+            config = PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000),
+        )
+        val events = LinkedBlockingQueue<TcpProxyEvent>()
+        val flow = httpFlow(peerPort = 2296)
+
+        try {
+            proxy.connect(flow, events::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(events.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                flow,
+                ("GET /cached.gif HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\n\r\n")
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+
+            assertTrue(collectResponse(events).endsWith("GIF89a"))
+            val graph = proxy.resourceGraphSnapshots().single()
+            assertEquals(URI("http://127.0.0.1:${server.localPort}/"), graph.rootLegacyUri)
+            assertTrue(
+                graph.nodes.any {
+                    it.legacyUri.path == "/cached.gif" && it.kind == ResourceKind.IMAGE
+                },
+            )
+        } finally {
+            proxy.close()
+            runCatching { server.close() }
+            thread.join(2_000)
+        }
+    }
+
+    @Test
     fun `truncated buffered response fails before emitting a partial HTTP response`() {
         val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
         val thread = Thread {
@@ -1294,7 +1335,7 @@ class HttpCompatibilityProxyTest {
 
             collectResponse(events)
             val graph = proxy.resourceGraphSnapshots().single()
-            assertEquals(URI("http://127.0.0.1:${server.localPort}/missing"), graph.rootLegacyUri)
+            assertEquals(URI("http://127.0.0.1:${server.localPort}/"), graph.rootLegacyUri)
             assertTrue(graph.edges.any { it.relation == ResourceRelation.IMG_SRC })
         } finally {
             proxy.close()

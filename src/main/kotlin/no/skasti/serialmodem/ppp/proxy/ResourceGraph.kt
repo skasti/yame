@@ -301,6 +301,14 @@ internal class NavigationResourceGraph(
         return true
     }
 
+    @Synchronized
+    fun updateKind(legacyUri: URI, kind: ResourceKind): Boolean {
+        val node = nodes[key(legacyUri)] ?: return false
+        if (node.kind == kind) return false
+        node.kind = kind
+        return true
+    }
+
     private fun key(uri: URI): String = LegacyHttpUrl.requestObservableKey(uri)
 }
 
@@ -351,14 +359,26 @@ internal class NavigationResourceRegistry(
     private val currentFetchAttempt = mutableMapOf<FetchResourceKey, Long>()
 
     fun startNavigation(rootLegacyUri: URI): NavigationResourceGraph {
+        val resourceRoot = LegacyHttpUrl.resourceRoot(rootLegacyUri)
+        return getOrCreateGraph(resourceRoot, rootLegacyUri)
+    }
+
+    fun ensureResourceContext(resourceLegacyUri: URI): NavigationResourceGraph =
+        getOrCreateGraph(LegacyHttpUrl.resourceRoot(resourceLegacyUri), resourceLegacyUri)
+
+    private fun getOrCreateGraph(
+        resourceRoot: URI,
+        associatedResource: URI,
+    ): NavigationResourceGraph {
         val pending = mutableListOf<PendingEvent>()
         val graph =
             synchronized(lock) {
-                val rootKey = LegacyHttpUrl.requestObservableKey(rootLegacyUri)
+                val rootKey = LegacyHttpUrl.requestObservableKey(resourceRoot)
                 graphByRootLegacyUri[rootKey]
                     ?.let(graphs::get)
                     ?.also { existing ->
                         touchLocked(existing.id)
+                        associateLocked(associatedResource, existing.id)
                         pending +=
                             PendingEvent.RootUsed(
                                 ResourceRegistryRoot(existing.id, existing.rootLegacyUri),
@@ -366,7 +386,7 @@ internal class NavigationResourceRegistry(
                     }
                     ?: NavigationResourceGraph(
                         id = nextId.getAndIncrement(),
-                        rootLegacyUri = rootLegacyUri,
+                        rootLegacyUri = resourceRoot,
                         maxNodes = maxNodesPerContext,
                         maxEdges = maxEdgesPerContext,
                     ).also { created ->
@@ -375,8 +395,9 @@ internal class NavigationResourceRegistry(
                         }
                         graphs[created.id] = created
                         graphByRootLegacyUri[rootKey] = created.id
-                        associateLocked(rootLegacyUri, created.id)
-                        val root = ResourceRegistryRoot(created.id, rootLegacyUri)
+                        associateLocked(resourceRoot, created.id)
+                        associateLocked(associatedResource, created.id)
+                        val root = ResourceRegistryRoot(created.id, resourceRoot)
                         pending += PendingEvent.RootAdded(root)
                         pending += PendingEvent.RootUsed(root)
                     }
@@ -423,17 +444,22 @@ internal class NavigationResourceRegistry(
         val pending = mutableListOf<PendingEvent>()
         synchronized(lock) {
             if (graphs[graph.id] !== graph) return
-            val wasKnown = graph.contains(childLegacyUri)
+            val previous = graph.nodeSnapshot(childLegacyUri)
             if (graph.discover(parentLegacyUri, childLegacyUri, upstreamUri, relation, kind)) {
                 touchLocked(graph.id)
                 associateLocked(childLegacyUri, graph.id)
                 pending += PendingEvent.RootUsed(ResourceRegistryRoot(graph.id, graph.rootLegacyUri))
-                if (!wasKnown) {
-                    graph.nodeSnapshot(childLegacyUri)?.let { resource ->
+                val resource = graph.nodeSnapshot(childLegacyUri)
+                if (previous == null) {
+                    resource?.let {
                         pending += PendingEvent.ResourceAdded(
-                            requireNotNull(registryResource(graph, resource.legacyUri)),
+                            requireNotNull(registryResource(graph, it.legacyUri)),
                         )
                     }
+                } else if (resource != null && resource != previous) {
+                    pending += PendingEvent.ResourceUpdated(
+                        requireNotNull(registryResource(graph, resource.legacyUri)),
+                    )
                 }
             }
         }
@@ -544,6 +570,23 @@ internal class NavigationResourceRegistry(
                         }
                     }
                 }
+        }
+        pending.forEach { it.fire(hooks) }
+    }
+
+    fun updateResourceKind(
+        graph: NavigationResourceGraph,
+        legacyUri: URI,
+        kind: ResourceKind,
+    ) {
+        val pending = mutableListOf<PendingEvent>()
+        synchronized(lock) {
+            if (graphs[graph.id] !== graph) return
+            if (graph.updateKind(legacyUri, kind)) {
+                registryResource(graph, legacyUri)?.let {
+                    pending += PendingEvent.ResourceUpdated(it)
+                }
+            }
         }
         pending.forEach { it.fire(hooks) }
     }

@@ -11,6 +11,27 @@ import kotlin.test.assertTrue
 
 class ResourceGraphTest {
     @Test
+    fun `resource contexts use the resource host and port as the graph root`() {
+        val registry = NavigationResourceRegistry()
+        val first = URI("http://legacy.test:8080/first.gif")
+        val second = URI("http://legacy.test:8080/second.gif")
+        val differentPort = URI("http://legacy.test:8081/other.gif")
+
+        val firstGraph = registry.ensureResourceContext(first)
+        val secondGraph = registry.ensureResourceContext(second)
+        val differentPortGraph = registry.ensureResourceContext(differentPort)
+
+        assertEquals(firstGraph.id, secondGraph.id)
+        assertEquals(URI("http://legacy.test:8080/"), firstGraph.rootLegacyUri)
+        assertTrue(firstGraph.id != differentPortGraph.id)
+        assertEquals(2, registry.snapshots().size)
+        assertEquals(
+            setOf(firstGraph.id),
+            registry.contextsFor(first).map { it.id }.toSet(),
+        )
+    }
+
+    @Test
     fun `resource graph deduplicates shared child nodes but keeps both edges`() {
         val registry = NavigationResourceRegistry()
         val graph = registry.startNavigation(URI("http://legacy.test/index.html"))
@@ -73,8 +94,8 @@ class ResourceGraphTest {
     @Test
     fun `legacy URL association finds every navigation context that references a shared resource`() {
         val registry = NavigationResourceRegistry()
-        val first = registry.startNavigation(URI("http://legacy.test/one.html"))
-        val second = registry.startNavigation(URI("http://legacy.test/two.html"))
+        val first = registry.startNavigation(URI("http://legacy-one.test/one.html"))
+        val second = registry.startNavigation(URI("http://legacy-two.test/two.html"))
         val sharedLegacy = URI("http://cdn.test/site.css")
         val upstream = URI("https://cdn.test/site.css")
 
@@ -98,7 +119,7 @@ class ResourceGraphTest {
             ResourceKind.IMAGE,
         )
 
-        // Visiting unrelated roots must not evict accumulated resource knowledge.
+        // Visiting more resources on the same host must not create new graphs.
         repeat(100) { index ->
             registry.startNavigation(URI("http://legacy.test/page-$index"))
         }
@@ -106,7 +127,7 @@ class ResourceGraphTest {
         val revisited = registry.startNavigation(root)
         assertEquals(first.id, revisited.id)
         assertTrue(revisited.contains(shared))
-        assertEquals(101, registry.snapshots().size)
+        assertEquals(1, registry.snapshots().size)
         assertEquals(listOf(first.id), registry.contextsFor(shared).map { it.id })
     }
 
@@ -116,9 +137,9 @@ class ResourceGraphTest {
         val removed = mutableListOf<ResourceRegistryRoot>()
         hooks.onRootRemoved += removed::add
         val registry = NavigationResourceRegistry(maxContexts = 2, hooks = hooks)
-        val firstRoot = URI("http://legacy.test/one")
-        val secondRoot = URI("http://legacy.test/two")
-        val thirdRoot = URI("http://legacy.test/three")
+        val firstRoot = URI("http://legacy-one.test/one")
+        val secondRoot = URI("http://legacy-two.test/two")
+        val thirdRoot = URI("http://legacy-three.test/three")
         val first = registry.startNavigation(firstRoot)
         registry.startNavigation(secondRoot)
 
@@ -126,16 +147,22 @@ class ResourceGraphTest {
         assertEquals(first.id, registry.startNavigation(firstRoot).id)
         registry.startNavigation(thirdRoot)
 
-        assertEquals(setOf(firstRoot, thirdRoot), registry.snapshots().map { it.rootLegacyUri }.toSet())
-        assertEquals(listOf(secondRoot), removed.map { it.rootLegacyUri })
+        assertEquals(
+            setOf(
+                URI("http://legacy-one.test/"),
+                URI("http://legacy-three.test/"),
+            ),
+            registry.snapshots().map { it.rootLegacyUri }.toSet(),
+        )
+        assertEquals(listOf(URI("http://legacy-two.test/")), removed.map { it.rootLegacyUri })
     }
 
     @Test
     fun `evicted graph handle cannot be reindexed or mutated`() {
         val registry = NavigationResourceRegistry(maxContexts = 1)
-        val first = registry.startNavigation(URI("http://legacy.test/one"))
+        val first = registry.startNavigation(URI("http://legacy-one.test/one"))
         val staleChild = URI("http://legacy.test/stale.gif")
-        registry.startNavigation(URI("http://legacy.test/two"))
+        registry.startNavigation(URI("http://legacy-two.test/two"))
 
         registry.discover(
             first,
@@ -282,7 +309,7 @@ class ResourceGraphTest {
         val revisited = registry.startNavigation(root)
 
         assertEquals(first.id, revisited.id)
-        assertEquals(listOf(root), addedRoots.map { it.rootLegacyUri })
+        assertEquals(listOf(URI("http://legacy.test/")), addedRoots.map { it.rootLegacyUri })
         assertEquals(2, usedRoots.count { it.graphId == first.id })
         assertTrue(removedRoots.isEmpty())
     }
@@ -409,8 +436,8 @@ class ResourceGraphTest {
         }
         assertEquals(
             listOf(
-                "added:$root",
-                "used:$root",
+                "added:http://legacy.test/",
+                "used:http://legacy.test/",
             ),
             observed,
         )
