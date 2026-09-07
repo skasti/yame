@@ -210,6 +210,24 @@ class ResourceTransformerTest {
     }
 
     @Test
+    fun `image tag transformer does not treat data dimensions as image dimensions`() {
+        val source = representation(
+            headers = mapOf("Content-Type" to listOf("text/html")),
+            body = """
+                <img src="hero.jpg" data-width="900" data-height="700" width="900" height="700">
+            """.trimIndent().toByteArray(),
+        )
+        val result =
+            ResourceTransformationPipeline(listOf(ImageTagTransformer()))
+                .transform(context(), Resource(URI("https://modern.test/page"), source))
+
+        assertEquals(
+            """<img src="hero.jpg" data-width="900" data-height="700" width="514" height="400">""",
+            requireNotNull(result.resource.transformed).representation.body.decodeToString(),
+        )
+    }
+
+    @Test
     fun `pipeline rejects transformers that replace source representation`() {
         val transformer =
             object : ResourceTransformer {

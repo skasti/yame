@@ -94,7 +94,7 @@ internal class ImageTagTransformer(
 
     private companion object {
         val IMG_TAG_PATTERN = Regex("""(?is)<\s*img\b[^>]*>""")
-        val WIDTH_ATTRIBUTE_PATTERN = Regex("""(?is)\bwidth\s*=\s*(?:"([0-9]+)"|'([0-9]+)'|([0-9]+))""")
-        val HEIGHT_ATTRIBUTE_PATTERN = Regex("""(?is)\bheight\s*=\s*(?:"([0-9]+)"|'([0-9]+)'|([0-9]+))""")
+        val WIDTH_ATTRIBUTE_PATTERN = Regex("""(?is)(?<=\s)width\s*=\s*(?:"([0-9]+)"|'([0-9]+)'|([0-9]+))""")
+        val HEIGHT_ATTRIBUTE_PATTERN = Regex("""(?is)(?<=\s)height\s*=\s*(?:"([0-9]+)"|'([0-9]+)'|([0-9]+))""")
     }
 }
