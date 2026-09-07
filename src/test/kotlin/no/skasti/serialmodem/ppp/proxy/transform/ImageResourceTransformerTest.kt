@@ -31,8 +31,8 @@ class ImageResourceTransformerTest {
         val output = ImageIO.read(ByteArrayInputStream(transformed.representation.body))
         assertTrue(output.width <= 640)
         assertTrue(output.height <= 480)
-        assertEquals(640, output.width)
-        assertEquals(400, output.height)
+        assertEquals(600, output.width)
+        assertEquals(375, output.height)
         assertTrue(transformed.representation.body.size < sourceBytes.size)
         assertEquals(listOf("image/jpeg"), transformed.representation.headers["Content-Type"])
         assertEquals(listOf("\"fixture\""), transformed.representation.headers["ETag"])
@@ -50,8 +50,8 @@ class ImageResourceTransformerTest {
         )
 
         val output = ImageIO.read(ByteArrayInputStream(requireNotNull(result.resource.transformed).representation.body))
-        assertEquals(240, output.width)
-        assertEquals(480, output.height)
+        assertEquals(200, output.width)
+        assertEquals(400, output.height)
     }
 
     @Test

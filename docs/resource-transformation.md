@@ -138,8 +138,11 @@ Within one running process, however, the pipeline is assumed stable. Code that i
 
 The HTML compatibility stage applies the same proportional sizing policy as
 JPEG optimization to literal `<img>` tags that contain numeric pixel
-`width` and `height` attributes. It does not inspect or fetch the referenced
-image; image-body optimization is an independent later step.
+`width` and `height` attributes. The default maximum is `600x400`, so the
+result stays within a `640x480` legacy display while preserving aspect ratio.
+Tags with missing dimensions or non-pixel values are left unchanged. The
+transformer does not inspect or fetch the referenced image; image-body
+optimization is an independent later step.
 
 
 ## Cache and in-flight work invariants

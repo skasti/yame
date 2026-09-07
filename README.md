@@ -222,6 +222,11 @@ Redirects that change the browser-visible host, path, or query are returned to t
 
 YAME keeps the required exact URL and origin mappings for the active PPP generation. Absolute `https://` references in supported text responses are pragmatically rewritten to `http://` wherever they occur, while binary bodies are left untouched. The proxy requests uncompressed text upstream, buffers rewritable responses, and recalculates `Content-Length`. It intentionally does not parse HTML, CSS, or JavaScript semantically. Mappings are discarded when the PPP generation changes.
 
+JPEG image optimization and literal HTML image-tag sizing use the same
+proportional `600x400` default policy. `<img>` tags are resized only when both
+`width` and `height` are numeric pixel values; no image is fetched solely to
+rewrite its tag.
+
 Resource transformations preserve upstream `ETag` and `Last-Modified` validators by design: within a running YAME process the transformation pipeline is deterministic, so unchanged upstream source state implies unchanged legacy output. Byte-specific metadata such as `Content-Length` and content digests is removed or regenerated when the body changes. See [resource transformation invariants](docs/resource-transformation.md) for the full contract.
 
 This does **not** make a directly entered `https://...` URL compatible. A browser that opens TCP port 443 expects a TLS handshake before any HTTP redirect can be exchanged. Supporting that case would require YAME to terminate the legacy browser's TLS itself, including certificate and legacy-cipher handling.

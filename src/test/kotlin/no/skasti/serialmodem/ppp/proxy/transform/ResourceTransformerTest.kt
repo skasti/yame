@@ -186,7 +186,7 @@ class ResourceTransformerTest {
                 .transform(context(), Resource(URI("https://modern.test/page"), source))
 
         assertEquals(
-            "<img class='hero' src='hero.jpg' width=\"617\" height=\"480\">",
+            "<img class='hero' src='hero.jpg' width=\"514\" height=\"400\">",
             requireNotNull(result.resource.transformed).representation.body.decodeToString(),
         )
     }
