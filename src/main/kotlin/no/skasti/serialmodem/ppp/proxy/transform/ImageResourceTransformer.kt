@@ -14,8 +14,8 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 internal data class ImageOptimizationPolicy(
-    val maxWidth: Int = 640,
-    val maxHeight: Int = 480,
+    val maxWidth: Int = 600,
+    val maxHeight: Int = 400,
     val jpegQuality: Float = 0.55f,
     val maxDecodedPixels: Long = 16_000_000L,
 ) {
