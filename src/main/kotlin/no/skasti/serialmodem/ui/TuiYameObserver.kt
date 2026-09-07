@@ -69,10 +69,15 @@ class TuiYameObserver(
         var useCount: Long = 0,
         var lastUsedNanos: Long = 0,
     )
+    private data class HttpSelectionRow(
+        val host: String,
+        val resourceUrl: String?,
+    )
 
     private val httpGraphs = linkedMapOf<Long, HttpGraphState>()
     private val expandedHttpHosts = linkedSetOf<String>()
     private var selectedHttpHost: String? = null
+    private var selectedHttpResourceUrl: String? = null
     private var commandPalette: TuiCommandPalette? = null
     private var keyboardInput: JLineKeyboardInput? = null
 
@@ -420,17 +425,39 @@ class TuiYameObserver(
         selectedHttpHost = selectedHttpHost
             ?.takeIf { selected -> hosts.any { it.host == selected } }
             ?: hosts.firstOrNull()?.host
+        selectedHttpResourceUrl =
+            selectedHttpResourceUrl?.takeIf { resourceUrl ->
+                (
+                    hosts
+                        .firstOrNull { it.host == selectedHttpHost }
+                        ?.let { host -> host.expanded && host.resources.any { it.url == resourceUrl } }
+                ) == true
+            }
     }
 
     @Synchronized
-    private fun moveHttpHostSelection(delta: Int) {
+    private fun moveHttpSelection(delta: Int) {
         val hosts = httpHostSnapshots()
         if (hosts.isEmpty()) return
-        val current = hosts.indexOfFirst { it.host == selectedHttpHost }
-            .takeIf { it >= 0 }
-            ?: 0
-        val next = (current + delta).coerceIn(0, hosts.lastIndex)
-        selectedHttpHost = hosts[next].host
+        val rows =
+            hosts.flatMap { host ->
+                buildList {
+                    add(HttpSelectionRow(host.host, null))
+                    if (host.expanded) {
+                        host.resources.forEach { resource ->
+                            add(HttpSelectionRow(host.host, resource.url))
+                        }
+                    }
+                }
+            }
+        val current =
+            rows.indexOfFirst {
+                it.host == selectedHttpHost && it.resourceUrl == selectedHttpResourceUrl
+            }.takeIf { it >= 0 }
+                ?: 0
+        val next = (current + delta).coerceIn(0, rows.lastIndex)
+        selectedHttpHost = rows[next].host
+        selectedHttpResourceUrl = rows[next].resourceUrl
         render()
     }
 
@@ -438,6 +465,7 @@ class TuiYameObserver(
     private fun setSelectedHttpHostExpanded(expanded: Boolean) {
         val host = selectedHttpHost ?: return
         if (expanded) expandedHttpHosts += host else expandedHttpHosts -= host
+        if (!expanded) selectedHttpResourceUrl = null
         render()
     }
 
@@ -489,8 +517,8 @@ class TuiYameObserver(
                                     paletteOpen -> handlePaletteKey(key)
                                     key == "/" -> openCommandPalette()
                                     key.equals("q", ignoreCase = true) -> requestQuit()
-                                    key == "ArrowUp" -> moveHttpHostSelection(-1)
-                                    key == "ArrowDown" -> moveHttpHostSelection(1)
+                                    key == "ArrowUp" -> moveHttpSelection(-1)
+                                    key == "ArrowDown" -> moveHttpSelection(1)
                                     key == "ArrowRight" || key == "Enter" -> setSelectedHttpHostExpanded(true)
                                     key == "ArrowLeft" -> setSelectedHttpHostExpanded(false)
                                 }
@@ -861,6 +889,7 @@ class TuiYameObserver(
                     selectedHttpHostIndex = httpHosts
                         .indexOfFirst { it.host == selectedHttpHost }
                         .coerceAtLeast(0),
+                    selectedHttpResourceUrl = selectedHttpResourceUrl,
                     commandPalette = commandPalette,
                 )
             },
@@ -1010,6 +1039,7 @@ internal data class DashboardState(
     val transfers: List<DashboardTransfer>,
     val httpHosts: List<DashboardHttpHost>,
     val selectedHttpHostIndex: Int,
+    val selectedHttpResourceUrl: String? = null,
     val commandPalette: TuiCommandPalette?,
 )
 
@@ -1145,6 +1175,7 @@ internal object YameDashboardRenderer {
                 lines = httpHostLines(
                     state.httpHosts,
                     state.selectedHttpHostIndex,
+                    state.selectedHttpResourceUrl,
                     lowerHeight - 2,
                     rightWidth - 4,
                 ),
@@ -1168,7 +1199,7 @@ internal object YameDashboardRenderer {
         )
 
         val footerText = if (state.commandPalette == null) {
-            "[/] commands   [q/Ctrl-C] quit"
+            "[↑/↓] select   [Enter/Right] expand   [Left] collapse   [/] commands   [q/Ctrl-C] quit"
         } else {
             "[↑/↓] select   [Enter] apply   [Esc] close palette"
         }
@@ -1320,6 +1351,7 @@ internal object YameDashboardRenderer {
     private fun httpHostLines(
         hosts: List<DashboardHttpHost>,
         selectedHostIndex: Int,
+        selectedResourceUrl: String?,
         visibleRows: Int,
         contentWidth: Int,
     ): List<DashboardLine> {
@@ -1329,10 +1361,18 @@ internal object YameDashboardRenderer {
 
         val selected = selectedHostIndex.coerceIn(0, hosts.lastIndex)
         val rows = visibleRows.coerceAtLeast(1)
-        var selectedLine = 0
-        for (index in 0 until selected) {
-            selectedLine += 1 + if (hosts[index].expanded) hosts[index].resources.size else 0
-        }
+        val selectedResourceIndex =
+            hosts[selected].resources.indexOfFirst { it.url == selectedResourceUrl }
+                .takeIf { selectedResourceUrl != null && it >= 0 }
+        val selectedLine =
+            hosts.take(selected).sumOf { host ->
+                1 + if (host.expanded) host.resources.size else 0
+            } +
+                if (selectedResourceIndex != null && hosts[selected].expanded) {
+                    1 + selectedResourceIndex
+                } else {
+                    0
+                }
         val itemCount = hosts.sumOf { host ->
             1 + if (host.expanded) host.resources.size else 0
         }
@@ -1345,7 +1385,8 @@ internal object YameDashboardRenderer {
         return sequence {
             hosts.forEachIndexed { index, host ->
                 val marker = if (host.expanded) "v" else ">"
-                val selection = if (index == selected) ">" else " "
+                val hostSelected = index == selected && selectedResourceIndex == null
+                val selection = if (hostSelected) ">" else " "
                 yield(
                     DashboardLine(
                         clip(
@@ -1353,7 +1394,7 @@ internal object YameDashboardRenderer {
                                 if (host.savedBytes > 0) " | saved ${formatBytes(host.savedBytes)}" else "",
                             contentWidth,
                         ),
-                        if (index == selected) DashboardTone.SELECTED else DashboardTone.ACCENT,
+                        if (hostSelected) DashboardTone.SELECTED else DashboardTone.ACCENT,
                     ),
                 )
                 if (host.expanded) {
@@ -1385,16 +1426,50 @@ internal object YameDashboardRenderer {
                                 ResourceState.READY -> DashboardTone.RESOURCE_READY
                                 ResourceState.FAILED -> DashboardTone.RESOURCE_FAILED
                             }
+                        val resourceSelected =
+                            index == selected &&
+                                resource.url == selectedResourceUrl
                         yield(
                             DashboardLine(
-                                clip("    $statusText $path$prefetchText$transformText", contentWidth),
-                                tone,
+                                formatHttpResourceLine(
+                                    selection = if (resourceSelected) ">" else " ",
+                                    statusText = statusText,
+                                    path = path,
+                                    suffix = "$prefetchText$transformText",
+                                    contentWidth = contentWidth,
+                                ),
+                                if (resourceSelected) DashboardTone.SELECTED else tone,
                             ),
                         )
                     }
                 }
             }
         }.drop(start).take(rows).toList()
+    }
+
+    private fun formatHttpResourceLine(
+        selection: String,
+        statusText: String,
+        path: String,
+        suffix: String,
+        contentWidth: Int,
+    ): String {
+        val prefix = "$selection  $statusText "
+        val minimumPathWidth = 12
+        val suffixWidth = (contentWidth - prefix.length - minimumPathWidth).coerceAtLeast(0)
+        val visibleSuffix = clip(suffix, suffixWidth)
+        val pathWidth = (contentWidth - prefix.length - visibleSuffix.length).coerceAtLeast(0)
+        return clip(prefix + middleClip(path, pathWidth) + visibleSuffix, contentWidth)
+    }
+
+    private fun middleClip(value: String, maxLength: Int): String {
+        val safeValue = sanitizeTerminalText(value)
+        if (maxLength <= 0) return ""
+        if (safeValue.length <= maxLength) return safeValue
+        if (maxLength == 1) return "…"
+        val tailLength = ((maxLength - 1) * 3 / 4).coerceAtLeast(1)
+        val headLength = maxLength - 1 - tailLength
+        return safeValue.take(headLength) + "…" + safeValue.takeLast(tailLength)
     }
     private fun paletteLines(
         palette: TuiCommandPalette,

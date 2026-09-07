@@ -75,6 +75,7 @@ class YameDashboardRendererTest {
                 ),
             ),
             selectedHttpHostIndex = 0,
+            selectedHttpResourceUrl = "https://example.test/assets/hero.jpg",
             commandPalette = null,
         )
 
@@ -91,7 +92,8 @@ class YameDashboardRendererTest {
         assertContains(rendered, "vg.no")
         assertContains(rendered, "93.184.216.34:80")
         assertContains(rendered, "example.test  (2)")
-        assertContains(rendered, "* /assets/hero.jpg")
+        assertContains(rendered, ">  *")
+        assertContains(rendered, "…hero.jpg")
         assertContains(rendered, "[P]")
         assertContains(rendered, "184K->31K -83%")
     }
