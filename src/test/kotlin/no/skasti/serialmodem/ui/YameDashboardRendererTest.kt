@@ -9,6 +9,7 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class YameDashboardRendererTest {
     @Test
@@ -159,6 +160,46 @@ class YameDashboardRendererTest {
         assertContains(rendered, "~ /transforming.jpg")
         assertContains(rendered, "* /ready.jpg")
         assertContains(rendered, "! /failed.gif")
+    }
+
+    @Test
+    fun longUnoptimizedResourcePathsAreMiddleTruncated() {
+        val longPath = "/assets/" + "nested/".repeat(20) + "logo.gif"
+        val rendered =
+            YameDashboardRenderer.render(
+                state =
+                    DashboardState(
+                        portName = "COM3",
+                        baud = 115200,
+                        connected = true,
+                        dnsUpstream = "8.8.8.8",
+                        httpProxyEnabled = true,
+                        logs = emptyList(),
+                        dnsLookups = emptyList(),
+                        transfers = emptyList(),
+                        httpHosts =
+                            listOf(
+                                DashboardHttpHost(
+                                    host = "example.test",
+                                    resources =
+                                        listOf(
+                                            DashboardHttpResource(
+                                                "http://example.test$longPath",
+                                                state = ResourceState.READY,
+                                            ),
+                                        ),
+                                    expanded = true,
+                                ),
+                            ),
+                        selectedHttpHostIndex = 0,
+                        commandPalette = null,
+                    ),
+                width = 120,
+                height = 34,
+            )
+
+        assertTrue(rendered.contains("…"), rendered)
+        assertContains(rendered, "logo.gif")
     }
 
     @Test
