@@ -11,6 +11,8 @@ import no.skasti.serialmodem.ppp.proxy.cookies.BoundedCookieStore
 import no.skasti.serialmodem.ppp.proxy.cookies.CookieOverride
 import no.skasti.serialmodem.ppp.proxy.routing.LegacyOriginRouteTable
 import no.skasti.serialmodem.ppp.proxy.transform.ImageResourceTransformer
+import no.skasti.serialmodem.ppp.proxy.transform.ImageTagTransformer
+import no.skasti.serialmodem.ppp.proxy.transform.ImageOptimizationPolicy
 import no.skasti.serialmodem.ppp.proxy.transform.LegacyTextResourceTransformer
 import no.skasti.serialmodem.ppp.proxy.transform.InFlightResourceWork
 import no.skasti.serialmodem.ppp.proxy.transform.CachedResource
@@ -95,11 +97,13 @@ internal class SystemHttpCompatibilityHandler(
 
     private val sessionStates = ConcurrentHashMap<SessionKey, SessionState>()
     private val originRoutes = LegacyOriginRouteTable()
+    private val imageOptimizationPolicy = ImageOptimizationPolicy()
     private val resourceTransformations =
         ResourceTransformationPipeline(
             listOf(
                 LegacyTextResourceTransformer(),
-                ImageResourceTransformer(),
+                ImageTagTransformer(imageOptimizationPolicy),
+                ImageResourceTransformer(imageOptimizationPolicy),
             ),
         )
     private val resourceCache = ResourceCache(

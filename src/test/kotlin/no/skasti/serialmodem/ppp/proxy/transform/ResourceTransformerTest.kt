@@ -176,6 +176,40 @@ class ResourceTransformerTest {
     }
 
     @Test
+    fun `image tag transformer scales numeric dimensions proportionally`() {
+        val source = representation(
+            headers = mapOf("Content-Type" to listOf("text/html")),
+            body = "<img class='hero' src='hero.jpg' width='900' height='700'>".toByteArray(),
+        )
+        val result =
+            ResourceTransformationPipeline(listOf(ImageTagTransformer()))
+                .transform(context(), Resource(URI("https://modern.test/page"), source))
+
+        assertEquals(
+            "<img class='hero' src='hero.jpg' width=\"617\" height=\"480\">",
+            requireNotNull(result.resource.transformed).representation.body.decodeToString(),
+        )
+    }
+
+    @Test
+    fun `image tag transformer leaves missing or non pixel dimensions unchanged`() {
+        val source = representation(
+            headers = mapOf("Content-Type" to listOf("text/html")),
+            body = """
+                <img src="missing-height.jpg" width="900">
+                <img src="percentage.jpg" width="100%" height="700">
+            """.trimIndent().toByteArray(),
+        )
+        val result =
+            ResourceTransformationPipeline(listOf(ImageTagTransformer()))
+                .transform(context(), Resource(URI("https://modern.test/page"), source))
+
+        val body = result.resource.representation.body.decodeToString()
+        assertTrue(body.contains("<img src=\"missing-height.jpg\" width=\"900\">"))
+        assertTrue(body.contains("<img src=\"percentage.jpg\" width=\"100%\" height=\"700\">"))
+    }
+
+    @Test
     fun `pipeline rejects transformers that replace source representation`() {
         val transformer =
             object : ResourceTransformer {

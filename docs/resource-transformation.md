@@ -134,6 +134,13 @@ If transformation behavior changes between YAME versions or configurations, cach
 
 Within one running process, however, the pipeline is assumed stable. Code that introduces runtime mutation of the transformer set or semantics must revisit this validator invariant explicitly.
 
+### Image dimensions
+
+The HTML compatibility stage applies the same proportional sizing policy as
+JPEG optimization to literal `<img>` tags that contain numeric pixel
+`width` and `height` attributes. It does not inspect or fetch the referenced
+image; image-body optimization is an independent later step.
+
 
 ## Cache and in-flight work invariants
 

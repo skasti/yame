@@ -10,22 +10,6 @@ import javax.imageio.ImageIO
 import javax.imageio.ImageWriteParam
 import javax.imageio.stream.MemoryCacheImageInputStream
 import javax.imageio.stream.MemoryCacheImageOutputStream
-import kotlin.math.min
-import kotlin.math.roundToInt
-
-internal data class ImageOptimizationPolicy(
-    val maxWidth: Int = 600,
-    val maxHeight: Int = 400,
-    val jpegQuality: Float = 0.55f,
-    val maxDecodedPixels: Long = 16_000_000L,
-) {
-    init {
-        require(maxWidth > 0) { "Image maxWidth must be positive" }
-        require(maxHeight > 0) { "Image maxHeight must be positive" }
-        require(jpegQuality in 0f..1f) { "JPEG quality must be between 0 and 1" }
-        require(maxDecodedPixels > 0) { "Image maxDecodedPixels must be positive" }
-    }
-}
 
 internal class ImageResourceTransformer(
     private val policy: ImageOptimizationPolicy = ImageOptimizationPolicy(),
@@ -59,7 +43,13 @@ internal class ImageResourceTransformer(
     ): ResourceTransformationState {
         val current = state.resource.representation
         val decoded = decodeJpeg(current.body) ?: return state
-        val resized = resizeForLegacyDisplay(decoded)
+        val targetDimensions = policy.targetDimensions(decoded.width, decoded.height)
+        val resized =
+            if (targetDimensions.width == decoded.width && targetDimensions.height == decoded.height) {
+                decoded
+            } else {
+                resizeForLegacyDisplay(decoded, targetDimensions)
+            }
         val encoded = encodeJpeg(resized) ?: return state
 
         // Recompression is an optimization, not a compatibility requirement for JPEG.
@@ -118,25 +108,17 @@ internal class ImageResourceTransformer(
             }
         }.getOrNull()
 
-    private fun resizeForLegacyDisplay(source: BufferedImage): BufferedImage {
-        val scale =
-            min(
-                1.0,
-                min(
-                    policy.maxWidth.toDouble() / source.width.toDouble(),
-                    policy.maxHeight.toDouble() / source.height.toDouble(),
-                ),
-            )
-        val targetWidth = (source.width * scale).roundToInt().coerceAtLeast(1)
-        val targetHeight = (source.height * scale).roundToInt().coerceAtLeast(1)
-
-        val target = BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_RGB)
+    private fun resizeForLegacyDisplay(
+        source: BufferedImage,
+        dimensions: ImageDimensions,
+    ): BufferedImage {
+        val target = BufferedImage(dimensions.width, dimensions.height, BufferedImage.TYPE_INT_RGB)
         val graphics = target.createGraphics()
         try {
             graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
             graphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
             graphics.setRenderingHint(RenderingHints.KEY_COLOR_RENDERING, RenderingHints.VALUE_COLOR_RENDER_QUALITY)
-            graphics.drawImage(source, 0, 0, targetWidth, targetHeight, null)
+            graphics.drawImage(source, 0, 0, dimensions.width, dimensions.height, null)
         } finally {
             graphics.dispose()
         }
