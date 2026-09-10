@@ -56,7 +56,7 @@ class ResourceGraphTest {
         )
 
         val snapshot = graph.snapshot()
-        assertEquals(2, snapshot.nodes.size)
+        assertEquals(3, snapshot.nodes.size)
         assertEquals(2, snapshot.edges.size)
         assertEquals(1, snapshot.nodes.count { it.legacyUri == sharedLegacy })
     }
@@ -104,6 +104,7 @@ class ResourceGraphTest {
 
         assertEquals(setOf(first.id, second.id), registry.contextsFor(sharedLegacy).map { it.id }.toSet())
     }
+
     @Test
     fun `navigation roots are process persistent and reused on later visits`() {
         val registry = NavigationResourceRegistry()
@@ -229,9 +230,9 @@ class ResourceGraphTest {
     }
 
     @Test
-    fun `graph bounds nodes and edges and does not index dropped resources`() {
+    fun `host graph bounds nodes and edges and does not index dropped resources`() {
         val registry = NavigationResourceRegistry(
-            maxNodesPerContext = 2,
+            maxNodesPerHost = 3,
             maxEdgesPerContext = 1,
         )
         val graph = registry.startNavigation(URI("http://legacy.test/root"))
@@ -264,7 +265,7 @@ class ResourceGraphTest {
         )
 
         val snapshot = graph.snapshot()
-        assertEquals(2, snapshot.nodes.size)
+        assertEquals(3, snapshot.nodes.size)
         assertEquals(1, snapshot.edges.size)
         assertTrue(registry.contextsFor(kept).isNotEmpty())
         assertTrue(registry.contextsFor(dropped).isEmpty())
@@ -315,12 +316,13 @@ class ResourceGraphTest {
     }
 
     @Test
-    fun `resource hook only fires when a resource is first added`() {
+    fun `resource hook fires once for each newly admitted resource`() {
         val hooks = ResourceRegistryHooks()
         val addedResources = mutableListOf<ResourceRegistryResource>()
         hooks.onResourceAdded += addedResources::add
         val registry = NavigationResourceRegistry(hooks = hooks)
-        val graph = registry.startNavigation(URI("http://legacy.test/root"))
+        val rootRequest = URI("http://legacy.test/root")
+        val graph = registry.startNavigation(rootRequest)
         val child = URI("http://cdn.test/shared.gif")
 
         repeat(2) {
@@ -334,9 +336,8 @@ class ResourceGraphTest {
             )
         }
 
-        assertEquals(listOf(child), addedResources.map { it.resourceLegacyUri })
+        assertEquals(listOf(rootRequest, child), addedResources.map { it.resourceLegacyUri })
     }
-
 
     @Test
     fun `resource lifecycle updates are observable with sticky prefetch and transforms`() {
@@ -442,6 +443,4 @@ class ResourceGraphTest {
             observed,
         )
     }
-
-
 }
