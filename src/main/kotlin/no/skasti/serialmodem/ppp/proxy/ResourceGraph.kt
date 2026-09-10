@@ -125,11 +125,11 @@ internal class ResourceRegistryHooks(
 internal class NavigationResourceGraph(
     val id: Long,
     val rootLegacyUri: URI,
-    private val maxNodes: Int,
+    private val maxNodesPerHost: Int,
     private val maxEdges: Int,
 ) {
     init {
-        require(maxNodes > 0) { "Resource graph node limit must be positive" }
+        require(maxNodesPerHost > 0) { "Resource graph node limit per host must be positive" }
         require(maxEdges > 0) { "Resource graph edge limit must be positive" }
     }
 
@@ -327,20 +327,20 @@ internal class NavigationResourceGraph(
     }
 
     private fun canAdmit(legacyUri: URI): Boolean =
-        key(legacyUri) in nodes || nodes.size < maxNodes
+        key(legacyUri) in nodes || nodes.size < maxNodesPerHost
 
     private fun key(uri: URI): String = LegacyHttpUrl.requestObservableKey(uri)
 }
 
 internal class NavigationResourceRegistry(
     private val maxContexts: Int = 512,
-    private val maxNodesPerContext: Int = 1_024,
+    private val maxNodesPerHost: Int = 4_096,
     private val maxEdgesPerContext: Int = 2_048,
     val hooks: ResourceRegistryHooks = ResourceRegistryHooks(),
 ) {
     init {
         require(maxContexts > 0) { "Navigation context limit must be positive" }
-        require(maxNodesPerContext > 0) { "Resource graph node limit must be positive" }
+        require(maxNodesPerHost > 0) { "Resource graph node limit per host must be positive" }
         require(maxEdgesPerContext > 0) { "Resource graph edge limit must be positive" }
     }
 
@@ -408,7 +408,7 @@ internal class NavigationResourceRegistry(
                     ?: NavigationResourceGraph(
                         id = nextId.getAndIncrement(),
                         rootLegacyUri = resourceRoot,
-                        maxNodes = maxNodesPerContext,
+                        maxNodesPerHost = maxNodesPerHost,
                         maxEdges = maxEdgesPerContext,
                     ).also { created ->
                         while (graphs.size >= maxContexts) {
@@ -513,14 +513,8 @@ internal class NavigationResourceRegistry(
         val attempt =
             synchronized(lock) {
                 if (graphs[graph.id] !== graph) return@synchronized null
-                val wasKnown = graph.contains(legacyUri)
                 if (!graph.ensureDirectResource(legacyUri)) return@synchronized null
                 associateLocked(legacyUri, graph.id)
-                if (!wasKnown) {
-                    registryResource(graph, legacyUri)?.let {
-                        pending += PendingEvent.ResourceAdded(it)
-                    }
-                }
                 val created =
                     ResourceFetchAttempt(
                         graphId = graph.id,
