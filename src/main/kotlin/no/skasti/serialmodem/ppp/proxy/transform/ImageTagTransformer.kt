@@ -99,16 +99,21 @@ internal class ImageTagTransformer(
             if (index >= tag.length) return null
 
             val quote = tag[index].takeIf { it == '\'' || it == '"' }
+            val replacementStart: Int
             val valueStart: Int
             val valueEndExclusive: Int
+            val replacementEndExclusive: Int
             if (quote != null) {
+                replacementStart = index
                 index++
                 valueStart = index
                 while (index < tag.length && tag[index] != quote) index++
                 if (index >= tag.length) return null
                 valueEndExclusive = index
                 index++
+                replacementEndExclusive = index
             } else {
+                replacementStart = index
                 valueStart = index
                 while (
                     index < tag.length &&
@@ -118,13 +123,15 @@ internal class ImageTagTransformer(
                     index++
                 }
                 valueEndExclusive = index
+                replacementEndExclusive = index
             }
 
             if (name.equals(requestedName, ignoreCase = true)) {
                 return HtmlAttribute(
                     value = tag.substring(valueStart, valueEndExclusive),
-                    valueStart = valueStart,
-                    valueEndExclusive = valueEndExclusive,
+                    quote = quote,
+                    replacementStart = replacementStart,
+                    replacementEndExclusive = replacementEndExclusive,
                 )
             }
         }
@@ -135,8 +142,21 @@ internal class ImageTagTransformer(
         tag: String,
         attribute: HtmlAttribute,
         value: Int,
-    ): String =
-        tag.replaceRange(attribute.valueStart, attribute.valueEndExclusive, value.toString())
+    ): String {
+        val replacement =
+            if (attribute.quote == '\'') {
+                "\"$value\""
+            } else if (attribute.quote == '"') {
+                "\"$value\""
+            } else {
+                value.toString()
+            }
+        return tag.replaceRange(
+            attribute.replacementStart,
+            attribute.replacementEndExclusive,
+            replacement,
+        )
+    }
 
     private fun isAttributeNameCharacter(character: Char): Boolean =
         character.isLetterOrDigit() || character == '-' || character == '_' || character == ':'
@@ -146,8 +166,9 @@ internal class ImageTagTransformer(
 
     private data class HtmlAttribute(
         val value: String,
-        val valueStart: Int,
-        val valueEndExclusive: Int,
+        val quote: Char?,
+        val replacementStart: Int,
+        val replacementEndExclusive: Int,
     )
 
     private companion object {
