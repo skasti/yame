@@ -59,42 +59,98 @@ internal class ImageTagTransformer(
     }
 
     private fun resizeImageTag(tag: String): String {
-        val sourceWidth = dimensionValue(tag, WIDTH_ATTRIBUTE_PATTERN) ?: return tag
-        val sourceHeight = dimensionValue(tag, HEIGHT_ATTRIBUTE_PATTERN) ?: return tag
+        val widthAttribute = findAttribute(tag, "width") ?: return tag
+        val heightAttribute = findAttribute(tag, "height") ?: return tag
+        val sourceWidth = widthAttribute.value.toIntOrNull()?.takeIf { it > 0 } ?: return tag
+        val sourceHeight = heightAttribute.value.toIntOrNull()?.takeIf { it > 0 } ?: return tag
         val dimensions = policy.targetDimensions(sourceWidth, sourceHeight)
         if (dimensions.width == sourceWidth && dimensions.height == sourceHeight) return tag
-        var resized = replaceAttribute(tag, WIDTH_ATTRIBUTE_PATTERN, "width", dimensions.width)
-        resized = replaceAttribute(resized, HEIGHT_ATTRIBUTE_PATTERN, "height", dimensions.height)
+
+        var resized = replaceAttributeValue(tag, widthAttribute, dimensions.width)
+        val resizedHeightAttribute = findAttribute(resized, "height") ?: return tag
+        resized = replaceAttributeValue(resized, resizedHeightAttribute, dimensions.height)
         return resized
     }
 
-    private fun dimensionValue(
+    private fun findAttribute(
         tag: String,
-        pattern: Regex,
-    ): Int? {
-        val match = pattern.find(tag) ?: return null
-        return match.groupValues.drop(1)
-            .firstOrNull { it.isNotEmpty() }
-            ?.toIntOrNull()
-            ?.takeIf { it > 0 }
+        requestedName: String,
+    ): HtmlAttribute? {
+        var index = tag.indexOf('<').takeIf { it >= 0 }?.plus(1) ?: return null
+        while (index < tag.length && tag[index].isWhitespace()) index++
+        while (index < tag.length && isAttributeNameCharacter(tag[index])) index++
+
+        while (index < tag.length) {
+            while (index < tag.length && tag[index].isWhitespace()) index++
+            if (index >= tag.length || tag[index] == '>' || tag[index] == '/') return null
+
+            val nameStart = index
+            while (index < tag.length && isAttributeNameCharacter(tag[index])) index++
+            if (index == nameStart) {
+                index++
+                continue
+            }
+            val name = tag.substring(nameStart, index)
+
+            while (index < tag.length && tag[index].isWhitespace()) index++
+            if (index >= tag.length || tag[index] != '=') continue
+            index++
+            while (index < tag.length && tag[index].isWhitespace()) index++
+            if (index >= tag.length) return null
+
+            val quote = tag[index].takeIf { it == '\'' || it == '"' }
+            val valueStart: Int
+            val valueEndExclusive: Int
+            if (quote != null) {
+                index++
+                valueStart = index
+                while (index < tag.length && tag[index] != quote) index++
+                if (index >= tag.length) return null
+                valueEndExclusive = index
+                index++
+            } else {
+                valueStart = index
+                while (
+                    index < tag.length &&
+                    !tag[index].isWhitespace() &&
+                    tag[index] != '>'
+                ) {
+                    index++
+                }
+                valueEndExclusive = index
+            }
+
+            if (name.equals(requestedName, ignoreCase = true)) {
+                return HtmlAttribute(
+                    value = tag.substring(valueStart, valueEndExclusive),
+                    valueStart = valueStart,
+                    valueEndExclusive = valueEndExclusive,
+                )
+            }
+        }
+        return null
     }
 
-    private fun replaceAttribute(
+    private fun replaceAttributeValue(
         tag: String,
-        pattern: Regex,
-        name: String,
+        attribute: HtmlAttribute,
         value: Int,
-    ): String {
-        val match = pattern.find(tag) ?: return tag
-        return tag.replaceRange(match.range, "$name=\"$value\"")
-    }
+    ): String =
+        tag.replaceRange(attribute.valueStart, attribute.valueEndExclusive, value.toString())
+
+    private fun isAttributeNameCharacter(character: Char): Boolean =
+        character.isLetterOrDigit() || character == '-' || character == '_' || character == ':'
 
     private fun firstHeader(headers: Map<String, List<String>>, name: String): String? =
         headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value?.firstOrNull()
 
+    private data class HtmlAttribute(
+        val value: String,
+        val valueStart: Int,
+        val valueEndExclusive: Int,
+    )
+
     private companion object {
-        val IMG_TAG_PATTERN = Regex("""(?is)<\s*img\b[^>]*>""")
-        val WIDTH_ATTRIBUTE_PATTERN = Regex("""(?is)(?<=\s)width\s*=\s*(?:"([0-9]+)"|'([0-9]+)'|([0-9]+))""")
-        val HEIGHT_ATTRIBUTE_PATTERN = Regex("""(?is)(?<=\s)height\s*=\s*(?:"([0-9]+)"|'([0-9]+)'|([0-9]+))""")
+        val IMG_TAG_PATTERN = Regex("""(?is)<\s*img\b(?:[^>\"']|\"[^\"]*\"|'[^']*')*>""")
     }
 }
