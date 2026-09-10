@@ -32,7 +32,7 @@ internal class RetroPppHandler(
     private val resourceGraphs: NavigationResourceRegistry =
         NavigationResourceRegistry(
             maxContexts = httpCompatibilityConfig.maxResourceContexts,
-            maxNodesPerContext = httpCompatibilityConfig.maxResourceNodesPerContext,
+            maxNodesPerHost = httpCompatibilityConfig.maxResourceNodesPerContext,
             maxEdgesPerContext = httpCompatibilityConfig.maxResourceEdgesPerContext,
             hooks = resourceRegistryHooks,
         ),
