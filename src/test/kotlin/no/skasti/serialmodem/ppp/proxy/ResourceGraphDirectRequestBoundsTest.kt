@@ -11,7 +11,7 @@ class ResourceGraphDirectRequestBoundsTest {
         val registry =
             NavigationResourceRegistry(
                 maxContexts = 4,
-                maxNodesPerContext = 3,
+                maxNodesPerHost = 3,
                 maxEdgesPerContext = 8,
             )
 
@@ -33,11 +33,11 @@ class ResourceGraphDirectRequestBoundsTest {
     }
 
     @Test
-    fun `begin fetch cannot bypass a full graph`() {
+    fun `begin fetch cannot bypass a full host graph`() {
         val registry =
             NavigationResourceRegistry(
                 maxContexts = 4,
-                maxNodesPerContext = 2,
+                maxNodesPerHost = 2,
                 maxEdgesPerContext = 8,
             )
         val admitted = URI("http://example.test/admitted")
