@@ -42,7 +42,7 @@ class ImageResourceTransformerTest {
 
     @Test
     fun `ten megabyte jpeg is reduced to dialup friendly size`() {
-        val sourceBytes = highEntropyJpegFixture(4000, 3000, quality = 1.0f)
+        val sourceBytes = loadOrGenerateLargeJpegFixture()
         assertTrue(
             sourceBytes.size > 10 * 1024 * 1024,
             "Fixture must exceed 10 MiB to exercise a genuinely large modern JPEG; was ${sourceBytes.size} bytes",
@@ -189,6 +189,12 @@ class ImageResourceTransformerTest {
             body = body,
         )
 
+    private fun loadOrGenerateLargeJpegFixture(): ByteArray =
+        ImageResourceTransformerTest::class.java
+            .getResourceAsStream(LARGE_JPEG_FIXTURE)
+            ?.use { it.readBytes() }
+            ?: highEntropyJpegFixture(4000, 3000, quality = 1.0f)
+
     private fun jpegFixture(
         width: Int,
         height: Int,
@@ -238,5 +244,9 @@ class ImageResourceTransformerTest {
         } finally {
             writer.dispose()
         }
+    }
+
+    private companion object {
+        const val LARGE_JPEG_FIXTURE = "/images/large-photo.jpg"
     }
 }
