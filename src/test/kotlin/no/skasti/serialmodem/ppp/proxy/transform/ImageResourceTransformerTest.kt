@@ -41,6 +41,31 @@ class ImageResourceTransformerTest {
     }
 
     @Test
+    fun `ten megabyte jpeg is reduced to dialup friendly size`() {
+        val sourceBytes = highEntropyJpegFixture(4000, 3000, quality = 1.0f)
+        assertTrue(
+            sourceBytes.size > 10 * 1024 * 1024,
+            "Fixture must exceed 10 MiB to exercise a genuinely large modern JPEG; was ${sourceBytes.size} bytes",
+        )
+
+        val result =
+            pipeline().transform(
+                context(),
+                Resource(URI("https://modern.test/huge.jpg"), representation(sourceBytes)),
+            )
+
+        val transformed = requireNotNull(result.resource.transformed)
+        val outputBytes = transformed.representation.body
+        val output = ImageIO.read(ByteArrayInputStream(outputBytes))
+        assertTrue(output.width <= 600)
+        assertTrue(output.height <= 400)
+        assertTrue(
+            outputBytes.size < 200 * 1024,
+            "Optimized JPEG should stay below 200 KiB for a practical dialup transfer; was ${outputBytes.size} bytes",
+        )
+    }
+
+    @Test
     fun `large portrait jpeg is constrained by legacy canvas`() {
         val sourceBytes = jpegFixture(800, 1600, quality = 0.95f)
 
@@ -178,7 +203,25 @@ class ImageResourceTransformerTest {
                 image.setRGB(x, y, gradient or noise)
             }
         }
+        return encodeJpeg(image, quality)
+    }
 
+    private fun highEntropyJpegFixture(
+        width: Int,
+        height: Int,
+        quality: Float,
+    ): ByteArray {
+        val image = BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
+        val random = Random(67890)
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                image.setRGB(x, y, random.nextInt() and 0x00ffffff)
+            }
+        }
+        return encodeJpeg(image, quality)
+    }
+
+    private fun encodeJpeg(image: BufferedImage, quality: Float): ByteArray {
         val writer = ImageIO.getImageWritersByFormatName("jpeg").next()
         return try {
             ByteArrayOutputStream().use { output ->
