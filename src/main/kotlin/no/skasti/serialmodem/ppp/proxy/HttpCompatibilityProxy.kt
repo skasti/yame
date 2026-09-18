@@ -16,7 +16,7 @@ internal class SystemHttpCompatibilityProxy(
     resourceGraphs: NavigationResourceRegistry =
         NavigationResourceRegistry(
             maxContexts = config.maxResourceContexts,
-            maxNodesPerContext = config.maxResourceNodesPerContext,
+            maxNodesPerHost = config.maxResourceNodesPerContext,
             maxEdgesPerContext = config.maxResourceEdgesPerContext,
             hooks = resourceRegistryHooks,
         ),

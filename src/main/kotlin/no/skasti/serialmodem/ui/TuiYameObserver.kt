@@ -19,8 +19,11 @@ import no.skasti.serialmodem.observer.TransferKind
 import no.skasti.serialmodem.observer.TransferState
 import no.skasti.serialmodem.observer.YameEvent
 import no.skasti.serialmodem.ppp.dns.dnsResponseCodeName
+import no.skasti.serialmodem.ppp.proxy.ResourceKind
 import no.skasti.serialmodem.ppp.proxy.ResourceRegistryResource
 import no.skasti.serialmodem.ppp.proxy.ResourceRegistryRoot
+import no.skasti.serialmodem.ppp.proxy.ResourceState
+import no.skasti.serialmodem.ppp.proxy.transform.ResourceTransformationSummary
 import no.skasti.serialmodem.serial.SerialPortDescriptor
 import no.skasti.serialmodem.serial.SerialFlowControl
 import java.net.URI
@@ -62,14 +65,19 @@ class TuiYameObserver(
     private val transfers = linkedMapOf<String, DashboardTransfer>()
     private data class HttpGraphState(
         val rootLegacyUri: URI,
-        val resources: LinkedHashSet<URI> = linkedSetOf(),
+        val resources: LinkedHashMap<URI, DashboardHttpResource> = linkedMapOf(),
         var useCount: Long = 0,
         var lastUsedNanos: Long = 0,
+    )
+    private data class HttpSelectionRow(
+        val host: String,
+        val resourceUrl: String?,
     )
 
     private val httpGraphs = linkedMapOf<Long, HttpGraphState>()
     private val expandedHttpHosts = linkedSetOf<String>()
     private var selectedHttpHost: String? = null
+    private var selectedHttpResourceUrl: String? = null
     private var commandPalette: TuiCommandPalette? = null
     private var keyboardInput: JLineKeyboardInput? = null
 
@@ -298,7 +306,19 @@ class TuiYameObserver(
 
     @Synchronized
     internal fun handleResourceRootAdded(root: ResourceRegistryRoot) {
-        httpGraphs[root.graphId] = HttpGraphState(rootLegacyUri = root.rootLegacyUri)
+        httpGraphs[root.graphId] =
+            HttpGraphState(
+                rootLegacyUri = root.rootLegacyUri,
+                resources =
+                    linkedMapOf(
+                        root.rootLegacyUri to
+                            DashboardHttpResource(
+                                url = root.rootLegacyUri.toString(),
+                                state = ResourceState.DISCOVERED,
+                                kind = ResourceKind.DOCUMENT,
+                            ),
+                    ),
+            )
         normalizeHttpHostSelection()
         render()
     }
@@ -319,25 +339,39 @@ class TuiYameObserver(
 
     @Synchronized
     internal fun handleResourceAdded(resource: ResourceRegistryResource) {
-        val changed = httpGraphs[resource.graphId]
-            ?.resources
-            ?.add(resource.resourceLegacyUri)
-            ?: false
+        val resources = httpGraphs[resource.graphId]?.resources ?: return
+        val changed = resource.resourceLegacyUri !in resources
+        resources[resource.resourceLegacyUri] = resource.toDashboardResource()
         if (!changed) return
         normalizeHttpHostSelection()
         render()
     }
 
     @Synchronized
+    internal fun handleResourceUpdated(resource: ResourceRegistryResource) {
+        val graph = httpGraphs[resource.graphId] ?: return
+        graph.resources[resource.resourceLegacyUri] = resource.toDashboardResource()
+        normalizeHttpHostSelection()
+        render()
+    }
+
+    @Synchronized
     internal fun handleResourceRemoved(resource: ResourceRegistryResource) {
-        val changed = httpGraphs[resource.graphId]
-            ?.resources
-            ?.remove(resource.resourceLegacyUri)
-            ?: false
+        val resources = httpGraphs[resource.graphId]?.resources ?: return
+        val changed = resources.remove(resource.resourceLegacyUri) != null
         if (!changed) return
         normalizeHttpHostSelection()
         render()
     }
+
+    private fun ResourceRegistryResource.toDashboardResource() =
+        DashboardHttpResource(
+            url = resourceLegacyUri.toString(),
+            state = state,
+            kind = kind,
+            prefetched = prefetched,
+            transformations = transformations,
+        )
 
     private fun touchHttpGraph(graphId: Long): Boolean {
         val graph = httpGraphs[graphId] ?: return false
@@ -348,7 +382,7 @@ class TuiYameObserver(
 
     private fun httpHostSnapshots(): List<DashboardHttpHost> {
         data class Aggregate(
-            val urls: LinkedHashSet<String> = linkedSetOf(),
+            val resources: LinkedHashMap<String, DashboardHttpResource> = linkedMapOf(),
             var useCount: Long = 0,
             var lastUsedNanos: Long = 0,
         )
@@ -356,15 +390,13 @@ class TuiYameObserver(
         val hosts = linkedMapOf<String, Aggregate>()
         httpGraphs.values.forEach { graph ->
             val graphHosts = linkedSetOf<String>()
-            sequenceOf(graph.rootLegacyUri)
-                .plus(graph.resources.asSequence())
-                .forEach { uri ->
-                    val host = uri.host?.lowercase() ?: return@forEach
-                    val aggregate = hosts.getOrPut(host) { Aggregate() }
-                    aggregate.urls += uri.toString()
-                    aggregate.lastUsedNanos = maxOf(aggregate.lastUsedNanos, graph.lastUsedNanos)
-                    graphHosts += host
-                }
+            graph.resources.forEach { (uri, resource) ->
+                val host = uri.host?.lowercase() ?: return@forEach
+                val aggregate = hosts.getOrPut(host) { Aggregate() }
+                aggregate.resources[uri.toString()] = resource
+                aggregate.lastUsedNanos = maxOf(aggregate.lastUsedNanos, graph.lastUsedNanos)
+                graphHosts += host
+            }
             graphHosts.forEach { host ->
                 hosts.getValue(host).useCount += graph.useCount
             }
@@ -374,7 +406,7 @@ class TuiYameObserver(
             .map { (host, aggregate) ->
                 DashboardHttpHost(
                     host = host,
-                    urls = aggregate.urls.toList(),
+                    resources = aggregate.resources.values.toList(),
                     expanded = host in expandedHttpHosts,
                     useCount = aggregate.useCount,
                     lastUsedNanos = aggregate.lastUsedNanos,
@@ -393,17 +425,39 @@ class TuiYameObserver(
         selectedHttpHost = selectedHttpHost
             ?.takeIf { selected -> hosts.any { it.host == selected } }
             ?: hosts.firstOrNull()?.host
+        selectedHttpResourceUrl =
+            selectedHttpResourceUrl?.takeIf { resourceUrl ->
+                (
+                    hosts
+                        .firstOrNull { it.host == selectedHttpHost }
+                        ?.let { host -> host.expanded && host.resources.any { it.url == resourceUrl } }
+                ) == true
+            }
     }
 
     @Synchronized
-    private fun moveHttpHostSelection(delta: Int) {
+    private fun moveHttpSelection(delta: Int) {
         val hosts = httpHostSnapshots()
         if (hosts.isEmpty()) return
-        val current = hosts.indexOfFirst { it.host == selectedHttpHost }
-            .takeIf { it >= 0 }
-            ?: 0
-        val next = (current + delta).coerceIn(0, hosts.lastIndex)
-        selectedHttpHost = hosts[next].host
+        val rows =
+            hosts.flatMap { host ->
+                buildList {
+                    add(HttpSelectionRow(host.host, null))
+                    if (host.expanded) {
+                        host.resources.forEach { resource ->
+                            add(HttpSelectionRow(host.host, resource.url))
+                        }
+                    }
+                }
+            }
+        val current =
+            rows.indexOfFirst {
+                it.host == selectedHttpHost && it.resourceUrl == selectedHttpResourceUrl
+            }.takeIf { it >= 0 }
+                ?: 0
+        val next = (current + delta).coerceIn(0, rows.lastIndex)
+        selectedHttpHost = rows[next].host
+        selectedHttpResourceUrl = rows[next].resourceUrl
         render()
     }
 
@@ -411,6 +465,7 @@ class TuiYameObserver(
     private fun setSelectedHttpHostExpanded(expanded: Boolean) {
         val host = selectedHttpHost ?: return
         if (expanded) expandedHttpHosts += host else expandedHttpHosts -= host
+        if (!expanded) selectedHttpResourceUrl = null
         render()
     }
 
@@ -462,8 +517,8 @@ class TuiYameObserver(
                                     paletteOpen -> handlePaletteKey(key)
                                     key == "/" -> openCommandPalette()
                                     key.equals("q", ignoreCase = true) -> requestQuit()
-                                    key == "ArrowUp" -> moveHttpHostSelection(-1)
-                                    key == "ArrowDown" -> moveHttpHostSelection(1)
+                                    key == "ArrowUp" -> moveHttpSelection(-1)
+                                    key == "ArrowDown" -> moveHttpSelection(1)
                                     key == "ArrowRight" || key == "Enter" -> setSelectedHttpHostExpanded(true)
                                     key == "ArrowLeft" -> setSelectedHttpHostExpanded(false)
                                 }
@@ -834,6 +889,7 @@ class TuiYameObserver(
                     selectedHttpHostIndex = httpHosts
                         .indexOfFirst { it.host == selectedHttpHost }
                         .coerceAtLeast(0),
+                    selectedHttpResourceUrl = selectedHttpResourceUrl,
                     commandPalette = commandPalette,
                 )
             },
@@ -927,12 +983,24 @@ internal data class DashboardTransfer(
         }
 }
 
+internal data class DashboardHttpResource(
+    val url: String,
+    val state: ResourceState = ResourceState.DISCOVERED,
+    val kind: ResourceKind = ResourceKind.OTHER,
+    val prefetched: Boolean = false,
+    val transformations: List<ResourceTransformationSummary> = emptyList(),
+)
+
 internal data class DashboardHttpHost(
     val host: String,
-    val urls: List<String>,
+    val resources: List<DashboardHttpResource>,
     val expanded: Boolean,
     val useCount: Long = 0,
     val lastUsedNanos: Long = 0,
+    val savedBytes: Long =
+        resources.sumOf { resource ->
+            resource.transformations.sumOf { it.savedBytes.toLong() }
+        },
 )
 
 internal enum class TuiPaletteMode {
@@ -971,6 +1039,7 @@ internal data class DashboardState(
     val transfers: List<DashboardTransfer>,
     val httpHosts: List<DashboardHttpHost>,
     val selectedHttpHostIndex: Int,
+    val selectedHttpResourceUrl: String? = null,
     val commandPalette: TuiCommandPalette?,
 )
 
@@ -983,6 +1052,10 @@ internal data class DashboardStyles(
     val danger: (String) -> String = { it },
     val muted: (String) -> String = { it },
     val selected: (String) -> String = { it },
+    val resourceKnown: (String) -> String = { it },
+    val resourceActive: (String) -> String = { it },
+    val resourceReady: (String) -> String = { it },
+    val resourceFailed: (String) -> String = { it },
 ) {
     companion object {
         val colorful = DashboardStyles(
@@ -994,6 +1067,10 @@ internal data class DashboardStyles(
             danger = { (brightRed + bold)(it) },
             muted = { gray(0.55)(it) },
             selected = { (brightGreen + bold + inverse)(it) },
+            resourceKnown = { gray(0.72)(it) },
+            resourceActive = { yellow(it) },
+            resourceReady = { brightGreen(it) },
+            resourceFailed = { brightRed(it) },
         )
     }
 }
@@ -1006,6 +1083,10 @@ private enum class DashboardTone {
     DANGER,
     MUTED,
     SELECTED,
+    RESOURCE_KNOWN,
+    RESOURCE_ACTIVE,
+    RESOURCE_READY,
+    RESOURCE_FAILED,
 }
 
 private data class DashboardLine(
@@ -1094,6 +1175,7 @@ internal object YameDashboardRenderer {
                 lines = httpHostLines(
                     state.httpHosts,
                     state.selectedHttpHostIndex,
+                    state.selectedHttpResourceUrl,
                     lowerHeight - 2,
                     rightWidth - 4,
                 ),
@@ -1117,7 +1199,7 @@ internal object YameDashboardRenderer {
         )
 
         val footerText = if (state.commandPalette == null) {
-            "[/] commands   [q/Ctrl-C] quit"
+            "[↑/↓] select   [Enter/Right] expand   [Left] collapse   [/] commands   [q/Ctrl-C] quit"
         } else {
             "[↑/↓] select   [Enter] apply   [Esc] close palette"
         }
@@ -1159,9 +1241,10 @@ internal object YameDashboardRenderer {
                 lines += DashboardLine(compactTransfer(it), transferTone(it.state))
             }
         state.httpHosts.getOrNull(state.selectedHttpHostIndex)?.let { host ->
-            val marker = if (host.expanded) "▼" else "▶"
+            val marker = if (host.expanded) "v" else ">"
             lines += DashboardLine(
-                "HTTP $marker ${host.host} (${host.urls.size})",
+                "HTTP $marker ${host.host} (${host.resources.size})" +
+                    if (host.savedBytes > 0) " | saved ${formatBytes(host.savedBytes)}" else "",
                 DashboardTone.ACCENT,
             )
         }
@@ -1178,7 +1261,7 @@ internal object YameDashboardRenderer {
                     (palette.options.size - 1).coerceAtLeast(0),
                 ),
             )
-            val selection = selected?.let { "  › ${it.label}" }.orEmpty()
+            val selection = selected?.let { "  > ${it.label}" }.orEmpty()
             lines.add(
                 1,
                 DashboardLine(
@@ -1268,6 +1351,7 @@ internal object YameDashboardRenderer {
     private fun httpHostLines(
         hosts: List<DashboardHttpHost>,
         selectedHostIndex: Int,
+        selectedResourceUrl: String?,
         visibleRows: Int,
         contentWidth: Int,
     ): List<DashboardLine> {
@@ -1277,12 +1361,20 @@ internal object YameDashboardRenderer {
 
         val selected = selectedHostIndex.coerceIn(0, hosts.lastIndex)
         val rows = visibleRows.coerceAtLeast(1)
-        var selectedLine = 0
-        for (index in 0 until selected) {
-            selectedLine += 1 + if (hosts[index].expanded) hosts[index].urls.size else 0
-        }
+        val selectedResourceIndex =
+            hosts[selected].resources.indexOfFirst { it.url == selectedResourceUrl }
+                .takeIf { selectedResourceUrl != null && it >= 0 }
+        val selectedLine =
+            hosts.take(selected).sumOf { host ->
+                1 + if (host.expanded) host.resources.size else 0
+            } +
+                if (selectedResourceIndex != null && hosts[selected].expanded) {
+                    1 + selectedResourceIndex
+                } else {
+                    0
+                }
         val itemCount = hosts.sumOf { host ->
-            1 + if (host.expanded) host.urls.size else 0
+            1 + if (host.expanded) host.resources.size else 0
         }
         val start = viewportStart(
             selectedIndex = selectedLine.coerceIn(0, (itemCount - 1).coerceAtLeast(0)),
@@ -1292,32 +1384,92 @@ internal object YameDashboardRenderer {
 
         return sequence {
             hosts.forEachIndexed { index, host ->
-                val marker = if (host.expanded) "▼" else "▶"
-                val selection = if (index == selected) "›" else " "
+                val marker = if (host.expanded) "v" else ">"
+                val hostSelected = index == selected && selectedResourceIndex == null
+                val selection = if (hostSelected) ">" else " "
                 yield(
                     DashboardLine(
-                        clip("$selection $marker ${host.host}  (${host.urls.size})", contentWidth),
-                        if (index == selected) DashboardTone.SELECTED else DashboardTone.ACCENT,
+                        clip(
+                            "$selection $marker ${host.host}  (${host.resources.size})" +
+                                if (host.savedBytes > 0) " | saved ${formatBytes(host.savedBytes)}" else "",
+                            contentWidth,
+                        ),
+                        if (hostSelected) DashboardTone.SELECTED else DashboardTone.ACCENT,
                     ),
                 )
                 if (host.expanded) {
-                    host.urls.forEach { url ->
-                        val path = runCatching { URI(url) }.getOrNull()?.let { uri ->
+                    host.resources.forEach { resource ->
+                        val path = runCatching { URI(resource.url) }.getOrNull()?.let { uri ->
                             buildString {
                                 append(uri.rawPath?.takeIf { it.isNotEmpty() } ?: "/")
                                 uri.rawQuery?.let { append('?').append(it) }
                             }
-                        } ?: url
+                        } ?: resource.url
+                        val summary = resource.transformations.lastOrNull()
+                        val transformText = summary?.let(::formatTransformationSummary).orEmpty()
+                        val prefetchText = if (resource.prefetched) " [P]" else ""
+                        val statusText =
+                            when (resource.state) {
+                                ResourceState.DISCOVERED -> "."
+                                ResourceState.FETCHING,
+                                ResourceState.SOURCE_READY,
+                                ResourceState.TRANSFORMING -> "~"
+                                ResourceState.READY -> "*"
+                                ResourceState.FAILED -> "!"
+                            }
+                        val tone =
+                            when (resource.state) {
+                                ResourceState.DISCOVERED -> DashboardTone.RESOURCE_KNOWN
+                                ResourceState.FETCHING,
+                                ResourceState.SOURCE_READY,
+                                ResourceState.TRANSFORMING -> DashboardTone.RESOURCE_ACTIVE
+                                ResourceState.READY -> DashboardTone.RESOURCE_READY
+                                ResourceState.FAILED -> DashboardTone.RESOURCE_FAILED
+                            }
+                        val resourceSelected =
+                            index == selected &&
+                                resource.url == selectedResourceUrl
                         yield(
                             DashboardLine(
-                                clip("    $path", contentWidth),
-                                DashboardTone.MUTED,
+                                formatHttpResourceLine(
+                                    selection = if (resourceSelected) ">" else " ",
+                                    statusText = statusText,
+                                    path = path,
+                                    suffix = "$prefetchText$transformText",
+                                    contentWidth = contentWidth,
+                                ),
+                                if (resourceSelected) DashboardTone.SELECTED else tone,
                             ),
                         )
                     }
                 }
             }
         }.drop(start).take(rows).toList()
+    }
+
+    private fun formatHttpResourceLine(
+        selection: String,
+        statusText: String,
+        path: String,
+        suffix: String,
+        contentWidth: Int,
+    ): String {
+        val prefix = "$selection  $statusText "
+        val minimumPathWidth = 12
+        val suffixWidth = (contentWidth - prefix.length - minimumPathWidth).coerceAtLeast(0)
+        val visibleSuffix = clip(suffix, suffixWidth)
+        val pathWidth = (contentWidth - prefix.length - visibleSuffix.length).coerceAtLeast(0)
+        return clip(prefix + middleClip(path, pathWidth) + visibleSuffix, contentWidth)
+    }
+
+    private fun middleClip(value: String, maxLength: Int): String {
+        val safeValue = sanitizeTerminalText(value)
+        if (maxLength <= 0) return ""
+        if (safeValue.length <= maxLength) return safeValue
+        if (maxLength == 1) return "…"
+        val tailLength = ((maxLength - 1) * 3 / 4).coerceAtLeast(1)
+        val headLength = maxLength - 1 - tailLength
+        return safeValue.take(headLength) + "…" + safeValue.takeLast(tailLength)
     }
     private fun paletteLines(
         palette: TuiCommandPalette,
@@ -1355,7 +1507,7 @@ internal object YameDashboardRenderer {
             .take(optionRows)
             .forEachIndexed { offset, option ->
                 val index = start + offset
-                val marker = if (index == selected) "›" else " "
+                val marker = if (index == selected) ">" else " "
                 val description = option.description
                     .takeIf { it.isNotBlank() }
                     ?.let { "  $it" }
@@ -1452,6 +1604,26 @@ internal object YameDashboardRenderer {
             HttpProxyActionKind.ERROR -> DashboardTone.DANGER
         }
 
+    private fun formatTransformationSummary(summary: ResourceTransformationSummary): String {
+        val savedPercent =
+            if (summary.sourceBytes > 0) {
+                (summary.savedBytes * 100L / summary.sourceBytes).coerceIn(0, 100)
+            } else {
+                0
+            }
+        val detail = summary.detail?.let { " | $it" }.orEmpty()
+        return "  ${formatCompactBytes(summary.sourceBytes.toLong())}->${formatCompactBytes(summary.outputBytes.toLong())} -$savedPercent%$detail"
+    }
+
+    private fun formatCompactBytes(bytes: Long): String =
+        when {
+            bytes >= 1024L * 1024L ->
+                "${(bytes.toDouble() / (1024.0 * 1024.0)).let { if (it >= 10) "%.0f".format(it) else "%.1f".format(it) }}M"
+            bytes >= 1024L ->
+                "${(bytes.toDouble() / 1024.0).let { if (it >= 10) "%.0f".format(it) else "%.1f".format(it) }}K"
+            else -> "$bytes"
+        }
+
     private fun compactTransfer(transfer: DashboardTransfer): String =
         "${transfer.kind} ${transfer.destination} ↑${formatBytes(transfer.toHostBytes)} ↓${formatBytes(transfer.toPeerBytes)}"
 
@@ -1487,6 +1659,10 @@ internal object YameDashboardRenderer {
             DashboardTone.DANGER -> styles.danger(text)
             DashboardTone.MUTED -> styles.muted(text)
             DashboardTone.SELECTED -> styles.selected(text)
+            DashboardTone.RESOURCE_KNOWN -> styles.resourceKnown(text)
+            DashboardTone.RESOURCE_ACTIVE -> styles.resourceActive(text)
+            DashboardTone.RESOURCE_READY -> styles.resourceReady(text)
+            DashboardTone.RESOURCE_FAILED -> styles.resourceFailed(text)
         }
 
     private fun clip(

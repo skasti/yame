@@ -2,10 +2,14 @@ package no.skasti.serialmodem.ui
 
 import no.skasti.serialmodem.observer.TransferKind
 import no.skasti.serialmodem.observer.TransferState
+import no.skasti.serialmodem.ppp.proxy.ResourceKind
+import no.skasti.serialmodem.ppp.proxy.ResourceState
+import no.skasti.serialmodem.ppp.proxy.transform.ResourceTransformationSummary
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class YameDashboardRendererTest {
     @Test
@@ -46,14 +50,33 @@ class YameDashboardRendererTest {
             httpHosts = listOf(
                 DashboardHttpHost(
                     host = "example.test",
-                    urls = listOf(
-                        "http://example.test/",
-                        "https://example.test/assets/site.css",
+                    resources = listOf(
+                        DashboardHttpResource(
+                            url = "http://example.test/",
+                            state = ResourceState.READY,
+                            kind = ResourceKind.DOCUMENT,
+                        ),
+                        DashboardHttpResource(
+                            url = "https://example.test/assets/hero.jpg",
+                            state = ResourceState.READY,
+                            kind = ResourceKind.IMAGE,
+                            prefetched = true,
+                            transformations =
+                                listOf(
+                                    ResourceTransformationSummary(
+                                        transformerId = "legacy-image-optimization",
+                                        sourceBytes = 184 * 1024,
+                                        outputBytes = 31 * 1024,
+                                        detail = "1600x1000 -> 640x400",
+                                    ),
+                                ),
+                        ),
                     ),
                     expanded = true,
                 ),
             ),
             selectedHttpHostIndex = 0,
+            selectedHttpResourceUrl = "https://example.test/assets/hero.jpg",
             commandPalette = null,
         )
 
@@ -70,7 +93,113 @@ class YameDashboardRendererTest {
         assertContains(rendered, "vg.no")
         assertContains(rendered, "93.184.216.34:80")
         assertContains(rendered, "example.test  (2)")
-        assertContains(rendered, "/assets/site.css")
+        assertContains(rendered, ">  *")
+        assertContains(rendered, "…hero.jpg")
+        assertContains(rendered, "[P]")
+        assertContains(rendered, "184K->31K -83%")
+    }
+
+    @Test
+    fun proxyResourcesExposeLifecycleStates() {
+        val rendered =
+            YameDashboardRenderer.render(
+                state =
+                    DashboardState(
+                        portName = "COM3",
+                        baud = 115200,
+                        connected = true,
+                        dnsUpstream = "8.8.8.8",
+                        httpProxyEnabled = true,
+                        logs = emptyList(),
+                        dnsLookups = emptyList(),
+                        transfers = emptyList(),
+                        httpHosts =
+                            listOf(
+                                DashboardHttpHost(
+                                    host = "example.test",
+                                    resources =
+                                        listOf(
+                                            DashboardHttpResource(
+                                                "http://example.test/known.gif",
+                                                state = ResourceState.DISCOVERED,
+                                            ),
+                                            DashboardHttpResource(
+                                                "http://example.test/fetching.gif",
+                                                state = ResourceState.FETCHING,
+                                            ),
+                                            DashboardHttpResource(
+                                                "http://example.test/source-ready.gif",
+                                                state = ResourceState.SOURCE_READY,
+                                            ),
+                                            DashboardHttpResource(
+                                                "http://example.test/transforming.jpg",
+                                                state = ResourceState.TRANSFORMING,
+                                            ),
+                                            DashboardHttpResource(
+                                                "http://example.test/ready.jpg",
+                                                state = ResourceState.READY,
+                                            ),
+                                            DashboardHttpResource(
+                                                "http://example.test/failed.gif",
+                                                state = ResourceState.FAILED,
+                                            ),
+                                        ),
+                                    expanded = true,
+                                ),
+                            ),
+                        selectedHttpHostIndex = 0,
+                        commandPalette = null,
+                    ),
+                width = 160,
+                height = 50,
+            )
+
+        assertContains(rendered, ". /known.gif")
+        assertContains(rendered, "~ /fetching.gif")
+        assertContains(rendered, "~ /source-ready.gif")
+        assertContains(rendered, "~ /transforming.jpg")
+        assertContains(rendered, "* /ready.jpg")
+        assertContains(rendered, "! /failed.gif")
+    }
+
+    @Test
+    fun longUnoptimizedResourcePathsAreMiddleTruncated() {
+        val longPath = "/assets/" + "nested/".repeat(20) + "logo.gif"
+        val rendered =
+            YameDashboardRenderer.render(
+                state =
+                    DashboardState(
+                        portName = "COM3",
+                        baud = 115200,
+                        connected = true,
+                        dnsUpstream = "8.8.8.8",
+                        httpProxyEnabled = true,
+                        logs = emptyList(),
+                        dnsLookups = emptyList(),
+                        transfers = emptyList(),
+                        httpHosts =
+                            listOf(
+                                DashboardHttpHost(
+                                    host = "example.test",
+                                    resources =
+                                        listOf(
+                                            DashboardHttpResource(
+                                                "http://example.test$longPath",
+                                                state = ResourceState.READY,
+                                            ),
+                                        ),
+                                    expanded = true,
+                                ),
+                            ),
+                        selectedHttpHostIndex = 0,
+                        commandPalette = null,
+                    ),
+                width = 120,
+                height = 34,
+            )
+
+        assertTrue(rendered.contains("…"), rendered)
+        assertContains(rendered, "logo.gif")
     }
 
     @Test
@@ -88,7 +217,7 @@ class YameDashboardRendererTest {
                 httpHosts = listOf(
                     DashboardHttpHost(
                         host = "example.test",
-                        urls = listOf("https://example.test/path/page.html?x=1"),
+                        resources = listOf(DashboardHttpResource("https://example.test/path/page.html?x=1")),
                         expanded = false,
                     ),
                 ),
@@ -99,7 +228,7 @@ class YameDashboardRendererTest {
             height = 34,
         )
 
-        assertContains(rendered, "▶ example.test")
+        assertContains(rendered, "> example.test")
         assertFalse(rendered.contains("/path/page.html?x=1"))
     }
 

@@ -32,9 +32,19 @@ internal data class ResourceRepresentation(
     val body: ByteArray,
 )
 
+internal data class ResourceTransformationSummary(
+    val transformerId: String,
+    val sourceBytes: Int,
+    val outputBytes: Int,
+    val detail: String? = null,
+) {
+    val savedBytes: Int get() = (sourceBytes - outputBytes).coerceAtLeast(0)
+}
+
 internal data class TransformedRepresentation(
     val profile: String,
     val representation: ResourceRepresentation,
+    val transformations: List<ResourceTransformationSummary> = emptyList(),
 )
 
 internal data class Resource(

@@ -80,6 +80,7 @@ class InteractiveYameApplication(
         resourceRegistryHooks.onRootRemoved += observer::handleResourceRootRemoved
         resourceRegistryHooks.onRootUsed += observer::handleResourceRootUsed
         resourceRegistryHooks.onResourceAdded += observer::handleResourceAdded
+        resourceRegistryHooks.onResourceUpdated += observer::handleResourceUpdated
         resourceRegistryHooks.onResourceRemoved += observer::handleResourceRemoved
     }
 

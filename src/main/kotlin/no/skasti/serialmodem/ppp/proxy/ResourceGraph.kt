@@ -1,5 +1,6 @@
 package no.skasti.serialmodem.ppp.proxy
 
+import no.skasti.serialmodem.ppp.proxy.transform.ResourceTransformationSummary
 import java.net.URI
 import java.util.concurrent.atomic.AtomicLong
 
@@ -45,6 +46,8 @@ internal data class ResourceNodeSnapshot(
     val kind: ResourceKind,
     val contentBase: URI?,
     val state: ResourceState,
+    val prefetched: Boolean = false,
+    val transformations: List<ResourceTransformationSummary> = emptyList(),
 )
 
 internal data class ResourceEdgeSnapshot(
@@ -69,6 +72,10 @@ internal data class ResourceRegistryResource(
     val graphId: Long,
     val rootLegacyUri: URI,
     val resourceLegacyUri: URI,
+    val state: ResourceState,
+    val kind: ResourceKind,
+    val prefetched: Boolean = false,
+    val transformations: List<ResourceTransformationSummary> = emptyList(),
 )
 
 internal data class ResourceFetchAttempt(
@@ -111,19 +118,21 @@ internal class ResourceRegistryHooks(
     val onRootRemoved = ResourceRegistryEvent<ResourceRegistryRoot>(dispatch)
     val onRootUsed = ResourceRegistryEvent<ResourceRegistryRoot>(dispatch)
     val onResourceAdded = ResourceRegistryEvent<ResourceRegistryResource>(dispatch)
+    val onResourceUpdated = ResourceRegistryEvent<ResourceRegistryResource>(dispatch)
     val onResourceRemoved = ResourceRegistryEvent<ResourceRegistryResource>(dispatch)
 }
 
 internal class NavigationResourceGraph(
     val id: Long,
     val rootLegacyUri: URI,
-    private val maxNodes: Int,
+    private val maxNodesPerHost: Int,
     private val maxEdges: Int,
 ) {
     init {
-        require(maxNodes > 0) { "Resource graph node limit must be positive" }
+        require(maxNodesPerHost > 0) { "Resource graph node limit per host must be positive" }
         require(maxEdges > 0) { "Resource graph edge limit must be positive" }
     }
+
     private data class MutableNode(
         val legacyUri: URI,
         var upstreamUri: URI?,
@@ -131,6 +140,8 @@ internal class NavigationResourceGraph(
         var kind: ResourceKind,
         var contentBase: URI?,
         var state: ResourceState,
+        var prefetched: Boolean,
+        var transformations: List<ResourceTransformationSummary>,
     )
 
     private val nodes = linkedMapOf<String, MutableNode>()
@@ -144,6 +155,8 @@ internal class NavigationResourceGraph(
             kind = ResourceKind.DOCUMENT,
             contentBase = null,
             state = ResourceState.DISCOVERED,
+            prefetched = false,
+            transformations = emptyList(),
         )
     }
 
@@ -155,8 +168,7 @@ internal class NavigationResourceGraph(
         relation: ResourceRelation,
         kind: ResourceKind,
     ): Boolean {
-        val key = key(childLegacyUri)
-        if (key !in nodes && nodes.size >= maxNodes) return false
+        if (!canAdmit(childLegacyUri)) return false
         upsertNode(
             legacyUri = childLegacyUri,
             upstreamUri = upstreamUri,
@@ -164,9 +176,27 @@ internal class NavigationResourceGraph(
             kind = kind,
             contentBase = null,
             state = ResourceState.DISCOVERED,
+            prefetched = false,
+            transformations = emptyList(),
         )
         val edge = ResourceEdgeSnapshot(parentLegacyUri, childLegacyUri, relation)
         if (edge in edges || edges.size < maxEdges) edges += edge
+        return true
+    }
+
+    @Synchronized
+    fun ensureDirectResource(legacyUri: URI): Boolean {
+        if (!canAdmit(legacyUri)) return false
+        if (key(legacyUri) !in nodes) {
+            upsertNode(
+                legacyUri = legacyUri,
+                upstreamUri = null,
+                role = ReferenceRole.SUBRESOURCE,
+                kind = ResourceKind.OTHER,
+                contentBase = null,
+                state = ResourceState.DISCOVERED,
+            )
+        }
         return true
     }
 
@@ -176,13 +206,16 @@ internal class NavigationResourceGraph(
         upstreamUri: URI,
         contentBase: URI?,
         state: ResourceState,
+        prefetched: Boolean = false,
     ) {
+        if (!canAdmit(legacyUri)) return
         val key = key(legacyUri)
         val existing = nodes[key]
         if (existing != null) {
             existing.upstreamUri = upstreamUri
             existing.contentBase = contentBase
             existing.state = state
+            existing.prefetched = existing.prefetched || prefetched
         } else {
             upsertNode(
                 legacyUri = legacyUri,
@@ -191,6 +224,8 @@ internal class NavigationResourceGraph(
                 kind = ResourceKind.OTHER,
                 contentBase = contentBase,
                 state = state,
+                prefetched = prefetched,
+                transformations = emptyList(),
             )
         }
     }
@@ -208,6 +243,8 @@ internal class NavigationResourceGraph(
                 kind = it.kind,
                 contentBase = it.contentBase,
                 state = it.state,
+                prefetched = it.prefetched,
+                transformations = it.transformations.toList(),
             )
         }
 
@@ -224,6 +261,8 @@ internal class NavigationResourceGraph(
                     kind = it.kind,
                     contentBase = it.contentBase,
                     state = it.state,
+                    prefetched = it.prefetched,
+                    transformations = it.transformations.toList(),
                 )
             },
             edges = edges.toList(),
@@ -236,11 +275,23 @@ internal class NavigationResourceGraph(
         kind: ResourceKind,
         contentBase: URI?,
         state: ResourceState,
+        prefetched: Boolean = false,
+        transformations: List<ResourceTransformationSummary> = emptyList(),
     ) {
         val key = key(legacyUri)
         val previous = nodes[key]
         if (previous == null) {
-            nodes[key] = MutableNode(legacyUri, upstreamUri, role, kind, contentBase, state)
+            nodes[key] =
+                MutableNode(
+                    legacyUri,
+                    upstreamUri,
+                    role,
+                    kind,
+                    contentBase,
+                    state,
+                    prefetched,
+                    transformations,
+                )
         } else {
             if (role == ReferenceRole.NAVIGATION) {
                 previous.role = ReferenceRole.NAVIGATION
@@ -251,21 +302,45 @@ internal class NavigationResourceGraph(
             if (upstreamUri != null) previous.upstreamUri = upstreamUri
             if (contentBase != null) previous.contentBase = contentBase
             if (state.ordinal > previous.state.ordinal) previous.state = state
+            previous.prefetched = previous.prefetched || prefetched
+            if (transformations.isNotEmpty()) previous.transformations = transformations
         }
     }
+
+    @Synchronized
+    fun setTransformations(
+        legacyUri: URI,
+        transformations: List<ResourceTransformationSummary>,
+    ): Boolean {
+        val node = nodes[key(legacyUri)] ?: return false
+        if (node.transformations == transformations) return false
+        node.transformations = transformations
+        return true
+    }
+
+    @Synchronized
+    fun updateKind(legacyUri: URI, kind: ResourceKind): Boolean {
+        val node = nodes[key(legacyUri)] ?: return false
+        if (node.kind == kind) return false
+        node.kind = kind
+        return true
+    }
+
+    private fun canAdmit(legacyUri: URI): Boolean =
+        key(legacyUri) in nodes || nodes.size < maxNodesPerHost
 
     private fun key(uri: URI): String = LegacyHttpUrl.requestObservableKey(uri)
 }
 
 internal class NavigationResourceRegistry(
     private val maxContexts: Int = 512,
-    private val maxNodesPerContext: Int = 1_024,
+    private val maxNodesPerHost: Int = 4_096,
     private val maxEdgesPerContext: Int = 2_048,
     val hooks: ResourceRegistryHooks = ResourceRegistryHooks(),
 ) {
     init {
         require(maxContexts > 0) { "Navigation context limit must be positive" }
-        require(maxNodesPerContext > 0) { "Resource graph node limit must be positive" }
+        require(maxNodesPerHost > 0) { "Resource graph node limit per host must be positive" }
         require(maxEdgesPerContext > 0) { "Resource graph edge limit must be positive" }
     }
 
@@ -284,12 +359,16 @@ internal class NavigationResourceRegistry(
         data class ResourceAdded(val value: ResourceRegistryResource) : PendingEvent {
             override fun fire(hooks: ResourceRegistryHooks) = hooks.onResourceAdded.fire(value)
         }
+        data class ResourceUpdated(val value: ResourceRegistryResource) : PendingEvent {
+            override fun fire(hooks: ResourceRegistryHooks) = hooks.onResourceUpdated.fire(value)
+        }
         data class ResourceRemoved(val value: ResourceRegistryResource) : PendingEvent {
             override fun fire(hooks: ResourceRegistryHooks) = hooks.onResourceRemoved.fire(value)
         }
     }
 
     private val lock = Any()
+
     private data class FetchResourceKey(
         val graphId: Long,
         val legacyKey: String,
@@ -301,14 +380,26 @@ internal class NavigationResourceRegistry(
     private val currentFetchAttempt = mutableMapOf<FetchResourceKey, Long>()
 
     fun startNavigation(rootLegacyUri: URI): NavigationResourceGraph {
+        val resourceRoot = LegacyHttpUrl.resourceRoot(rootLegacyUri)
+        return getOrCreateGraph(resourceRoot, rootLegacyUri)
+    }
+
+    fun ensureResourceContext(resourceLegacyUri: URI): NavigationResourceGraph =
+        getOrCreateGraph(LegacyHttpUrl.resourceRoot(resourceLegacyUri), resourceLegacyUri)
+
+    private fun getOrCreateGraph(
+        resourceRoot: URI,
+        associatedResource: URI,
+    ): NavigationResourceGraph {
         val pending = mutableListOf<PendingEvent>()
         val graph =
             synchronized(lock) {
-                val rootKey = LegacyHttpUrl.requestObservableKey(rootLegacyUri)
+                val rootKey = LegacyHttpUrl.requestObservableKey(resourceRoot)
                 graphByRootLegacyUri[rootKey]
                     ?.let(graphs::get)
                     ?.also { existing ->
                         touchLocked(existing.id)
+                        admitAssociatedResourceLocked(existing, associatedResource, pending)
                         pending +=
                             PendingEvent.RootUsed(
                                 ResourceRegistryRoot(existing.id, existing.rootLegacyUri),
@@ -316,8 +407,8 @@ internal class NavigationResourceRegistry(
                     }
                     ?: NavigationResourceGraph(
                         id = nextId.getAndIncrement(),
-                        rootLegacyUri = rootLegacyUri,
-                        maxNodes = maxNodesPerContext,
+                        rootLegacyUri = resourceRoot,
+                        maxNodesPerHost = maxNodesPerHost,
                         maxEdges = maxEdgesPerContext,
                     ).also { created ->
                         while (graphs.size >= maxContexts) {
@@ -325,8 +416,9 @@ internal class NavigationResourceRegistry(
                         }
                         graphs[created.id] = created
                         graphByRootLegacyUri[rootKey] = created.id
-                        associateLocked(rootLegacyUri, created.id)
-                        val root = ResourceRegistryRoot(created.id, rootLegacyUri)
+                        associateLocked(resourceRoot, created.id)
+                        admitAssociatedResourceLocked(created, associatedResource, pending)
+                        val root = ResourceRegistryRoot(created.id, resourceRoot)
                         pending += PendingEvent.RootAdded(root)
                         pending += PendingEvent.RootUsed(root)
                     }
@@ -334,6 +426,37 @@ internal class NavigationResourceRegistry(
         pending.forEach { it.fire(hooks) }
         return graph
     }
+
+    private fun admitAssociatedResourceLocked(
+        graph: NavigationResourceGraph,
+        resource: URI,
+        pending: MutableList<PendingEvent>,
+    ) {
+        val wasKnown = graph.contains(resource)
+        if (!graph.ensureDirectResource(resource)) return
+        associateLocked(resource, graph.id)
+        if (!wasKnown && resource != graph.rootLegacyUri) {
+            registryResource(graph, resource)?.let {
+                pending += PendingEvent.ResourceAdded(it)
+            }
+        }
+    }
+
+    private fun registryResource(
+        graph: NavigationResourceGraph,
+        legacyUri: URI,
+    ): ResourceRegistryResource? =
+        graph.nodeSnapshot(legacyUri)?.let { node ->
+            ResourceRegistryResource(
+                graphId = graph.id,
+                rootLegacyUri = graph.rootLegacyUri,
+                resourceLegacyUri = node.legacyUri,
+                state = node.state,
+                kind = node.kind,
+                prefetched = node.prefetched,
+                transformations = node.transformations,
+            )
+        }
 
     fun contextsFor(legacyUri: URI): List<NavigationResourceGraph> =
         synchronized(lock) {
@@ -357,17 +480,22 @@ internal class NavigationResourceRegistry(
         val pending = mutableListOf<PendingEvent>()
         synchronized(lock) {
             if (graphs[graph.id] !== graph) return
-            val wasKnown = graph.contains(childLegacyUri)
+            val previous = graph.nodeSnapshot(childLegacyUri)
             if (graph.discover(parentLegacyUri, childLegacyUri, upstreamUri, relation, kind)) {
                 touchLocked(graph.id)
                 associateLocked(childLegacyUri, graph.id)
                 pending += PendingEvent.RootUsed(ResourceRegistryRoot(graph.id, graph.rootLegacyUri))
-                if (!wasKnown) {
-                    graph.nodeSnapshot(childLegacyUri)?.let { resource ->
+                val resource = graph.nodeSnapshot(childLegacyUri)
+                if (previous == null) {
+                    resource?.let {
                         pending += PendingEvent.ResourceAdded(
-                            ResourceRegistryResource(graph.id, graph.rootLegacyUri, resource.legacyUri),
+                            requireNotNull(registryResource(graph, it.legacyUri)),
                         )
                     }
+                } else if (resource != null && resource != previous) {
+                    pending += PendingEvent.ResourceUpdated(
+                        requireNotNull(registryResource(graph, resource.legacyUri)),
+                    )
                 }
             }
         }
@@ -379,20 +507,37 @@ internal class NavigationResourceRegistry(
         legacyUri: URI,
         upstreamUri: URI,
         contentBase: URI?,
-    ): ResourceFetchAttempt? =
-        synchronized(lock) {
-            if (graphs[graph.id] !== graph) return@synchronized null
-            val attempt =
-                ResourceFetchAttempt(
-                    graphId = graph.id,
-                    legacyUri = legacyUri,
-                    id = nextFetchAttemptId.getAndIncrement(),
+        prefetched: Boolean = false,
+    ): ResourceFetchAttempt? {
+        val pending = mutableListOf<PendingEvent>()
+        val attempt =
+            synchronized(lock) {
+                if (graphs[graph.id] !== graph) return@synchronized null
+                if (!graph.ensureDirectResource(legacyUri)) return@synchronized null
+                associateLocked(legacyUri, graph.id)
+                val created =
+                    ResourceFetchAttempt(
+                        graphId = graph.id,
+                        legacyUri = legacyUri,
+                        id = nextFetchAttemptId.getAndIncrement(),
+                    )
+                currentFetchAttempt[fetchKey(graph.id, legacyUri)] = created.id
+                touchLocked(graph.id)
+                graph.markFetched(
+                    legacyUri,
+                    upstreamUri,
+                    contentBase,
+                    ResourceState.FETCHING,
+                    prefetched,
                 )
-            currentFetchAttempt[fetchKey(graph.id, legacyUri)] = attempt.id
-            touchLocked(graph.id)
-            graph.markFetched(legacyUri, upstreamUri, contentBase, ResourceState.FETCHING)
-            attempt
-        }
+                registryResource(graph, legacyUri)?.let {
+                    pending += PendingEvent.ResourceUpdated(it)
+                }
+                created
+            }
+        pending.forEach { it.fire(hooks) }
+        return attempt
+    }
 
     fun markFetchState(
         graph: NavigationResourceGraph,
@@ -401,23 +546,31 @@ internal class NavigationResourceRegistry(
         upstreamUri: URI,
         contentBase: URI?,
         state: ResourceState,
-    ): Boolean =
-        synchronized(lock) {
-            if (graphs[graph.id] !== graph) return@synchronized false
-            if (attempt.graphId != graph.id) return@synchronized false
-            val key = fetchKey(graph.id, legacyUri)
-            if (LegacyHttpUrl.requestObservableKey(attempt.legacyUri) != key.legacyKey) {
-                return@synchronized false
-            }
-            if (currentFetchAttempt[key] != attempt.id) return@synchronized false
+    ): Boolean {
+        val pending = mutableListOf<PendingEvent>()
+        val changed =
+            synchronized(lock) {
+                if (graphs[graph.id] !== graph) return@synchronized false
+                if (attempt.graphId != graph.id) return@synchronized false
+                val key = fetchKey(graph.id, legacyUri)
+                if (LegacyHttpUrl.requestObservableKey(attempt.legacyUri) != key.legacyKey) {
+                    return@synchronized false
+                }
+                if (currentFetchAttempt[key] != attempt.id) return@synchronized false
 
-            touchLocked(graph.id)
-            graph.markFetched(legacyUri, upstreamUri, contentBase, state)
-            if (state == ResourceState.READY || state == ResourceState.FAILED) {
-                currentFetchAttempt.remove(key, attempt.id)
+                touchLocked(graph.id)
+                graph.markFetched(legacyUri, upstreamUri, contentBase, state)
+                registryResource(graph, legacyUri)?.let {
+                    pending += PendingEvent.ResourceUpdated(it)
+                }
+                if (state == ResourceState.READY || state == ResourceState.FAILED) {
+                    currentFetchAttempt.remove(key, attempt.id)
+                }
+                true
             }
-            true
-        }
+        pending.forEach { it.fire(hooks) }
+        return changed
+    }
 
     fun markFetched(
         graph: NavigationResourceGraph,
@@ -425,12 +578,57 @@ internal class NavigationResourceRegistry(
         upstreamUri: URI,
         contentBase: URI?,
         state: ResourceState,
+        prefetched: Boolean = false,
     ) {
+        val pending = mutableListOf<PendingEvent>()
         synchronized(lock) {
             if (graphs[graph.id] !== graph) return
+            if (!graph.ensureDirectResource(legacyUri)) return
+            associateLocked(legacyUri, graph.id)
             touchLocked(graph.id)
-            graph.markFetched(legacyUri, upstreamUri, contentBase, state)
+            graph.markFetched(legacyUri, upstreamUri, contentBase, state, prefetched)
+            registryResource(graph, legacyUri)?.let {
+                pending += PendingEvent.ResourceUpdated(it)
+            }
         }
+        pending.forEach { it.fire(hooks) }
+    }
+
+    fun recordTransformations(
+        legacyUri: URI,
+        transformations: List<ResourceTransformationSummary>,
+    ) {
+        val pending = mutableListOf<PendingEvent>()
+        synchronized(lock) {
+            contextByLegacyUri[LegacyHttpUrl.requestObservableKey(legacyUri)]
+                ?.mapNotNull(graphs::get)
+                .orEmpty()
+                .forEach { graph ->
+                    if (graph.setTransformations(legacyUri, transformations)) {
+                        registryResource(graph, legacyUri)?.let {
+                            pending += PendingEvent.ResourceUpdated(it)
+                        }
+                    }
+                }
+        }
+        pending.forEach { it.fire(hooks) }
+    }
+
+    fun updateResourceKind(
+        graph: NavigationResourceGraph,
+        legacyUri: URI,
+        kind: ResourceKind,
+    ) {
+        val pending = mutableListOf<PendingEvent>()
+        synchronized(lock) {
+            if (graphs[graph.id] !== graph) return
+            if (graph.updateKind(legacyUri, kind)) {
+                registryResource(graph, legacyUri)?.let {
+                    pending += PendingEvent.ResourceUpdated(it)
+                }
+            }
+        }
+        pending.forEach { it.fire(hooks) }
     }
 
     fun snapshots(): List<NavigationResourceGraphSnapshot> =
@@ -450,7 +648,15 @@ internal class NavigationResourceRegistry(
         snapshot.nodes.forEach { resource ->
             pending +=
                 PendingEvent.ResourceRemoved(
-                    ResourceRegistryResource(snapshot.id, snapshot.rootLegacyUri, resource.legacyUri),
+                    ResourceRegistryResource(
+                        graphId = snapshot.id,
+                        rootLegacyUri = snapshot.rootLegacyUri,
+                        resourceLegacyUri = resource.legacyUri,
+                        state = resource.state,
+                        kind = resource.kind,
+                        prefetched = resource.prefetched,
+                        transformations = resource.transformations,
+                    ),
                 )
         }
         val iterator = contextByLegacyUri.entries.iterator()

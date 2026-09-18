@@ -10,6 +10,9 @@ import no.skasti.serialmodem.ppp.proxy.cookies.BoundedCookieOverrides
 import no.skasti.serialmodem.ppp.proxy.cookies.BoundedCookieStore
 import no.skasti.serialmodem.ppp.proxy.cookies.CookieOverride
 import no.skasti.serialmodem.ppp.proxy.routing.LegacyOriginRouteTable
+import no.skasti.serialmodem.ppp.proxy.transform.ImageResourceTransformer
+import no.skasti.serialmodem.ppp.proxy.transform.ImageTagTransformer
+import no.skasti.serialmodem.ppp.proxy.transform.ImageOptimizationPolicy
 import no.skasti.serialmodem.ppp.proxy.transform.LegacyTextResourceTransformer
 import no.skasti.serialmodem.ppp.proxy.transform.InFlightResourceWork
 import no.skasti.serialmodem.ppp.proxy.transform.CachedResource
@@ -51,7 +54,7 @@ internal class SystemHttpCompatibilityHandler(
     private val resourceGraphs: NavigationResourceRegistry =
         NavigationResourceRegistry(
             maxContexts = config.maxResourceContexts,
-            maxNodesPerContext = config.maxResourceNodesPerContext,
+            maxNodesPerHost = config.maxResourceNodesPerContext,
             maxEdgesPerContext = config.maxResourceEdgesPerContext,
             hooks = resourceRegistryHooks,
         ),
@@ -94,7 +97,15 @@ internal class SystemHttpCompatibilityHandler(
 
     private val sessionStates = ConcurrentHashMap<SessionKey, SessionState>()
     private val originRoutes = LegacyOriginRouteTable()
-    private val resourceTransformations = ResourceTransformationPipeline(listOf(LegacyTextResourceTransformer()))
+    private val imageOptimizationPolicy = ImageOptimizationPolicy()
+    private val resourceTransformations =
+        ResourceTransformationPipeline(
+            listOf(
+                LegacyTextResourceTransformer(),
+                ImageTagTransformer(imageOptimizationPolicy),
+                ImageResourceTransformer(imageOptimizationPolicy),
+            ),
+        )
     private val resourceCache = ResourceCache(
         maxEntries = config.maxRepresentationCacheEntries,
         maxBytes = config.maxRepresentationCacheBytes,
@@ -136,6 +147,9 @@ internal class SystemHttpCompatibilityHandler(
             val upstreamUri = originRoutes.resolve(state.flow, legacyUri)
             fetchLegacyUri = legacyUri
             fetchUpstreamUri = upstreamUri
+            if (!request.method.equals("HEAD", ignoreCase = true)) {
+                resourceGraphs.ensureResourceContext(legacyUri)
+            }
             fetchAttempts =
                 resourceGraphs.contextsFor(legacyUri)
                     .mapNotNull { graph ->
@@ -425,10 +439,23 @@ internal class SystemHttpCompatibilityHandler(
     ): LegacyHttpResponse {
         val graphs =
             if (response.establishesNavigationGraph) {
-                listOf(resourceGraphs.startNavigation(response.legacyUri))
+                resourceGraphs.startNavigation(response.legacyUri).also { graph ->
+                    resourceGraphs.discover(
+                        graph = graph,
+                        parentLegacyUri = graph.rootLegacyUri,
+                        childLegacyUri = response.legacyUri,
+                        upstreamUri = response.uri,
+                        relation = ResourceRelation.ROOT,
+                        kind = ResourceKind.DOCUMENT,
+                    )
+                }.let(::listOf)
             } else {
                 resourceGraphs.contextsFor(response.legacyUri)
             }
+        val responseKind = resourceKindForResponse(response.headers, response.referenceRole)
+        graphs.forEach { graph ->
+            resourceGraphs.updateResourceKind(graph, response.legacyUri, responseKind)
+        }
         val fetchAttempts =
             graphs.mapNotNull { graph ->
                 val attempt =
@@ -479,6 +506,10 @@ internal class SystemHttpCompatibilityHandler(
                     referenceRole = response.referenceRole,
                     requestMethod = response.requestMethod,
                 )
+            resourceGraphs.recordTransformations(
+                response.legacyUri,
+                preparedResource.transformed?.transformations.orEmpty(),
+            )
             val sourceRepresentation = preparedResource.source
             val clientRepresentation = preparedResource.representation
             val legacyHeaders =

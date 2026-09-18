@@ -146,7 +146,7 @@ The dashboard contains:
 - **Transfers** — TCP flows with connection state, bytes in both directions, and average transfer rate
 - **HTTP / HTTPS compatibility proxy** — an expandable overview of hosts and the resource URLs YAME currently knows about from the active resource registry
 
-When the command palette is closed, use **Up/Down** to select a proxy host, **Enter/Right** to expand it, and **Left** to collapse it. Hosts are kept unique and ordered with recently used hosts first, with usage frequency as a secondary signal. Expanded hosts show the unique paths and queries currently represented by active navigation resource graphs; entries disappear when their registry context is evicted.
+When the command palette is closed, use **Up/Down** to select a proxy host, **Enter/Right** to expand it, and **Left** to collapse it. Hosts are kept unique and ordered with recently used hosts first, with usage frequency as a secondary signal. Expanded hosts show the unique paths and queries currently represented by host resource graphs; entries disappear when their registry context is evicted.
 
 For example, the proxy panel may look like:
 
@@ -222,6 +222,11 @@ Redirects that change the browser-visible host, path, or query are returned to t
 
 YAME keeps the required exact URL and origin mappings for the active PPP generation. Absolute `https://` references in supported text responses are pragmatically rewritten to `http://` wherever they occur, while binary bodies are left untouched. The proxy requests uncompressed text upstream, buffers rewritable responses, and recalculates `Content-Length`. It intentionally does not parse HTML, CSS, or JavaScript semantically. Mappings are discarded when the PPP generation changes.
 
+JPEG image optimization and literal HTML image-tag sizing use the same
+proportional `600x400` default policy. `<img>` tags are resized only when both
+`width` and `height` are numeric pixel values; no image is fetched solely to
+rewrite its tag.
+
 Resource transformations preserve upstream `ETag` and `Last-Modified` validators by design: within a running YAME process the transformation pipeline is deterministic, so unchanged upstream source state implies unchanged legacy output. Byte-specific metadata such as `Content-Length` and content digests is removed or regenerated when the body changes. See [resource transformation invariants](docs/resource-transformation.md) for the full contract.
 
 This does **not** make a directly entered `https://...` URL compatible. A browser that opens TCP port 443 expects a TLS handshake before any HTTP redirect can be exchanged. Supporting that case would require YAME to terminate the legacy browser's TLS itself, including certificate and legacy-cipher handling.
@@ -232,7 +237,7 @@ Disable compatibility mode when transparent TCP/80 forwarding is desired:
 ./gradlew run --args="--port <port> --no-http-https-proxy"
 ```
 
-In the dashboard, use `/http-proxy` to switch between compatibility and transparent forwarding. The compatibility panel is populated directly from YAME's navigation resource registry rather than by parsing proxy log messages, so it reflects the currently retained resource graphs and follows registry eviction.
+In the dashboard, use `/http-proxy` to switch between compatibility and transparent forwarding. The compatibility panel is populated directly from YAME's host resource registry rather than by parsing proxy log messages, so it reflects the currently retained resource graphs and follows registry eviction.
 The dashboard header also shows the running YAME version and build Git commit, which is useful when testing local `installDist` builds.
 
 YAME always writes module-specific logs under `logs/`: `modem.log`, `serial.log`, `ppp.log`,

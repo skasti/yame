@@ -16,7 +16,7 @@ internal class SystemRoutingTcpProxy(
     private val resourceGraphs: NavigationResourceRegistry =
         NavigationResourceRegistry(
             maxContexts = httpConfig.maxResourceContexts,
-            maxNodesPerContext = httpConfig.maxResourceNodesPerContext,
+            maxNodesPerHost = httpConfig.maxResourceNodesPerContext,
             maxEdgesPerContext = httpConfig.maxResourceEdgesPerContext,
             hooks = resourceRegistryHooks,
         ),
