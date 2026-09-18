@@ -146,7 +146,7 @@ jobs:
             [ -n "$tag" ] || continue
 
             version="${tag#v}"
-            expected_asset="serial-modem-emulator-$version.zip"
+            expected_asset="yame-$version.zip"
             needs_recovery=false
 
             if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
@@ -263,7 +263,7 @@ jobs:
 
             ./gradlew --no-daemon clean test distZip -PreleaseVersion="$version"
 
-            asset="build/distributions/serial-modem-emulator-$version.zip"
+            asset="build/distributions/yame-$version.zip"
             asset_name="$(basename "$asset")"
 
             if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
