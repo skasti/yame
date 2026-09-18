@@ -273,6 +273,98 @@ jobs:
           set -euo pipefail
 
           while IFS=
+              # Create the release state explicitly. Assets are uploaded separately so
+              # a partial failure always leaves a recoverable draft.
+              if ! gh release create "$tag" \
+                --repo "$GITHUB_REPOSITORY" \
+                --target "$sha" \
+                --title "$tag" \
+                --generate-notes \
+                --draft; then
+                # A concurrent recovery run may have created it after our check.
+                gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null
+              fi
+            fi
+
+            # Never clobber a healthy asset. If upload failed previously, recovery
+            # planning detects the missing ZIP and retries it here.
+            if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
+                 grep -Fxq "$asset_name"; then
+              if ! gh release upload "$tag" "$asset" \
+                --repo "$GITHUB_REPOSITORY"; then
+                # Another overlapping recovery run may have uploaded the same asset
+                # after our existence check. Treat that conflict as success only if
+                # the expected asset is now present; otherwise preserve the failure.
+                if gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
+                   grep -Fxq "$asset_name"; then
+                  echo "Asset $asset_name was uploaded concurrently; continuing"
+                else
+                  echo "::error::Failed to upload $asset_name for $tag"
+                  exit 1
+                fi
+              fi
+            fi
+
+            # Publish only after the expected asset is present. This covers both fresh
+            # drafts and drafts recovered from an earlier failed upload.
+            if [ "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = "true" ]; then
+              gh release edit "$tag" \
+                --repo "$GITHUB_REPOSITORY" \
+                --draft=false
+            fi
+          done < "$RUNNER_TEMP/releases.tsv"
+\t' read -r tag sha version asset_name; do
+            echo "Building $tag from $sha"
+            git checkout --detach "$sha"
+
+            ./gradlew --no-daemon clean test distZip -PreleaseVersion="$version"
+
+            # The asset name travels with the planned release because historical
+            # commits use the pre-rename Gradle project name.
+            asset="build/distributions/$asset_name"
+
+            if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              # Create the release state explicitly. Assets are uploaded separately so
+              # a partial failure always leaves a recoverable draft.
+              if ! gh release create "$tag" \
+                --repo "$GITHUB_REPOSITORY" \
+                --target "$sha" \
+                --title "$tag" \
+                --generate-notes \
+                --draft; then
+                # A concurrent recovery run may have created it after our check.
+                gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null
+              fi
+            fi
+
+            # Never clobber a healthy asset. If upload failed previously, recovery
+            # planning detects the missing ZIP and retries it here.
+            if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
+                 grep -Fxq "$asset_name"; then
+              if ! gh release upload "$tag" "$asset" \
+                --repo "$GITHUB_REPOSITORY"; then
+                # Another overlapping recovery run may have uploaded the same asset
+                # after our existence check. Treat that conflict as success only if
+                # the expected asset is now present; otherwise preserve the failure.
+                if gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
+                   grep -Fxq "$asset_name"; then
+                  echo "Asset $asset_name was uploaded concurrently; continuing"
+                else
+                  echo "::error::Failed to upload $asset_name for $tag"
+                  exit 1
+                fi
+              fi
+            fi
+
+            # Publish only after the expected asset is present. This covers both fresh
+            # drafts and drafts recovered from an earlier failed upload.
+            if [ "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = "true" ]; then
+              gh release edit "$tag" \
+                --repo "$GITHUB_REPOSITORY" \
+                --draft=false
+            fi
+          done < "$RUNNER_TEMP/releases.tsv"
+\x09' read -r tag sha version asset_name; do
 
             if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
               # Create the release state explicitly. Assets are uploaded separately so
