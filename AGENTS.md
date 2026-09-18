@@ -1,4 +1,4 @@
-# YAME contributor and review scope
+# YAME (Yet Another Modem Emulator) contributor and review scope
 
 YAME is a compatibility layer for DOS and Windows 3.1-era clients connected over
 a slow serial PPP link. The primary browser target is Netscape Navigator 4.08,

@@ -140,13 +140,28 @@ jobs:
             exit 1
           fi
 
+          release_asset_name() {
+            local commit="$1"
+            local version="$2"
+
+            # Commits before the repository rename still build the legacy distribution
+            # name. Keep their release assets recoverable under that original name.
+            if git show "$commit:settings.gradle.kts" 2>/dev/null |
+              grep -Fq 'rootProject.name = "yame"'; then
+              printf 'yame-%s.zip' "$version"
+            else
+              printf 'serial-modem-emulator-%s.zip' "$version"
+            fi
+          }
+
           # First recover any already-reserved SemVer tags whose release publication
           # previously failed, remained a draft, or is missing its expected ZIP asset.
           while IFS= read -r tag; do
             [ -n "$tag" ] || continue
 
             version="${tag#v}"
-            expected_asset="serial-modem-emulator-$version.zip"
+            sha="$(git rev-list -n 1 "$tag")"
+            expected_asset="$(release_asset_name "$sha" "$version")"
             needs_recovery=false
 
             if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
@@ -163,8 +178,7 @@ jobs:
             fi
 
             if [ "$needs_recovery" = true ]; then
-              sha="$(git rev-list -n 1 "$tag")"
-              printf '%s\t%s\t%s\n' "$tag" "$sha" "$version" >> "$RUNNER_TEMP/releases.tsv"
+              printf '%s\t%s\t%s\t%s\n' "$tag" "$sha" "$version" "$expected_asset" >> "$RUNNER_TEMP/releases.tsv"
             fi
           done < <(
             git tag --merged origin/main --list 'v*' |
@@ -231,9 +245,10 @@ jobs:
             git tag "$tag" "$sha"
             git push origin "refs/tags/$tag"
             current_version="$version"
+            expected_asset="$(release_asset_name "$sha" "$version")"
 
             echo "Reserved $tag for merged PR #$pr_number at $sha"
-            printf '%s\t%s\t%s\n' "$tag" "$sha" "$version" >> "$RUNNER_TEMP/releases.tsv"
+            printf '%s\t%s\t%s\t%s\n' "$tag" "$sha" "$version" "$expected_asset" >> "$RUNNER_TEMP/releases.tsv"
           done < <(git rev-list --reverse --first-parent "$base_ref..origin/main")
 
           # Remove duplicate recovery/planning entries while preserving SemVer order.
@@ -257,14 +272,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          while IFS=$'\t' read -r tag sha version; do
+          while read -r tag sha version asset_name; do
             echo "Building $tag from $sha"
             git checkout --detach "$sha"
 
             ./gradlew --no-daemon clean test distZip -PreleaseVersion="$version"
 
-            asset="build/distributions/serial-modem-emulator-$version.zip"
-            asset_name="$(basename "$asset")"
+            # The asset name travels with the planned release because historical
+            # commits use the pre-rename Gradle project name.
+            asset="build/distributions/$asset_name"
 
             if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
               # Create the release state explicitly. Assets are uploaded separately so

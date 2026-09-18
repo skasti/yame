@@ -134,7 +134,7 @@ extract_executable "$MTCP_ZIP" "DNSTEST.EXE" "$DOS_DRIVE/DNSTEST.EXE"
 extract_executable "$MTCP_ZIP" "HTGET.EXE" "$DOS_DRIVE/HTGET.EXE"
 
 "$ROOT/gradlew" --no-daemon installDist >/dev/null
-YAME="$ROOT/build/install/serial-modem-emulator/bin/serial-modem-emulator"
+YAME="$ROOT/build/install/yame/bin/yame"
 
 cat > "$DOSBOX_CONF" <<EOF
 [sdl]
@@ -253,7 +253,7 @@ SERIAL_PORT="$(readlink -f "$PTY_LINK")"
 YAME_PID=$!
 
 for _ in $(seq 1 100); do
-    if grep -Fq "Serial modem emulator ready" "$YAME_LOG" 2>/dev/null; then
+    if grep -Fq "YAME ready" "$YAME_LOG" 2>/dev/null; then
         break
     fi
     if ! kill -0 "$YAME_PID" 2>/dev/null; then
@@ -265,7 +265,7 @@ for _ in $(seq 1 100); do
     sleep 0.05
 done
 
-if ! grep -Fq "Serial modem emulator ready" "$YAME_LOG" 2>/dev/null; then
+if ! grep -Fq "YAME ready" "$YAME_LOG" 2>/dev/null; then
     echo "YAME did not become ready" >&2
     exit 1
 fi

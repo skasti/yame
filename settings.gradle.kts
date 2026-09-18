@@ -1,1 +1,1 @@
-rootProject.name = "serial-modem-emulator"
+rootProject.name = "yame"

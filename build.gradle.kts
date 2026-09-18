@@ -3,7 +3,7 @@ plugins {
     application
 }
 
-group = "no.skasti.serialmodem"
+group = "no.skasti.yame"
 version = providers.gradleProperty("releaseVersion").getOrElse("0.1.0-SNAPSHOT")
 
 repositories {
@@ -22,7 +22,7 @@ kotlin {
 }
 
 application {
-    mainClass.set("no.skasti.serialmodem.MainKt")
+    mainClass.set("no.skasti.yame.MainKt")
 }
 
 tasks.test {

@@ -1,6 +1,6 @@
-# Serial Modem Emulator
+# YAME - Yet Another Modem Emulator
 
-A small Kotlin/JVM project that makes a modern computer behave like a basic Hayes-compatible modem over a physical RS-232 serial connection.
+A small Kotlin/JVM project called YAME (Yet Another Modem Emulator) that makes a modern computer behave like a basic Hayes-compatible modem over a physical RS-232 serial connection.
 
 The intended end state is:
 
@@ -46,12 +46,12 @@ The current networking milestone provides IPv4, ICMP, UDP, DNS and TCP over PPP 
 
 ## Telephone and modem tone simulation
 
-Dialing audio lives in the separate `no.skasti.serialmodem.tone` package behind the `TonePlayer` interface; `JavaSoundTonePlayer` is the production implementation. It is blocking by design: `pickupTime` controls how long the simulated remote telephone rings before answering, and the call does not return until the subsequent modem handshake has also completed.
+Dialing audio lives in the separate `no.skasti.yame.tone` package behind the `TonePlayer` interface; `JavaSoundTonePlayer` is the production implementation. It is blocking by design: `pickupTime` controls how long the simulated remote telephone rings before answering, and the call does not return until the subsequent modem handshake has also completed.
 
 For example:
 
 ```kotlin
-import no.skasti.serialmodem.tone.JavaSoundTonePlayer
+import no.skasti.yame.tone.JavaSoundTonePlayer
 import kotlin.time.Duration.Companion.seconds
 
 JavaSoundTonePlayer().use { player ->
@@ -81,8 +81,8 @@ The later training stages deliberately use deterministic pseudo-random QAM-like 
 The default V.34 handshake adds about 6.2 seconds after pickup. Callers that only want the telephone part can disable it explicitly:
 
 ```kotlin
-import no.skasti.serialmodem.tone.HandshakeProfile
-import no.skasti.serialmodem.tone.JavaSoundTonePlayer
+import no.skasti.yame.tone.HandshakeProfile
+import no.skasti.yame.tone.JavaSoundTonePlayer
 
 JavaSoundTonePlayer().use { player ->
     player.dial(
@@ -249,7 +249,7 @@ be changed live with `/loglevel-modem`, `/loglevel-serial`, `/loglevel-ppp`,
 For example:
 
 ```powershell
-.\build\install\serial-modem-emulator\bin\serial-modem-emulator.bat --ui tui --loglevel-proxy debug --loglevel-ppp warn
+.\build\install\yame\bin\yame.bat --ui tui --loglevel-proxy debug --loglevel-ppp warn
 ```
 
 If an active module log already exists at startup, YAME archives it as
