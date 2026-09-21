@@ -8,6 +8,14 @@ The intended end state is:
 old laptop -> serial/null-modem -> Hayes emulator -> PPP server -> IP/NAT -> Internet
 ```
 
+## Project status
+
+YAME is an experimental, pre-1.0 project under active development. It is built
+around real-world testing with DOS and Windows 3.1-era software and hardware,
+and compatibility behavior may continue to evolve as additional legacy clients
+are tested. Releases are intended to be usable, but the project does not yet
+promise a stable API or configuration surface.
+
 ## Current milestone
 
 The emulator currently:
@@ -348,3 +356,17 @@ Explicitly handled commands currently include:
 - `ATD...`
 
 Other valid-looking `AT...` commands are accepted with `OK` for compatibility with old modem initialization strings.
+
+
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the build,
+testing, compatibility, and pull-request guidelines. The project's more detailed
+architecture and review constraints are documented in [AGENTS.md](AGENTS.md).
+
+Please report potential security vulnerabilities according to
+[SECURITY.md](SECURITY.md) rather than opening a public issue.
+
+## License
+
+YAME is licensed under the [Apache License 2.0](LICENSE).
