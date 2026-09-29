@@ -180,15 +180,15 @@ Expanded host with known resource paths:
 
 ![YAME TUI with expanded proxy host](docs/assets/tui-proxy-expanded.svg)
 
-Useful palette commands include `/port`, `/baud`, `/flow-control`, `/dns-upstream`, `/http-proxy`, `/login-add`, `/reconnect`, `/disconnect`, `/refresh-ports`, `/clear-log`, and `/quit`.
+Useful palette commands include `/port`, `/baud`, `/flow-control`, `/dns-upstream`, `/http-proxy`, `/login`, `/reconnect`, `/disconnect`, `/refresh-ports`, `/clear-log`, and `/quit`.
 
 Set or replace the serial terminal login from the TUI with:
 
 ```text
-/login-add <username>:<password>
+/login <username>:<password>
 ```
 
-Type the command and press Enter. You can also type `/login-add` and press
+Type the command and press Enter. You can also type `/login` and press
 Enter when it appears in the command list, then enter the credentials at the
 prompt. The setting applies to the next modem call and stays in memory for the
 current YAME process. The password is masked in the TUI and is not written to
@@ -225,9 +225,11 @@ JDK 21, otherwise it checks the active `java` and Gradle's downloaded JDKs. If
 none is available, set `JAVA_HOME` to a JDK 21 installation before running.
 
 The run configuration invokes [scripts/run-tui-terminal.sh](scripts/run-tui-terminal.sh).
-It requires `gnome-terminal`; if it is missing, install GNOME Terminal or start
-YAME manually from a terminal. Set `JAVA_HOME` to your JDK 21 installation first
-if `java -version` reports an older version:
+It prefers Kitty when installed and otherwise uses GNOME Terminal. Both are
+asked to open maximized; Kitty also uses 120 columns by 40 rows as its initial
+size before maximization. If neither is installed, start YAME manually from a
+terminal. Set `JAVA_HOME` to your JDK 21 installation first if `java -version`
+reports an older version:
 
 ```shell
 export JAVA_HOME="/path/to/jdk-21"

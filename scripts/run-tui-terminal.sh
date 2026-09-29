@@ -36,20 +36,35 @@ if [[ -z "$java_21_home" ]]; then
   exit 1
 fi
 
-if ! command -v gnome-terminal >/dev/null 2>&1; then
-  echo "Fant ikke gnome-terminal. Installer GNOME Terminal for å starte YAME TUI." >&2
-  exit 1
-fi
-
 export JAVA_HOME="$java_21_home"
 export PATH="$JAVA_HOME/bin:$PATH"
 
-gnome-terminal --working-directory="$project_dir" -- bash -lc '
+terminal_command='
   cd -- "$1"
   ./build/install/yame/bin/yame --ui tui
   status=$?
-  echo
-  echo "YAME avsluttet med status $status."
-  read -r -p "Trykk Enter for å lukke terminalen... " _
+  if (( status != 0 )); then
+    echo
+    echo "YAME avsluttet med feilkode $status."
+    read -r -p "Trykk Enter for å lukke terminalen... " _
+  fi
   exit "$status"
-' yame-tui "$project_dir"
+'
+terminal_shell=(bash -lc "$terminal_command" yame-tui "$project_dir")
+
+if command -v kitty >/dev/null 2>&1; then
+  kitty --detach \
+    --start-as=maximized \
+    --directory "$project_dir" \
+    --override initial_window_width=120c \
+    --override initial_window_height=40c \
+    "${terminal_shell[@]}"
+elif command -v gnome-terminal >/dev/null 2>&1; then
+  gnome-terminal \
+    --maximize \
+    --working-directory="$project_dir" \
+    -- "${terminal_shell[@]}"
+else
+  echo "Fant verken kitty eller gnome-terminal. Installer en av dem for å starte YAME TUI." >&2
+  exit 1
+fi
