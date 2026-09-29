@@ -156,8 +156,8 @@ select a different file.
 
 The file uses simple `key=value` properties and is limited to 32 KiB. YAME
 rejects a save that exceeds this limit before replacing the existing file.
-Serial port names are limited to 1,024 characters, login usernames to 64
-printable ASCII characters, and passwords to 256 printable ASCII characters.
+Serial port names are limited to 256 characters, and login usernames and
+passwords to 64 printable ASCII characters each.
 It stores the terminal password as plain text, with owner-only file permissions
 on POSIX systems; `/yame.ini` is ignored by Git.
 

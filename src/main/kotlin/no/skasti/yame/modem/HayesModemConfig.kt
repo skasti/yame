@@ -56,6 +56,6 @@ data class HayesModemConfig(
 
     companion object {
         const val MAX_LOGIN_USERNAME_LENGTH = 64
-        const val MAX_LOGIN_PASSWORD_LENGTH = 256
+        const val MAX_LOGIN_PASSWORD_LENGTH = 64
     }
 }

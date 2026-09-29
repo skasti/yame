@@ -20,6 +20,6 @@ data class YameConfiguration(
     }
 
     companion object {
-        const val MAX_PORT_NAME_LENGTH = 1_024
+        const val MAX_PORT_NAME_LENGTH = 256
     }
 }
