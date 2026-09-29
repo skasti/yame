@@ -276,6 +276,42 @@ class HayesModemTest {
     }
 
     @Test
+    fun `disabled tone simulation skips playback but still connects`() {
+        val output = ByteArrayOutputStream()
+        var playbackCount = 0
+        val modem = HayesModem(
+            output = output,
+            baudRate = 115200,
+            config = HayesModemConfig(toneSimulationEnabled = false),
+            tonePlayer = FakeTonePlayer { _, _, _, _, _ -> playbackCount++ },
+            logger = {},
+        )
+
+        modem.dial("1")
+
+        assertEquals(0, playbackCount)
+        assertTrue(output.toString().contains("CONNECT 115200"))
+        assertEquals(HayesModem.State.CONNECTED, modem.state)
+    }
+
+    @Test
+    fun `tone simulation can be toggled on the active modem`() {
+        var playbackCount = 0
+        val modem = HayesModem(
+            baudRate = 115200,
+            config = HayesModemConfig(toneSimulationEnabled = false),
+            tonePlayer = FakeTonePlayer { _, _, _, _, _ -> playbackCount++ },
+            logger = {},
+        )
+
+        modem.updateToneSimulationEnabled(true)
+        modem.dial("1")
+
+        assertEquals(1, playbackCount)
+        assertEquals(HayesModem.State.CONNECTED, modem.state)
+    }
+
+    @Test
     fun `audio failure does not prevent AT dial connection`() {
         val output = ByteArrayOutputStream()
         val logs = mutableListOf<String>()
@@ -393,6 +429,28 @@ class HayesModemTest {
         assertTrue(text.contains("Username:"))
         assertTrue(text.indexOf("CONNECT 9600") < text.indexOf("Username:"))
         assertEquals(HayesModem.State.CONNECTED, modem.state)
+        assertEquals(0, pppHandler.connectedCalls)
+    }
+
+    @Test
+    fun `terminal login credentials can be added while modem is running`() {
+        val output = ByteArrayOutputStream()
+        val pppHandler = FakePppHandler()
+        val modem = HayesModem(
+            output = output,
+            baudRate = 9600,
+            tonePlayer = FakeTonePlayer(),
+            logger = {},
+            pppHandler = pppHandler,
+        )
+
+        modem.updateLoginCredentials("new-user", "new-password")
+        modem.receive("ATD123\r".toByteArray())
+        modem.receive("new-user\rnew-password\r".toByteArray())
+
+        assertTrue(output.toString().contains("Username:"))
+        assertTrue(output.toString().contains("Password:"))
+        assertTrue(output.toString().contains(">"))
         assertEquals(0, pppHandler.connectedCalls)
     }
 

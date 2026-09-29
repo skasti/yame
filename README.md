@@ -119,7 +119,7 @@ The progress monitor follows the Java Sound output line's rendered frame positio
 
 Dial strings are normalized before DTMF is generated. A leading `+` is converted to Norway's international access prefix `00`, so `+47 345 76 543` is dialed as `004734576543`. Spaces, dashes, parentheses and other presentation characters are ignored, and a leading Hayes `T` or `P` dial-mode selector is removed.
 
-The modem owns dialing-tone playback and its timing configuration. By default it uses a 500 ms dial tone, a two-second simulated pickup time, and the `v34` handshake profile. These values can be overridden from the command line; pickup and dial-tone durations are capped at 10 seconds to keep the eagerly generated PCM buffers bounded. Audio failure is treated as cosmetic, so systems without a configured sound device can still use the modem emulator.
+The modem owns dialing-tone playback and its timing configuration. By default it uses a 500 ms dial tone, a two-second simulated pickup time, and the `v34` handshake profile. Tone playback is enabled by default and can be disabled with `modem.tone-simulation-enabled=false` in `yame.ini` or with `/tone off` in the TUI; `/tone on` enables it again without reconnecting. The timing values can be overridden from the command line; pickup and dial-tone durations are capped at 10 seconds to keep the eagerly generated PCM buffers bounded. Audio failure is treated as cosmetic, so systems without a configured sound device can still use the modem emulator.
 
 ## Requirements
 
@@ -144,6 +144,22 @@ Start YAME in an interactive terminal:
 ```shell
 ./gradlew run
 ```
+
+YAME reads and writes `yame.ini` in its working directory. The IntelliJ run
+configuration uses the project directory, so its file is in the repository
+root. YAME creates the file on first start and saves TUI changes to the serial
+port, baud rate, flow control, DNS, proxy, log levels, and terminal login. A
+configuration file can also set modem timing, handshake profile, tone simulation,
+and PPP subnet.
+Command-line options override file values for that run. Use `--config <path>` to
+select a different file.
+
+The file uses simple `key=value` properties and is limited to 32 KiB. YAME
+rejects a save that exceeds this limit before replacing the existing file.
+Serial port names are limited to 256 characters, and login usernames and
+passwords to 64 printable ASCII characters each.
+It stores the terminal password as plain text, with owner-only file permissions
+on POSIX systems; `/yame.ini` is ignored by Git.
 
 By default, YAME uses `--ui auto`. On an interactive ANSI terminal it opens the dashboard; if exactly one serial port is available it auto-selects and opens it, otherwise it stays disconnected until a port is selected from the command palette. Press `/` to open the palette.
 
@@ -180,7 +196,19 @@ Expanded host with known resource paths:
 
 ![YAME TUI with expanded proxy host](docs/assets/tui-proxy-expanded.svg)
 
-Useful palette commands include `/port`, `/baud`, `/flow-control`, `/dns-upstream`, `/http-proxy`, `/reconnect`, `/disconnect`, `/refresh-ports`, `/clear-log`, and `/quit`.
+Useful palette commands include `/port`, `/baud`, `/flow-control`, `/dns-upstream`, `/http-proxy`, `/tone`, `/login`, `/reconnect`, `/disconnect`, `/refresh-ports`, `/clear-log`, and `/quit`. Choose `on` or `off` after `/tone`, or type `/tone on` or `/tone off` directly.
+
+Set or replace the serial terminal login from the TUI with:
+
+```text
+/login <username>:<password>
+```
+
+Type the command and press Enter. You can also type `/login` and press
+Enter when it appears in the command list, then enter the credentials at the
+prompt. The setting applies to the next modem call and stays in memory for the
+current YAME process. The password is masked in the TUI and is not written to
+logs.
 
 A port can still be selected explicitly:
 
@@ -195,6 +223,38 @@ For scripts, redirected output, or the traditional line-oriented console, force 
 ```
 
 Use `--ui tui` to force the dashboard even when terminal capability detection would not enable it automatically.
+
+### IntelliJ IDEA on Ubuntu
+
+Import the project as a Gradle project and select JDK 21 as the project SDK.
+Select the shared **YAME TUI** run configuration and click **Run**. Its
+**Before launch** Gradle task runs `installDist` to update the distribution.
+The launcher script then opens a GNOME Terminal window and starts the installed
+program with `--ui tui`, giving the dashboard a real interactive terminal.
+Click inside that window and press `/` to open the command palette; use `/quit`
+to exit. If YAME exits, the window stays open until you press Enter so its
+output remains visible. `installDist` rebuilds changed files as needed, so a
+separate `clean` is unnecessary.
+
+YAME requires JDK 21 at runtime. The launcher uses `JAVA_HOME` when it points to
+JDK 21, otherwise it checks the active `java` and Gradle's downloaded JDKs. If
+none is available, set `JAVA_HOME` to a JDK 21 installation before running.
+
+The run configuration invokes [scripts/run-tui-terminal.sh](scripts/run-tui-terminal.sh).
+It prefers Kitty when installed and otherwise uses GNOME Terminal. Both are
+asked to open maximized; Kitty also uses 120 columns by 40 rows as its initial
+size before maximization. If neither is installed, start YAME manually from a
+terminal. Set `JAVA_HOME` to your JDK 21 installation first if `java -version`
+reports an older version:
+
+```shell
+export JAVA_HOME="/path/to/jdk-21"
+export PATH="$JAVA_HOME/bin:$PATH"
+./gradlew installDist
+./build/install/yame/bin/yame --ui tui
+```
+
+### Additional command-line options
 
 Dialing/handshake progress is logged automatically. Modem timing and handshake behavior can be overridden explicitly:
 

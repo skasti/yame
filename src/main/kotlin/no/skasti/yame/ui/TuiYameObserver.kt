@@ -13,7 +13,6 @@ import com.github.ajalt.mordant.terminal.Terminal
 import no.skasti.yame.BuildInfo
 import no.skasti.yame.logging.YameLogLevel
 import no.skasti.yame.logging.YameLogModule
-import no.skasti.yame.observer.HttpProxyActionKind
 import no.skasti.yame.observer.TransferDirection
 import no.skasti.yame.observer.TransferKind
 import no.skasti.yame.observer.TransferState
@@ -36,6 +35,7 @@ class TuiYameObserver(
     initialFlowControl: SerialFlowControl,
     initialDnsUpstream: String,
     initialHttpProxyEnabled: Boolean,
+    initialToneSimulationEnabled: Boolean,
     initialLogLevels: Map<YameLogModule, YameLogLevel> = emptyMap(),
     private val onQuit: () -> Unit = {},
     private val onPortSelected: (String) -> Unit = {},
@@ -43,7 +43,9 @@ class TuiYameObserver(
     private val onFlowControlSelected: (SerialFlowControl) -> Unit = {},
     private val onDnsUpstreamSelected: (String) -> Unit = {},
     private val onHttpProxySelected: (Boolean) -> Unit = {},
+    private val onToneSimulationSelected: (Boolean) -> Unit = {},
     private val onLogLevelSelected: (YameLogModule, YameLogLevel) -> Unit = { _, _ -> },
+    private val onLoginAdded: (String, String) -> Unit = { _, _ -> },
     private val onDisconnect: () -> Unit = {},
     private val onReconnect: () -> Unit = {},
     private val onRefreshPorts: () -> Unit = {},
@@ -54,6 +56,7 @@ class TuiYameObserver(
     private var flowControl = initialFlowControl
     private var dnsUpstream = initialDnsUpstream
     private var httpProxyEnabled = initialHttpProxyEnabled
+    private var toneSimulationEnabled = initialToneSimulationEnabled
     private val logLevels = YameLogModule.entries.associateWith {
         initialLogLevels[it] ?: YameLogLevel.INFO
     }.toMutableMap()
@@ -109,12 +112,14 @@ class TuiYameObserver(
         flowControl: SerialFlowControl,
         dnsUpstream: String,
         httpProxyEnabled: Boolean,
+        toneSimulationEnabled: Boolean,
     ) {
         this.portName = portName
         this.baud = baud
         this.flowControl = flowControl
         this.dnsUpstream = dnsUpstream
         this.httpProxyEnabled = httpProxyEnabled
+        this.toneSimulationEnabled = toneSimulationEnabled
         render()
     }
 
@@ -642,6 +647,21 @@ class TuiYameObserver(
     }
 
     @Synchronized
+    private fun openTonePalette() {
+        commandPalette = TuiCommandPalette(
+            mode = TuiPaletteMode.TONE,
+            input = "/tone",
+            title = "Tone simulation",
+            options = listOf(
+                TuiCommandOption("on", if (toneSimulationEnabled) "current" else "", "true"),
+                TuiCommandOption("off", if (toneSimulationEnabled) "" else "current", "false"),
+            ),
+            selectedIndex = if (toneSimulationEnabled) 0 else 1,
+        )
+        render()
+    }
+
+    @Synchronized
     private fun openLogLevelPalette(module: YameLogModule) {
         val current = logLevels[module] ?: YameLogLevel.INFO
         commandPalette = TuiCommandPalette(
@@ -686,6 +706,14 @@ class TuiYameObserver(
                         }
                         TuiPaletteMode.DNS ->
                             commandPalette = palette.copy(input = palette.input.dropLast(1))
+                        TuiPaletteMode.LOGIN -> {
+                            val next = palette.input.dropLast(1)
+                            commandPalette = if (next.length < TUI_LOGIN_PREFIX.length) {
+                                commandPaletteFor(next.ifEmpty { "/" })
+                            } else {
+                                palette.copy(input = next, title = TUI_LOGIN_TITLE)
+                            }
+                        }
                         else -> Unit
                     }
                     null
@@ -700,6 +728,17 @@ class TuiYameObserver(
                     key.length == 1 &&
                     (key[0].isDigit() || key[0] == '.') -> {
                     commandPalette = palette.copy(input = palette.input + key)
+                    null
+                }
+                palette.mode == TuiPaletteMode.LOGIN &&
+                    key.length == 1 &&
+                    !key[0].isISOControl() -> {
+                    val next = palette.input + key
+                    commandPalette = if (loginInputWithinLimits(next)) {
+                        palette.copy(input = next, title = TUI_LOGIN_TITLE)
+                    } else {
+                        palette.copy(title = TUI_LOGIN_INVALID_TITLE)
+                    }
                     null
                 }
                 else -> null
@@ -724,11 +763,33 @@ class TuiYameObserver(
     private fun executePaletteSelection(): (() -> Unit)? {
         val palette = commandPalette ?: return null
 
+        if (palette.mode == TuiPaletteMode.LOGIN) {
+            val credentials = parseLoginInput(palette.input)
+            if (credentials == null) {
+                commandPalette = palette.copy(title = TUI_LOGIN_INVALID_TITLE)
+                return null
+            }
+            commandPalette = null
+            return { onLoginAdded(credentials.username, credentials.password) }
+        }
+
         if (palette.mode == TuiPaletteMode.DNS) {
             if (palette.input.isBlank()) return null
             commandPalette = null
             val value = palette.input
             return { onDnsUpstreamSelected(value) }
+        }
+
+        if (palette.mode == TuiPaletteMode.COMMANDS &&
+            palette.input.startsWith("/tone ", ignoreCase = true)
+        ) {
+            val enabled = parseToneInput(palette.input)
+            if (enabled == null) {
+                commandPalette = palette.copy(title = TUI_TONE_INVALID_TITLE)
+                return null
+            }
+            commandPalette = null
+            return { onToneSimulationSelected(enabled) }
         }
 
         val selected = palette.options.getOrNull(palette.selectedIndex) ?: return null
@@ -751,6 +812,14 @@ class TuiYameObserver(
                 }
                 "/http-proxy" -> {
                     openHttpPalette()
+                    null
+                }
+                TUI_TONE_COMMAND -> {
+                    openTonePalette()
+                    null
+                }
+                TUI_LOGIN_COMMAND -> {
+                    openLoginAddPalette()
                     null
                 }
                 "/loglevel-modem" -> {
@@ -829,6 +898,13 @@ class TuiYameObserver(
                 action
             }
 
+            TuiPaletteMode.TONE -> {
+                commandPalette = null
+                val value = selected.value.toBoolean()
+                val action: () -> Unit = { onToneSimulationSelected(value) }
+                action
+            }
+
             TuiPaletteMode.LOG_LEVEL -> {
                 commandPalette = null
                 val parts = selected.value.split(':', limit = 2)
@@ -841,12 +917,34 @@ class TuiYameObserver(
                 }
             }
 
-            TuiPaletteMode.DNS -> null
+            TuiPaletteMode.DNS,
+            TuiPaletteMode.LOGIN -> null
         }
+    }
+
+    @Synchronized
+    private fun openLoginAddPalette() {
+        commandPalette = TuiCommandPalette(
+            mode = TuiPaletteMode.LOGIN,
+            input = TUI_LOGIN_PREFIX,
+            title = TUI_LOGIN_TITLE,
+            options = emptyList(),
+            selectedIndex = 0,
+        )
+        render()
     }
 
     private fun commandPaletteFor(input: String): TuiCommandPalette {
         val normalized = if (input.startsWith("/")) input else "/$input"
+        if (normalized.startsWith(TUI_LOGIN_PREFIX, ignoreCase = true)) {
+            return TuiCommandPalette(
+                mode = TuiPaletteMode.LOGIN,
+                input = normalized,
+                title = TUI_LOGIN_TITLE,
+                options = emptyList(),
+                selectedIndex = 0,
+            )
+        }
         return TuiCommandPalette(
             mode = TuiPaletteMode.COMMANDS,
             input = normalized,
@@ -882,6 +980,7 @@ class TuiYameObserver(
                     connected = connected,
                     dnsUpstream = dnsUpstream,
                     httpProxyEnabled = httpProxyEnabled,
+                    toneSimulationEnabled = toneSimulationEnabled,
                     logs = logs.toList(),
                     dnsLookups = dnsLookups.toList(),
                     transfers = transfers.values.toList(),
@@ -924,13 +1023,14 @@ class TuiYameObserver(
         const val HIDE_CURSOR = "\u001B[?25l"
         const val SHOW_CURSOR = "\u001B[?25h"
         val TIME_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
-        val COMMON_BAUD_RATES = listOf(9_600, 19_200, 38_400, 57_600, 115_200)
         val COMMAND_OPTIONS = listOf(
             TuiCommandOption("/port", "Select serial port", "/port"),
             TuiCommandOption("/baud", "Select baud rate", "/baud"),
             TuiCommandOption("/flow-control", "Select serial flow control", "/flow-control"),
             TuiCommandOption("/dns-upstream", "Change upstream resolver and reconnect", "/dns-upstream"),
             TuiCommandOption("/http-proxy", "Enable or disable HTTP/TLS compatibility", "/http-proxy"),
+            TuiCommandOption(TUI_TONE_COMMAND, "Enable or disable modem tones", TUI_TONE_COMMAND),
+            TuiCommandOption(TUI_LOGIN_COMMAND, "Set terminal login credentials", TUI_LOGIN_COMMAND),
             TuiCommandOption("/loglevel-modem", "Set modem file log level", "/loglevel-modem"),
             TuiCommandOption("/loglevel-serial", "Set serial file log level", "/loglevel-serial"),
             TuiCommandOption("/loglevel-ppp", "Set ppp file log level", "/loglevel-ppp"),
@@ -1010,8 +1110,17 @@ internal enum class TuiPaletteMode {
     FLOW_CONTROL,
     DNS,
     HTTP,
+    TONE,
     LOG_LEVEL,
+    LOGIN,
 }
+
+private fun paletteDisplayInput(palette: TuiCommandPalette): String =
+    if (palette.mode == TuiPaletteMode.LOGIN) {
+        maskLoginPassword(palette.input)
+    } else {
+        palette.input
+    }
 
 internal data class TuiCommandOption(
     val label: String,
@@ -1034,6 +1143,7 @@ internal data class DashboardState(
     val connected: Boolean,
     val dnsUpstream: String,
     val httpProxyEnabled: Boolean,
+    val toneSimulationEnabled: Boolean = true,
     val logs: List<String>,
     val dnsLookups: List<DashboardDnsLookup>,
     val transfers: List<DashboardTransfer>,
@@ -1191,9 +1301,10 @@ internal object YameDashboardRenderer {
         val serial = state.portName ?: "no port"
         val connection = if (state.connected) "CONNECTED" else "NOT CONNECTED"
         val proxy = if (state.httpProxyEnabled) "HTTP proxy ON" else "HTTP proxy OFF"
+        val tones = if (state.toneSimulationEnabled) "tones ON" else "tones OFF"
         val headerText =
             "[ YAME ${BuildInfo.display}  •  $serial @ ${state.baud}  •  " +
-                "${state.flowControl.displayName}  •  $connection  •  DNS ${state.dnsUpstream}  •  $proxy ]"
+                "${state.flowControl.displayName}  •  $connection  •  DNS ${state.dnsUpstream}  •  $proxy  •  $tones ]"
         val header = styles.title(
             clip(headerText, renderWidth).padEnd(renderWidth),
         )
@@ -1224,7 +1335,7 @@ internal object YameDashboardRenderer {
                 DashboardTone.ACCENT,
             ),
             DashboardLine(
-                "DNS ${state.dnsUpstream}  HTTP proxy ${if (state.httpProxyEnabled) "ON" else "OFF"}",
+                "DNS ${state.dnsUpstream}  HTTP proxy ${if (state.httpProxyEnabled) "ON" else "OFF"}  tones ${if (state.toneSimulationEnabled) "ON" else "OFF"}",
                 DashboardTone.MUTED,
             ),
         )
@@ -1265,7 +1376,7 @@ internal object YameDashboardRenderer {
             lines.add(
                 1,
                 DashboardLine(
-                    "Palette: ${palette.input}$selection",
+                    "Palette: ${paletteDisplayInput(palette)}$selection",
                     if (selected == null) DashboardTone.ACCENT else DashboardTone.SELECTED,
                 ),
             )
@@ -1478,12 +1589,17 @@ internal object YameDashboardRenderer {
     ): List<DashboardLine> {
         val result = mutableListOf<DashboardLine>()
         result += DashboardLine(
-            "> ${palette.input}",
+            "> ${paletteDisplayInput(palette)}",
             DashboardTone.ACCENT,
         )
 
         if (palette.mode == TuiPaletteMode.DNS) {
             result += DashboardLine("Enter an IPv4 address, then press Enter.", DashboardTone.MUTED)
+            return result.take(visibleRows)
+        }
+
+        if (palette.mode == TuiPaletteMode.LOGIN) {
+            result += DashboardLine("Enter username:password, then press Enter.", DashboardTone.MUTED)
             return result.take(visibleRows)
         }
 
@@ -1593,15 +1709,6 @@ internal object YameDashboardRenderer {
             status == "FAILED" -> DashboardTone.DANGER
             status.startsWith("NOERROR") -> DashboardTone.SUCCESS
             else -> DashboardTone.ACCENT
-        }
-
-    private fun httpTone(kind: HttpProxyActionKind): DashboardTone =
-        when (kind) {
-            HttpProxyActionKind.ROUTED -> DashboardTone.MUTED
-            HttpProxyActionKind.REQUEST -> DashboardTone.ACCENT
-            HttpProxyActionKind.REDIRECT -> DashboardTone.WARNING
-            HttpProxyActionKind.RESPONSE -> DashboardTone.SUCCESS
-            HttpProxyActionKind.ERROR -> DashboardTone.DANGER
         }
 
     private fun formatTransformationSummary(summary: ResourceTransformationSummary): String {

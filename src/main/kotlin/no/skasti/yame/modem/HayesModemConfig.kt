@@ -13,6 +13,7 @@ data class HayesModemConfig(
     val pickupTime: Duration = 2.seconds,
     val dialToneTime: Duration = 500.milliseconds,
     val handshakeProfile: HandshakeProfile = HandshakeProfile.V34,
+    val toneSimulationEnabled: Boolean = true,
     val username: String? = null,
     val password: String? = null,
     val pppIpConfig: PppIpConfig = PppIpConfig(),
@@ -39,11 +40,22 @@ data class HayesModemConfig(
         require(password == null || password.isNotEmpty()) {
             "password must not be empty"
         }
+        require(username == null || username.length <= MAX_LOGIN_USERNAME_LENGTH) {
+            "username must not exceed $MAX_LOGIN_USERNAME_LENGTH characters"
+        }
+        require(password == null || password.length <= MAX_LOGIN_PASSWORD_LENGTH) {
+            "password must not exceed $MAX_LOGIN_PASSWORD_LENGTH characters"
+        }
         require(username == null || username.all { it.code in 0x20..0x7e }) {
             "username must contain only printable ASCII characters"
         }
         require(password == null || password.all { it.code in 0x20..0x7e }) {
             "password must contain only printable ASCII characters"
         }
+    }
+
+    companion object {
+        const val MAX_LOGIN_USERNAME_LENGTH = 64
+        const val MAX_LOGIN_PASSWORD_LENGTH = 64
     }
 }
