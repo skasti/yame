@@ -733,10 +733,12 @@ class TuiYameObserver(
                 palette.mode == TuiPaletteMode.LOGIN &&
                     key.length == 1 &&
                     !key[0].isISOControl() -> {
-                    commandPalette = palette.copy(
-                        input = palette.input + key,
-                        title = TUI_LOGIN_TITLE,
-                    )
+                    val next = palette.input + key
+                    commandPalette = if (loginInputWithinLimits(next)) {
+                        palette.copy(input = next, title = TUI_LOGIN_TITLE)
+                    } else {
+                        palette.copy(title = TUI_LOGIN_INVALID_TITLE)
+                    }
                     null
                 }
                 else -> null
