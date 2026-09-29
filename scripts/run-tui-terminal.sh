@@ -41,7 +41,7 @@ export PATH="$JAVA_HOME/bin:$PATH"
 
 terminal_command='
   cd -- "$1"
-  ./build/install/yame/bin/yame --ui tui
+  ./build/install/yame/bin/yame --config "$1/yame.ini" --ui tui
   status=$?
   if (( status != 0 )); then
     echo

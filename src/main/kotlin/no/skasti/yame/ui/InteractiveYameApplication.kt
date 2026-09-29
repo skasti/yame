@@ -1,6 +1,7 @@
 package no.skasti.yame.ui
 
 import com.github.ajalt.mordant.terminal.Terminal
+import no.skasti.yame.config.YameConfiguration
 import no.skasti.yame.logging.YameLogLevel
 import no.skasti.yame.logging.YameLogManager
 import no.skasti.yame.logging.YameLogModule
@@ -20,6 +21,8 @@ class InteractiveYameApplication(
     initialModemConfig: HayesModemConfig,
     terminal: Terminal,
     private val logManager: YameLogManager,
+    initialLogLevels: Map<YameLogModule, YameLogLevel> = YameLogManager.defaultLevels(),
+    private val onConfigurationChanged: (YameConfiguration) -> Unit = {},
     private val portProvider: () -> List<no.skasti.yame.serial.SerialPortDescriptor> =
         SerialConnection::availablePortDescriptors,
 ) : AutoCloseable {
@@ -67,7 +70,7 @@ class InteractiveYameApplication(
         onFlowControlSelected = ::selectFlowControl,
         onDnsUpstreamSelected = ::selectDnsUpstream,
         onHttpProxySelected = ::selectHttpProxy,
-        initialLogLevels = YameLogModule.entries.associateWith(logManager::level),
+        initialLogLevels = initialLogLevels,
         onLogLevelSelected = ::selectLogLevel,
         onLoginAdded = ::addLoginCredentials,
         onDisconnect = ::disconnect,
@@ -164,6 +167,7 @@ class InteractiveYameApplication(
     private fun selectPort(portName: String) {
         selectedPortName = portName
         autoConnectEnabled = true
+        persistConfiguration()
         updateObserverSettings()
         restartConnection()
     }
@@ -171,6 +175,7 @@ class InteractiveYameApplication(
     private fun selectBaud(baud: Int) {
         selectedBaud = baud
         autoConnectEnabled = true
+        persistConfiguration()
         updateObserverSettings()
         restartConnection()
     }
@@ -178,6 +183,7 @@ class InteractiveYameApplication(
     private fun selectFlowControl(flowControl: SerialFlowControl) {
         selectedFlowControl = flowControl
         autoConnectEnabled = true
+        persistConfiguration()
         updateObserverSettings()
         restartConnection()
     }
@@ -194,6 +200,7 @@ class InteractiveYameApplication(
                 upstreamServer = address,
             ),
         )
+        persistConfiguration()
         observer.onLog("DNS upstream changed to $address; reconnecting")
         autoConnectEnabled = true
         updateObserverSettings()
@@ -206,6 +213,7 @@ class InteractiveYameApplication(
                 enabled = enabled,
             ),
         )
+        persistConfiguration()
         observer.onLog(
             "HTTP/HTTPS compatibility proxy ${if (enabled) "enabled" else "disabled"}; reconnecting",
         )
@@ -217,6 +225,7 @@ class InteractiveYameApplication(
     private fun selectLogLevel(module: YameLogModule, level: YameLogLevel) {
         logManager.setLevel(module, level)
         observer.updateLogLevel(module, level)
+        persistConfiguration()
         observer.onLog("Log level for ${module.fileName} changed to ${level.name.lowercase()}")
     }
 
@@ -231,6 +240,7 @@ class InteractiveYameApplication(
         modemConfig = updatedConfig
         val modem = synchronized(lock) { activeModem }
         modem?.updateLoginCredentials(username, password)
+        persistConfiguration()
         observer.onLog(
             "Terminal login configured for '$username'; applies to the next modem call",
         )
@@ -467,6 +477,20 @@ class InteractiveYameApplication(
             dnsUpstream = modemConfig.pppDnsConfig.upstreamServer.toString(),
             httpProxyEnabled = modemConfig.pppHttpCompatibilityConfig.enabled,
         )
+    }
+
+    private fun persistConfiguration() {
+        val configuration = YameConfiguration(
+            portName = selectedPortName,
+            baudRate = selectedBaud,
+            flowControl = selectedFlowControl,
+            modemConfig = modemConfig,
+            logLevels = YameLogModule.entries.associateWith(logManager::level),
+        )
+        runCatching { onConfigurationChanged(configuration) }
+            .onFailure { error ->
+                observer.onLog("Could not save yame.ini: ${error.message ?: error.javaClass.simpleName}")
+            }
     }
 
     private fun connectionIsActive(): Boolean =

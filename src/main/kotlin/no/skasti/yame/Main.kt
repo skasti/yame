@@ -1,6 +1,8 @@
 package no.skasti.yame
 
 import com.github.ajalt.mordant.terminal.Terminal
+import no.skasti.yame.config.YameConfiguration
+import no.skasti.yame.config.YameConfigurationStore
 import no.skasti.yame.logging.YameLogLevel
 import no.skasti.yame.logging.YameLogManager
 import no.skasti.yame.logging.YameLogModule
@@ -17,12 +19,22 @@ import no.skasti.yame.tone.DialString
 import no.skasti.yame.tone.HandshakeProfile
 import no.skasti.yame.ui.InteractiveYameApplication
 import java.util.concurrent.CountDownLatch
+import java.nio.file.Files
+import java.nio.file.Path
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 fun main(args: Array<String>) {
-    val options = parseArgs(args)
+    val configPath = configurationPath(args)
+    val configStore = YameConfigurationStore(configPath)
+    val informationalOnly = args.any { it == "--help" || it == "-h" || it == "--list" || it == "-l" }
+    val savedConfiguration = if (informationalOnly) {
+        YameConfiguration()
+    } else {
+        configStore.load()
+    }
+    val options = parseArgs(args, savedConfiguration, configPath)
 
     if (options.listPorts) {
         val ports = SerialConnection.availablePortDescriptors()
@@ -69,6 +81,13 @@ fun main(args: Array<String>) {
         return
     }
 
+    if (!Files.exists(options.configPath)) {
+        runCatching { configStore.save(options.toConfiguration()) }
+            .onFailure { error ->
+                System.err.println("YAME could not create ${options.configPath}: ${error.message}")
+            }
+    }
+
     val detectedTerminal = Terminal()
     val useTui = when (options.uiMode) {
         UiMode.AUTO ->
@@ -87,6 +106,8 @@ fun main(args: Array<String>) {
             initialFlowControl = options.flowControl,
             initialModemConfig = options.modemConfig,
             logManager = logManager,
+            initialLogLevels = options.logLevels,
+            onConfigurationChanged = configStore::save,
             terminal = if (options.uiMode == UiMode.AUTO) {
                 detectedTerminal
             } else {
@@ -195,13 +216,18 @@ private data class Options(
     val uiMode: UiMode,
     val modemConfig: HayesModemConfig,
     val logLevels: Map<YameLogModule, YameLogLevel>,
+    val configPath: Path,
 )
 
-private fun parseArgs(args: Array<String>): Options {
-    val defaults = HayesModemConfig()
-    var port: String? = null
-    var baud = 38400
-    var flowControl = SerialFlowControl.DISABLED
+private fun parseArgs(
+    args: Array<String>,
+    savedConfiguration: YameConfiguration,
+    configPath: Path,
+): Options {
+    val defaults = savedConfiguration.modemConfig
+    var port: String? = savedConfiguration.portName
+    var baud = savedConfiguration.baudRate
+    var flowControl = savedConfiguration.flowControl
     var list = false
     var testNumber: String? = null
     var pickupTime = defaults.pickupTime
@@ -209,10 +235,10 @@ private fun parseArgs(args: Array<String>): Options {
     var handshakeProfile = defaults.handshakeProfile
     var username = defaults.username
     var password = defaults.password
-    var pppSubnet: Ipv4Cidr? = null
+    var pppSubnet: Ipv4Cidr? = defaults.pppIpConfig.configuredSubnet
     var dnsUpstream = defaults.pppDnsConfig.upstreamServer
     var httpCompatibilityEnabled = defaults.pppHttpCompatibilityConfig.enabled
-    val logLevels = YameLogManager.defaultLevels().toMutableMap()
+    val logLevels = savedConfiguration.logLevels.toMutableMap()
     var uiMode = UiMode.AUTO
 
     var i = 0
@@ -286,6 +312,10 @@ private fun parseArgs(args: Array<String>): Options {
                 require(i + 1 < args.size) { "$arg requires auto, tui, or plain" }
                 uiMode = parseUiMode(args[++i])
             }
+            "--config" -> {
+                require(i + 1 < args.size) { "$arg requires a path" }
+                i++
+            }
             "--help", "-h" -> {
                 printUsage()
                 kotlin.system.exitProcess(0)
@@ -315,7 +345,35 @@ private fun parseArgs(args: Array<String>): Options {
             ),
         ),
         logLevels = logLevels.toMap(),
+        configPath = configPath,
     )
+}
+
+private fun Options.toConfiguration(): YameConfiguration =
+    YameConfiguration(
+        portName = portName,
+        baudRate = baudRate,
+        flowControl = flowControl,
+        modemConfig = modemConfig,
+        logLevels = logLevels,
+    )
+
+private fun configurationPath(args: Array<String>): Path {
+    var configuredPath: Path? = null
+    var index = 0
+    while (index < args.size) {
+        if (args[index] == "--config") {
+            require(index + 1 < args.size) { "--config requires a path" }
+            configuredPath = Path.of(args[index + 1])
+            index++
+        }
+        index++
+    }
+
+    val path = configuredPath ?: Path.of("yame.ini")
+    return if (path.isAbsolute) path.normalize() else {
+        Path.of(System.getProperty("user.dir")).resolve(path).normalize()
+    }
 }
 
 private fun logModuleForArgument(argument: String): YameLogModule =
@@ -383,6 +441,7 @@ private fun printUsage() {
               --handshake-profile P   Handshake profile: ${handshakeProfileNames()} (default: ${defaults.handshakeProfile.name.lowercase()})
               --username USER         Enable terminal login with this username
               --password PASS         Terminal login password (requires --username)
+              --config FILE           Config file (default: yame.ini in the working directory)
               --subnet CIDR           PPP address pool, e.g. 10.0.0.0/30 (default: automatic)
               --dns-upstream IP       DNS server used by YAME's local DNS proxy (default: ${defaults.pppDnsConfig.upstreamServer})
               --http-https-proxy      Enable HTTP/HTTPS compatibility proxy (default)

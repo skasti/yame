@@ -145,6 +145,18 @@ Start YAME in an interactive terminal:
 ./gradlew run
 ```
 
+YAME reads and writes `yame.ini` in its working directory. The IntelliJ run
+configuration uses the project directory, so its file is in the repository
+root. YAME creates the file on first start and saves TUI changes to the serial
+port, baud rate, flow control, DNS, proxy, log levels, and terminal login. A
+configuration file can also set modem timing, handshake profile, and PPP subnet.
+Command-line options override file values for that run. Use `--config <path>` to
+select a different file.
+
+The file uses simple `key=value` properties. It stores the terminal password as
+plain text, with owner-only file permissions on POSIX systems; `/yame.ini` is
+ignored by Git.
+
 By default, YAME uses `--ui auto`. On an interactive ANSI terminal it opens the dashboard; if exactly one serial port is available it auto-selects and opens it, otherwise it stays disconnected until a port is selected from the command palette. Press `/` to open the palette.
 
 The dashboard contains:
