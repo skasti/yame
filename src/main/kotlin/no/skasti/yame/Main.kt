@@ -223,6 +223,22 @@ private data class Options(
     val configPath: Path,
 )
 
+internal fun resolveLoginCredentials(
+    savedUsername: String?,
+    savedPassword: String?,
+    usernameOverride: String?,
+    passwordOverride: String?,
+): Pair<String?, String?> {
+    require((usernameOverride == null) == (passwordOverride == null)) {
+        "Both --username and --password must be provided together"
+    }
+    return if (usernameOverride == null) {
+        savedUsername to savedPassword
+    } else {
+        usernameOverride to passwordOverride
+    }
+}
+
 private fun parseArgs(
     args: Array<String>,
     savedConfiguration: YameConfiguration,
@@ -238,8 +254,8 @@ private fun parseArgs(
     var dialToneTime = defaults.dialToneTime
     var handshakeProfile = defaults.handshakeProfile
     val toneSimulationEnabled = defaults.toneSimulationEnabled
-    var username = defaults.username
-    var password = defaults.password
+    var usernameOverride: String? = null
+    var passwordOverride: String? = null
     var pppSubnet: Ipv4Cidr? = defaults.pppIpConfig.configuredSubnet
     var dnsUpstream = defaults.pppDnsConfig.upstreamServer
     var httpCompatibilityEnabled = defaults.pppHttpCompatibilityConfig.enabled
@@ -287,11 +303,11 @@ private fun parseArgs(
             }
             "--username" -> {
                 require(i + 1 < args.size) { "$arg requires a username" }
-                username = args[++i]
+                usernameOverride = args[++i]
             }
             "--password" -> {
                 require(i + 1 < args.size) { "$arg requires a password" }
-                password = args[++i]
+                passwordOverride = args[++i]
             }
             "--subnet" -> {
                 require(i + 1 < args.size) { "$arg requires an IPv4 CIDR, e.g. 10.0.0.0/30" }
@@ -329,6 +345,13 @@ private fun parseArgs(
         }
         i++
     }
+
+    val (username, password) = resolveLoginCredentials(
+        savedUsername = defaults.username,
+        savedPassword = defaults.password,
+        usernameOverride = usernameOverride,
+        passwordOverride = passwordOverride,
+    )
 
     return Options(
         portName = port,
