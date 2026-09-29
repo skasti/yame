@@ -154,9 +154,12 @@ and PPP subnet.
 Command-line options override file values for that run. Use `--config <path>` to
 select a different file.
 
-The file uses simple `key=value` properties. It stores the terminal password as
-plain text, with owner-only file permissions on POSIX systems; `/yame.ini` is
-ignored by Git.
+The file uses simple `key=value` properties and is limited to 32 KiB. YAME
+rejects a save that exceeds this limit before replacing the existing file.
+Serial port names are limited to 1,024 characters, login usernames to 64
+printable ASCII characters, and passwords to 256 printable ASCII characters.
+It stores the terminal password as plain text, with owner-only file permissions
+on POSIX systems; `/yame.ini` is ignored by Git.
 
 By default, YAME uses `--ui auto`. On an interactive ANSI terminal it opens the dashboard; if exactly one serial port is available it auto-selects and opens it, otherwise it stays disconnected until a port is selected from the command palette. Press `/` to open the palette.
 

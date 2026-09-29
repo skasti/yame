@@ -11,9 +11,11 @@ import no.skasti.yame.ppp.ip.Ipv4Cidr
 import no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig
 import no.skasti.yame.serial.SerialFlowControl
 import no.skasti.yame.tone.HandshakeProfile
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.PosixFilePermission
+import java.util.Properties
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -54,6 +56,45 @@ class YameConfigurationStoreTest {
     }
 
     @Test
+    fun `accepts maximum string lengths and saves a readable configuration`() {
+        val path = tempDirectory.resolve("maximum.ini")
+        val configuration = YameConfiguration(
+            portName = "p".repeat(YameConfiguration.MAX_PORT_NAME_LENGTH),
+            modemConfig = HayesModemConfig(
+                username = "u".repeat(HayesModemConfig.MAX_LOGIN_USERNAME_LENGTH),
+                password = "p".repeat(HayesModemConfig.MAX_LOGIN_PASSWORD_LENGTH),
+            ),
+        )
+        val store = YameConfigurationStore(path)
+
+        store.save(configuration)
+
+        assertTrue(Files.size(path) <= 32 * 1024)
+        assertEquals(configuration, store.load())
+    }
+
+    @Test
+    fun `rejects string values longer than their supported limits`() {
+        assertFailsWith<IllegalArgumentException> {
+            YameConfiguration(
+                portName = "p".repeat(YameConfiguration.MAX_PORT_NAME_LENGTH + 1),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            HayesModemConfig(
+                username = "u".repeat(HayesModemConfig.MAX_LOGIN_USERNAME_LENGTH + 1),
+                password = "secret",
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            HayesModemConfig(
+                username = "user",
+                password = "p".repeat(HayesModemConfig.MAX_LOGIN_PASSWORD_LENGTH + 1),
+            )
+        }
+    }
+
+    @Test
     fun `configuration file containing a password is owner readable only`() {
         val path = tempDirectory.resolve("yame.ini")
         YameConfigurationStore(path).save(
@@ -62,12 +103,25 @@ class YameConfigurationStoreTest {
             ),
         )
 
-        val permissions = Files.getPosixFilePermissions(path)
-        assertEquals(
-            setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
-            permissions,
-        )
+        if (Files.getFileStore(path).supportsFileAttributeView("posix")) {
+            val permissions = Files.getPosixFilePermissions(path)
+            assertEquals(
+                setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
+                permissions,
+            )
+        }
         assertTrue(Files.readString(path).contains("login.password=secret"))
+    }
+
+    @Test
+    fun `rejects properties that exceed the serialized config size limit`() {
+        val properties = Properties().apply {
+            setProperty("oversized", "x".repeat(MAX_CONFIG_BYTES))
+        }
+
+        assertFailsWith<IOException> {
+            serializePropertiesWithinLimit(properties)
+        }
     }
 
     @Test

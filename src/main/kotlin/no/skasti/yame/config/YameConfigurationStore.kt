@@ -11,7 +11,11 @@ import no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig
 import no.skasti.yame.serial.SerialFlowControl
 import no.skasti.yame.tone.HandshakeProfile
 import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.io.InputStreamReader
+import java.io.OutputStream
+import java.io.OutputStreamWriter
 import java.nio.channels.Channels
 import java.nio.charset.StandardCharsets
 import java.nio.file.AtomicMoveNotSupportedException
@@ -150,6 +154,7 @@ class YameConfigurationStore(private val path: Path) {
             }
         }
 
+        val serialized = serializePropertiesWithinLimit(properties)
         val destination = path.toAbsolutePath().normalize()
         val parent = requireNotNull(destination.parent) {
             "Configuration path must have a parent directory"
@@ -158,9 +163,12 @@ class YameConfigurationStore(private val path: Path) {
         val temporary = Files.createTempFile(parent, ".yame-config-", ".tmp")
         try {
             restrictPermissions(temporary)
-            Files.newBufferedWriter(temporary, StandardCharsets.UTF_8).use { writer ->
-                properties.store(writer, "YAME configuration; credentials are stored in plaintext")
-            }
+            Files.write(
+                temporary,
+                serialized,
+                StandardOpenOption.WRITE,
+                StandardOpenOption.TRUNCATE_EXISTING,
+            )
             restrictPermissions(temporary)
             try {
                 Files.move(
@@ -212,6 +220,33 @@ class YameConfigurationStore(private val path: Path) {
 
     private companion object {
         const val CONFIG_VERSION = "1"
-        const val MAX_CONFIG_BYTES = 32 * 1024
     }
+}
+
+internal const val MAX_CONFIG_BYTES = 32 * 1024
+
+internal fun serializePropertiesWithinLimit(properties: Properties): ByteArray {
+    val bytes = ByteArrayOutputStream(MAX_CONFIG_BYTES)
+    val boundedOutput = object : OutputStream() {
+        private fun requireCapacity(additionalBytes: Int) {
+            if (additionalBytes > MAX_CONFIG_BYTES - bytes.size()) {
+                throw IOException("Serialized configuration exceeds $MAX_CONFIG_BYTES bytes")
+            }
+        }
+
+        override fun write(value: Int) {
+            requireCapacity(1)
+            bytes.write(value)
+        }
+
+        override fun write(buffer: ByteArray, offset: Int, length: Int) {
+            requireCapacity(length)
+            bytes.write(buffer, offset, length)
+        }
+    }
+
+    OutputStreamWriter(boundedOutput, StandardCharsets.UTF_8).use { writer ->
+        properties.store(writer, "YAME configuration; credentials are stored in plaintext")
+    }
+    return bytes.toByteArray()
 }

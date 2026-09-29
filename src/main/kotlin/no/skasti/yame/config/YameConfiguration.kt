@@ -12,4 +12,14 @@ data class YameConfiguration(
     val flowControl: SerialFlowControl = SerialFlowControl.DISABLED,
     val modemConfig: HayesModemConfig = HayesModemConfig(),
     val logLevels: Map<YameLogModule, YameLogLevel> = YameLogManager.defaultLevels(),
-)
+) {
+    init {
+        require(portName == null || portName.length <= MAX_PORT_NAME_LENGTH) {
+            "portName must not exceed $MAX_PORT_NAME_LENGTH characters"
+        }
+    }
+
+    companion object {
+        const val MAX_PORT_NAME_LENGTH = 1_024
+    }
+}

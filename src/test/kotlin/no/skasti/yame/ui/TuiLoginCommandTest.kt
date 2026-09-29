@@ -1,9 +1,11 @@
 package no.skasti.yame.ui
 
+import no.skasti.yame.modem.HayesModemConfig
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class TuiLoginCommandTest {
     @Test
@@ -20,6 +22,21 @@ class TuiLoginCommandTest {
         assertNull(parseLoginInput("/login :secret"))
         assertNull(parseLoginInput("/login user:"))
         assertNull(parseLoginInput("/login usuário:secret"))
+    }
+
+    @Test
+    fun `accepts maximum login lengths and rejects longer credentials`() {
+        val maxUsername = "u".repeat(HayesModemConfig.MAX_LOGIN_USERNAME_LENGTH)
+        val maxPassword = "p".repeat(HayesModemConfig.MAX_LOGIN_PASSWORD_LENGTH)
+
+        assertEquals(
+            TuiLoginCredentials(maxUsername, maxPassword),
+            parseLoginInput("/login " + maxUsername + ":" + maxPassword),
+        )
+        assertNull(parseLoginInput("/login " + maxUsername + "u:" + maxPassword))
+        assertNull(parseLoginInput("/login " + maxUsername + ":" + maxPassword + "p"))
+        assertTrue(loginInputWithinLimits("/login " + maxUsername + ":" + maxPassword))
+        assertFalse(loginInputWithinLimits("/login " + maxUsername + "u:" + maxPassword))
     }
 
     @Test
