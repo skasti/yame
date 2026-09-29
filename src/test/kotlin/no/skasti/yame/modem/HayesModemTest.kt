@@ -397,6 +397,28 @@ class HayesModemTest {
     }
 
     @Test
+    fun `terminal login credentials can be added while modem is running`() {
+        val output = ByteArrayOutputStream()
+        val pppHandler = FakePppHandler()
+        val modem = HayesModem(
+            output = output,
+            baudRate = 9600,
+            tonePlayer = FakeTonePlayer(),
+            logger = {},
+            pppHandler = pppHandler,
+        )
+
+        modem.updateLoginCredentials("new-user", "new-password")
+        modem.receive("ATD123\r".toByteArray())
+        modem.receive("new-user\rnew-password\r".toByteArray())
+
+        assertTrue(output.toString().contains("Username:"))
+        assertTrue(output.toString().contains("Password:"))
+        assertTrue(output.toString().contains(">"))
+        assertEquals(0, pppHandler.connectedCalls)
+    }
+
+    @Test
     fun `PPP bytes following ppp command in same read are forwarded`() {
         val output = ByteArrayOutputStream()
         val pppHandler = FakePppHandler()

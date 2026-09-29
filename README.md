@@ -180,7 +180,19 @@ Expanded host with known resource paths:
 
 ![YAME TUI with expanded proxy host](docs/assets/tui-proxy-expanded.svg)
 
-Useful palette commands include `/port`, `/baud`, `/flow-control`, `/dns-upstream`, `/http-proxy`, `/reconnect`, `/disconnect`, `/refresh-ports`, `/clear-log`, and `/quit`.
+Useful palette commands include `/port`, `/baud`, `/flow-control`, `/dns-upstream`, `/http-proxy`, `/login-add`, `/reconnect`, `/disconnect`, `/refresh-ports`, `/clear-log`, and `/quit`.
+
+Set or replace the serial terminal login from the TUI with:
+
+```text
+/login-add <username>:<password>
+```
+
+Type the command and press Enter. You can also type `/login-add` and press
+Enter when it appears in the command list, then enter the credentials at the
+prompt. The setting applies to the next modem call and stays in memory for the
+current YAME process. The password is masked in the TUI and is not written to
+logs.
 
 A port can still be selected explicitly:
 
@@ -195,6 +207,36 @@ For scripts, redirected output, or the traditional line-oriented console, force 
 ```
 
 Use `--ui tui` to force the dashboard even when terminal capability detection would not enable it automatically.
+
+### IntelliJ IDEA on Ubuntu
+
+Import the project as a Gradle project and select JDK 21 as the project SDK.
+Select the shared **YAME TUI** run configuration and click **Run**. Its
+**Before launch** Gradle task runs `installDist` to update the distribution.
+The launcher script then opens a GNOME Terminal window and starts the installed
+program with `--ui tui`, giving the dashboard a real interactive terminal.
+Click inside that window and press `/` to open the command palette; use `/quit`
+to exit. If YAME exits, the window stays open until you press Enter so its
+output remains visible. `installDist` rebuilds changed files as needed, so a
+separate `clean` is unnecessary.
+
+YAME requires JDK 21 at runtime. The launcher uses `JAVA_HOME` when it points to
+JDK 21, otherwise it checks the active `java` and Gradle's downloaded JDKs. If
+none is available, set `JAVA_HOME` to a JDK 21 installation before running.
+
+The run configuration invokes [scripts/run-tui-terminal.sh](scripts/run-tui-terminal.sh).
+It requires `gnome-terminal`; if it is missing, install GNOME Terminal or start
+YAME manually from a terminal. Set `JAVA_HOME` to your JDK 21 installation first
+if `java -version` reports an older version:
+
+```shell
+export JAVA_HOME="/path/to/jdk-21"
+export PATH="$JAVA_HOME/bin:$PATH"
+./gradlew installDist
+./build/install/yame/bin/yame --ui tui
+```
+
+### Additional command-line options
 
 Dialing/handshake progress is logged automatically. Modem timing and handshake behavior can be overridden explicitly:
 

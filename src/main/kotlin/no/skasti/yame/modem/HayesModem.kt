@@ -64,6 +64,9 @@ class HayesModem(
     private var connectedPhase = ConnectedPhase.PPP
     private var pppStarted = false
     private var pendingLoginUsername: String? = null
+    @Volatile
+    private var loginCredentials = LoginCredentials(config.username, config.password)
+    private var connectedLoginCredentials = loginCredentials
 
     init {
         output?.let(pppHandler::attachOutput)
@@ -76,6 +79,11 @@ class HayesModem(
             State.DIALING -> Unit
             State.CONNECTED -> receiveConnected(bytes)
         }
+    }
+
+    fun updateLoginCredentials(username: String, password: String) {
+        val validated = config.copy(username = username, password = password)
+        loginCredentials = LoginCredentials(validated.username, validated.password)
     }
 
     private fun receiveCommands(bytes: ByteArray) {
@@ -261,7 +269,10 @@ class HayesModem(
             ConnectedPhase.LOGIN_PASSWORD -> {
                 logger("LOGIN <= password received")
 
-                if (pendingLoginUsername == config.username && rawLine == config.password) {
+                if (
+                    pendingLoginUsername == connectedLoginCredentials.username &&
+                    rawLine == connectedLoginCredentials.password
+                ) {
                     pendingLoginUsername = null
                     connectedPhase = ConnectedPhase.LOGIN_COMMAND
                     logger("LOGIN authentication accepted")
@@ -411,8 +422,9 @@ class HayesModem(
     }
 
     private fun connect() {
+        connectedLoginCredentials = loginCredentials
         state = State.CONNECTED
-        connectedPhase = if (config.username == null) {
+        connectedPhase = if (connectedLoginCredentials.username == null) {
             ConnectedPhase.PPP
         } else {
             ConnectedPhase.LOGIN_USERNAME
@@ -427,7 +439,7 @@ class HayesModem(
             return
         }
 
-        if (config.username == null) {
+        if (connectedLoginCredentials.username == null) {
             logger("LOGIN disabled; PPP data mode ready")
             startPpp()
             return
@@ -468,4 +480,9 @@ class HayesModem(
         pppHandler.close()
         tonePlayer.close()
     }
+
+    private data class LoginCredentials(
+        val username: String?,
+        val password: String?,
+    )
 }

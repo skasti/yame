@@ -44,6 +44,7 @@ class TuiYameObserver(
     private val onDnsUpstreamSelected: (String) -> Unit = {},
     private val onHttpProxySelected: (Boolean) -> Unit = {},
     private val onLogLevelSelected: (YameLogModule, YameLogLevel) -> Unit = { _, _ -> },
+    private val onLoginAdded: (String, String) -> Unit = { _, _ -> },
     private val onDisconnect: () -> Unit = {},
     private val onReconnect: () -> Unit = {},
     private val onRefreshPorts: () -> Unit = {},
@@ -686,6 +687,14 @@ class TuiYameObserver(
                         }
                         TuiPaletteMode.DNS ->
                             commandPalette = palette.copy(input = palette.input.dropLast(1))
+                        TuiPaletteMode.LOGIN_ADD -> {
+                            val next = palette.input.dropLast(1)
+                            commandPalette = if (next.length < LOGIN_ADD_PREFIX.length) {
+                                commandPaletteFor(next.ifEmpty { "/" })
+                            } else {
+                                palette.copy(input = next, title = LOGIN_ADD_TITLE)
+                            }
+                        }
                         else -> Unit
                     }
                     null
@@ -700,6 +709,15 @@ class TuiYameObserver(
                     key.length == 1 &&
                     (key[0].isDigit() || key[0] == '.') -> {
                     commandPalette = palette.copy(input = palette.input + key)
+                    null
+                }
+                palette.mode == TuiPaletteMode.LOGIN_ADD &&
+                    key.length == 1 &&
+                    !key[0].isISOControl() -> {
+                    commandPalette = palette.copy(
+                        input = palette.input + key,
+                        title = LOGIN_ADD_TITLE,
+                    )
                     null
                 }
                 else -> null
@@ -723,6 +741,16 @@ class TuiYameObserver(
 
     private fun executePaletteSelection(): (() -> Unit)? {
         val palette = commandPalette ?: return null
+
+        if (palette.mode == TuiPaletteMode.LOGIN_ADD) {
+            val credentials = parseLoginAddInput(palette.input)
+            if (credentials == null) {
+                commandPalette = palette.copy(title = LOGIN_ADD_INVALID_TITLE)
+                return null
+            }
+            commandPalette = null
+            return { onLoginAdded(credentials.username, credentials.password) }
+        }
 
         if (palette.mode == TuiPaletteMode.DNS) {
             if (palette.input.isBlank()) return null
@@ -751,6 +779,10 @@ class TuiYameObserver(
                 }
                 "/http-proxy" -> {
                     openHttpPalette()
+                    null
+                }
+                LOGIN_ADD_COMMAND -> {
+                    openLoginAddPalette()
                     null
                 }
                 "/loglevel-modem" -> {
@@ -841,12 +873,34 @@ class TuiYameObserver(
                 }
             }
 
-            TuiPaletteMode.DNS -> null
+            TuiPaletteMode.DNS,
+            TuiPaletteMode.LOGIN_ADD -> null
         }
+    }
+
+    @Synchronized
+    private fun openLoginAddPalette() {
+        commandPalette = TuiCommandPalette(
+            mode = TuiPaletteMode.LOGIN_ADD,
+            input = LOGIN_ADD_PREFIX,
+            title = LOGIN_ADD_TITLE,
+            options = emptyList(),
+            selectedIndex = 0,
+        )
+        render()
     }
 
     private fun commandPaletteFor(input: String): TuiCommandPalette {
         val normalized = if (input.startsWith("/")) input else "/$input"
+        if (normalized.startsWith(LOGIN_ADD_PREFIX, ignoreCase = true)) {
+            return TuiCommandPalette(
+                mode = TuiPaletteMode.LOGIN_ADD,
+                input = normalized,
+                title = LOGIN_ADD_TITLE,
+                options = emptyList(),
+                selectedIndex = 0,
+            )
+        }
         return TuiCommandPalette(
             mode = TuiPaletteMode.COMMANDS,
             input = normalized,
@@ -931,6 +985,7 @@ class TuiYameObserver(
             TuiCommandOption("/flow-control", "Select serial flow control", "/flow-control"),
             TuiCommandOption("/dns-upstream", "Change upstream resolver and reconnect", "/dns-upstream"),
             TuiCommandOption("/http-proxy", "Enable or disable HTTP/TLS compatibility", "/http-proxy"),
+            TuiCommandOption(LOGIN_ADD_COMMAND, "Set terminal login credentials", LOGIN_ADD_COMMAND),
             TuiCommandOption("/loglevel-modem", "Set modem file log level", "/loglevel-modem"),
             TuiCommandOption("/loglevel-serial", "Set serial file log level", "/loglevel-serial"),
             TuiCommandOption("/loglevel-ppp", "Set ppp file log level", "/loglevel-ppp"),
@@ -1011,7 +1066,15 @@ internal enum class TuiPaletteMode {
     DNS,
     HTTP,
     LOG_LEVEL,
+    LOGIN_ADD,
 }
+
+private fun paletteDisplayInput(palette: TuiCommandPalette): String =
+    if (palette.mode == TuiPaletteMode.LOGIN_ADD) {
+        maskLoginAddPassword(palette.input)
+    } else {
+        palette.input
+    }
 
 internal data class TuiCommandOption(
     val label: String,
@@ -1265,7 +1328,7 @@ internal object YameDashboardRenderer {
             lines.add(
                 1,
                 DashboardLine(
-                    "Palette: ${palette.input}$selection",
+                    "Palette: ${paletteDisplayInput(palette)}$selection",
                     if (selected == null) DashboardTone.ACCENT else DashboardTone.SELECTED,
                 ),
             )
@@ -1478,12 +1541,17 @@ internal object YameDashboardRenderer {
     ): List<DashboardLine> {
         val result = mutableListOf<DashboardLine>()
         result += DashboardLine(
-            "> ${palette.input}",
+            "> ${paletteDisplayInput(palette)}",
             DashboardTone.ACCENT,
         )
 
         if (palette.mode == TuiPaletteMode.DNS) {
             result += DashboardLine("Enter an IPv4 address, then press Enter.", DashboardTone.MUTED)
+            return result.take(visibleRows)
+        }
+
+        if (palette.mode == TuiPaletteMode.LOGIN_ADD) {
+            result += DashboardLine("Enter username:password, then press Enter.", DashboardTone.MUTED)
             return result.take(visibleRows)
         }
 

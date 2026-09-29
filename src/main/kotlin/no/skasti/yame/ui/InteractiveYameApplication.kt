@@ -69,6 +69,7 @@ class InteractiveYameApplication(
         onHttpProxySelected = ::selectHttpProxy,
         initialLogLevels = YameLogModule.entries.associateWith(logManager::level),
         onLogLevelSelected = ::selectLogLevel,
+        onLoginAdded = ::addLoginCredentials,
         onDisconnect = ::disconnect,
         onReconnect = ::reconnect,
         onRefreshPorts = ::refreshPorts,
@@ -217,6 +218,22 @@ class InteractiveYameApplication(
         logManager.setLevel(module, level)
         observer.updateLogLevel(module, level)
         observer.onLog("Log level for ${module.fileName} changed to ${level.name.lowercase()}")
+    }
+
+    private fun addLoginCredentials(username: String, password: String) {
+        val updatedConfig = runCatching {
+            modemConfig.copy(username = username, password = password)
+        }.getOrElse { error ->
+            observer.onLog("Terminal login rejected: ${error.message}")
+            return
+        }
+
+        modemConfig = updatedConfig
+        val modem = synchronized(lock) { activeModem }
+        modem?.updateLoginCredentials(username, password)
+        observer.onLog(
+            "Terminal login configured for '$username'; applies to the next modem call",
+        )
     }
 
     private fun reconnect() {
