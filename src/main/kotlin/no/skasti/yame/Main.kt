@@ -400,7 +400,7 @@ private fun printUsage() {
         Explicit PPP subnets must not overlap an active local IPv4 interface subnet.
         On an interactive terminal, --ui auto starts the YAME dashboard. It can start without
         --port and lets you select the serial port, baud rate, DNS upstream, and HTTP proxy
-        through the / command palette. Use /login-add username:password there to configure
+        through the / command palette. Use /login username:password there to configure
         terminal login credentials at runtime. Plain mode keeps the traditional line-oriented output.
         YAME advertises its local PPP address as DNS and forwards DNS queries to --dns-upstream.
         HTTP/HTTPS compatibility mode is enabled by default. TCP/80 requests are handled by YAME as
@@ -413,7 +413,7 @@ private fun printUsage() {
         original creation timestamp. Use the --loglevel-* options to tune each module independently.
         Durations accept milliseconds or seconds, e.g. 500ms, 2s, or 1.5s, up to 10s.
         Terminal login can be configured at startup with both --username and --password, or
-        at runtime in the TUI with /login-add username:password.
+        at runtime in the TUI with /login username:password.
         Tone progress is always logged while a dialing sequence is played.
         """.trimIndent(),
     )

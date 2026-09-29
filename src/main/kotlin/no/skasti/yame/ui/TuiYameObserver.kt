@@ -687,12 +687,12 @@ class TuiYameObserver(
                         }
                         TuiPaletteMode.DNS ->
                             commandPalette = palette.copy(input = palette.input.dropLast(1))
-                        TuiPaletteMode.LOGIN_ADD -> {
+                        TuiPaletteMode.LOGIN -> {
                             val next = palette.input.dropLast(1)
-                            commandPalette = if (next.length < LOGIN_ADD_PREFIX.length) {
+                            commandPalette = if (next.length < TUI_LOGIN_PREFIX.length) {
                                 commandPaletteFor(next.ifEmpty { "/" })
                             } else {
-                                palette.copy(input = next, title = LOGIN_ADD_TITLE)
+                                palette.copy(input = next, title = TUI_LOGIN_TITLE)
                             }
                         }
                         else -> Unit
@@ -711,12 +711,12 @@ class TuiYameObserver(
                     commandPalette = palette.copy(input = palette.input + key)
                     null
                 }
-                palette.mode == TuiPaletteMode.LOGIN_ADD &&
+                palette.mode == TuiPaletteMode.LOGIN &&
                     key.length == 1 &&
                     !key[0].isISOControl() -> {
                     commandPalette = palette.copy(
                         input = palette.input + key,
-                        title = LOGIN_ADD_TITLE,
+                        title = TUI_LOGIN_TITLE,
                     )
                     null
                 }
@@ -742,10 +742,10 @@ class TuiYameObserver(
     private fun executePaletteSelection(): (() -> Unit)? {
         val palette = commandPalette ?: return null
 
-        if (palette.mode == TuiPaletteMode.LOGIN_ADD) {
-            val credentials = parseLoginAddInput(palette.input)
+        if (palette.mode == TuiPaletteMode.LOGIN) {
+            val credentials = parseLoginInput(palette.input)
             if (credentials == null) {
-                commandPalette = palette.copy(title = LOGIN_ADD_INVALID_TITLE)
+                commandPalette = palette.copy(title = TUI_LOGIN_INVALID_TITLE)
                 return null
             }
             commandPalette = null
@@ -781,7 +781,7 @@ class TuiYameObserver(
                     openHttpPalette()
                     null
                 }
-                LOGIN_ADD_COMMAND -> {
+                TUI_LOGIN_COMMAND -> {
                     openLoginAddPalette()
                     null
                 }
@@ -874,16 +874,16 @@ class TuiYameObserver(
             }
 
             TuiPaletteMode.DNS,
-            TuiPaletteMode.LOGIN_ADD -> null
+            TuiPaletteMode.LOGIN -> null
         }
     }
 
     @Synchronized
     private fun openLoginAddPalette() {
         commandPalette = TuiCommandPalette(
-            mode = TuiPaletteMode.LOGIN_ADD,
-            input = LOGIN_ADD_PREFIX,
-            title = LOGIN_ADD_TITLE,
+            mode = TuiPaletteMode.LOGIN,
+            input = TUI_LOGIN_PREFIX,
+            title = TUI_LOGIN_TITLE,
             options = emptyList(),
             selectedIndex = 0,
         )
@@ -892,11 +892,11 @@ class TuiYameObserver(
 
     private fun commandPaletteFor(input: String): TuiCommandPalette {
         val normalized = if (input.startsWith("/")) input else "/$input"
-        if (normalized.startsWith(LOGIN_ADD_PREFIX, ignoreCase = true)) {
+        if (normalized.startsWith(TUI_LOGIN_PREFIX, ignoreCase = true)) {
             return TuiCommandPalette(
-                mode = TuiPaletteMode.LOGIN_ADD,
+                mode = TuiPaletteMode.LOGIN,
                 input = normalized,
-                title = LOGIN_ADD_TITLE,
+                title = TUI_LOGIN_TITLE,
                 options = emptyList(),
                 selectedIndex = 0,
             )
@@ -985,7 +985,7 @@ class TuiYameObserver(
             TuiCommandOption("/flow-control", "Select serial flow control", "/flow-control"),
             TuiCommandOption("/dns-upstream", "Change upstream resolver and reconnect", "/dns-upstream"),
             TuiCommandOption("/http-proxy", "Enable or disable HTTP/TLS compatibility", "/http-proxy"),
-            TuiCommandOption(LOGIN_ADD_COMMAND, "Set terminal login credentials", LOGIN_ADD_COMMAND),
+            TuiCommandOption(TUI_LOGIN_COMMAND, "Set terminal login credentials", TUI_LOGIN_COMMAND),
             TuiCommandOption("/loglevel-modem", "Set modem file log level", "/loglevel-modem"),
             TuiCommandOption("/loglevel-serial", "Set serial file log level", "/loglevel-serial"),
             TuiCommandOption("/loglevel-ppp", "Set ppp file log level", "/loglevel-ppp"),
@@ -1066,12 +1066,12 @@ internal enum class TuiPaletteMode {
     DNS,
     HTTP,
     LOG_LEVEL,
-    LOGIN_ADD,
+    LOGIN,
 }
 
 private fun paletteDisplayInput(palette: TuiCommandPalette): String =
-    if (palette.mode == TuiPaletteMode.LOGIN_ADD) {
-        maskLoginAddPassword(palette.input)
+    if (palette.mode == TuiPaletteMode.LOGIN) {
+        maskLoginPassword(palette.input)
     } else {
         palette.input
     }
@@ -1550,7 +1550,7 @@ internal object YameDashboardRenderer {
             return result.take(visibleRows)
         }
 
-        if (palette.mode == TuiPaletteMode.LOGIN_ADD) {
+        if (palette.mode == TuiPaletteMode.LOGIN) {
             result += DashboardLine("Enter username:password, then press Enter.", DashboardTone.MUTED)
             return result.take(visibleRows)
         }

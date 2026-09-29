@@ -1,9 +1,9 @@
 package no.skasti.yame.ui
 
-internal const val LOGIN_ADD_COMMAND = "/login-add"
-internal const val LOGIN_ADD_PREFIX = "$LOGIN_ADD_COMMAND "
-internal const val LOGIN_ADD_TITLE = "Add terminal login — username:password"
-internal const val LOGIN_ADD_INVALID_TITLE = "Use /login-add username:password"
+internal const val TUI_LOGIN_COMMAND = "/login"
+internal const val TUI_LOGIN_PREFIX = "$TUI_LOGIN_COMMAND "
+internal const val TUI_LOGIN_TITLE = "Terminal login — username:password"
+internal const val TUI_LOGIN_INVALID_TITLE = "Use /login username:password"
 
 internal data class TuiLoginCredentials(
     val username: String,
@@ -13,10 +13,10 @@ internal data class TuiLoginCredentials(
         "TuiLoginCredentials(username=$username, password=<redacted>)"
 }
 
-internal fun parseLoginAddInput(input: String): TuiLoginCredentials? {
-    if (!input.startsWith(LOGIN_ADD_PREFIX, ignoreCase = true)) return null
+internal fun parseLoginInput(input: String): TuiLoginCredentials? {
+    if (!input.startsWith(TUI_LOGIN_PREFIX, ignoreCase = true)) return null
 
-    val credentials = input.substring(LOGIN_ADD_PREFIX.length)
+    val credentials = input.substring(TUI_LOGIN_PREFIX.length)
     val separator = credentials.indexOf(':')
     if (separator <= 0 || separator == credentials.lastIndex) return null
 
@@ -34,10 +34,10 @@ internal fun parseLoginAddInput(input: String): TuiLoginCredentials? {
     return TuiLoginCredentials(username, password)
 }
 
-internal fun maskLoginAddPassword(input: String): String {
-    if (!input.startsWith(LOGIN_ADD_PREFIX, ignoreCase = true)) return input
+internal fun maskLoginPassword(input: String): String {
+    if (!input.startsWith(TUI_LOGIN_PREFIX, ignoreCase = true)) return input
 
-    val separator = input.indexOf(':', startIndex = LOGIN_ADD_PREFIX.length)
+    val separator = input.indexOf(':', startIndex = TUI_LOGIN_PREFIX.length)
     if (separator < 0) return input
 
     val passwordLength = input.length - separator - 1
