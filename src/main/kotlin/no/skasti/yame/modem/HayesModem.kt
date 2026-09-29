@@ -60,6 +60,8 @@ class HayesModem(
     private var commandParseState = CommandParseState.SEEKING_AT
     private var pendingCommandA = 'A'
     private var echo = true
+    @Volatile
+    private var toneSimulationEnabled = config.toneSimulationEnabled
     private val loginBuffer = StringBuilder()
     private var connectedPhase = ConnectedPhase.PPP
     private var pppStarted = false
@@ -84,6 +86,10 @@ class HayesModem(
     fun updateLoginCredentials(username: String, password: String) {
         val validated = config.copy(username = username, password = password)
         loginCredentials = LoginCredentials(validated.username, validated.password)
+    }
+
+    fun updateToneSimulationEnabled(enabled: Boolean) {
+        toneSimulationEnabled = enabled
     }
 
     private fun receiveCommands(bytes: ByteArray) {
@@ -399,18 +405,20 @@ class HayesModem(
         state = State.DIALING
         logger("MODEM dialing $number")
 
-        try {
-            tonePlayer.dial(
-                number = number,
-                pickupTime = config.pickupTime,
-                dialToneTime = config.dialToneTime,
-                handshakeProfile = config.handshakeProfile,
-                onProgress = ::logToneProgress,
-            )
-        } catch (e: Exception) {
-            // Audio is cosmetic for a real modem connection: a missing or
-            // unconfigured audio device must not prevent the link itself.
-            logger("AUDIO !! Could not play dialing tones: ${e.message}")
+        if (toneSimulationEnabled) {
+            try {
+                tonePlayer.dial(
+                    number = number,
+                    pickupTime = config.pickupTime,
+                    dialToneTime = config.dialToneTime,
+                    handshakeProfile = config.handshakeProfile,
+                    onProgress = ::logToneProgress,
+                )
+            } catch (e: Exception) {
+                // Audio is cosmetic for a real modem connection: a missing or
+                // unconfigured audio device must not prevent the link itself.
+                logger("AUDIO !! Could not play dialing tones: ${e.message}")
+            }
         }
 
         setCarrierPresent(true)

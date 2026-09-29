@@ -13,6 +13,7 @@ data class HayesModemConfig(
     val pickupTime: Duration = 2.seconds,
     val dialToneTime: Duration = 500.milliseconds,
     val handshakeProfile: HandshakeProfile = HandshakeProfile.V34,
+    val toneSimulationEnabled: Boolean = true,
     val username: String? = null,
     val password: String? = null,
     val pppIpConfig: PppIpConfig = PppIpConfig(),

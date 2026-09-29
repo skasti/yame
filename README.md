@@ -119,7 +119,7 @@ The progress monitor follows the Java Sound output line's rendered frame positio
 
 Dial strings are normalized before DTMF is generated. A leading `+` is converted to Norway's international access prefix `00`, so `+47 345 76 543` is dialed as `004734576543`. Spaces, dashes, parentheses and other presentation characters are ignored, and a leading Hayes `T` or `P` dial-mode selector is removed.
 
-The modem owns dialing-tone playback and its timing configuration. By default it uses a 500 ms dial tone, a two-second simulated pickup time, and the `v34` handshake profile. These values can be overridden from the command line; pickup and dial-tone durations are capped at 10 seconds to keep the eagerly generated PCM buffers bounded. Audio failure is treated as cosmetic, so systems without a configured sound device can still use the modem emulator.
+The modem owns dialing-tone playback and its timing configuration. By default it uses a 500 ms dial tone, a two-second simulated pickup time, and the `v34` handshake profile. Tone playback is enabled by default and can be disabled with `modem.tone-simulation-enabled=false` in `yame.ini` or with `/tone off` in the TUI; `/tone on` enables it again without reconnecting. The timing values can be overridden from the command line; pickup and dial-tone durations are capped at 10 seconds to keep the eagerly generated PCM buffers bounded. Audio failure is treated as cosmetic, so systems without a configured sound device can still use the modem emulator.
 
 ## Requirements
 
@@ -149,7 +149,8 @@ YAME reads and writes `yame.ini` in its working directory. The IntelliJ run
 configuration uses the project directory, so its file is in the repository
 root. YAME creates the file on first start and saves TUI changes to the serial
 port, baud rate, flow control, DNS, proxy, log levels, and terminal login. A
-configuration file can also set modem timing, handshake profile, and PPP subnet.
+configuration file can also set modem timing, handshake profile, tone simulation,
+and PPP subnet.
 Command-line options override file values for that run. Use `--config <path>` to
 select a different file.
 
@@ -192,7 +193,7 @@ Expanded host with known resource paths:
 
 ![YAME TUI with expanded proxy host](docs/assets/tui-proxy-expanded.svg)
 
-Useful palette commands include `/port`, `/baud`, `/flow-control`, `/dns-upstream`, `/http-proxy`, `/login`, `/reconnect`, `/disconnect`, `/refresh-ports`, `/clear-log`, and `/quit`.
+Useful palette commands include `/port`, `/baud`, `/flow-control`, `/dns-upstream`, `/http-proxy`, `/tone`, `/login`, `/reconnect`, `/disconnect`, `/refresh-ports`, `/clear-log`, and `/quit`. Choose `on` or `off` after `/tone`, or type `/tone on` or `/tone off` directly.
 
 Set or replace the serial terminal login from the TUI with:
 

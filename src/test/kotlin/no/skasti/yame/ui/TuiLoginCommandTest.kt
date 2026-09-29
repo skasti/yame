@@ -31,4 +31,12 @@ class TuiLoginCommandTest {
         assertFalse(parseLoginInput("/login modem-user:top-secret")
             .toString().contains("top-secret"))
     }
+
+    @Test
+    fun `parses tone on and off command arguments`() {
+        assertEquals(true, parseToneInput("/tone on"))
+        assertEquals(false, parseToneInput("/TONE off"))
+        assertNull(parseToneInput("/tone maybe"))
+        assertNull(parseToneInput("/tone on now"))
+    }
 }

@@ -233,6 +233,7 @@ private fun parseArgs(
     var pickupTime = defaults.pickupTime
     var dialToneTime = defaults.dialToneTime
     var handshakeProfile = defaults.handshakeProfile
+    val toneSimulationEnabled = defaults.toneSimulationEnabled
     var username = defaults.username
     var password = defaults.password
     var pppSubnet: Ipv4Cidr? = defaults.pppIpConfig.configuredSubnet
@@ -336,6 +337,7 @@ private fun parseArgs(
             pickupTime = pickupTime,
             dialToneTime = dialToneTime,
             handshakeProfile = handshakeProfile,
+            toneSimulationEnabled = toneSimulationEnabled,
             username = username,
             password = password,
             pppIpConfig = PppIpConfig(configuredSubnet = pppSubnet),

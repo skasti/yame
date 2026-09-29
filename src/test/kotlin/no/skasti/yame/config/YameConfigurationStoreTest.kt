@@ -37,6 +37,7 @@ class YameConfigurationStoreTest {
                 pickupTime = 3.seconds,
                 dialToneTime = 750.milliseconds,
                 handshakeProfile = HandshakeProfile.NONE,
+                toneSimulationEnabled = false,
                 username = "modem-user",
                 password = "s:e=cret\\value",
                 pppIpConfig = PppIpConfig(Ipv4Cidr.parse("10.10.0.0/30")),

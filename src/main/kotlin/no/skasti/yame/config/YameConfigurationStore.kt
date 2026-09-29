@@ -47,6 +47,11 @@ class YameConfigurationStore(private val path: Path) {
             handshakeProfile = properties.getProperty("modem.handshake-profile")
                 ?.let(::parseHandshakeProfile)
                 ?: modemDefaults.handshakeProfile,
+            toneSimulationEnabled = boolean(
+                properties,
+                "modem.tone-simulation-enabled",
+                modemDefaults.toneSimulationEnabled,
+            ),
             username = properties.getProperty("login.username", modemDefaults.username),
             password = properties.getProperty("login.password", modemDefaults.password),
             pppIpConfig = PppIpConfig(
@@ -107,6 +112,10 @@ class YameConfigurationStore(private val path: Path) {
             setProperty("modem.pickup-time-nanos", configuration.modemConfig.pickupTime.inWholeNanoseconds.toString())
             setProperty("modem.dial-tone-time-nanos", configuration.modemConfig.dialToneTime.inWholeNanoseconds.toString())
             setProperty("modem.handshake-profile", configuration.modemConfig.handshakeProfile.name)
+            setProperty(
+                "modem.tone-simulation-enabled",
+                configuration.modemConfig.toneSimulationEnabled.toString(),
+            )
             configuration.modemConfig.username?.let { setProperty("login.username", it) }
             configuration.modemConfig.password?.let { setProperty("login.password", it) }
             configuration.modemConfig.pppIpConfig.configuredSubnet?.let {

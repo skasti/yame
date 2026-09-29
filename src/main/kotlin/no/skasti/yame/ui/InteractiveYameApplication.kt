@@ -64,12 +64,14 @@ class InteractiveYameApplication(
         initialFlowControl = initialFlowControl,
         initialDnsUpstream = initialModemConfig.pppDnsConfig.upstreamServer.toString(),
         initialHttpProxyEnabled = initialModemConfig.pppHttpCompatibilityConfig.enabled,
+        initialToneSimulationEnabled = initialModemConfig.toneSimulationEnabled,
         onQuit = ::shutdown,
         onPortSelected = ::selectPort,
         onBaudSelected = ::selectBaud,
         onFlowControlSelected = ::selectFlowControl,
         onDnsUpstreamSelected = ::selectDnsUpstream,
         onHttpProxySelected = ::selectHttpProxy,
+        onToneSimulationSelected = ::selectToneSimulation,
         initialLogLevels = initialLogLevels,
         onLogLevelSelected = ::selectLogLevel,
         onLoginAdded = ::addLoginCredentials,
@@ -222,6 +224,16 @@ class InteractiveYameApplication(
         restartConnection()
     }
 
+    private fun selectToneSimulation(enabled: Boolean) {
+        modemConfig = modemConfig.copy(toneSimulationEnabled = enabled)
+        synchronized(lock) {
+            activeModem?.updateToneSimulationEnabled(enabled)
+        }
+        persistConfiguration()
+        updateObserverSettings()
+        observer.onLog("Tone simulation ${if (enabled) "enabled" else "disabled"}")
+    }
+
     private fun selectLogLevel(module: YameLogModule, level: YameLogLevel) {
         logManager.setLevel(module, level)
         observer.updateLogLevel(module, level)
@@ -353,6 +365,7 @@ class InteractiveYameApplication(
                         connectionAttemptGeneration == connectionGeneration
 
                 if (isCurrent) {
+                    modem.updateToneSimulationEnabled(modemConfig.toneSimulationEnabled)
                     activeModem = modem
                     activeConnection = connection
                     connectionAttemptGeneration = null
@@ -476,6 +489,7 @@ class InteractiveYameApplication(
             flowControl = selectedFlowControl,
             dnsUpstream = modemConfig.pppDnsConfig.upstreamServer.toString(),
             httpProxyEnabled = modemConfig.pppHttpCompatibilityConfig.enabled,
+            toneSimulationEnabled = modemConfig.toneSimulationEnabled,
         )
     }
 

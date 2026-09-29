@@ -276,6 +276,42 @@ class HayesModemTest {
     }
 
     @Test
+    fun `disabled tone simulation skips playback but still connects`() {
+        val output = ByteArrayOutputStream()
+        var playbackCount = 0
+        val modem = HayesModem(
+            output = output,
+            baudRate = 115200,
+            config = HayesModemConfig(toneSimulationEnabled = false),
+            tonePlayer = FakeTonePlayer { _, _, _, _, _ -> playbackCount++ },
+            logger = {},
+        )
+
+        modem.dial("1")
+
+        assertEquals(0, playbackCount)
+        assertTrue(output.toString().contains("CONNECT 115200"))
+        assertEquals(HayesModem.State.CONNECTED, modem.state)
+    }
+
+    @Test
+    fun `tone simulation can be toggled on the active modem`() {
+        var playbackCount = 0
+        val modem = HayesModem(
+            baudRate = 115200,
+            config = HayesModemConfig(toneSimulationEnabled = false),
+            tonePlayer = FakeTonePlayer { _, _, _, _, _ -> playbackCount++ },
+            logger = {},
+        )
+
+        modem.updateToneSimulationEnabled(true)
+        modem.dial("1")
+
+        assertEquals(1, playbackCount)
+        assertEquals(HayesModem.State.CONNECTED, modem.state)
+    }
+
+    @Test
     fun `audio failure does not prevent AT dial connection`() {
         val output = ByteArrayOutputStream()
         val logs = mutableListOf<String>()
