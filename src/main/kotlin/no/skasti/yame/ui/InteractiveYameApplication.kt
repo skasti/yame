@@ -25,6 +25,13 @@ class InteractiveYameApplication(
     private val onConfigurationChanged: (YameConfiguration) -> Unit = {},
     private val portProvider: () -> List<no.skasti.yame.serial.SerialPortDescriptor> =
         SerialConnection::availablePortDescriptors,
+    initialSavedConfiguration: YameConfiguration = YameConfiguration(
+        portName = initialPortName,
+        baudRate = initialBaud,
+        flowControl = initialFlowControl,
+        modemConfig = initialModemConfig,
+        logLevels = initialLogLevels,
+    ),
 ) : AutoCloseable {
     private val lock = Any()
 
@@ -51,6 +58,7 @@ class InteractiveYameApplication(
     private var activeConnection: SerialConnection? = null
     private var activeModem: HayesModem? = null
     private var monitorThread: Thread? = null
+    private var persistedConfiguration = initialSavedConfiguration
 
     private val resourceUiExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "yame-resource-ui").apply { isDaemon = true }
@@ -169,7 +177,7 @@ class InteractiveYameApplication(
     private fun selectPort(portName: String) {
         selectedPortName = portName
         autoConnectEnabled = true
-        persistConfiguration()
+        persistConfiguration { it.copy(portName = portName) }
         updateObserverSettings()
         restartConnection()
     }
@@ -177,7 +185,7 @@ class InteractiveYameApplication(
     private fun selectBaud(baud: Int) {
         selectedBaud = baud
         autoConnectEnabled = true
-        persistConfiguration()
+        persistConfiguration { it.copy(baudRate = baud) }
         updateObserverSettings()
         restartConnection()
     }
@@ -185,7 +193,7 @@ class InteractiveYameApplication(
     private fun selectFlowControl(flowControl: SerialFlowControl) {
         selectedFlowControl = flowControl
         autoConnectEnabled = true
-        persistConfiguration()
+        persistConfiguration { it.copy(flowControl = flowControl) }
         updateObserverSettings()
         restartConnection()
     }
@@ -197,12 +205,22 @@ class InteractiveYameApplication(
                 return
             }
 
-        modemConfig = modemConfig.copy(
-            pppDnsConfig = modemConfig.pppDnsConfig.copy(
-                upstreamServer = address,
-            ),
-        )
-        persistConfiguration()
+        synchronized(lock) {
+            modemConfig = modemConfig.copy(
+                pppDnsConfig = modemConfig.pppDnsConfig.copy(
+                    upstreamServer = address,
+                ),
+            )
+        }
+        persistConfiguration { saved ->
+            saved.copy(
+                modemConfig = saved.modemConfig.copy(
+                    pppDnsConfig = saved.modemConfig.pppDnsConfig.copy(
+                        upstreamServer = address,
+                    ),
+                ),
+            )
+        }
         observer.onLog("DNS upstream changed to $address; reconnecting")
         autoConnectEnabled = true
         updateObserverSettings()
@@ -210,12 +228,22 @@ class InteractiveYameApplication(
     }
 
     private fun selectHttpProxy(enabled: Boolean) {
-        modemConfig = modemConfig.copy(
-            pppHttpCompatibilityConfig = modemConfig.pppHttpCompatibilityConfig.copy(
-                enabled = enabled,
-            ),
-        )
-        persistConfiguration()
+        synchronized(lock) {
+            modemConfig = modemConfig.copy(
+                pppHttpCompatibilityConfig = modemConfig.pppHttpCompatibilityConfig.copy(
+                    enabled = enabled,
+                ),
+            )
+        }
+        persistConfiguration { saved ->
+            saved.copy(
+                modemConfig = saved.modemConfig.copy(
+                    pppHttpCompatibilityConfig = saved.modemConfig.pppHttpCompatibilityConfig.copy(
+                        enabled = enabled,
+                    ),
+                ),
+            )
+        }
         observer.onLog(
             "HTTP/HTTPS compatibility proxy ${if (enabled) "enabled" else "disabled"}; reconnecting",
         )
@@ -225,11 +253,13 @@ class InteractiveYameApplication(
     }
 
     private fun selectToneSimulation(enabled: Boolean) {
-        modemConfig = modemConfig.copy(toneSimulationEnabled = enabled)
         synchronized(lock) {
+            modemConfig = modemConfig.copy(toneSimulationEnabled = enabled)
             activeModem?.updateToneSimulationEnabled(enabled)
         }
-        persistConfiguration()
+        persistConfiguration { saved ->
+            saved.copy(modemConfig = saved.modemConfig.copy(toneSimulationEnabled = enabled))
+        }
         updateObserverSettings()
         observer.onLog("Tone simulation ${if (enabled) "enabled" else "disabled"}")
     }
@@ -237,22 +267,29 @@ class InteractiveYameApplication(
     private fun selectLogLevel(module: YameLogModule, level: YameLogLevel) {
         logManager.setLevel(module, level)
         observer.updateLogLevel(module, level)
-        persistConfiguration()
+        persistConfiguration { saved ->
+            saved.copy(logLevels = saved.logLevels + (module to level))
+        }
         observer.onLog("Log level for ${module.fileName} changed to ${level.name.lowercase()}")
     }
 
     private fun addLoginCredentials(username: String, password: String) {
-        val updatedConfig = runCatching {
-            modemConfig.copy(username = username, password = password)
-        }.getOrElse { error ->
+        val error = runCatching {
+            synchronized(lock) {
+                modemConfig = modemConfig.copy(username = username, password = password)
+                activeModem?.updateLoginCredentials(username, password)
+            }
+        }.exceptionOrNull()
+        if (error != null) {
             observer.onLog("Terminal login rejected: ${error.message}")
             return
         }
 
-        modemConfig = updatedConfig
-        val modem = synchronized(lock) { activeModem }
-        modem?.updateLoginCredentials(username, password)
-        persistConfiguration()
+        persistConfiguration { saved ->
+            saved.copy(
+                modemConfig = saved.modemConfig.copy(username = username, password = password),
+            )
+        }
         observer.onLog(
             "Terminal login configured for '$username'; applies to the next modem call",
         )
@@ -279,9 +316,9 @@ class InteractiveYameApplication(
         if (!running || !autoConnectEnabled) return
 
         val connectionGeneration: Int
-        val baud = selectedBaud
-        val flowControl = selectedFlowControl
-        val config = modemConfig
+        val baud: Int
+        val flowControl: SerialFlowControl
+        val config: HayesModemConfig
         synchronized(lock) {
             if (
                 activeConnection != null ||
@@ -293,6 +330,9 @@ class InteractiveYameApplication(
             generation++
             connectionGeneration = generation
             connectionAttemptGeneration = connectionGeneration
+            baud = selectedBaud
+            flowControl = selectedFlowControl
+            config = modemConfig
         }
 
         val modemFileLogger = logManager.logger(YameLogModule.MODEM)
@@ -365,6 +405,11 @@ class InteractiveYameApplication(
                         connectionAttemptGeneration == connectionGeneration
 
                 if (isCurrent) {
+                    modemConfig.username?.let { username ->
+                        modemConfig.password?.let { password ->
+                            modem.updateLoginCredentials(username, password)
+                        }
+                    }
                     modem.updateToneSimulationEnabled(modemConfig.toneSimulationEnabled)
                     activeModem = modem
                     activeConnection = connection
@@ -493,15 +538,9 @@ class InteractiveYameApplication(
         )
     }
 
-    private fun persistConfiguration() {
-        val configuration = YameConfiguration(
-            portName = selectedPortName,
-            baudRate = selectedBaud,
-            flowControl = selectedFlowControl,
-            modemConfig = modemConfig,
-            logLevels = YameLogModule.entries.associateWith(logManager::level),
-        )
-        runCatching { onConfigurationChanged(configuration) }
+    private fun persistConfiguration(update: (YameConfiguration) -> YameConfiguration) {
+        persistedConfiguration = update(persistedConfiguration)
+        runCatching { onConfigurationChanged(persistedConfiguration) }
             .onFailure { error ->
                 observer.onLog("Could not save yame.ini: ${error.message ?: error.javaClass.simpleName}")
             }

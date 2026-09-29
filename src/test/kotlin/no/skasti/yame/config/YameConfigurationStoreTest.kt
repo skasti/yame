@@ -16,6 +16,7 @@ import java.nio.file.Path
 import java.nio.file.attribute.PosixFilePermission
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
@@ -67,6 +68,26 @@ class YameConfigurationStoreTest {
             permissions,
         )
         assertTrue(Files.readString(path).contains("login.password=secret"))
+    }
+
+    @Test
+    fun `rejects non-regular configuration paths`() {
+        val path = tempDirectory.resolve("config-directory")
+        Files.createDirectory(path)
+
+        assertFailsWith<IllegalArgumentException> {
+            YameConfigurationStore(path).load()
+        }
+    }
+
+    @Test
+    fun `rejects configuration larger than the read limit`() {
+        val path = tempDirectory.resolve("oversized.ini")
+        Files.write(path, ByteArray(32 * 1024 + 1) { 'x'.code.toByte() })
+
+        assertFailsWith<IllegalArgumentException> {
+            YameConfigurationStore(path).load()
+        }
     }
 
     @Test

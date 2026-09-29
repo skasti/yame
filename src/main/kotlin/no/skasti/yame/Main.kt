@@ -60,7 +60,7 @@ fun main(args: Array<String>) {
         }
         val modem = HayesModem(
             baudRate = options.baudRate,
-            config = options.modemConfig,
+            config = configurationForToneTest(options.modemConfig),
             logger = modemConsoleLogger,
             pppLogger = logManager.logger(YameLogModule.PPP),
             dnsLogger = logManager.debugLogger(YameLogModule.DNS),
@@ -82,7 +82,7 @@ fun main(args: Array<String>) {
     }
 
     if (!Files.exists(options.configPath)) {
-        runCatching { configStore.save(options.toConfiguration()) }
+        runCatching { configStore.save(savedConfiguration) }
             .onFailure { error ->
                 System.err.println("YAME could not create ${options.configPath}: ${error.message}")
             }
@@ -108,6 +108,7 @@ fun main(args: Array<String>) {
             logManager = logManager,
             initialLogLevels = options.logLevels,
             onConfigurationChanged = configStore::save,
+            initialSavedConfiguration = savedConfiguration,
             terminal = if (options.uiMode == UiMode.AUTO) {
                 detectedTerminal
             } else {
@@ -200,6 +201,9 @@ fun main(args: Array<String>) {
         logManager.close()
     }
 }
+
+internal fun configurationForToneTest(configuration: HayesModemConfig): HayesModemConfig =
+    configuration.copy(toneSimulationEnabled = true)
 
 private enum class UiMode {
     AUTO,
@@ -350,15 +354,6 @@ private fun parseArgs(
         configPath = configPath,
     )
 }
-
-private fun Options.toConfiguration(): YameConfiguration =
-    YameConfiguration(
-        portName = portName,
-        baudRate = baudRate,
-        flowControl = flowControl,
-        modemConfig = modemConfig,
-        logLevels = logLevels,
-    )
 
 private fun configurationPath(args: Array<String>): Path {
     var configuredPath: Path? = null

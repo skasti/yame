@@ -10,11 +10,15 @@ import no.skasti.yame.ppp.ip.Ipv4Cidr
 import no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig
 import no.skasti.yame.serial.SerialFlowControl
 import no.skasti.yame.tone.HandshakeProfile
+import java.io.ByteArrayInputStream
+import java.io.InputStreamReader
+import java.nio.channels.Channels
 import java.nio.charset.StandardCharsets
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.PosixFilePermission
 import java.util.Properties
 import kotlin.time.Duration.Companion.nanoseconds
@@ -22,13 +26,25 @@ import kotlin.time.Duration.Companion.nanoseconds
 class YameConfigurationStore(private val path: Path) {
     fun load(defaults: YameConfiguration = YameConfiguration()): YameConfiguration {
         if (!Files.exists(path)) return defaults
-        require(Files.size(path) <= MAX_CONFIG_BYTES) {
-            "Configuration file is larger than $MAX_CONFIG_BYTES bytes: $path"
+        require(Files.isRegularFile(path)) {
+            "Configuration path must be a regular file: $path"
         }
 
         val properties = Properties()
-        Files.newBufferedReader(path, StandardCharsets.UTF_8).use { reader ->
-            properties.load(reader)
+        Files.newByteChannel(
+            path,
+            StandardOpenOption.READ,
+        ).use { channel ->
+            val bytes = Channels.newInputStream(channel).use { input ->
+                input.readNBytes(MAX_CONFIG_BYTES + 1).also { content ->
+                    require(content.size <= MAX_CONFIG_BYTES) {
+                        "Configuration file is larger than $MAX_CONFIG_BYTES bytes: $path"
+                    }
+                }
+            }
+            InputStreamReader(ByteArrayInputStream(bytes), StandardCharsets.UTF_8).use { reader ->
+                properties.load(reader)
+            }
         }
         if (properties.containsKey("login.password")) {
             restrictPermissions(path)
@@ -196,6 +212,6 @@ class YameConfigurationStore(private val path: Path) {
 
     private companion object {
         const val CONFIG_VERSION = "1"
-        const val MAX_CONFIG_BYTES = 32 * 1024L
+        const val MAX_CONFIG_BYTES = 32 * 1024
     }
 }

@@ -10,7 +10,7 @@ is_java_21() {
 }
 
 java_21_home=""
-if is_java_21 "${JAVA_HOME:-}"; then
+if [[ -n "${JAVA_HOME:-}" ]] && is_java_21 "$JAVA_HOME"; then
   java_21_home="$JAVA_HOME"
 else
   current_java="$(command -v java || true)"
