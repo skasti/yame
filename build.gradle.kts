@@ -13,7 +13,7 @@ repositories {
 dependencies {
     implementation("com.fazecast:jSerialComm:2.11.4")
     implementation("com.github.ajalt.mordant:mordant:3.1.0")
-    implementation("org.jline:jline-terminal-jni:4.4.5")
+    implementation("org.jline:jline-terminal-jni:4.4.6")
     testImplementation(kotlin("test"))
 }
 
