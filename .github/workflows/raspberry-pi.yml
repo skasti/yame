@@ -1,0 +1,29 @@
+name: Raspberry Pi deployment
+
+on:
+  pull_request:
+    paths:
+      - 'deployment/raspberry-pi/**'
+      - '.github/workflows/raspberry-pi.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'deployment/raspberry-pi/**'
+      - '.github/workflows/raspberry-pi.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check shell syntax and lint
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          bash -n deployment/raspberry-pi/install.sh deployment/raspberry-pi/yame-update
+          shellcheck deployment/raspberry-pi/install.sh deployment/raspberry-pi/yame-update
