@@ -165,18 +165,6 @@ jobs:
             expected_asset="$(release_asset_name "$sha" "$version")"
             needs_recovery=false
 
-            # Smoke-test the ZIP on native ARM64 before publication. The JVM
-            # distribution still uses the existing Gradle distZip packaging.
-            arm64_asset_name=""
-            if [ "$asset_name" = "yame-$version.zip" ]; then
-              arm64_asset_name="yame-$version-linux-arm64.zip"
-              smoke_dir="$(mktemp -d)"
-              unzip -q "$asset" -d "$smoke_dir"
-              timeout 60s "$smoke_dir/yame-$version/bin/yame" --list
-              rm -rf "$smoke_dir"
-              cp "$asset" "build/distributions/$arm64_asset_name"
-            fi
-
             if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
               needs_recovery=true
             else
@@ -294,6 +282,19 @@ jobs:
             # The asset name travels with the planned release because historical
             # commits use the pre-rename Gradle project name.
             asset="build/distributions/$asset_name"
+
+            # Smoke-test the ZIP on native ARM64 before publication. The JVM
+            # distribution still uses the existing Gradle distZip packaging.
+            arm64_asset_name=""
+            if [ "$asset_name" = "yame-$version.zip" ]; then
+              arm64_asset_name="yame-$version-linux-arm64.zip"
+              smoke_dir="$(mktemp -d)"
+              unzip -q "$asset" -d "$smoke_dir"
+              timeout 60s "$smoke_dir/yame-$version/bin/yame" --list
+              rm -rf "$smoke_dir"
+              cp "$asset" "build/distributions/$arm64_asset_name"
+            fi
+
 
             if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
               # Create the release state explicitly. Assets are uploaded separately so
