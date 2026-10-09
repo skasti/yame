@@ -22,7 +22,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          token: ${{ secrets.RELEASE_TOKEN }}
+          persist-credentials: false
 
       - name: Set up JDK 21
         uses: actions/setup-java@v6
@@ -39,9 +39,23 @@ jobs:
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
+
+          if [ -z "$RELEASE_TOKEN" ]; then
+            echo "::error::RELEASE_TOKEN repository secret is required to push release tags"
+            exit 1
+          fi
+
+          # Authenticate only tag pushes. Do not persist the reusable PAT in the
+          # checkout configuration, where historical Gradle builds could access it.
+          push_release_ref() {
+            local auth
+            auth="$(printf 'x-access-token:%s' "$RELEASE_TOKEN" | base64 -w 0)"
+            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push "$@"
+          }
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -56,7 +70,7 @@ jobs:
             if [ "$lock_acquired" = true ] && [ -n "$owned_lock_oid" ]; then
               # Delete only the exact lock object this run created. If another run has
               # replaced it, --force-with-lease refuses to remove the new owner's lock.
-              git push \
+              push_release_ref \
                 --force-with-lease="refs/tags/$lock_tag:$owned_lock_oid" \
                 origin ":refs/tags/$lock_tag" >/dev/null 2>&1 || true
               git tag -d "$lock_tag" >/dev/null 2>&1 || true
@@ -92,7 +106,7 @@ jobs:
 
               if [ -n "$lock_time" ] && [ $((now - lock_time)) -gt 900 ]; then
                 echo "Removing stale release version lock $observed_lock_oid"
-                git push \
+                push_release_ref \
                   --force-with-lease="refs/tags/$lock_tag:$observed_lock_oid" \
                   origin ":refs/tags/$lock_tag" >/dev/null 2>&1 || true
                 git tag -d "$lock_tag" >/dev/null 2>&1 || true
@@ -106,7 +120,7 @@ jobs:
             git tag -a "$lock_tag" -m "Release version lock for workflow run $GITHUB_RUN_ID" "origin/main"
             candidate_lock_oid="$(git rev-parse "refs/tags/$lock_tag")"
 
-            if git push origin "refs/tags/$lock_tag" >/dev/null 2>&1; then
+            if push_release_ref origin "refs/tags/$lock_tag" >/dev/null 2>&1; then
               lock_acquired=true
               owned_lock_oid="$candidate_lock_oid"
             else
@@ -245,7 +259,7 @@ jobs:
             tag="v$version"
 
             git tag "$tag" "$sha"
-            git push origin "refs/tags/$tag"
+            push_release_ref origin "refs/tags/$tag"
             current_version="$version"
             expected_asset="$(release_asset_name "$sha" "$version")"
 
