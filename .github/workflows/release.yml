@@ -1,18 +1,26 @@
 name: Release
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
 
 permissions:
-  contents: write
+  contents: read
   pull-requests: read
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
-  release:
-    # Native ARM64 build for Raspberry Pi 3 (64-bit).
-    runs-on: ubuntu-24.04-arm
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      has_releases: ${{ steps.plan.outputs.has_releases }}
+      latest_tag: ${{ steps.plan.outputs.latest_tag }}
     env:
       # main at the point automatic releases were introduced; this represents v0.1.0.
       RELEASE_BOOTSTRAP_SHA: 5fd66e4a3580ed3667ec65b0675ac28e611132ce
@@ -24,22 +32,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Set up JDK 21
-        uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: "21"
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
-        with:
-          cache-provider: basic
-
       - name: Plan releases in main history order
         id: plan
         env:
-          GH_TOKEN: ${{ github.token }}
           RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
@@ -170,6 +167,9 @@ jobs:
             fi
           }
 
+          # Fail on permission/API errors instead of treating every tag as missing.
+          published_tags="$(gh api --paginate "/repos/$GITHUB_REPOSITORY/releases" --jq '.[].tag_name')"
+
           # First recover any already-reserved SemVer tags whose release publication
           # previously failed, remained a draft, or is missing its expected ZIP asset.
           while IFS= read -r tag; do
@@ -180,15 +180,19 @@ jobs:
             expected_asset="$(release_asset_name "$sha" "$version")"
             needs_recovery=false
 
-            if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            if ! grep -Fxq "$tag" <<< "$published_tags"; then
               needs_recovery=true
             else
               if [ "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = "true" ]; then
                 needs_recovery=true
               fi
 
-              if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
-                   grep -Fxq "$expected_asset"; then
+              asset_names="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+              if ! grep -Fxq "$expected_asset" <<< "$asset_names"; then
+                needs_recovery=true
+              fi
+              if [ "$expected_asset" = "yame-$version.zip" ] &&
+                 ! grep -Fxq "yame-$version-linux-arm64.zip" <<< "$asset_names"; then
                 needs_recovery=true
               fi
             fi
@@ -271,6 +275,8 @@ jobs:
           sort -u -V -k1,1 "$RUNNER_TEMP/releases.tsv" > "$RUNNER_TEMP/releases.sorted.tsv"
           mv "$RUNNER_TEMP/releases.sorted.tsv" "$RUNNER_TEMP/releases.tsv"
 
+          echo "latest_tag=$(git tag --merged origin/main --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)" >> "$GITHUB_OUTPUT"
+
           release_lock
           trap - EXIT
 
@@ -280,88 +286,124 @@ jobs:
             echo "has_releases=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build and publish planned releases
-        if: steps.plan.outputs.has_releases == 'true'
+          python3 - <<'PY_MATRIX'
+          import json, os
+          from pathlib import Path
+          rows = [dict(zip(("tag", "sha", "version", "asset_name"), line.split("\t")))
+                  for line in Path(os.environ["RUNNER_TEMP"], "releases.tsv").read_text().splitlines()]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write("matrix=" + json.dumps({"include": rows}, separators=(",", ":")) + "\n")
+          PY_MATRIX
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.has_releases == 'true'
+    # Historical builds run on isolated ARM64 runners with read-only credentials.
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ matrix.sha }}
+          persist-credentials: false
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+
+      - name: Build and smoke-test release
         env:
-          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ matrix.version }}
+          ASSET_NAME: ${{ matrix.asset_name }}
         shell: bash
         run: |
           set -euo pipefail
+          ./gradlew --no-daemon clean test distZip -PreleaseVersion="$VERSION"
+          asset="build/distributions/$ASSET_NAME"
+          test -f "$asset"
+          mkdir -p "$RUNNER_TEMP/release-assets"
+          cp "$asset" "$RUNNER_TEMP/release-assets/"
+          if [ "$ASSET_NAME" = "yame-$VERSION.zip" ]; then
+            smoke_dir="$(mktemp -d)"
+            unzip -q "$asset" -d "$smoke_dir"
+            timeout 60s "$smoke_dir/yame-$VERSION/bin/yame" --list
+            rm -rf "$smoke_dir"
+            cp "$asset" "$RUNNER_TEMP/release-assets/yame-$VERSION-linux-arm64.zip"
+          fi
 
-          while read -r tag sha version asset_name; do
-            echo "Building $tag from $sha"
-            git checkout --detach "$sha"
+      - name: Upload tested release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.tag }}
+          path: ${{ runner.temp }}/release-assets/*.zip
+          if-no-files-found: error
 
-            ./gradlew --no-daemon clean test distZip -PreleaseVersion="$version"
+  publish:
+    needs: [plan, build]
+    if: needs.plan.outputs.has_releases == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # Limit publication API traffic; latest is selected by version, not job order.
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      # No checkout, Gradle, executable assets, or build cache in this job.
+      - name: Download tested release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: release-${{ matrix.tag }}
+          path: ${{ runner.temp }}/release-assets
 
-            # The asset name travels with the planned release because historical
-            # commits use the pre-rename Gradle project name.
-            asset="build/distributions/$asset_name"
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          LATEST_TAG: ${{ needs.plan.outputs.latest_tag }}
+          TAG: ${{ matrix.tag }}
+          SHA: ${{ matrix.sha }}
+          ASSET_NAME: ${{ matrix.asset_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::RELEASE_TOKEN repository secret is required to publish releases"
+            exit 1
+          fi
 
-            # Smoke-test the ZIP on native ARM64 before publication. The JVM
-            # distribution still uses the existing Gradle distZip packaging.
-            arm64_asset_name=""
-            if [ "$asset_name" = "yame-$version.zip" ]; then
-              arm64_asset_name="yame-$version-linux-arm64.zip"
-              smoke_dir="$(mktemp -d)"
-              unzip -q "$asset" -d "$smoke_dir"
-              timeout 60s "$smoke_dir/yame-$version/bin/yame" --list
-              rm -rf "$smoke_dir"
-              cp "$asset" "build/distributions/$arm64_asset_name"
-            fi
+          # Distinguish a missing release from permission/API failures. Do not hide
+          # the original 403 behind a subsequent 'release not found' message.
+          releases="$(gh api --paginate "/repos/$GITHUB_REPOSITORY/releases" --jq '.[].tag_name')"
+          if ! grep -Fxq "$TAG" <<< "$releases"; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --verify-tag --target "$SHA" --title "$TAG" --generate-notes --draft
+          fi
 
-
-            if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-              # Create the release state explicitly. Assets are uploaded separately so
-              # a partial failure always leaves a recoverable draft.
-              if ! gh release create "$tag" \
-                --repo "$GITHUB_REPOSITORY" \
-                --target "$sha" \
-                --title "$tag" \
-                --generate-notes \
-                --draft; then
-                # A concurrent recovery run may have created it after our check.
-                gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null
+          test -f "$RUNNER_TEMP/release-assets/$ASSET_NAME"
+          for asset in "$RUNNER_TEMP/release-assets/"*.zip; do
+            asset_name="$(basename "$asset")"
+            names="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+            if ! grep -Fxq "$asset_name" <<< "$names"; then
+              if ! gh release upload "$TAG" "$asset" --repo "$GITHUB_REPOSITORY"; then
+                # Another recovery run may have uploaded the same immutable asset.
+                names="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+                grep -Fxq "$asset_name" <<< "$names" || exit 1
               fi
             fi
+          done
 
-            # Never clobber a healthy asset. If upload failed previously, recovery
-            # planning detects the missing ZIP and retries it here.
-            if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
-                 grep -Fxq "$asset_name"; then
-              if ! gh release upload "$tag" "$asset" \
-                --repo "$GITHUB_REPOSITORY"; then
-                # Another overlapping recovery run may have uploaded the same asset
-                # after our existence check. Treat that conflict as success only if
-                # the expected asset is now present; otherwise preserve the failure.
-                if gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
-                   grep -Fxq "$asset_name"; then
-                  echo "Asset $asset_name was uploaded concurrently; continuing"
-                else
-                  echo "::error::Failed to upload $asset_name for $tag"
-                  exit 1
-                fi
-              fi
-            fi
-
-            if [ -n "$arm64_asset_name" ]; then
-              if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
-                   grep -Fxq "$arm64_asset_name"; then
-                if ! gh release upload "$tag" "build/distributions/$arm64_asset_name" --repo "$GITHUB_REPOSITORY"; then
-                  if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
-                       grep -Fxq "$arm64_asset_name"; then
-                    echo "::error::Failed to upload $arm64_asset_name for $tag"
-                    exit 1
-                  fi
-                fi
-              fi
-            fi
-
-            # Publish only after both assets are present. This covers both fresh
-            # drafts and drafts recovered from an earlier failed upload.
-            if [ "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = "true" ]; then
-              gh release edit "$tag" \
-                --repo "$GITHUB_REPOSITORY" \
-                --draft=false
-            fi
-          done < "$RUNNER_TEMP/releases.tsv"
+          if [ "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = true ]; then
+            latest=false
+            [ "$TAG" != "$LATEST_TAG" ] || latest=true
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest="$latest"
+          fi
