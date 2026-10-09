@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO="skasti/yame"
+BASE="/opt/yame"
+RELEASES="$BASE/releases"
+CURRENT="$BASE/current"
+API="https://api.github.com/repos/$REPO/releases/latest"
+
+if [[ ${EUID} -ne 0 ]]; then
+  echo "yame-update must run as root" >&2
+  exit 1
+fi
+
+mkdir -p "$RELEASES"
+exec 9>"$BASE/.update.lock"
+flock -n 9 || { echo "Another YAME update is running"; exit 0; }
+
+has_installed_release() {
+  [[ -x "$CURRENT/bin/yame" ]]
+}
+
+fallback_or_fail() {
+  echo "YAME update: $1" >&2
+  if has_installed_release; then
+    echo "Keeping existing YAME installation"
+    exit 0
+  fi
+  echo "No installed YAME release is available" >&2
+  exit 1
+}
+
+echo "Checking GitHub Releases for latest YAME version..."
+if ! metadata="$(curl --fail --silent --show-error --location --connect-timeout 5 --max-time 15 "$API")"; then
+  fallback_or_fail "GitHub is unavailable"
+fi
+
+tag="$(jq -r '.tag_name // empty' <<< "$metadata")"
+if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  fallback_or_fail "Unexpected release tag: $tag"
+fi
+version="${tag#v}"
+asset="yame-$version-linux-arm64.zip"
+asset_json="$(jq -c --arg name "$asset" '[.assets[]? | select(.name == $name)] | first // empty' <<< "$metadata")"
+if [[ -z "$asset_json" ]]; then
+  fallback_or_fail "Release $tag does not have $asset"
+fi
+url="$(jq -r '.browser_download_url // empty' <<< "$asset_json")"
+digest="$(jq -r '.digest // empty' <<< "$asset_json")"
+if [[ "$url" != "https://github.com/$REPO/releases/download/$tag/$asset" ]]; then
+  fallback_or_fail "Unexpected asset URL"
+fi
+if [[ -n "$digest" && ! "$digest" =~ ^sha256:[0-9a-fA-F]{64}$ ]]; then
+  fallback_or_fail "Unsupported release checksum format"
+fi
+
+target="$RELEASES/$tag"
+if [[ -x "$target/bin/yame" && "$(readlink -f "$CURRENT" 2>/dev/null || true)" == "$target" ]]; then
+  echo "YAME $tag is already installed"
+  exit 0
+fi
+
+stage="$(mktemp -d "$BASE/.staging.XXXXXXXX")"
+trap 'rm -rf -- "$stage"' EXIT
+echo "Downloading $asset..."
+if ! curl --fail --silent --show-error --location --retry 2 --connect-timeout 5 --max-time 120 -o "$stage/release.zip" "$url"; then
+  fallback_or_fail "Download failed"
+fi
+if [[ -n "$digest" ]]; then
+  echo "${digest#sha256:}  $stage/release.zip" | sha256sum --check --status ||
+    fallback_or_fail "Checksum verification failed"
+fi
+
+mkdir -p "$stage/unpacked"
+if ! unzip -q "$stage/release.zip" -d "$stage/unpacked"; then
+  fallback_or_fail "Invalid ZIP archive"
+fi
+distribution="$stage/unpacked/yame-$version"
+if [[ ! -f "$distribution/bin/yame" || ! -d "$distribution/lib" ]]; then
+  fallback_or_fail "Release ZIP has an unexpected layout"
+fi
+chmod 755 "$distribution/bin/yame"
+
+if [[ ! -e "$target" ]]; then
+  mv "$distribution" "$target"
+fi
+if [[ ! -x "$target/bin/yame" ]]; then
+  fallback_or_fail "Installed release has no executable launcher"
+fi
+
+if [[ -L "$CURRENT" && -x "$CURRENT/bin/yame" ]]; then
+  old="$(readlink "$CURRENT")"
+  ln -s "$old" "$BASE/.previous-next"
+  mv -Tf "$BASE/.previous-next" "$BASE/previous"
+fi
+
+ln -s "releases/$tag" "$BASE/.current-next"
+mv -Tf "$BASE/.current-next" "$CURRENT"
+echo "Activated YAME $tag"
