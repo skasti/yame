@@ -1,0 +1,43 @@
+name: Linux ARM64
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+
+      - name: Build, test, and package
+        run: ./gradlew --no-daemon clean test distZip
+
+      - name: Smoke-test packaged CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          dist="$(find build/distributions -maxdepth 1 -name 'yame-*.zip' -print -quit)"
+          test -n "$dist"
+          mkdir -p "$RUNNER_TEMP/yame-smoke"
+          unzip -q "$dist" -d "$RUNNER_TEMP/yame-smoke"
+          launcher="$(find "$RUNNER_TEMP/yame-smoke" -path '*/bin/yame' -type f -print -quit)"
+          test -n "$launcher"
+          timeout 60s "$launcher" --list
