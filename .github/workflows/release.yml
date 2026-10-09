@@ -11,7 +11,8 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    # Native ARM64 build for Raspberry Pi 3 (64-bit).
+    runs-on: ubuntu-24.04-arm
     env:
       # main at the point automatic releases were introduced; this represents v0.1.0.
       RELEASE_BOOTSTRAP_SHA: 5fd66e4a3580ed3667ec65b0675ac28e611132ce
@@ -282,6 +283,19 @@ jobs:
             # commits use the pre-rename Gradle project name.
             asset="build/distributions/$asset_name"
 
+            # Smoke-test the ZIP on native ARM64 before publication. The JVM
+            # distribution still uses the existing Gradle distZip packaging.
+            arm64_asset_name=""
+            if [ "$asset_name" = "yame-$version.zip" ]; then
+              arm64_asset_name="yame-$version-linux-arm64.zip"
+              smoke_dir="$(mktemp -d)"
+              unzip -q "$asset" -d "$smoke_dir"
+              timeout 60s "$smoke_dir/yame-$version/bin/yame" --list
+              rm -rf "$smoke_dir"
+              cp "$asset" "build/distributions/$arm64_asset_name"
+            fi
+
+
             if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
               # Create the release state explicitly. Assets are uploaded separately so
               # a partial failure always leaves a recoverable draft.
@@ -315,7 +329,20 @@ jobs:
               fi
             fi
 
-            # Publish only after the expected asset is present. This covers both fresh
+            if [ -n "$arm64_asset_name" ]; then
+              if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
+                   grep -Fxq "$arm64_asset_name"; then
+                if ! gh release upload "$tag" "build/distributions/$arm64_asset_name" --repo "$GITHUB_REPOSITORY"; then
+                  if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' |
+                       grep -Fxq "$arm64_asset_name"; then
+                    echo "::error::Failed to upload $arm64_asset_name for $tag"
+                    exit 1
+                  fi
+                fi
+              fi
+            fi
+
+            # Publish only after both assets are present. This covers both fresh
             # drafts and drafts recovered from an earlier failed upload.
             if [ "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = "true" ]; then
               gh release edit "$tag" \
