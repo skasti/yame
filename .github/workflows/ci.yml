@@ -13,6 +13,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  release-workflow-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Test release workflow
+        run: |
+          python3 -m pip install PyYAML
+          python3 -m unittest discover -s tests -p 'test_release_workflow.py'
+
   build-and-test:
     runs-on: ubuntu-latest
 
