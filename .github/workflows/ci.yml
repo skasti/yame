@@ -43,6 +43,24 @@ jobs:
       - name: Build and test
         run: ./gradlew --no-daemon clean build
 
+      - name: Upload image transformation visual report
+        id: image-gallery
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: yame-image-transformations
+          path: build/reports/image-transformations/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Link image gallery in job summary
+        if: steps.image-gallery.outputs.artifact-url != ''
+        env:
+          ARTIFACT_URL: ${{ steps.image-gallery.outputs.artifact-url }}
+        run: |
+          echo '### Image transformation examples' >> "$GITHUB_STEP_SUMMARY"
+          echo "Download the [visual gallery]($ARTIFACT_URL), unzip and open index.html." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Install DOSBox integration-test dependencies
         run: |
           sudo apt-get update
