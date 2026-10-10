@@ -109,7 +109,11 @@ Tests should cover the boundary/negative paths explicitly, not only the happy pa
 `JpegResourceTransformer`, which handles JPEG. Both are registered as separate
 optimization stages in the resource pipeline and share `LegacyImageCodec` for
 in-memory ImageIO decoding and resizing. They use the same `600x400` canvas,
-no upscaling and the 16-million decoded-pixel limit. An encoded-input limit is checked before
+no upscaling, a 16-million decoded-pixel limit, and a 48 MiB estimated decoded-raster limit.
+Before full decode, the image reader's default output sample layout (element size and elements
+per pixel) is used to estimate raster memory; images exceeding either limit pass through.
+This bounds the expected main raster allocation, not every temporary decoder buffer or
+aggregate memory use across simultaneous requests. An encoded-input limit is checked before
 parsing/decoding: the proxy supplies its existing `maxResponseBytes` budget
 (default 16 MiB); standalone image policies default to 32 MiB. Output uses the
 existing source/transformed representation cache and preserves source validators.

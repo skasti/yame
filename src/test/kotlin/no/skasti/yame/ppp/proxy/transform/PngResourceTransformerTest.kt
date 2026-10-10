@@ -2,7 +2,12 @@ package no.skasti.yame.ppp.proxy.transform
 
 import no.skasti.yame.ppp.proxy.ReferenceRole
 import no.skasti.yame.ppp.proxy.ResourceKind
+import java.awt.Transparency
+import java.awt.color.ColorSpace
 import java.awt.image.BufferedImage
+import java.awt.image.ComponentColorModel
+import java.awt.image.DataBuffer
+import java.awt.image.Raster
 import java.awt.image.IndexColorModel
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -158,6 +163,48 @@ class PngResourceTransformerTest {
         assertPassthrough(source, policy = ImageOptimizationPolicy(maxDecodedPixels = 9599))
         assertPassthrough(source, policy = ImageOptimizationPolicy(maxEncodedBytes = source.size - 1))
         output(transform(source, policy = ImageOptimizationPolicy(maxDecodedPixels = 9600, maxEncodedBytes = source.size)), source, "image/gif")
+    }
+
+    @Test
+    fun `16 bit rgba png is rejected when decoded raster exceeds byte budget`() {
+        val width = 256
+        val height = 128
+        val colorModel = ComponentColorModel(
+            ColorSpace.getInstance(ColorSpace.CS_sRGB),
+            intArrayOf(16, 16, 16, 16),
+            true,
+            false,
+            Transparency.TRANSLUCENT,
+            DataBuffer.TYPE_USHORT,
+        )
+        val raster = Raster.createInterleavedRaster(DataBuffer.TYPE_USHORT, width, height, 4, null)
+        val bytes = png(BufferedImage(colorModel, raster, false, null))
+        assertTrue(bytes.size < 4096, "A highly compressible PNG should exercise decoded, not encoded, limits")
+
+        val exactRasterBytes = width.toLong() * height * 8
+        val limited = ImageOptimizationPolicy(maxDecodedRasterBytes = exactRasterBytes - 1)
+        assertNull(LegacyImageCodec(limited).decode(bytes, "png"))
+        assertPassthrough(bytes, policy = limited)
+
+        val decoded = requireNotNull(
+            LegacyImageCodec(ImageOptimizationPolicy(maxDecodedRasterBytes = exactRasterBytes)).decode(bytes, "png"),
+        )
+        assertEquals(width, decoded.width)
+        assertEquals(height, decoded.height)
+    }
+
+    @Test
+    fun `8 bit rgba png remains decodable with same dimensions and smaller raster budget`() {
+        val width = 256
+        val height = 128
+        val bytes = png(BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB))
+        val rasterBytes = width.toLong() * height * 4
+        val decoded = requireNotNull(
+            LegacyImageCodec(ImageOptimizationPolicy(maxDecodedRasterBytes = rasterBytes)).decode(bytes, "png"),
+        )
+        assertEquals(width, decoded.width)
+        assertEquals(height, decoded.height)
+        assertNull(LegacyImageCodec(ImageOptimizationPolicy(maxDecodedRasterBytes = rasterBytes - 1)).decode(bytes, "png"))
     }
 
     @Test

@@ -3,6 +3,7 @@ package no.skasti.yame.ppp.proxy.transform
 import java.awt.AlphaComposite
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
+import java.awt.image.DataBuffer
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import javax.imageio.IIOImage
@@ -25,7 +26,16 @@ internal class LegacyImageCodec(private val policy: ImageOptimizationPolicy) {
                     val width = reader.getWidth(0)
                     val height = reader.getHeight(0)
                     if (width <= 0 || height <= 0) return@use null
-                    if (width.toLong() * height.toLong() > policy.maxDecodedPixels) return@use null
+                    val pixels = width.toLong() * height.toLong()
+                    if (pixels > policy.maxDecodedPixels) return@use null
+                    // ImageIO decodes the full source before we resize it. Check the actual
+                    // default raster layout, not just pixel count or compressed byte size.
+                    val types = reader.getImageTypes(0)
+                    if (!types.hasNext()) return@use null
+                    val sampleModel = types.next().sampleModel
+                    val bytesPerElement = (DataBuffer.getDataTypeSize(sampleModel.dataType).toLong() + 7) / 8
+                    val bytesPerPixel = bytesPerElement * sampleModel.numDataElements
+                    if (bytesPerPixel <= 0 || pixels > policy.maxDecodedRasterBytes / bytesPerPixel) return@use null
                     reader.read(0)
                 } finally {
                     reader.dispose()

@@ -18,6 +18,7 @@ internal data class ImageOptimizationPolicy(
     val maxHeight: Int = 400,
     val jpegQuality: Float = 0.55f,
     val maxDecodedPixels: Long = 16_000_000L,
+    val maxDecodedRasterBytes: Long = 48L * 1024 * 1024,
     val maxEncodedBytes: Int = 32 * 1024 * 1024,
 ) {
     init {
@@ -26,6 +27,7 @@ internal data class ImageOptimizationPolicy(
         require(jpegQuality in 0f..1f) { "JPEG quality must be between 0 and 1" }
         require(maxEncodedBytes > 0) { "Image maxEncodedBytes must be positive" }
         require(maxDecodedPixels > 0) { "Image maxDecodedPixels must be positive" }
+        require(maxDecodedRasterBytes > 0) { "Image maxDecodedRasterBytes must be positive" }
     }
 
     fun targetDimensions(sourceWidth: Int, sourceHeight: Int): ImageDimensions {
