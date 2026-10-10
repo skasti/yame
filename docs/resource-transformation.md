@@ -83,7 +83,7 @@ Bodyless responses may still participate in resource-level transforms when heade
 ## Image dimensions
 
 The HTML compatibility stage applies the same proportional sizing policy as
-JPEG optimization to literal `<img>` tags that contain numeric pixel
+JPEG/PNG optimization to literal `<img>` tags that contain numeric pixel
 `width` and `height` attributes. The default maximum is `600x400`, so the
 result stays within a `640x480` legacy display while preserving aspect ratio.
 Tags with missing dimensions or non-pixel values are left unchanged. The
@@ -102,3 +102,46 @@ Image and other binary transformers process untrusted Internet data. They must t
 - optimization transforms should not replace the source when the candidate representation is larger unless compatibility requires transcoding regardless of size.
 
 Tests should cover the boundary/negative paths explicitly, not only the happy path.
+
+## PNG output and transparency
+
+The existing image transformer accepts `image/png` as well as JPEG. Both use
+in-memory ImageIO decoding, the same `600x400` canvas, no upscaling and the
+16-million decoded-pixel limit. An encoded-input limit is checked before
+parsing/decoding: the proxy supplies its existing `maxResponseBytes` budget
+(default 16 MiB); standalone image policies default to 32 MiB. Output uses the
+existing source/transformed representation cache and preserves source validators.
+Changing format updates `Content-Type` and removes source byte lengths/digests;
+the HTTP boundary calculates the final `Content-Length`.
+
+Netscape Navigator 4.08 can display PNG, but ignores PNG transparency
+([PNG: The Definitive Guide, browser support table](https://www.libpng.org/pub/png/book/chapter02.html)).
+The deterministic policy is:
+
+- Images fitting an exact 256-entry palette become a non-interlaced GIF. No
+  color quantization is applied. Binary alpha uses one palette entry, allowing
+  up to 255 opaque colors. RGB values of fully transparent pixels are ignored;
+  an opaque black pixel stays distinct from a transparent black pixel.
+- Palette artwork and binary-transparent images use nearest-neighbor reduction,
+  preserving colors and binary alpha. Opaque high-color images use bilinear
+  reduction. All resizing preserves aspect ratio within the shared canvas.
+- Opaque high-color PNGs may become non-progressive baseline JPEG at the shared
+  JPEG quality (default 0.55). A round-trip comparison against the resized RGB
+  image requires channel RMS error at most 12 on the 0–255 scale and at most
+  1% of pixels with any channel error above 48. This is a conservative numeric
+  guard against compression damage, not a guarantee of perceptual equivalence.
+- Partial alpha and binary-transparent images exceeding GIF palette capacity
+  pass through unchanged. There is no alpha threshold, lossy palette reduction
+  or guessed page-background matte. APNG also passes through; the stock PNG
+  decoder would otherwise silently discard its animation.
+- Malformed data, a mismatch between declared format and decoder format,
+  encoded bodies and images exceeding the resource limits remain unchanged.
+- Every candidate must be strictly smaller than the current representation.
+  The original headers and bytes remain intact on all fallback paths.
+
+Passthrough is deliberate: partial-alpha images and other unsupported cases
+retain Netscape's original PNG transparency limitation. Full-alpha rendering on
+an arbitrary page background is outside this policy. Even an exact transparent
+GIF is declined if it would increase transfer size. Tests generate deterministic
+fixtures and verify format, pixels/alpha, size, limits, HTTP framing and cached
+identical-source reuse without relying on external image downloads.

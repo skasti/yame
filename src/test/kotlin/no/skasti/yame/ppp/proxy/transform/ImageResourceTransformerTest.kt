@@ -146,12 +146,12 @@ class ImageResourceTransformerTest {
     }
 
     @Test
-    fun `non jpeg content is ignored`() {
-        val source = representation(byteArrayOf(1, 2, 3), contentType = "image/png")
+    fun `unsupported image content is ignored`() {
+        val source = representation(byteArrayOf(1, 2, 3), contentType = "image/webp")
 
         val result = pipeline().transform(
             context(),
-            Resource(URI("https://modern.test/image.png"), source),
+            Resource(URI("https://modern.test/image.webp"), source),
         )
 
         assertNull(result.resource.transformed)

@@ -18,11 +18,13 @@ internal data class ImageOptimizationPolicy(
     val maxHeight: Int = 400,
     val jpegQuality: Float = 0.55f,
     val maxDecodedPixels: Long = 16_000_000L,
+    val maxEncodedBytes: Int = 32 * 1024 * 1024,
 ) {
     init {
         require(maxWidth > 0) { "Image maxWidth must be positive" }
         require(maxHeight > 0) { "Image maxHeight must be positive" }
         require(jpegQuality in 0f..1f) { "JPEG quality must be between 0 and 1" }
+        require(maxEncodedBytes > 0) { "Image maxEncodedBytes must be positive" }
         require(maxDecodedPixels > 0) { "Image maxDecodedPixels must be positive" }
     }
 

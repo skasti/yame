@@ -288,12 +288,18 @@ HTTP compatibility mode is enabled by default. Requests that the legacy client s
 
 Redirects that change the browser-visible host, path, or query are returned to the legacy client. An HTTPS location is exposed as the equivalent clean HTTP URL, and YAME remembers its real HTTPS target. This lets the browser update its own address and relative-URL base instead of requiring YAME to inject or maintain an HTML `<base>` element. A scheme-only upgrade such as `http://example.test/app` to `https://example.test/app` is followed internally because exposing it as HTTP would redirect the browser back to the URL it just requested.
 
-YAME keeps the required exact URL and origin mappings for the active PPP generation. Absolute `https://` references in supported text responses are pragmatically rewritten to `http://` wherever they occur, while binary bodies are left untouched. The proxy requests uncompressed text upstream, buffers rewritable responses, and recalculates `Content-Length`. It intentionally does not parse HTML, CSS, or JavaScript semantically. Mappings are discarded when the PPP generation changes.
+YAME keeps the required exact URL and origin mappings for the active PPP generation. Absolute `https://` references in supported text responses are pragmatically rewritten to `http://` wherever they occur. Supported images are optimized separately; other binary bodies pass through unchanged. The proxy requests uncompressed text upstream, buffers rewritable responses, and recalculates `Content-Length`. It intentionally does not parse HTML, CSS, or JavaScript semantically. Mappings are discarded when the PPP generation changes.
 
-JPEG image optimization and literal HTML image-tag sizing use the same
+JPEG/PNG image optimization and literal HTML image-tag sizing use the same
 proportional `600x400` default policy. `<img>` tags are resized only when both
 `width` and `height` are numeric pixel values; no image is fetched solely to
-rewrite its tag.
+rewrite its tag. PNG artwork with at most 256 colors becomes an exact-palette
+GIF (255 opaque colors plus one transparent entry when needed). Opaque
+high-color images may become baseline JPEG after a conservative quality check.
+PNG partial alpha, excessive transparent-image palette sizes, and animation
+pass through unchanged. Every replacement must be smaller than its source.
+See the [PNG transparency policy](docs/resource-transformation.md#png-output-and-transparency)
+for the fallback limitations.
 
 Resource transformations preserve upstream `ETag` and `Last-Modified` validators by design: within a running YAME process the transformation pipeline is deterministic, so unchanged upstream source state implies unchanged legacy output. Byte-specific metadata such as `Content-Length` and content digests is removed or regenerated when the body changes. See [resource transformation invariants](docs/resource-transformation.md) for the full contract.
 

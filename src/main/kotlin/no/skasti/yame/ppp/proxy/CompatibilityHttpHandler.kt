@@ -97,7 +97,7 @@ internal class SystemHttpCompatibilityHandler(
 
     private val sessionStates = ConcurrentHashMap<SessionKey, SessionState>()
     private val originRoutes = LegacyOriginRouteTable()
-    private val imageOptimizationPolicy = ImageOptimizationPolicy()
+    private val imageOptimizationPolicy = ImageOptimizationPolicy(maxEncodedBytes = config.maxResponseBytes)
     private val resourceTransformations =
         ResourceTransformationPipeline(
             listOf(
