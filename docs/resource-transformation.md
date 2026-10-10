@@ -154,3 +154,22 @@ an arbitrary page background is outside this policy. Even an exact transparent
 GIF is declined if it would increase transfer size. Tests generate deterministic
 fixtures and verify format, pixels/alpha, size, limits, HTTP framing and cached
 identical-source reuse without relying on external image downloads.
+
+## Visual image transformation examples
+
+The deterministic image transformer tests also generate an offline, side-by-side visual
+gallery from synthetic PNG/JPEG fixtures using the **production** resource transformation
+pipeline. It demonstrates a binary-transparent logo converted to GIF, exact-palette
+artwork, PNG-to-JPEG, JPEG recompression, and a partially transparent PNG deliberately
+left unchanged. Original and resulting files are shown against checkerboard and dark
+backgrounds, alongside their dimensions, encoded sizes, and percentage saved.
+
+Run `./gradlew test --tests '*ImageTransformationVisualReportTest'` to generate
+`build/reports/image-transformations/index.html` with its referenced image files.
+The pull-request CI uploads this directory as the
+`yame-image-transformations` artifact, linked from the build job summary.
+Download and extract the full archive, then open `index.html` locally.
+
+These fixtures are repeatable behavioral examples, **not** a representative corpus
+of real website logos/photos. Visual checks in Netscape 4.08 are still useful,
+especially for browser-specific GIF transparency rendering.
