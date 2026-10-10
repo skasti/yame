@@ -105,12 +105,17 @@ Tests should cover the boundary/negative paths explicitly, not only the happy pa
 
 ## PNG output and transparency
 
-The existing image transformer accepts `image/png` as well as JPEG. Both use
-in-memory ImageIO decoding, the same `600x400` canvas, no upscaling and the
-16-million decoded-pixel limit. An encoded-input limit is checked before
+`PngResourceTransformer` handles `image/png`, independently of
+`JpegResourceTransformer`, which handles JPEG. Both are registered as separate
+optimization stages in the resource pipeline and share `LegacyImageCodec` for
+in-memory ImageIO decoding and resizing. They use the same `600x400` canvas,
+no upscaling and the 16-million decoded-pixel limit. An encoded-input limit is checked before
 parsing/decoding: the proxy supplies its existing `maxResponseBytes` budget
 (default 16 MiB); standalone image policies default to 32 MiB. Output uses the
 existing source/transformed representation cache and preserves source validators.
+JPEG optimization runs before PNG optimization so PNG-to-JPEG candidates are
+not recompressed by the JPEG stage.
+
 Changing format updates `Content-Type` and removes source byte lengths/digests;
 the HTTP boundary calculates the final `Content-Length`.
 

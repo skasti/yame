@@ -20,7 +20,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
-class PngImageResourceTransformerTest {
+class PngResourceTransformerTest {
     @Test
     fun `large true color png becomes smaller baseline jpeg within legacy canvas`() {
         for ((width, height, expectedWidth, expectedHeight) in listOf(
@@ -170,13 +170,41 @@ class PngImageResourceTransformerTest {
         assertNull(result.resource.transformed)
     }
 
+    @Test
+    fun `jpeg transformer ignores png independently of png registration`() {
+        val source = representation(png(photo(320, 200)))
+        val resource = Resource(context().upstreamUri, source)
+        val result = ResourceTransformationPipeline(listOf(JpegResourceTransformer())).transform(context(), resource)
+        assertSame(resource, result.resource)
+        assertNull(result.resource.transformed)
+    }
+
+    @Test
+    fun `separate transformers do not recompress png converted to jpeg`() {
+        val bytes = png(photo(320, 200))
+        val standalone = transform(bytes)
+        output(standalone, bytes, "image/jpeg")
+        for (transformers in listOf(
+            listOf(JpegResourceTransformer(), PngResourceTransformer()),
+            listOf(PngResourceTransformer(), JpegResourceTransformer()),
+        )) {
+            val result = ResourceTransformationPipeline(transformers)
+                .transform(context(), Resource(context().upstreamUri, representation(bytes)))
+            assertContentEquals(standalone.resource.representation.body, result.resource.representation.body)
+            assertEquals(
+                listOf("legacy-png-optimization"),
+                requireNotNull(result.resource.transformed).transformations.map { it.transformerId },
+            )
+        }
+    }
+
     private fun transform(
         bytes: ByteArray,
         policy: ImageOptimizationPolicy = ImageOptimizationPolicy(),
         contentType: String = "image/png",
     ): ResourceTransformationState = pipeline(policy).transform(context(), Resource(context().upstreamUri, representation(bytes, contentType)))
 
-    private fun pipeline(policy: ImageOptimizationPolicy) = ResourceTransformationPipeline(listOf(ImageResourceTransformer(policy)))
+    private fun pipeline(policy: ImageOptimizationPolicy) = ResourceTransformationPipeline(listOf(PngResourceTransformer(policy)))
 
     private fun assertPassthrough(
         bytes: ByteArray,

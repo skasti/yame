@@ -8,13 +8,6 @@ import javax.imageio.ImageWriteParam
 import javax.imageio.stream.MemoryCacheImageOutputStream
 import kotlin.math.abs
 
-internal data class LegacyImageOutput(
-    val bytes: ByteArray,
-    val contentType: String,
-    val width: Int,
-    val height: Int,
-)
-
 /** Netscape 4.08 renders PNG but ignores its transparency; GIF retains binary alpha. */
 internal class PngImageEncoder(
     private val policy: ImageOptimizationPolicy,

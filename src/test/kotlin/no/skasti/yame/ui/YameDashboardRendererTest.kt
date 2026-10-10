@@ -64,7 +64,7 @@ class YameDashboardRendererTest {
                             transformations =
                                 listOf(
                                     ResourceTransformationSummary(
-                                        transformerId = "legacy-image-optimization",
+                                        transformerId = "legacy-jpeg-optimization",
                                         sourceBytes = 184 * 1024,
                                         outputBytes = 31 * 1024,
                                         detail = "1600x1000 -> 640x400",

@@ -17,7 +17,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
-class ImageResourceTransformerTest {
+class JpegResourceTransformerTest {
     @Test
     fun `large landscape jpeg is resized and recompressed`() {
         val sourceBytes = jpegFixture(1600, 1000, quality = 0.95f)
@@ -100,7 +100,7 @@ class ImageResourceTransformerTest {
     fun `jpeg is passed through when recompression is not smaller`() {
         val sourceBytes = jpegFixture(64, 64, quality = 0.01f)
         val transformer =
-            ImageResourceTransformer(
+            JpegResourceTransformer(
                 ImageOptimizationPolicy(jpegQuality = 1.0f),
             )
 
@@ -131,7 +131,7 @@ class ImageResourceTransformerTest {
     fun `jpeg beyond decoded pixel limit is passed through without decoding`() {
         val sourceBytes = jpegFixture(1000, 1000, quality = 0.9f)
         val transformer =
-            ImageResourceTransformer(
+            JpegResourceTransformer(
                 ImageOptimizationPolicy(maxDecodedPixels = 500_000),
             )
 
@@ -157,7 +157,7 @@ class ImageResourceTransformerTest {
         assertNull(result.resource.transformed)
     }
 
-    private fun pipeline() = ResourceTransformationPipeline(listOf(ImageResourceTransformer()))
+    private fun pipeline() = ResourceTransformationPipeline(listOf(JpegResourceTransformer()))
 
     private fun context() =
         ResourceTransformationContext(
@@ -190,7 +190,7 @@ class ImageResourceTransformerTest {
         )
 
     private fun loadOrGenerateLargeJpegFixture(): ByteArray =
-        ImageResourceTransformerTest::class.java
+        JpegResourceTransformerTest::class.java
             .getResourceAsStream(LARGE_JPEG_FIXTURE)
             ?.use { it.readBytes() }
             ?: highEntropyJpegFixture(4000, 3000, quality = 1.0f)
