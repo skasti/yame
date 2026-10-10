@@ -59,7 +59,7 @@ jobs:
           ARTIFACT_URL: ${{ steps.image-gallery.outputs.artifact-url }}
         run: |
           echo '### Image transformation examples' >> "$GITHUB_STEP_SUMMARY"
-          echo "Download the [visual gallery]($ARTIFACT_URL), unzip and open `index.html`." >> "$GITHUB_STEP_SUMMARY"
+          echo "Download the [visual gallery]($ARTIFACT_URL), unzip and open index.html." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Install DOSBox integration-test dependencies
         run: |
