@@ -39,6 +39,61 @@ import kotlin.test.assertTrue
 
 class PppIpv4SessionTest {
     @Test
+    fun `unsupported ICMP and IPv4 cases capture original packet including options and padding`() {
+        val sent = mutableListOf<PppFrame>()
+        val observed = mutableListOf<YameEvent>()
+        newSession(sent, eventSink = observed::add).use { session ->
+            openIpcp(session, sent)
+            val peer = Ipv4Address.parse("10.0.0.2")
+            val payload = IcmpPacket(type = 3, code = 1, body = ByteArray(12)).encode()
+            val local = Ipv4Address.parse("10.0.0.1")
+            val cases = listOf(
+                "udp" to Ipv4Packet(protocol = 17, source = peer, destination = local,
+                    payload = UdpPacket(sourcePort = 1024, destinationPort = 9999,
+                        payload = byteArrayOf(1)).encode(peer, local)),
+                "tcp" to Ipv4Packet(protocol = 6, source = peer, destination = local,
+                    payload = TcpPacket(sourcePort = 1024, destinationPort = 9999,
+                        sequenceNumber = 0u, flags = TcpPacket.SYN, windowSize = 1024).encode(peer, local)),
+                "ipv4-protocol-99" to Ipv4Packet(protocol = 99, source = peer,
+                    destination = local, payload = payload),
+                "ipv4-fragment" to Ipv4Packet(protocol = 1, source = peer, flagsAndFragmentOffset = 0x2000,
+                    destination = local, payload = payload),
+                "icmp-type-3" to Ipv4Packet(protocol = 1, source = peer,
+                    destination = Ipv4Address.parse("203.0.113.11"), payload = payload),
+                "icmp-type-3" to Ipv4Packet(protocol = 1, source = peer,
+                    destination = Ipv4Address.parse("10.0.0.1"), payload = payload),
+                "ipv4-protocol-99" to Ipv4Packet(protocol = 99, source = peer,
+                    destination = Ipv4Address.parse("203.0.113.11"), payload = payload),
+                "ipv4-fragment" to Ipv4Packet(protocol = 1, source = peer, flagsAndFragmentOffset = 0x2000,
+                    destination = Ipv4Address.parse("203.0.113.11"), payload = payload),
+            )
+            for ((type, packet) in cases) {
+                val raw = packet.copy(options = byteArrayOf(1, 1, 0, 0)).encode() + byteArrayOf(0, 0)
+                session.receive(PppFrame(PppSession.IPV4_PROTOCOL, raw))
+                val event = observed.filterIsInstance<YameEvent.UnhandledPacket>().last()
+                assertEquals(type, event.packetType)
+                assertEquals(PppSession.IPV4_PROTOCOL, event.pppProtocol)
+                assertContentEquals(raw, event.bytes())
+                assertEquals(packet.protocol, requireNotNull(Ipv4Packet.parse(event.bytes())).protocol)
+            }
+            assertEquals(cases.size, observed.filterIsInstance<YameEvent.UnhandledPacket>().size)
+        }
+    }
+
+    @Test
+    fun `unsupported PPP payload is captured without serial framing`() {
+        val observed = mutableListOf<YameEvent>()
+        PppSession(sendFrame = {}, logger = {}, eventSink = observed::add).use { session ->
+            val bytes = byteArrayOf(1, 2, 3)
+            session.receive(PppFrame(0x8057, bytes))
+            val event = observed.filterIsInstance<YameEvent.UnhandledPacket>().single()
+            assertEquals("ppp-protocol-32855", event.packetType)
+            assertEquals(0x8057, event.pppProtocol)
+            assertContentEquals(bytes, event.bytes())
+        }
+    }
+
+    @Test
     fun `client FIN after HTTP response receives ACK and closes without transfer failure`() {
         val sent = CopyOnWriteArrayList<PppFrame>()
         val logs = CopyOnWriteArrayList<String>()

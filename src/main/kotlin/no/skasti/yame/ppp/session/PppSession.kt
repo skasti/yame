@@ -174,9 +174,11 @@ class PppSession(
             LCP_PROTOCOL -> receiveLcp(frame.payload)
             IPCP_PROTOCOL -> receiveIpcp(frame.payload)
             IPV4_PROTOCOL -> receiveIpv4(frame.payload)
-            else -> sessionLog(
-                "PPP .. protocol=${frame.protocolName()} (0x%04X) not handled yet"
-                    .format(frame.protocol),
+            else -> unhandledPacket(
+                "ppp-protocol-${frame.protocol}",
+                "PPP .. protocol=${frame.protocolName()} (0x%04X) not handled yet".format(frame.protocol),
+                frame.protocol,
+                frame.payload,
             )
         }
     }
@@ -390,6 +392,11 @@ class PppSession(
             startIpcp()
         }
     }
+    private fun unhandledPacket(type: String, reason: String, protocol: Int, bytes: ByteArray) {
+        sessionLog(reason)
+        emitEvent(YameEvent.UnhandledPacket(type, reason, protocol, bytes))
+    }
+
     private fun receiveIpv4(payload: ByteArray) {
         if (!ipcpOpen) {
             sessionLog("IPv4 .. ignored before IPCP is open")
@@ -410,27 +417,37 @@ class PppSession(
         }
 
         if (packet.destination == localIpAddress) {
-            receiveLocalIpv4(packet)
+            receiveLocalIpv4(packet, payload)
         } else {
-            receiveExternalIpv4(packet)
+            receiveExternalIpv4(packet, payload)
         }
     }
 
-    private fun receiveLocalIpv4(packet: Ipv4Packet) {
+    private fun receiveLocalIpv4(packet: Ipv4Packet, rawPacket: ByteArray) {
         if (packet.isFragmented) {
-            sessionLog("IPv4 .. fragmented packet to local endpoint not handled")
+            unhandledPacket(
+                "ipv4-fragment",
+                "IPv4 .. fragmented packet to local endpoint not handled",
+                IPV4_PROTOCOL,
+                rawPacket,
+            )
             return
         }
 
         when (packet.protocol) {
-            Ipv4Packet.ICMP_PROTOCOL -> receiveLocalIcmp(packet)
-            Ipv4Packet.TCP_PROTOCOL -> receiveLocalTcp(packet)
-            Ipv4Packet.UDP_PROTOCOL -> receiveLocalUdp(packet)
-            else -> sessionLog("IPv4 .. local protocol=${packet.protocol} not handled")
+            Ipv4Packet.ICMP_PROTOCOL -> receiveLocalIcmp(packet, rawPacket)
+            Ipv4Packet.TCP_PROTOCOL -> receiveLocalTcp(packet, rawPacket)
+            Ipv4Packet.UDP_PROTOCOL -> receiveLocalUdp(packet, rawPacket)
+            else -> unhandledPacket(
+                "ipv4-protocol-${packet.protocol}",
+                "IPv4 .. local protocol=${packet.protocol} not handled",
+                IPV4_PROTOCOL,
+                rawPacket,
+            )
         }
     }
 
-    private fun receiveLocalIcmp(packet: Ipv4Packet) {
+    private fun receiveLocalIcmp(packet: Ipv4Packet, rawPacket: ByteArray) {
         val icmp = IcmpPacket.parse(packet.payload)
         if (icmp == null) {
             sessionLog("ICMP !! malformed packet or invalid checksum")
@@ -439,7 +456,12 @@ class PppSession(
 
         val reply = icmp.toEchoReply()
         if (reply == null) {
-            sessionLog("ICMP .. type=${icmp.type} code=${icmp.code} not handled")
+            unhandledPacket(
+                "icmp-type-${icmp.type}",
+                "ICMP .. type=${icmp.type} code=${icmp.code} not handled",
+                IPV4_PROTOCOL,
+                rawPacket,
+            )
             return
         }
 
@@ -468,7 +490,7 @@ class PppSession(
         )
     }
 
-    private fun receiveLocalUdp(packet: Ipv4Packet) {
+    private fun receiveLocalUdp(packet: Ipv4Packet, rawPacket: ByteArray) {
         val udp = UdpPacket.parse(
             bytes = packet.payload,
             source = packet.source,
@@ -480,7 +502,12 @@ class PppSession(
         }
 
         if (udp.destinationPort != DNS_PORT) {
-            sessionLog("UDP .. local port=${udp.destinationPort} not handled")
+            unhandledPacket(
+                "udp",
+                "UDP .. local port=${udp.destinationPort} not handled",
+                IPV4_PROTOCOL,
+                rawPacket,
+            )
             return
         }
 
@@ -551,7 +578,7 @@ class PppSession(
         }
     }
 
-    private fun receiveLocalTcp(packet: Ipv4Packet) {
+    private fun receiveLocalTcp(packet: Ipv4Packet, rawPacket: ByteArray) {
         val tcp = TcpPacket.parse(
             bytes = packet.payload,
             source = packet.source,
@@ -563,7 +590,12 @@ class PppSession(
         }
 
         if (tcp.destinationPort != DNS_PORT) {
-            sessionLog("TCP .. local port=${tcp.destinationPort} not handled")
+            unhandledPacket(
+                "tcp",
+                "TCP .. local port=${tcp.destinationPort} not handled",
+                IPV4_PROTOCOL,
+                rawPacket,
+            )
             return
         }
 
@@ -577,24 +609,31 @@ class PppSession(
         )
     }
 
-    private fun receiveExternalIpv4(packet: Ipv4Packet) {
+    private fun receiveExternalIpv4(packet: Ipv4Packet, rawPacket: ByteArray) {
         if (packet.isFragmented) {
-            sessionLog("IPv4 .. fragmented egress packet not handled")
+            unhandledPacket(
+                "ipv4-fragment",
+                "IPv4 .. fragmented egress packet not handled",
+                IPV4_PROTOCOL,
+                rawPacket,
+            )
             return
         }
 
         when (packet.protocol) {
-            Ipv4Packet.ICMP_PROTOCOL -> receiveExternalIcmp(packet)
+            Ipv4Packet.ICMP_PROTOCOL -> receiveExternalIcmp(packet, rawPacket)
             Ipv4Packet.TCP_PROTOCOL -> receiveExternalTcp(packet)
             Ipv4Packet.UDP_PROTOCOL -> receiveExternalUdp(packet)
-            else -> sessionLog(
-                "IPv4 .. ${packet.source} -> ${packet.destination} " +
-                    "protocol=${packet.protocol} egress not handled yet",
+            else -> unhandledPacket(
+                "ipv4-protocol-${packet.protocol}",
+                "IPv4 .. ${packet.source} -> ${packet.destination} protocol=${packet.protocol} egress not handled yet",
+                IPV4_PROTOCOL,
+                rawPacket,
             )
         }
     }
 
-    private fun receiveExternalIcmp(packet: Ipv4Packet) {
+    private fun receiveExternalIcmp(packet: Ipv4Packet, rawPacket: ByteArray) {
         val icmp = IcmpPacket.parse(packet.payload)
         if (icmp == null) {
             sessionLog("ICMP !! malformed packet or invalid checksum")
@@ -603,7 +642,12 @@ class PppSession(
 
         val reply = icmp.toEchoReply()
         if (reply == null) {
-            sessionLog("ICMP .. egress type=${icmp.type} code=${icmp.code} not handled")
+            unhandledPacket(
+                "icmp-type-${icmp.type}",
+                "ICMP .. egress type=${icmp.type} code=${icmp.code} not handled",
+                IPV4_PROTOCOL,
+                rawPacket,
+            )
             return
         }
 

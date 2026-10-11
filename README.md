@@ -321,11 +321,12 @@ Disable compatibility mode when transparent TCP/80 forwarding is desired:
 In the dashboard, use `/http-proxy` to switch between compatibility and transparent forwarding. The compatibility panel is populated directly from YAME's host resource registry rather than by parsing proxy log messages, so it reflects the currently retained resource graphs and follows registry eviction.
 The dashboard header also shows the running YAME version and build Git commit, which is useful when testing local `installDist` builds.
 
-YAME always writes module-specific logs under `logs/`: `modem.log`, `serial.log`, `ppp.log`,
-`dns.log`, `proxy.log`, and `transfers.log`. Each module defaults to `info` and can be tuned
+YAME writes module-specific logs under `logs/` by default. Use `--log-dir DIRECTORY`
+to choose a different root (relative paths are resolved from the working directory). Files: `modem.log`, `serial.log`, `ppp.log`,
+`dns.log`, `proxy.log`, `transfers.log`, and `unhandled.log`. Each module defaults to `info` and can be tuned
 independently with `--loglevel-<module> error|warn|info|debug`. In the TUI, the same levels can
 be changed live with `/loglevel-modem`, `/loglevel-serial`, `/loglevel-ppp`,
-`/loglevel-dns`, `/loglevel-proxy`, and `/loglevel-transfers`; no reconnect is required.
+`/loglevel-dns`, `/loglevel-proxy`, `/loglevel-transfers`, and `/loglevel-unhandled`; no reconnect is required.
 
 For example:
 
@@ -336,6 +337,27 @@ For example:
 If an active module log already exists at startup, YAME archives it as
 `logs/<module>-yyyy-mm-dd-hh-mm.log` using the original file creation time before starting a new
 `<module>.log`.
+
+Unsupported PPP protocols, IPv4 protocols/fragments, ICMP types, and local TCP/UDP
+ports are recorded in `unhandled.log` at `warn`, independently of the PPP debug
+level. Detailed captures go to `<log-root>/unhandled/<packet-type>/<UTC-timestamp>-<uuid>.txt`,
+for example `unhandled/icmp-type-3/2026-10-11T21-44-13Z-<uuid>.txt`.
+Timestamps replace colons with hyphens for Windows compatibility; a UUID prevents collisions.
+Each `yame-unhandled-v1` file contains the reason, PPP protocol number, byte count,
+and a `data=` line with hex bytes. For IPv4 cases these are the **original complete
+IPv4 bytes**, including IP options and any PPP padding; for unsupported PPP
+protocols they are the PPP payload (without serial framing/FCS). Replay by decoding
+`data` from hex and feeding `PppFrame(pppProtocol, bytes)` to a negotiated session.
+Captures include packet contents and may contain private data; inspect before sharing.
+
+A background writer queues at most 64 packets (at most 65535 bytes each) and retains
+at most 1000 capture files across all packet types, including previous runs. It deletes
+the oldest captures before saving new ones; copy useful fixtures elsewhere to preserve them.
+The summary logs keep the usual 10 MiB rotation and five archives per module.
+A full queue drops captures; capture IO failures are reported once to stderr, without
+stopping the modem. Capture collection is independent of log-level filtering.
+Malformed packets and expected lifecycle drops (such as traffic before IPCP opens)
+remain in the existing protocol logs rather than this unsupported-packet collection.
 
 ## Test tone
 

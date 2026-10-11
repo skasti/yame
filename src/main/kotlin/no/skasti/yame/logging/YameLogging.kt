@@ -34,6 +34,7 @@ enum class YameLogModule(val fileName: String) {
     DNS("dns"),
     PROXY("proxy"),
     TRANSFERS("transfers"),
+    UNHANDLED("unhandled"),
 }
 
 class YameLogManager(
@@ -53,6 +54,7 @@ class YameLogManager(
         @Volatile var writeFailed: Boolean = writer == null,
     )
 
+    private val captures = UnhandledPacketRecorder(logDirectory)
     private val lock = Any()
     private val writers: Map<YameLogModule, ModuleWriter>
 
@@ -105,6 +107,13 @@ class YameLogManager(
 
     fun eventSink(event: YameEvent) {
         when (event) {
+            is YameEvent.UnhandledPacket -> {
+                log(YameLogModule.UNHANDLED, YameLogLevel.WARN, event.reason)
+                captures.record(event) { path ->
+                    log(YameLogModule.UNHANDLED, YameLogLevel.INFO, "${event.reason}; capture=$path")
+                }
+            }
+
             is YameEvent.DnsQuery ->
                 log(
                     YameLogModule.DNS,
@@ -190,6 +199,7 @@ class YameLogManager(
     }
 
     override fun close() {
+        captures.close()
         synchronized(lock) {
             writers.values.forEach { entry ->
                 entry.writer?.let { writer ->

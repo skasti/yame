@@ -49,7 +49,7 @@ fun main(args: Array<String>) {
         return
     }
 
-    val logManager = YameLogManager(options.logLevels)
+    val logManager = YameLogManager(options.logLevels, options.logDirectory)
     try {
 
     if (options.testNumber != null) {
@@ -221,6 +221,7 @@ private data class Options(
     val modemConfig: HayesModemConfig,
     val logLevels: Map<YameLogModule, YameLogLevel>,
     val configPath: Path,
+    val logDirectory: Path,
 )
 
 internal fun resolveLoginCredentials(
@@ -261,6 +262,7 @@ private fun parseArgs(
     var httpCompatibilityEnabled = defaults.pppHttpCompatibilityConfig.enabled
     val logLevels = savedConfiguration.logLevels.toMutableMap()
     var uiMode = UiMode.AUTO
+    var logDirectory = Path.of("logs")
 
     var i = 0
     while (i < args.size) {
@@ -324,10 +326,17 @@ private fun parseArgs(
             "--loglevel-ppp",
             "--loglevel-dns",
             "--loglevel-proxy",
-            "--loglevel-transfers" -> {
+            "--loglevel-transfers",
+            "--loglevel-unhandled" -> {
                 require(i + 1 < args.size) { "$arg requires error, warn, info, or debug" }
                 val module = logModuleForArgument(arg)
                 logLevels[module] = YameLogLevel.parse(args[++i])
+            }
+            "--log-dir" -> {
+                require(i + 1 < args.size) { "$arg requires a directory" }
+                val value = args[++i]
+                require(value.isNotBlank()) { "$arg requires a non-empty directory" }
+                logDirectory = Path.of(value)
             }
             "--ui" -> {
                 require(i + 1 < args.size) { "$arg requires auto, tui, or plain" }
@@ -375,6 +384,7 @@ private fun parseArgs(
         ),
         logLevels = logLevels.toMap(),
         configPath = configPath,
+        logDirectory = logDirectory,
     )
 }
 
@@ -404,6 +414,7 @@ private fun logModuleForArgument(argument: String): YameLogModule =
         "--loglevel-dns" -> YameLogModule.DNS
         "--loglevel-proxy" -> YameLogModule.PROXY
         "--loglevel-transfers" -> YameLogModule.TRANSFERS
+        "--loglevel-unhandled" -> YameLogModule.UNHANDLED
         else -> error("Unknown log level argument: $argument")
     }
 
@@ -466,6 +477,8 @@ private fun printUsage() {
               --dns-upstream IP       DNS server used by YAME's local DNS proxy (default: ${defaults.pppDnsConfig.upstreamServer})
               --http-https-proxy      Enable HTTP/HTTPS compatibility proxy (default)
               --no-http-https-proxy   Disable compatibility proxy and use normal TCP forwarding
+              --log-dir DIRECTORY     Log root (default: logs in the working directory)
+              --loglevel-unhandled L  unhandled.log level: error|warn|info|debug (default: info)
               --loglevel-modem LEVEL  modem.log level: error|warn|info|debug (default: info)
               --loglevel-serial LEVEL serial.log level: error|warn|info|debug (default: info)
               --loglevel-ppp LEVEL    ppp.log level: error|warn|info|debug (default: info)

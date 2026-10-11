@@ -210,6 +210,7 @@ class TuiYameObserver(
     @Synchronized
     fun onEvent(event: YameEvent) {
         when (event) {
+            is YameEvent.UnhandledPacket -> Unit
             is YameEvent.DnsQuery -> {
                 val existing = dnsLookups.indexOfFirst { it.key == event.key }
                 val lookup = DashboardDnsLookup(
@@ -858,6 +859,10 @@ class TuiYameObserver(
                     openLogLevelPalette(YameLogModule.PROXY)
                     null
                 }
+                "/loglevel-unhandled" -> {
+                    openLogLevelPalette(YameLogModule.UNHANDLED)
+                    null
+                }
                 "/loglevel-transfers" -> {
                     openLogLevelPalette(YameLogModule.TRANSFERS)
                     null
@@ -1055,6 +1060,7 @@ class TuiYameObserver(
             TuiCommandOption("/loglevel-ppp", "Set ppp file log level", "/loglevel-ppp"),
             TuiCommandOption("/loglevel-dns", "Set dns file log level", "/loglevel-dns"),
             TuiCommandOption("/loglevel-proxy", "Set proxy file log level", "/loglevel-proxy"),
+            TuiCommandOption("/loglevel-unhandled", "Set unhandled file log level", "/loglevel-unhandled"),
             TuiCommandOption("/loglevel-transfers", "Set transfers file log level", "/loglevel-transfers"),
             TuiCommandOption("/reconnect", "Open the selected serial port", "/reconnect"),
             TuiCommandOption("/disconnect", "Close the current serial port", "/disconnect"),
