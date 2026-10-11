@@ -91,8 +91,12 @@ Boot -> yame-update.service -> yame.service -> HDMI tty1 TUI
   than **4096 entries**, and caps uncompressed contents at **256 MiB**.
   Updates also require enough free space to leave **128 MiB** available for
   the OS. Exceeding a limit leaves the previously installed version untouched.
-  The extractor uses Python 3's standard library; `python3` is installed
-  by `install.sh`.
+  The extractor also normalizes the release's immutable directories to
+  mode `755`, readable library files to `644`, and the launcher to `755`
+  before activation. This makes the distribution accessible to YAME's
+  unprivileged service user even when the root-run updater inherits a
+  restrictive `umask 077`. The extractor uses Python 3's standard library;
+  `python3` is installed by `install.sh`.
 - If GitHub publishes an SHA256 asset digest, the updater verifies it before
   installation. If the release does not include a digest, GitHub HTTPS is
   relied upon. Releases must be trusted; do not run this installer against an
@@ -200,8 +204,8 @@ The updater has offline integration tests using mocked GitHub API/download
 responses. They verify release activation, retention, recovery of an interrupted
 update, offline/first-boot fallback, checksum failure, oversized downloads,
 ZIP expansion limits, excessive file counts, path traversal and oversized
-streamed downloads without a known Content-Length, without
-touching the host's `/opt/yame` directory:
+streamed downloads without a known Content-Length, and a restrictive
+root `umask 077` with non-root file-read/execute checks, without touching the host's `/opt/yame` directory:
 
 ```sh
 sudo bash deployment/raspberry-pi/test-update.sh
