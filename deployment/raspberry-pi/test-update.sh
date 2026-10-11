@@ -34,28 +34,19 @@ if [[ "$url" == "https://api.github.com/repos/skasti/yame/releases/latest" ]]; t
   printf '{"tag_name":"v%s","assets":[{"name":"%s","browser_download_url":"https://github.com/skasti/yame/releases/download/v%s/%s","digest":"sha256:%s"}]}\n' \
     "$version" "$asset" "$version" "$asset" "$digest"
 else
-  # Verify the updater supplies curl's streaming download-size limit.
+  # Model old Bookworm curl: the server supplied no Content-Length, so
+  # --max-filesize is accepted but DOES NOT bound the streamed response.
   [[ " $* " == *" --max-filesize 67108864 "* ]] || {
     echo "Missing curl download limit" >&2
     exit 1
   }
-  output=""
-  while (( $# )); do
-    if [[ "$1" == "-o" ]]; then
-      output="$2"
-      shift 2
-    else
-      shift
-    fi
-  done
-  [[ -n "$output" ]] || exit 1
-  max_size=67108864
   archive="$YAME_TEST_ASSETS/yame-$YAME_TEST_VERSION-linux-arm64.zip"
-  if (( $(stat -c %s "$archive") > max_size )); then
-    # Emulate curl --max-filesize rejecting an excessive stream.
-    exit 63
+  cat "$archive"
+  # A successful, complete oversized transfer would create this marker.
+  # A reader-side streaming cap instead closes the pipe and causes SIGPIPE.
+  if [[ -n "${YAME_TEST_DOWNLOAD_COMPLETED_MARKER:-}" ]]; then
+    touch "$YAME_TEST_DOWNLOAD_COMPLETED_MARKER"
   fi
-  cp "$archive" "$output"
 fi
 MOCK_CURL
 chmod +x "$sandbox/mock/curl"
@@ -166,9 +157,17 @@ PY_ENTRIES
 bash "$script_dir/yame-update"
 assert_target current 1.2.0
 
-# Reject an oversized download before extraction.
+# Model a chunked/unknown-Content-Length 65 MiB download with old curl:
+# it must be cut off DURING streaming, not merely rejected after all 65 MiB
+# have reached the SD card.
 truncate -s $((65 * 1024 * 1024)) "$YAME_TEST_ASSETS/yame-1.3.0-linux-arm64.zip"
+export YAME_TEST_DOWNLOAD_COMPLETED_MARKER="$sandbox/oversized-download-finished"
 bash "$script_dir/yame-update"
+[[ ! -e "$YAME_TEST_DOWNLOAD_COMPLETED_MARKER" ]] || {
+  echo "Updater failed to stop oversized streaming response" >&2
+  exit 1
+}
+unset YAME_TEST_DOWNLOAD_COMPLETED_MARKER
 assert_target current 1.2.0
 assert_target previous 1.1.0
 [[ ! -e "$YAME_BASE/releases/v1.3.0" ]]
