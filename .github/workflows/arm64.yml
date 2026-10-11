@@ -25,7 +25,8 @@ jobs:
         id: gate
         uses: actions/github-script@v8
         with:
-          script: await require('./scripts/ci/tui-previews.cjs').gate({github, context, core}, {requireArm64: true})
+          script: |
+            await require('./scripts/ci/tui-previews.cjs').gate({github, context, core}, {requireArm64: true})
 
   test:
     needs: preview-gate
