@@ -245,3 +245,20 @@ This configuration targets a dedicated Pi displaying YAME on the local HDMI
 virtual console. It does not create a desktop app, bundle a JRE, modify YAME
 itself, configure a fixed serial adapter rule, or interrupt active sessions to
 apply updates in the background.
+
+### Inspect packet diagnostics over SSH
+
+The supplied service explicitly sets `--log-dir /var/lib/yame/logs`.
+Read the dedicated unsupported-packet summary without watching the HDMI dashboard:
+
+```sh
+sudo tail -f /var/lib/yame/logs/unhandled.log
+sudo ls /var/lib/yame/logs/unhandled/icmp-type-3/
+```
+
+Individual `.txt` captures under `logs/unhandled/<packet-type>/` contain the original
+packet bytes in hex and the reason for dropping them. Copy useful captures off the
+Pi for regression fixtures before automatic retention removes them (10 per packet type and 1000 files total by default).
+To change the root, override `ExecStart` in a systemd drop-in and pass `--log-dir`;
+make sure the service user can write to the new directory. See the main README for
+capture format, retention, and replay instructions.

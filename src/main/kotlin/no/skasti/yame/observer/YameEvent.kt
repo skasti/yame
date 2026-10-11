@@ -31,6 +31,17 @@ enum class HttpProxyActionKind {
 }
 
 sealed interface YameEvent {
+    /** Immutable diagnostic snapshot; bytes are an IPv4 packet or a PPP payload. */
+    class UnhandledPacket(
+        val packetType: String,
+        val reason: String,
+        val pppProtocol: Int,
+        bytes: ByteArray,
+    ) : YameEvent {
+        private val snapshot = bytes.copyOf()
+        fun bytes(): ByteArray = snapshot.copyOf()
+    }
+
     data class DnsQuery(
         val key: String,
         val transport: DnsTransport,

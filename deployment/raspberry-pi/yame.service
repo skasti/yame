@@ -7,7 +7,7 @@ Conflicts=getty@tty1.service
 [Service]
 Type=simple
 WorkingDirectory=/var/lib/yame
-ExecStart=/opt/yame/current/bin/yame --ui tui
+ExecStart=/opt/yame/current/bin/yame --ui tui --log-dir /var/lib/yame/logs
 Environment=TERM=linux
 Environment="JAVA_TOOL_OPTIONS=-Xms64m -Xmx256m"
 SupplementaryGroups=dialout audio

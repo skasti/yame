@@ -34,6 +34,7 @@ enum class YameLogModule(val fileName: String) {
     DNS("dns"),
     PROXY("proxy"),
     TRANSFERS("transfers"),
+    UNHANDLED("unhandled"),
 }
 
 class YameLogManager(
@@ -41,6 +42,7 @@ class YameLogManager(
     private val logDirectory: Path = Path.of("logs"),
     private val maxActiveLogBytes: Long = 10L * 1024L * 1024L,
     private val maxArchivesPerModule: Int = 5,
+    captureLimits: PacketCaptureLimits = PacketCaptureLimits(),
 ) : AutoCloseable {
     init {
         require(maxActiveLogBytes > 0) { "maxActiveLogBytes must be positive" }
@@ -53,6 +55,7 @@ class YameLogManager(
         @Volatile var writeFailed: Boolean = writer == null,
     )
 
+    private val captures = UnhandledPacketRecorder(logDirectory, captureLimits)
     private val lock = Any()
     private val writers: Map<YameLogModule, ModuleWriter>
 
@@ -87,6 +90,12 @@ class YameLogManager(
         }
     }
 
+    val captureLimits: PacketCaptureLimits get() = captures.limits
+
+    fun setCaptureLimit(kind: PacketCaptureLimitKind, value: Int) {
+        captures.updateLimits(kind.apply(captures.limits, value))
+    }
+
     fun level(module: YameLogModule): YameLogLevel =
         writers[module]?.level ?: YameLogLevel.INFO
 
@@ -105,6 +114,14 @@ class YameLogManager(
 
     fun eventSink(event: YameEvent) {
         when (event) {
+            is YameEvent.UnhandledPacket -> {
+                captures.record(event, onReceived = {
+                    log(YameLogModule.UNHANDLED, YameLogLevel.WARN, event.reason)
+                }) { path ->
+                    log(YameLogModule.UNHANDLED, YameLogLevel.INFO, "${event.reason}; capture=$path")
+                }
+            }
+
             is YameEvent.DnsQuery ->
                 log(
                     YameLogModule.DNS,
@@ -190,6 +207,7 @@ class YameLogManager(
     }
 
     override fun close() {
+        captures.close()
         synchronized(lock) {
             writers.values.forEach { entry ->
                 entry.writer?.let { writer ->

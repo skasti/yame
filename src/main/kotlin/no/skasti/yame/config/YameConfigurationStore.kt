@@ -1,5 +1,6 @@
 package no.skasti.yame.config
 
+import no.skasti.yame.logging.PacketCaptureLimitKind
 import no.skasti.yame.logging.YameLogLevel
 import no.skasti.yame.logging.YameLogModule
 import no.skasti.yame.modem.HayesModemConfig
@@ -110,6 +111,10 @@ class YameConfigurationStore(private val path: Path) {
             }
         require(baudRate > 0) { "serial.baud in $path must be positive" }
 
+        val captureLimits = PacketCaptureLimitKind.entries.fold(defaults.captureLimits) { limits, kind ->
+            properties.getProperty(kind.configKey)?.let { kind.apply(limits, kind.parse(it)) } ?: limits
+        }
+
         return YameConfiguration(
             portName = properties.getProperty("serial.port")
                 ?.takeIf(String::isNotBlank)
@@ -120,6 +125,7 @@ class YameConfigurationStore(private val path: Path) {
                 ?: defaults.flowControl,
             modemConfig = modemConfig,
             logLevels = logLevels,
+            captureLimits = captureLimits,
         )
     }
 
@@ -149,6 +155,9 @@ class YameConfigurationStore(private val path: Path) {
                 "http-https-proxy.enabled",
                 configuration.modemConfig.pppHttpCompatibilityConfig.enabled.toString(),
             )
+            PacketCaptureLimitKind.entries.forEach { kind ->
+                setProperty(kind.configKey, kind.value(configuration.captureLimits).toString())
+            }
             configuration.logLevels.forEach { (module, level) ->
                 setProperty("loglevel.${module.fileName}", level.name.lowercase())
             }

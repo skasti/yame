@@ -2,6 +2,7 @@ package no.skasti.yame.ui
 
 import com.github.ajalt.mordant.terminal.Terminal
 import no.skasti.yame.config.YameConfiguration
+import no.skasti.yame.logging.PacketCaptureLimitKind
 import no.skasti.yame.logging.YameLogLevel
 import no.skasti.yame.logging.YameLogManager
 import no.skasti.yame.logging.YameLogModule
@@ -82,6 +83,8 @@ class InteractiveYameApplication(
         onToneSimulationSelected = ::selectToneSimulation,
         initialLogLevels = initialLogLevels,
         onLogLevelSelected = ::selectLogLevel,
+        initialCaptureLimits = logManager.captureLimits,
+        onCaptureLimitSelected = ::selectCaptureLimit,
         onLoginAdded = ::addLoginCredentials,
         onDisconnect = ::disconnect,
         onReconnect = ::reconnect,
@@ -262,6 +265,13 @@ class InteractiveYameApplication(
         }
         updateObserverSettings()
         observer.onLog("Tone simulation ${if (enabled) "enabled" else "disabled"}")
+    }
+
+    private fun selectCaptureLimit(kind: PacketCaptureLimitKind, value: Int) {
+        logManager.setCaptureLimit(kind, value)
+        observer.updateCaptureLimits(logManager.captureLimits)
+        persistConfiguration { saved -> saved.copy(captureLimits = kind.apply(saved.captureLimits, value)) }
+        observer.onLog("${kind.commandName} changed to $value")
     }
 
     private fun selectLogLevel(module: YameLogModule, level: YameLogLevel) {

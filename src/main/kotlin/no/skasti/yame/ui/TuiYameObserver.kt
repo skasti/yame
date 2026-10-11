@@ -10,6 +10,8 @@ import com.github.ajalt.mordant.rendering.TextColors.yellow
 import com.github.ajalt.mordant.rendering.TextStyles.bold
 import com.github.ajalt.mordant.rendering.TextStyles.inverse
 import com.github.ajalt.mordant.terminal.Terminal
+import no.skasti.yame.logging.PacketCaptureLimits
+import no.skasti.yame.logging.PacketCaptureLimitKind
 import no.skasti.yame.logging.YameLogLevel
 import no.skasti.yame.logging.YameLogModule
 import no.skasti.yame.observer.TransferDirection
@@ -35,6 +37,8 @@ class TuiYameObserver(
     initialDnsUpstream: String,
     initialHttpProxyEnabled: Boolean,
     initialToneSimulationEnabled: Boolean,
+    initialCaptureLimits: PacketCaptureLimits = PacketCaptureLimits(),
+    private val onCaptureLimitSelected: (PacketCaptureLimitKind, Int) -> Unit = { _, _ -> },
     initialLogLevels: Map<YameLogModule, YameLogLevel> = emptyMap(),
     private val onQuit: () -> Unit = {},
     private val onPortSelected: (String) -> Unit = {},
@@ -50,6 +54,11 @@ class TuiYameObserver(
     private val onRefreshPorts: () -> Unit = {},
     private val terminal: Terminal = Terminal(interactive = true),
 ) : AutoCloseable {
+    private var captureLimits = initialCaptureLimits
+
+    @Synchronized
+    fun updateCaptureLimits(value: PacketCaptureLimits) { captureLimits = value }
+
     private var portName = initialPortName
     private var baud = initialBaud
     private var flowControl = initialFlowControl
@@ -199,17 +208,22 @@ class TuiYameObserver(
 
     @Synchronized
     fun onLog(message: String) {
+        appendLog(message)
+        render()
+    }
+
+    private fun appendLog(message: String) {
         val timestamp = LocalTime.now().format(TIME_FORMAT)
         logs.addLast("$timestamp  $message")
         while (logs.size > MAX_LOG_LINES) {
             logs.removeFirst()
         }
-        render()
     }
 
     @Synchronized
     fun onEvent(event: YameEvent) {
         when (event) {
+            is YameEvent.UnhandledPacket -> appendLog(event.reason)
             is YameEvent.DnsQuery -> {
                 val existing = dnsLookups.indexOfFirst { it.key == event.key }
                 val lookup = DashboardDnsLookup(
@@ -720,6 +734,12 @@ class TuiYameObserver(
                             val next = palette.input.dropLast(1).ifEmpty { "/" }
                             commandPalette = commandPaletteFor(next)
                         }
+                        TuiPaletteMode.CAPTURE_LIMIT -> {
+                            val prefix = palette.input.substringBefore(' ') + " "
+                            if (palette.input.length > prefix.length) {
+                                commandPalette = palette.copy(input = palette.input.dropLast(1))
+                            }
+                        }
                         TuiPaletteMode.DNS ->
                             commandPalette = palette.copy(input = palette.input.dropLast(1))
                         TuiPaletteMode.LOGIN -> {
@@ -738,6 +758,10 @@ class TuiYameObserver(
                     key.length == 1 &&
                     !key[0].isISOControl() -> {
                     commandPalette = commandPaletteFor(palette.input + key)
+                    null
+                }
+                palette.mode == TuiPaletteMode.CAPTURE_LIMIT && key.length == 1 && key[0].isDigit() -> {
+                    commandPalette = palette.copy(input = palette.input + key)
                     null
                 }
                 palette.mode == TuiPaletteMode.DNS &&
@@ -778,6 +802,31 @@ class TuiYameObserver(
 
     private fun executePaletteSelection(): (() -> Unit)? {
         val palette = commandPalette ?: return null
+
+        if (palette.mode == TuiPaletteMode.CAPTURE_LIMIT) {
+            val command = parseCaptureLimitInput(palette.input)
+            if (command == null) {
+                commandPalette = palette.copy(title = "Capture limit: enter a positive integer")
+                return null
+            }
+            commandPalette = null
+            return { onCaptureLimitSelected(command.first, command.second) }
+        }
+
+        if (palette.mode == TuiPaletteMode.COMMANDS) {
+            val kind = PacketCaptureLimitKind.entries.firstOrNull {
+                palette.input.startsWith("/${it.commandName} ", ignoreCase = true)
+            }
+            if (kind != null) {
+                val command = parseCaptureLimitInput(palette.input)
+                if (command == null) {
+                    commandPalette = palette.copy(title = "Capture limit: enter a positive integer")
+                    return null
+                }
+                commandPalette = null
+                return { onCaptureLimitSelected(command.first, command.second) }
+            }
+        }
 
         if (palette.mode == TuiPaletteMode.LOGIN) {
             val credentials = parseLoginInput(palette.input)
@@ -838,6 +887,16 @@ class TuiYameObserver(
                     openLoginAddPalette()
                     null
                 }
+                "/capture-limit-per-type", "/capture-limit-total" -> {
+                    val kind = PacketCaptureLimitKind.entries.single { "/${it.commandName}" == selected.value }
+                    commandPalette = TuiCommandPalette(
+                        mode = TuiPaletteMode.CAPTURE_LIMIT,
+                        input = "/${kind.commandName} ",
+                        title = "Capture limit (current: ${kind.value(captureLimits)}): enter a positive integer",
+                        options = emptyList(), selectedIndex = 0,
+                    )
+                    null
+                }
                 "/loglevel-modem" -> {
                     openLogLevelPalette(YameLogModule.MODEM)
                     null
@@ -856,6 +915,10 @@ class TuiYameObserver(
                 }
                 "/loglevel-proxy" -> {
                     openLogLevelPalette(YameLogModule.PROXY)
+                    null
+                }
+                "/loglevel-unhandled" -> {
+                    openLogLevelPalette(YameLogModule.UNHANDLED)
                     null
                 }
                 "/loglevel-transfers" -> {
@@ -934,6 +997,7 @@ class TuiYameObserver(
             }
 
             TuiPaletteMode.DNS,
+            TuiPaletteMode.CAPTURE_LIMIT,
             TuiPaletteMode.LOGIN -> null
         }
     }
@@ -1050,11 +1114,14 @@ class TuiYameObserver(
             TuiCommandOption("/http-proxy", "Enable or disable HTTP/TLS compatibility", "/http-proxy"),
             TuiCommandOption(TUI_TONE_COMMAND, "Enable or disable modem tones", TUI_TONE_COMMAND),
             TuiCommandOption(TUI_LOGIN_COMMAND, "Set terminal login credentials", TUI_LOGIN_COMMAND),
+            TuiCommandOption("/capture-limit-per-type", "Maximum captures per packet type", "/capture-limit-per-type"),
+            TuiCommandOption("/capture-limit-total", "Maximum captures across all packet types", "/capture-limit-total"),
             TuiCommandOption("/loglevel-modem", "Set modem file log level", "/loglevel-modem"),
             TuiCommandOption("/loglevel-serial", "Set serial file log level", "/loglevel-serial"),
             TuiCommandOption("/loglevel-ppp", "Set ppp file log level", "/loglevel-ppp"),
             TuiCommandOption("/loglevel-dns", "Set dns file log level", "/loglevel-dns"),
             TuiCommandOption("/loglevel-proxy", "Set proxy file log level", "/loglevel-proxy"),
+            TuiCommandOption("/loglevel-unhandled", "Set unhandled file log level", "/loglevel-unhandled"),
             TuiCommandOption("/loglevel-transfers", "Set transfers file log level", "/loglevel-transfers"),
             TuiCommandOption("/reconnect", "Open the selected serial port", "/reconnect"),
             TuiCommandOption("/disconnect", "Close the current serial port", "/disconnect"),
@@ -1131,6 +1198,7 @@ internal enum class TuiPaletteMode {
     HTTP,
     TONE,
     LOG_LEVEL,
+    CAPTURE_LIMIT,
     LOGIN,
 }
 
@@ -1679,6 +1747,11 @@ internal object YameDashboardRenderer {
 
         if (palette.mode == TuiPaletteMode.DNS) {
             result += DashboardLine("Enter an IPv4 address, then press Enter.", DashboardTone.MUTED)
+            return result.take(visibleRows)
+        }
+
+        if (palette.mode == TuiPaletteMode.CAPTURE_LIMIT) {
+            result += DashboardLine("Enter a positive integer, then press Enter.", DashboardTone.MUTED)
             return result.take(visibleRows)
         }
 
