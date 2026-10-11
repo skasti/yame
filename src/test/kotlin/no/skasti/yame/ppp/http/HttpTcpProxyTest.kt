@@ -15,9 +15,6 @@ import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class HttpTcpProxyTest {
-    // Reproduced against main: shutdownOutput fails with "HTTP flow is not connected".
-    // Keep this regression active: it describes the desired behavior and is
-    // expected to fail until late peer FIN handling is fixed.
     @Test
     fun `client FIN after completed HTTP response succeeds`() {
         val connectionRemoved = CountDownLatch(1)
@@ -64,7 +61,9 @@ class HttpTcpProxyTest {
             // would turn successful response delivery into FAILED and a TCP reset.
             val shutdown = proxy.shutdownOutput(flow)
             assertTrue(shutdown.isSuccess, "Client FIN failed: ${shutdown.exceptionOrNull()}")
+            proxy.shutdownOutput(flow).getOrThrow()
             assertTrue(events.isEmpty(), "Client FIN must not emit another response or EOF")
+            assertTrue(proxy.send(flow, "unexpected data".encodeToByteArray()).isFailure)
         } finally {
             proxy.close()
         }
