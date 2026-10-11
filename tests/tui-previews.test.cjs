@@ -157,5 +157,7 @@ test('publication writes only PNGs and reports inherited status after verifying 
     assert.equal(calls[3][1].context, 'build-and-test');
     assert.equal(calls[3][1].state, 'success');
     assert.ok(calls[4][1].body.includes(`/${successor}/assets/screenshots/30x100.png`));
+    assert.equal((calls[4][1].body.match(/!\[/g) || []).length, 10);
+    assert.ok(!calls[4][1].body.includes('<details>'));
   } finally { fs.rmSync(directory, {recursive: true, force: true}); }
 });

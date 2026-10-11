@@ -158,9 +158,9 @@ async function publish({github, context, core}, number, directory) {
   const body = `${marker}\n### YAME terminal previews\n\n` +
     `Rendered from code commit \`${run.head_sha.slice(0, 8)}\`; [CI run](${run.html_url}). ` +
     `Fixed font/colors, production dashboard renderer, synthetic data. Sizes are rows × columns.\n\n` +
-    filenames.map(name => `<details>\n<summary>${name.replace('.png', '')}</summary>\n\n![${name}](${url(name)})\n\n</details>`).join('\n\n');
+    filenames.map(name => `#### ${name.replace('.png', '')}\n\n![${name}](${url(name)})`).join('\n\n');
   const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number: pr.number});
-  const existing = comments.find(c => c.user.login === 'github-actions[bot]' && c.body.startsWith(marker));
+  const existing = comments.find(c => ['github-actions[bot]', 'chatgpt-codex-connector[bot]'].includes(c.user.login) && c.body.startsWith(marker));
   if (existing) await github.rest.issues.updateComment({...repo, comment_id: existing.id, body});
   else await github.rest.issues.createComment({...repo, issue_number: pr.number, body});
 }
