@@ -13,7 +13,14 @@ if [[ ${EUID} -ne 0 ]]; then
   exit 1
 fi
 
-mkdir -p "$RELEASES"
+# The immutable release tree must be traversable by the unprivileged
+# service account, even when this root-run script inherits umask 077.
+# Avoid chmod operations through unexpected symlinks.
+if [[ -L "$BASE" || -L "$RELEASES" ]]; then
+  echo "Refusing symlinked YAME installation directories" >&2
+  exit 1
+fi
+install -d -m 755 "$BASE" "$RELEASES"
 exec 9>"$BASE/.update.lock"
 flock -n 9 || { echo "Another YAME update is running"; exit 0; }
 
