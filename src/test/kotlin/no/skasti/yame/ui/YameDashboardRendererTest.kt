@@ -155,7 +155,7 @@ class YameDashboardRendererTest {
         assertContains(rendered, "93.184.216.34:80")
         assertContains(rendered, "example.test  (2)")
         assertContains(rendered, ">  *")
-        assertContains(rendered, "…hero.jpg")
+        assertContains(rendered, "/assets/hero.jpg")
         assertContains(rendered, "[P]")
         assertContains(rendered, "184K->31K -83%")
     }
