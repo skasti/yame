@@ -17,6 +17,12 @@ if [[ -z "$YAME_USER" || "$YAME_USER" == root ]] || ! id "$YAME_USER" >/dev/null
 fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# Check the existing service account before apt-get, directory ownership or
+# systemd configuration is changed. Switching users requires manual migration.
+# shellcheck source=deployment/raspberry-pi/data-directory.sh
+source "$SCRIPT_DIR/data-directory.sh"
+verify_yame_service_account "$YAME_USER" \
+  /etc/systemd/system/yame.service.d/user.conf /var/lib/yame
 echo "Installing YAME for $YAME_USER (tty1)..."
 
 apt-get update
@@ -49,8 +55,6 @@ fi
 java -version
 
 install -d -m 755 /opt/yame/releases
-# shellcheck source=deployment/raspberry-pi/data-directory.sh
-source "$SCRIPT_DIR/data-directory.sh"
 prepare_yame_data_directory /var/lib/yame "$YAME_USER"
 usermod -aG dialout,audio "$YAME_USER"
 
