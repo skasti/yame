@@ -49,12 +49,9 @@ fi
 java -version
 
 install -d -m 755 /opt/yame/releases
-install -d -m 700 -o "$YAME_USER" -g "$(id -gn "$YAME_USER")" /var/lib/yame
-# Never overwrite configuration, even when re-running the installer.
-if [[ -f /var/lib/yame/yame.ini ]]; then
-  chown "$YAME_USER:$(id -gn "$YAME_USER")" /var/lib/yame/yame.ini
-  chmod 600 /var/lib/yame/yame.ini
-fi
+# shellcheck source=deployment/raspberry-pi/data-directory.sh
+source "$SCRIPT_DIR/data-directory.sh"
+prepare_yame_data_directory /var/lib/yame "$YAME_USER"
 usermod -aG dialout,audio "$YAME_USER"
 
 install -d -m 755 /usr/local/lib/yame
