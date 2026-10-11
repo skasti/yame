@@ -84,6 +84,10 @@ Boot -> yame-update.service -> yame.service -> HDMI tty1 TUI
   needs an internet connection and a published ARM64 asset; without one,
   the installer preserves the local login console instead of starting a broken
   systemd service.
+- GitHub's release **metadata** response is capped at **1 MiB while
+  streaming**, before JSON parsing or buffering into a shell variable.
+  Invalid, truncated, oversized, or multiple JSON documents are rejected,
+  keeping the existing YAME installation active.
 - Downloads are capped at **64 MiB** at the byte-stream level, including
   responses without `Content-Length` (older Bookworm curl versions do not
   reliably enforce `--max-filesize` for such responses). ZIP extraction
@@ -203,8 +207,9 @@ sudo systemctl enable --now getty@tty1.service
 The updater has offline integration tests using mocked GitHub API/download
 responses. They verify release activation, retention, recovery of an interrupted
 update, offline/first-boot fallback, checksum failure, oversized downloads,
-ZIP expansion limits, excessive file counts, path traversal and oversized
-streamed downloads without a known Content-Length, and a restrictive
+ZIP expansion limits, excessive file counts, path traversal, oversized
+streamed ZIP and API metadata responses without a known Content-Length,
+truncated/multiple JSON documents, and a restrictive
 root `umask 077` with non-root file-read/execute checks, without touching the host's `/opt/yame` directory:
 
 ```sh
