@@ -42,6 +42,7 @@ class YameLogManager(
     private val logDirectory: Path = Path.of("logs"),
     private val maxActiveLogBytes: Long = 10L * 1024L * 1024L,
     private val maxArchivesPerModule: Int = 5,
+    captureLimits: PacketCaptureLimits = PacketCaptureLimits(),
 ) : AutoCloseable {
     init {
         require(maxActiveLogBytes > 0) { "maxActiveLogBytes must be positive" }
@@ -54,7 +55,7 @@ class YameLogManager(
         @Volatile var writeFailed: Boolean = writer == null,
     )
 
-    private val captures = UnhandledPacketRecorder(logDirectory)
+    private val captures = UnhandledPacketRecorder(logDirectory, captureLimits)
     private val lock = Any()
     private val writers: Map<YameLogModule, ModuleWriter>
 
@@ -87,6 +88,12 @@ class YameLogManager(
                 )
             }
         }
+    }
+
+    val captureLimits: PacketCaptureLimits get() = captures.limits
+
+    fun setCaptureLimit(kind: PacketCaptureLimitKind, value: Int) {
+        captures.updateLimits(kind.apply(captures.limits, value))
     }
 
     fun level(module: YameLogModule): YameLogLevel =

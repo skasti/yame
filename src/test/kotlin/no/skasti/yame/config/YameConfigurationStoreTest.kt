@@ -1,5 +1,6 @@
 package no.skasti.yame.config
 
+import no.skasti.yame.logging.PacketCaptureLimits
 import no.skasti.yame.logging.YameLogLevel
 import no.skasti.yame.logging.YameLogManager
 import no.skasti.yame.logging.YameLogModule
@@ -25,6 +26,15 @@ import kotlin.time.Duration.Companion.seconds
 import org.junit.jupiter.api.io.TempDir
 
 class YameConfigurationStoreTest {
+    @Test
+    fun `invalid capture limits in saved configuration are rejected`() {
+        val path = tempDirectory.resolve("capture-limits.ini")
+        for (value in listOf("0", "-1", "no", "2147483648")) {
+            Files.writeString(path, "capture.max-per-type=$value")
+            assertFailsWith<IllegalStateException> { YameConfigurationStore(path).load() }
+        }
+    }
+
     @TempDir
     lateinit var tempDirectory: Path
 
@@ -48,6 +58,7 @@ class YameConfigurationStoreTest {
                 pppHttpCompatibilityConfig = PppHttpCompatibilityConfig(enabled = false),
             ),
             logLevels = YameLogModule.entries.associateWith { YameLogLevel.DEBUG },
+            captureLimits = PacketCaptureLimits(maxPerType = 20, maxTotal = 500),
         )
 
         store.save(expected)

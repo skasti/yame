@@ -351,11 +351,26 @@ protocols they are the PPP payload (without serial framing/FCS). Replay by decod
 Captures include packet contents and may contain private data; inspect before sharing.
 
 A background writer queues at most 64 packets (at most 65535 bytes each) and retains
-at most 1000 capture files across all packet types, including previous runs. It deletes
+at most 10 capture files per packet type and 1000 files total, including previous runs.
+Both limits apply simultaneously. It deletes
 the oldest captures before saving new ones; copy useful fixtures elsewhere to preserve them.
 The summary logs keep the usual 10 MiB rotation and five archives per module.
 A full queue drops captures; capture IO failures are reported once to stderr, without
 stopping the modem. Capture collection is independent of log-level filtering.
+
+Change limits live without reconnecting:
+
+```text
+/capture-limit-per-type 20
+/capture-limit-total 2000
+```
+
+Both commands are also available in the `/` palette, which displays the current value.
+TUI changes are saved as `capture.max-per-type` and `capture.max-total` in `yame.ini`.
+Use `--capture-limit-per-type N` and `--capture-limit-total N` to override saved values
+for one run. Counts must be positive integers; zero does not mean unlimited.
+Lowering either limit schedules background cleanup of existing captures, even if no
+new packets arrive. Startup also applies the configured limits to previous captures.
 Malformed packets and expected lifecycle drops (such as traffic before IPCP opens)
 remain in the existing protocol logs rather than this unsupported-packet collection.
 

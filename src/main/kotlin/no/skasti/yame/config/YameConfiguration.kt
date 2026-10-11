@@ -1,5 +1,6 @@
 package no.skasti.yame.config
 
+import no.skasti.yame.logging.PacketCaptureLimits
 import no.skasti.yame.logging.YameLogLevel
 import no.skasti.yame.logging.YameLogManager
 import no.skasti.yame.logging.YameLogModule
@@ -11,6 +12,7 @@ data class YameConfiguration(
     val baudRate: Int = 38_400,
     val flowControl: SerialFlowControl = SerialFlowControl.DISABLED,
     val modemConfig: HayesModemConfig = HayesModemConfig(),
+    val captureLimits: PacketCaptureLimits = PacketCaptureLimits(),
     val logLevels: Map<YameLogModule, YameLogLevel> = YameLogManager.defaultLevels(),
 ) {
     init {

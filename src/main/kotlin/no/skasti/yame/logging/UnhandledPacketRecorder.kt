@@ -17,8 +17,12 @@ import java.util.concurrent.atomic.AtomicBoolean
 /** Bounded diagnostic IO, isolated from the serial/PPP receive thread. */
 internal class UnhandledPacketRecorder(
     logRoot: Path,
-    private val maxFiles: Int = 1000,
+    initialLimits: PacketCaptureLimits = PacketCaptureLimits(),
 ) : AutoCloseable {
+    @Volatile
+    var limits: PacketCaptureLimits = initialLimits
+        private set
+
     private val root = logRoot.resolve("unhandled")
     private val failureReported = AtomicBoolean()
     private val executor = ThreadPoolExecutor(
@@ -28,7 +32,7 @@ internal class UnhandledPacketRecorder(
     )
 
     init {
-        require(maxFiles > 0)
+        schedulePruning()
     }
 
     fun record(event: YameEvent.UnhandledPacket, onCaptured: (String) -> Unit) {
@@ -46,7 +50,7 @@ internal class UnhandledPacketRecorder(
                     val directory = root.resolve(event.packetType)
                     Files.createDirectories(directory)
                     check(!Files.isSymbolicLink(directory)) { "capture directory must not be a symbolic link" }
-                    pruneBeforeWrite()
+                    prune(event.packetType)
                     val path = directory.resolve("${timestamp.toString().replace(':', '-')}-${UUID.randomUUID()}.txt")
                     Files.newBufferedWriter(path, CREATE_NEW, WRITE).use { writer ->
                         writer.appendLine("format=yame-unhandled-v1")
@@ -68,18 +72,47 @@ internal class UnhandledPacketRecorder(
         }
     }
 
-    private fun pruneBeforeWrite() {
+    fun updateLimits(value: PacketCaptureLimits) {
+        limits = value
+        schedulePruning()
+    }
+
+    private fun schedulePruning() {
+        try {
+            executor.execute {
+                runCatching { prune() }.onFailure { reportFailure(it.message ?: "retention failure") }
+            }
+        } catch (_: RejectedExecutionException) {
+            // Queued captures also apply the latest limits before writing.
+            reportFailure("capture queue full or recorder closed; retention deferred")
+        }
+    }
+
+    private fun prune(incomingType: String? = null) {
+        if (!Files.exists(root, NOFOLLOW_LINKS)) return
+        check(!Files.isSymbolicLink(root)) { "capture root must not be a symbolic link" }
+        val current = limits
         // Do not follow links or remove unrelated files. Only this recorder's format is retained.
         val captures = Files.walk(root, 2).use { paths ->
             paths.filter { path ->
-                Files.isRegularFile(path, NOFOLLOW_LINKS) &&
+                Files.isRegularFile(path, NOFOLLOW_LINKS) && path.parent?.parent == root &&
                     path.fileName.toString().matches(CAPTURE_NAME)
             }.sorted { left, right ->
                 Files.getLastModifiedTime(left, NOFOLLOW_LINKS)
                     .compareTo(Files.getLastModifiedTime(right, NOFOLLOW_LINKS))
             }.toList()
         }
-        captures.take((captures.size - maxFiles + 1).coerceAtLeast(0)).forEach(Files::delete)
+        val removed = mutableSetOf<Path>()
+        captures.groupBy { it.parent.fileName.toString() }.forEach { (type, files) ->
+            val reserved = if (type == incomingType) 1 else 0
+            files.take((files.size - current.maxPerType + reserved).coerceAtLeast(0)).forEach {
+                Files.delete(it)
+                removed.add(it)
+            }
+        }
+        val remaining = captures.filterNot { it in removed }
+        val reserved = if (incomingType == null) 0 else 1
+        remaining.take((remaining.size - current.maxTotal + reserved).coerceAtLeast(0)).forEach(Files::delete)
     }
 
     private fun reportFailure(message: String) {

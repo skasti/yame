@@ -15,6 +15,39 @@ import java.util.concurrent.atomic.AtomicInteger
 
 class UnhandledPacketRecorderTest {
     @Test
+    fun `per type and total limits apply together and live lowering prunes existing captures`() {
+        val root = Files.createTempDirectory("yame-capture-limits")
+        fun captures() = Files.walk(root).use { paths ->
+            paths.filter { Files.isRegularFile(it) }.toList()
+        }
+        UnhandledPacketRecorder(root, PacketCaptureLimits(maxPerType = 2, maxTotal = 3)).use { recorder ->
+            repeat(4) { index ->
+                val saved = CountDownLatch(1)
+                recorder.record(YameEvent.UnhandledPacket("udp", "udp-$index", 33, byteArrayOf(1))) {
+                    saved.countDown()
+                }
+                assertTrue(saved.await(5, TimeUnit.SECONDS))
+                assertTrue(captures().size <= 2)
+            }
+            assertTrue(captures().none { "reason=udp-0" in it.readText() || "reason=udp-1" in it.readText() })
+            repeat(2) { index ->
+                val saved = CountDownLatch(1)
+                recorder.record(YameEvent.UnhandledPacket("tcp", "tcp-$index", 33, byteArrayOf(1))) {
+                    saved.countDown()
+                }
+                assertTrue(saved.await(5, TimeUnit.SECONDS))
+            }
+            assertEquals(3, captures().size)
+            assertEquals(2, captures().count { it.parent.fileName.toString() == "tcp" })
+            recorder.updateLimits(PacketCaptureLimits(maxPerType = 1, maxTotal = 2))
+        }
+        assertEquals(2, captures().size)
+        assertTrue(captures().groupBy { it.parent }.values.all { it.size <= 1 })
+        UnhandledPacketRecorder(root, PacketCaptureLimits(maxPerType = 10, maxTotal = 1)).close()
+        assertEquals(1, captures().size)
+    }
+
+    @Test
     fun `full capture queue drops excess work without blocking the caller`() {
         val root = Files.createTempDirectory("yame-capture-queue")
         val workerEntered = CountDownLatch(1)
@@ -63,7 +96,7 @@ class UnhandledPacketRecorderTest {
     fun `retention covers all types and previous runs and preserves unrelated files`() {
         val root = Files.createTempDirectory("yame-capture-retention")
         fun record(index: Int, type: String) {
-            UnhandledPacketRecorder(root, maxFiles = 2).use {
+            UnhandledPacketRecorder(root, initialLimits = PacketCaptureLimits(maxTotal = 2)).use {
                 it.record(YameEvent.UnhandledPacket(type, "packet-$index", 33, byteArrayOf(index.toByte()))) {}
             }
         }

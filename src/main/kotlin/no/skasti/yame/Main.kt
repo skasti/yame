@@ -3,6 +3,8 @@ package no.skasti.yame
 import com.github.ajalt.mordant.terminal.Terminal
 import no.skasti.yame.config.YameConfiguration
 import no.skasti.yame.config.YameConfigurationStore
+import no.skasti.yame.logging.PacketCaptureLimits
+import no.skasti.yame.logging.PacketCaptureLimitKind
 import no.skasti.yame.logging.YameLogLevel
 import no.skasti.yame.logging.YameLogManager
 import no.skasti.yame.logging.YameLogModule
@@ -49,7 +51,7 @@ fun main(args: Array<String>) {
         return
     }
 
-    val logManager = YameLogManager(options.logLevels, options.logDirectory)
+    val logManager = YameLogManager(options.logLevels, options.logDirectory, captureLimits = options.captureLimits)
     try {
 
     if (options.testNumber != null) {
@@ -222,6 +224,7 @@ private data class Options(
     val logLevels: Map<YameLogModule, YameLogLevel>,
     val configPath: Path,
     val logDirectory: Path,
+    val captureLimits: PacketCaptureLimits,
 )
 
 internal fun resolveLoginCredentials(
@@ -263,6 +266,7 @@ private fun parseArgs(
     val logLevels = savedConfiguration.logLevels.toMutableMap()
     var uiMode = UiMode.AUTO
     var logDirectory = Path.of("logs")
+    var captureLimits = savedConfiguration.captureLimits
 
     var i = 0
     while (i < args.size) {
@@ -332,6 +336,11 @@ private fun parseArgs(
                 val module = logModuleForArgument(arg)
                 logLevels[module] = YameLogLevel.parse(args[++i])
             }
+            "--capture-limit-per-type", "--capture-limit-total" -> {
+                val kind = PacketCaptureLimitKind.entries.single { "--${it.commandName}" == arg }
+                require(i + 1 < args.size) { "$arg requires a positive integer" }
+                captureLimits = kind.apply(captureLimits, kind.parse(args[++i]))
+            }
             "--log-dir" -> {
                 require(i + 1 < args.size) { "$arg requires a directory" }
                 val value = args[++i]
@@ -385,6 +394,7 @@ private fun parseArgs(
         logLevels = logLevels.toMap(),
         configPath = configPath,
         logDirectory = logDirectory,
+        captureLimits = captureLimits,
     )
 }
 
@@ -477,6 +487,8 @@ private fun printUsage() {
               --dns-upstream IP       DNS server used by YAME's local DNS proxy (default: ${defaults.pppDnsConfig.upstreamServer})
               --http-https-proxy      Enable HTTP/HTTPS compatibility proxy (default)
               --no-http-https-proxy   Disable compatibility proxy and use normal TCP forwarding
+              --capture-limit-per-type N Maximum captures per packet type (default: 10)
+              --capture-limit-total N Maximum captures across all types (default: 1000)
               --log-dir DIRECTORY     Log root (default: logs in the working directory)
               --loglevel-unhandled L  unhandled.log level: error|warn|info|debug (default: info)
               --loglevel-modem LEVEL  modem.log level: error|warn|info|debug (default: info)
