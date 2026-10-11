@@ -4,15 +4,13 @@ import no.skasti.yame.observer.YameEvent
 import java.nio.file.Files
 import java.nio.file.LinkOption.NOFOLLOW_LINKS
 import java.nio.file.Path
-import java.nio.file.StandardOpenOption.CREATE_NEW
-import java.nio.file.StandardOpenOption.WRITE
 import java.time.Instant
-import java.util.UUID
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /** Bounded diagnostic IO, isolated from the serial/PPP receive thread. */
 internal class UnhandledPacketRecorder(
@@ -23,8 +21,10 @@ internal class UnhandledPacketRecorder(
     var limits: PacketCaptureLimits = initialLimits
         private set
 
+    private val fileWriter = PacketCaptureFileWriter()
     private val root = logRoot.resolve("unhandled")
     private val failureReported = AtomicBoolean()
+    private val pendingFailure = AtomicReference<String?>()
     private val executor = ThreadPoolExecutor(
         1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue(64),
         { task -> Thread(task, "yame-packet-captures").apply { isDaemon = true } },
@@ -35,40 +35,36 @@ internal class UnhandledPacketRecorder(
         schedulePruning()
     }
 
-    fun record(event: YameEvent.UnhandledPacket, onCaptured: (String) -> Unit) {
+    fun record(
+        event: YameEvent.UnhandledPacket,
+        onReceived: () -> Unit = {},
+        onCaptured: (String) -> Unit,
+    ) {
         val bytes = event.bytes()
         if (bytes.size > 65535 || !event.packetType.matches(Regex("[a-z0-9-]{1,64}"))) {
-            reportFailure("invalid packet capture metadata or size")
+            deferFailure("invalid packet capture metadata or size")
             return
         }
         val timestamp = Instant.now()
         try {
             executor.execute {
+                reportPendingFailure()
                 try {
+                    onReceived()
                     Files.createDirectories(root)
                     check(!Files.isSymbolicLink(root)) { "capture root must not be a symbolic link" }
                     val directory = root.resolve(event.packetType)
                     Files.createDirectories(directory)
                     check(!Files.isSymbolicLink(directory)) { "capture directory must not be a symbolic link" }
                     prune(event.packetType)
-                    val path = directory.resolve("${timestamp.toString().replace(':', '-')}-${UUID.randomUUID()}.txt")
-                    Files.newBufferedWriter(path, CREATE_NEW, WRITE).use { writer ->
-                        writer.appendLine("format=yame-unhandled-v1")
-                        writer.appendLine("timestamp=$timestamp")
-                        writer.appendLine("packet-type=${event.packetType}")
-                        writer.appendLine("reason=${event.reason}")
-                        writer.appendLine("ppp-protocol=${event.pppProtocol}")
-                        writer.appendLine("encoding=hex")
-                        writer.appendLine("length=${bytes.size}")
-                        writer.appendLine("data=${bytes.toHexString()}")
-                    }
+                    val path = fileWriter.write(directory, event, timestamp, bytes)
                     onCaptured(path.toString())
                 } catch (error: Exception) {
                     reportFailure(error.message ?: error.javaClass.simpleName)
                 }
             }
         } catch (_: RejectedExecutionException) {
-            reportFailure("capture queue full or recorder closed; packet capture dropped")
+            deferFailure("capture queue full or recorder closed; packet capture dropped")
         }
     }
 
@@ -80,11 +76,12 @@ internal class UnhandledPacketRecorder(
     private fun schedulePruning() {
         try {
             executor.execute {
+                reportPendingFailure()
                 runCatching { prune() }.onFailure { reportFailure(it.message ?: "retention failure") }
             }
         } catch (_: RejectedExecutionException) {
             // Queued captures also apply the latest limits before writing.
-            reportFailure("capture queue full or recorder closed; retention deferred")
+            deferFailure("capture queue full or recorder closed; retention deferred")
         }
     }
 
@@ -113,6 +110,20 @@ internal class UnhandledPacketRecorder(
         val remaining = captures.filterNot { it in removed }
         val reserved = if (incomingType == null) 0 else 1
         remaining.take((remaining.size - current.maxTotal + reserved).coerceAtLeast(0)).forEach(Files::delete)
+    }
+
+    private fun deferFailure(message: String) {
+        if (failureReported.get()) return
+        pendingFailure.compareAndSet(null, message)
+        try {
+            executor.execute { reportPendingFailure() }
+        } catch (_: RejectedExecutionException) {
+            // Already queued work reports this; rejection must never write to stderr on the caller.
+        }
+    }
+
+    private fun reportPendingFailure() {
+        pendingFailure.getAndSet(null)?.let(::reportFailure)
     }
 
     private fun reportFailure(message: String) {

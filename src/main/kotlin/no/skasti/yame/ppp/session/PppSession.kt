@@ -393,7 +393,6 @@ class PppSession(
         }
     }
     private fun unhandledPacket(type: String, reason: String, protocol: Int, bytes: ByteArray) {
-        sessionLog(reason)
         emitEvent(YameEvent.UnhandledPacket(type, reason, protocol, bytes))
     }
 

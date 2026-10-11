@@ -83,7 +83,8 @@ class PppIpv4SessionTest {
     @Test
     fun `unsupported PPP payload is captured without serial framing`() {
         val observed = mutableListOf<YameEvent>()
-        PppSession(sendFrame = {}, logger = {}, eventSink = observed::add).use { session ->
+        PppSession(sendFrame = {}, logger = { error("Unsupported packet must not invoke a synchronous logger") },
+            eventSink = observed::add).use { session ->
             val bytes = byteArrayOf(1, 2, 3)
             session.receive(PppFrame(0x8057, bytes))
             val event = observed.filterIsInstance<YameEvent.UnhandledPacket>().single()

@@ -349,13 +349,17 @@ IPv4 bytes**, including IP options and any PPP padding; for unsupported PPP
 protocols they are the PPP payload (without serial framing/FCS). Replay by decoding
 `data` from hex and feeding `PppFrame(pppProtocol, bytes)` to a negotiated session.
 Captures include packet contents and may contain private data; inspect before sharing.
+On POSIX filesystems, capture files are created with owner-only read/write permissions
+(`0600`). A capture is written to a private temporary file, closed, and then published
+with an atomic rename; failed writes leave no incomplete `.txt` fixture. Filesystems
+without atomic rename support reject captures rather than publish partial files.
 
-A background writer queues at most 64 packets (at most 65535 bytes each) and retains
+A background writer handles both summary logging and capture IO, and queues at most 64 packets (at most 65535 bytes each) and retains
 at most 10 capture files per packet type and 1000 files total, including previous runs.
 Both limits apply simultaneously. It deletes
 the oldest captures before saving new ones; copy useful fixtures elsewhere to preserve them.
 The summary logs keep the usual 10 MiB rotation and five archives per module.
-A full queue drops captures; capture IO failures are reported once to stderr, without
+A full queue drops that packet’s summary and capture; capture IO failures are reported once to stderr, without
 stopping the modem. Capture collection is independent of log-level filtering.
 
 Change limits live without reconnecting:

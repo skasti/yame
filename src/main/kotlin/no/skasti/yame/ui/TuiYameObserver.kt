@@ -208,18 +208,22 @@ class TuiYameObserver(
 
     @Synchronized
     fun onLog(message: String) {
+        appendLog(message)
+        render()
+    }
+
+    private fun appendLog(message: String) {
         val timestamp = LocalTime.now().format(TIME_FORMAT)
         logs.addLast("$timestamp  $message")
         while (logs.size > MAX_LOG_LINES) {
             logs.removeFirst()
         }
-        render()
     }
 
     @Synchronized
     fun onEvent(event: YameEvent) {
         when (event) {
-            is YameEvent.UnhandledPacket -> Unit
+            is YameEvent.UnhandledPacket -> appendLog(event.reason)
             is YameEvent.DnsQuery -> {
                 val existing = dnsLookups.indexOfFirst { it.key == event.key }
                 val lookup = DashboardDnsLookup(

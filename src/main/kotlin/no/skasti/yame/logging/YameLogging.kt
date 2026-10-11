@@ -115,8 +115,9 @@ class YameLogManager(
     fun eventSink(event: YameEvent) {
         when (event) {
             is YameEvent.UnhandledPacket -> {
-                log(YameLogModule.UNHANDLED, YameLogLevel.WARN, event.reason)
-                captures.record(event) { path ->
+                captures.record(event, onReceived = {
+                    log(YameLogModule.UNHANDLED, YameLogLevel.WARN, event.reason)
+                }) { path ->
                     log(YameLogModule.UNHANDLED, YameLogLevel.INFO, "${event.reason}; capture=$path")
                 }
             }

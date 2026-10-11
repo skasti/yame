@@ -2,6 +2,9 @@ package no.skasti.yame.logging
 
 import no.skasti.yame.observer.YameEvent
 import java.nio.file.Files
+import java.io.OutputStream
+import java.io.PrintStream
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.io.path.readText
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -14,6 +17,32 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 class UnhandledPacketRecorderTest {
+    @Test
+    fun `blocked summary writer does not block packet submission and runs off caller thread`() {
+        val root = Files.createTempDirectory("yame-capture-summary")
+        val workerEntered = CountDownLatch(1)
+        val releaseWorker = CountDownLatch(1)
+        val submitter = Thread.currentThread()
+        val captured = AtomicInteger()
+        val recorder = UnhandledPacketRecorder(root)
+        try {
+            recorder.record(YameEvent.UnhandledPacket("udp", "unsupported", 33, byteArrayOf(1)), onReceived = {
+                assertTrue(Thread.currentThread() !== submitter)
+                workerEntered.countDown()
+                releaseWorker.await(5, TimeUnit.SECONDS)
+            }) { captured.incrementAndGet() }
+            assertTrue(workerEntered.await(5, TimeUnit.SECONDS))
+            // The first worker is still blocked, yet a second submission returns immediately.
+            recorder.record(YameEvent.UnhandledPacket("tcp", "unsupported", 33, byteArrayOf(2))) {
+                captured.incrementAndGet()
+            }
+        } finally {
+            releaseWorker.countDown()
+            recorder.close()
+        }
+        assertEquals(2, captured.get())
+    }
+
     @Test
     fun `per type and total limits apply together and live lowering prunes existing captures`() {
         val root = Files.createTempDirectory("yame-capture-limits")
@@ -55,6 +84,14 @@ class UnhandledPacketRecorderTest {
         val captured = AtomicInteger()
         val event = YameEvent.UnhandledPacket("udp", "unsupported", 33, byteArrayOf(1))
         val recorder = UnhandledPacketRecorder(root)
+        val caller = Thread.currentThread()
+        val errorOnCaller = AtomicBoolean()
+        val originalError = System.err
+        System.setErr(PrintStream(object : OutputStream() {
+            override fun write(value: Int) {
+                if (Thread.currentThread() === caller) errorOnCaller.set(true)
+            }
+        }))
         try {
             recorder.record(event) {
                 workerEntered.countDown()
@@ -65,9 +102,10 @@ class UnhandledPacketRecorderTest {
             repeat(70) { recorder.record(event) { captured.incrementAndGet() } }
         } finally {
             releaseWorker.countDown()
-            recorder.close()
+            try { recorder.close() } finally { System.setErr(originalError) }
         }
         assertEquals(65, captured.get())
+        assertFalse(errorOnCaller.get(), "Queue overflow must not write stderr on the receive thread")
     }
 
     @Test
