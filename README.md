@@ -121,6 +121,13 @@ Dial strings are normalized before DTMF is generated. A leading `+` is converted
 
 The modem owns dialing-tone playback and its timing configuration. By default it uses a 500 ms dial tone, a two-second simulated pickup time, and the `v34` handshake profile. Tone playback is enabled by default and can be disabled with `modem.tone-simulation-enabled=false` in `yame.ini` or with `/tone off` in the TUI; `/tone on` enables it again without reconnecting. The timing values can be overridden from the command line; pickup and dial-tone durations are capped at 10 seconds to keep the eagerly generated PCM buffers bounded. Audio failure is treated as cosmetic, so systems without a configured sound device can still use the modem emulator.
 
+## Raspberry Pi appliance
+
+For Raspberry Pi OS Lite 64-bit, YAME can run as a self-updating modem appliance
+directly on the HDMI Linux console (no desktop environment required). See the
+[Raspberry Pi setup guide](deployment/raspberry-pi/README.md) for installation,
+automatic GitHub Release updates, systemd startup and troubleshooting.
+
 ## Requirements
 
 - JDK 21

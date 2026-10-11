@@ -1,44 +1,247 @@
-# Raspberry Pi 3 (64-bit)
+# Raspberry Pi deployment (HDMI TUI appliance)
 
-YAME publishes a Linux ARM64 ZIP asset alongside its standard JVM ZIP for each
-new release. The ARM64 archive is built and smoke-tested on a native GitHub
-Actions ARM64 runner. It **does not bundle Java**.
+These files configure a Raspberry Pi 3 running **Raspberry Pi OS Lite 64-bit**
+to download the latest stable YAME release on boot and run the interactive
+dashboard directly on the HDMI Linux virtual console (`tty1`). No desktop,
+Wayland, X11, Git, Gradle or Kotlin compiler is needed on the Pi.
 
-## Requirements
+YAME's Linux ARM64 release ZIP is a Gradle JVM distribution; it does **not**
+bundle Java. The installation therefore requires an ARM64 Java 21 runtime.
 
-- Raspberry Pi 3 with a **64-bit** Raspberry Pi OS Lite installation
-- Java 21 runtime (install from the OS repository when available)
-- USB-to-RS232 adapter and (if required) a null-modem cable
-- HDMI display, for example 800x480
-- Audio device for simulated modem tones
+**Raspberry Pi OS Bookworm:** The default package repositories do not
+provide `openjdk-21-jre-headless`. If your Pi is on Bookworm, install an
+ARM64 Java 21 runtime (for example Eclipse Temurin 21) and ensure that
+`java -version` invokes it **before** running the installer. The installer
+reuses an existing Java 21 runtime and only tries installing OpenJDK 21 from
+APT if none is available. Raspberry Pi OS Trixie offers OpenJDK 21 through
+its package repositories. The installer exits with a clear error, without
+taking over `tty1`, if Java 21 cannot be provided.
 
-Verify architecture and Java:
+## Before installing
+
+1. Flash Raspberry Pi OS Lite **64-bit** and enable SSH in Raspberry Pi Imager.
+   Verify that you can connect over SSH before disabling the local login
+   prompt. SSH is the recovery path if the TUI cannot start.
+2. Connect the HDMI screen (tested target: **800x480**), keyboard, speaker and
+   USB-to-RS232 adapter. Configure HDMI mode if automatic detection fails.
+3. From the Pi's HDMI console, check that `echo "$TERM"` reports `linux`,
+   `stty size` reports approximately `30 100`, and `tput colors` reports `8`.
+   The Linux virtual console supports fewer colors than a desktop emulator.
+4. Check `uname -m` reports `aarch64`. The 32-bit OS is not supported by
+   this deployment. Run `java -version` to check for Java 21, especially
+   when migrating an existing Bookworm installation.
+5. Confirm [GitHub Releases](https://github.com/skasti/yame/releases/latest)
+   includes a `yame-<version>-linux-arm64.zip` asset. This deployment is
+   available only for releases that include that asset.
+
+## Installation
+
+Install from a local checkout of YAME (you can clone/download the repo on
+another computer and copy `deployment/raspberry-pi/` to the Pi):
 
 ```sh
-uname -m        # aarch64
-java -version   # 21
+sudo bash deployment/raspberry-pi/install.sh
 ```
 
-## Download and launch
-
-Download the `yame-<version>-linux-arm64.zip` file from
-[GitHub Releases](https://github.com/skasti/yame/releases/latest).
-Unpack the ZIP and run the launcher inside its `bin` directory:
+The installer uses the account invoking `sudo` for the UI service. For a
+different existing local account:
 
 ```sh
-unzip yame-*-linux-arm64.zip
-cd yame-*/
-./bin/yame --list   # show serial ports
-./bin/yame          # launch interactive dashboard on local tty1
+sudo YAME_USER=myuser bash deployment/raspberry-pi/install.sh
 ```
 
-Run on the Pi's HDMI console to use the interactive TUI. The Linux virtual
-console typically reports `TERM=linux` and has limited colors; the display
-should be tested at 100 columns by 30 rows for an 800x480 screen.
+**The service account is fixed after the initial installation.** Do not
+rerun the installer as a different `sudo` user or with a different
+`YAME_USER`: existing `/var/lib/yame/yame.ini` and other runtime data
+belong to the original account and are not migrated automatically.
+The installer checks the previously recorded service account **before
+changing packages, file permissions, or systemd services**, and refuses
+account changes with a clear error. For older installations with no
+account record, an existing data directory with configuration also
+cannot be silently reassigned. A service-account change requires a
+separate, deliberate backup and migration of runtime data and systemd
+configuration before rerunning the installer.
 
-By default, YAME stores `yame.ini` in the working directory; use
-`--config /path/to/yame.ini` if you prefer a fixed configuration location.
+The installer validates an installed Java 21 runtime, installing it from APT
+only if available, and installs support utilities. It adds the account to
+`dialout` and `audio`, installs systemd units, disables `getty@tty1`
+and starts YAME on `tty1`. On the **first installation**, it first
+downloads and verifies a usable YAME release; if this fails, it stops without
+disabling the existing `tty1` login. Subsequent runs may reuse an already
+installed release without requiring internet. It is safe to rerun after
+modifying deployment files. It does not overwrite `yame.ini`.
 
-This release asset is a ZIP of the standard Gradle JVM distribution, produced
-and CLI-smoke-tested on Linux ARM64. It is not a self-updating appliance image;
-systemd startup and automatic release downloads are separate follow-up work.
+If you have already been running YAME manually, **stop that instance**
+before enabling the service; otherwise both processes may try to open the
+same serial adapter.
+
+## Boot and update behavior
+
+```text
+Boot -> yame-update.service -> yame.service -> HDMI tty1 TUI
+```
+
+- `yame-update.service` is a one-shot dependency of `yame.service`. It checks
+  GitHub's latest **stable** release each time YAME starts, including on boot.
+- Updates are downloaded to a staging directory on the same filesystem and
+  unpacked before activation. `/opt/yame/current` is changed via an atomic
+  symlink rename, with the prior target saved in `/opt/yame/previous`.
+  Unique temporary links make an interrupted switch retry-safe; abandoned
+  staging directories are removed on the next run.
+- After a successful update, only the current and previous versioned
+  distribution directories are kept under `/opt/yame/releases/`. This bounds
+  disk usage while retaining a version for manual recovery.
+- When the GitHub API, release asset or download is unavailable, the updater
+  retains an existing installation and lets the UI start. Initial installation
+  needs an internet connection and a published ARM64 asset; without one,
+  the installer preserves the local login console instead of starting a broken
+  systemd service.
+- GitHub's release **metadata** response is capped at **1 MiB while
+  streaming**, before JSON parsing or buffering into a shell variable.
+  Invalid, truncated, oversized, or multiple JSON documents are rejected,
+  keeping the existing YAME installation active.
+- Downloads are capped at **64 MiB** at the byte-stream level, including
+  responses without `Content-Length` (older Bookworm curl versions do not
+  reliably enforce `--max-filesize` for such responses). ZIP extraction
+  validates all entry names and types, rejects traversal/symlinks and more
+  than **4096 entries**, and caps uncompressed contents at **256 MiB**.
+  Updates also require enough free space to leave **128 MiB** available for
+  the OS. Exceeding a limit leaves the previously installed version untouched.
+  The extractor also normalizes the release's immutable directories to
+  mode `755`, readable library files to `644`, and the launcher to `755`
+  before activation. This makes the distribution accessible to YAME's
+  unprivileged service user even when the root-run updater inherits a
+  restrictive `umask 077`. The extractor uses Python 3's standard library;
+  `python3` is installed by `install.sh`.
+- If GitHub publishes an SHA256 asset digest, the updater verifies it before
+  installation. If the release does not include a digest, GitHub HTTPS is
+  relied upon. Releases must be trusted; do not run this installer against an
+  untrusted fork.
+- The updater *does not* automatically restart an already running modem
+  connection. There is no background timer in this first version.
+- `previous` provides a manual rollback target, **not automatic startup
+  health-check rollback**.
+
+The update process can take up to roughly three minutes with a slow network.
+YAME still starts without internet if a release was installed previously.
+
+## Files and ownership
+
+```text
+/opt/yame/releases/vX.Y.Z/       unpacked version directory
+/opt/yame/current               symlink to selected version
+/opt/yame/previous              previous selected version (if any)
+/var/lib/yame/yame.ini          persistent configuration (private to service user)
+/var/lib/yame/logs/             application logs
+/usr/local/bin/yame-update      root-run updater
+/etc/systemd/system/yame.service
+/etc/systemd/system/yame-update.service
+```
+
+Configuration and runtime data are intentionally outside the versioned
+application directory. YAME runs as the configured non-root user and normally
+creates its own private `yame.ini` in `/var/lib/yame/`.
+
+**Security:** The root-run installer deliberately never reads, changes
+ownership of, or changes permissions on an existing `yame.ini`. That file
+lives in a directory writable by the unprivileged YAME user, who could
+replace it with a symlink to a protected system file. Running `sudo chown`
+or `sudo chmod` blindly against that path can unintentionally follow such a
+symlink and modify the target.
+
+If migrating a configuration from another location, copy it as the YAME
+service user from a trusted, readable source so the new file is owned by
+that user. If an existing `yame.ini` is owned by root from an earlier
+manual installation, perform an explicit, carefully checked migration
+(or recreate the settings through YAME). The installer will **not** silently
+change its ownership or permissions.
+
+The updater runs as root; YAME runs as your configured non-root user with
+`dialout` and `audio` supplemental groups. The Java heap is capped at
+256 MiB for the Raspberry Pi 3's 1 GiB RAM.
+
+## Useful operations
+
+```sh
+systemctl status yame.service yame-update.service
+sudo systemctl restart yame.service    # also checks for updates
+sudo systemctl stop yame.service
+sudo /usr/local/bin/yame-update       # download/update only; does not restart UI
+journalctl -u yame.service -b -n 100 --no-pager
+journalctl -u yame-update.service -b -n 100 --no-pager
+ls -l /opt/yame/current /opt/yame/previous
+```
+
+For manual rollback while connected over SSH (note that the normal updater
+will select the latest release again at the next service start):
+
+```sh
+sudo systemctl stop yame.service
+cd /opt/yame
+sudo ln -sfn "$(readlink previous)" .current-rollback
+sudo mv -Tf .current-rollback current
+# Restarting yame.service triggers an update check again, which may restore
+# latest. Temporarily disable the update dependency if troubleshooting a bad
+# release, or start the older launcher manually on tty1.
+```
+
+To restore the text login console:
+
+```sh
+sudo systemctl disable --now yame.service
+sudo systemctl enable --now getty@tty1.service
+```
+
+## Troubleshooting
+
+- **No YAME screen**: inspect `journalctl -u yame -b` over SSH. Verify
+  `/opt/yame/current/bin/yame` exists and Java is installed.
+- **Installer rejects a different service account**: rerun it as the
+  account used during the initial installation (or set `YAME_USER` to
+  that same account). Do not change accounts without a manual runtime-data
+  migration. This protects existing owner-only configuration and logs.
+- **`AccessDeniedException: /var/lib/yame/yame.ini`**: the file may be
+  left over from a root-run instance. The installer will not change a
+  user-controlled path as root. Inspect the configuration ownership and file
+  type, then migrate a trusted regular config file to the service user or
+  recreate the settings. Avoid following symlinks in privileged file operations.
+- **No serial port**: use `ls /dev/serial/by-id/` when supported by the
+  adapter, or `ls -l /dev/ttyUSB*`; choose the port through YAME's palette.
+- **No modem audio**: verify the audio output with `aplay -l` and an ALSA
+  playback test. Pi 3 supports HDMI and analog audio, depending on settings.
+- **Dashboard too tall on first draw**: a known observed initial render
+  behavior on the 100x30 Linux console; opening the command palette can cause
+  a correct redraw. This deployment PR does not modify TUI rendering.
+- **No internet during first install**: the installer reports the failed
+  initial update and leaves the console login intact. Once online, rerun
+  `sudo bash deployment/raspberry-pi/install.sh`.
+- **Release rejected for size or archive safety**: check
+  `journalctl -u yame-update.service -b`; the existing release remains active.
+
+## Update regression tests
+
+The updater has offline integration tests using mocked GitHub API/download
+responses. They verify release activation, retention, recovery of an interrupted
+update, offline/first-boot fallback, checksum failure, oversized downloads,
+ZIP expansion limits, excessive file counts, path traversal, oversized
+streamed ZIP and API metadata responses without a known Content-Length,
+truncated/multiple JSON documents, and a restrictive
+root `umask 077` with non-root file-read/execute checks, without touching the host's `/opt/yame` directory:
+
+```sh
+sudo bash deployment/raspberry-pi/test-update.sh
+```
+
+CI runs these tests alongside ShellCheck and Bash syntax validation. The
+separate `test-data-directory.sh` additionally verifies that privileged
+directory setup does not follow or modify a user-controlled `yame.ini`
+symlink (or change an existing regular config file). It also tests
+service-account preflight: safe same-user reinstall, account-change refusal,
+ambiguous/symlinked account records, and old runtime data without a drop-in.
+
+## Scope
+
+This configuration targets a dedicated Pi displaying YAME on the local HDMI
+virtual console. It does not create a desktop app, bundle a JRE, modify YAME
+itself, configure a fixed serial adapter rule, or interrupt active sessions to
+apply updates in the background.

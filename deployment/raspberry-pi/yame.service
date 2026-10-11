@@ -1,0 +1,25 @@
+[Unit]
+Description=YAME - Yet Another Modem Emulator (HDMI TUI)
+Wants=yame-update.service
+After=yame-update.service systemd-user-sessions.service
+Conflicts=getty@tty1.service
+
+[Service]
+Type=simple
+WorkingDirectory=/var/lib/yame
+ExecStart=/opt/yame/current/bin/yame --ui tui
+Environment=TERM=linux
+Environment="JAVA_TOOL_OPTIONS=-Xms64m -Xmx256m"
+SupplementaryGroups=dialout audio
+StandardInput=tty-force
+StandardOutput=tty
+StandardError=journal
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

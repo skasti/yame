@@ -1,0 +1,245 @@
+#!/usr/bin/env bash
+# Self-contained, offline integration tests for the root-run updater.
+set -euo pipefail
+
+if [[ ${EUID} -ne 0 ]]; then
+  echo "Run these tests as root (sudo bash deployment/raspberry-pi/test-update.sh)" >&2
+  exit 1
+fi
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+sandbox="$(mktemp -d)"
+trap 'rm -rf -- "$sandbox"' EXIT
+mkdir -p "$sandbox/mock" "$sandbox/assets"
+# Permit the non-root user to traverse the test fixture root while keeping
+# the fake GitHub assets and root-run downloader otherwise unchanged.
+chmod 755 "$sandbox"
+export YAME_BASE="$sandbox/install"
+export YAME_EXTRACTOR="$script_dir/extract-release.py"
+export YAME_TEST_ASSETS="$sandbox/assets"
+export PATH="$sandbox/mock:$PATH"
+
+cat > "$sandbox/mock/curl" <<'MOCK_CURL'
+#!/usr/bin/env bash
+set -euo pipefail
+url="${*: -1}"
+if [[ "$url" == "https://api.github.com/repos/skasti/yame/releases/latest" ]]; then
+  if [[ "${YAME_TEST_OFFLINE:-0}" == 1 ]]; then
+    exit 22
+  fi
+  # Model Bookworm curl: an unknown-length API response is streamed even
+  # though curl accepts --max-filesize. The consumer must enforce the cap.
+  [[ " $* " == *" --max-filesize 1048576 "* ]] || {
+    echo "Missing metadata curl limit" >&2
+    exit 1
+  }
+  if [[ "${YAME_TEST_METADATA_OVERSIZED:-0}" == 1 ]]; then
+    head -c $((4 * 1024 * 1024)) /dev/zero
+    if [[ -n "${YAME_TEST_METADATA_FINISHED_MARKER:-}" ]]; then
+      touch "$YAME_TEST_METADATA_FINISHED_MARKER"
+    fi
+    exit 0
+  fi
+  if [[ "${YAME_TEST_METADATA_TRUNCATED:-0}" == 1 ]]; then
+    printf '{"tag_name":"v1.3.0","assets":['
+    exit 0
+  fi
+  if [[ "${YAME_TEST_METADATA_MULTIPLE:-0}" == 1 ]]; then
+    printf '{}\n{}\n'
+    exit 0
+  fi
+  version="$YAME_TEST_VERSION"
+  asset="yame-$version-linux-arm64.zip"
+  archive="$YAME_TEST_ASSETS/$asset"
+  digest="$(sha256sum "$archive" | cut -d ' ' -f 1)"
+  if [[ "${YAME_TEST_BAD_DIGEST:-0}" == 1 ]]; then
+    digest="$(printf '%064d' 0)"
+  fi
+  printf '{"tag_name":"v%s","assets":[{"name":"%s","browser_download_url":"https://github.com/skasti/yame/releases/download/v%s/%s","digest":"sha256:%s"}]}\n' \
+    "$version" "$asset" "$version" "$asset" "$digest"
+else
+  # Model old Bookworm curl: the server supplied no Content-Length, so
+  # --max-filesize is accepted but DOES NOT bound the streamed response.
+  [[ " $* " == *" --max-filesize 67108864 "* ]] || {
+    echo "Missing curl download limit" >&2
+    exit 1
+  }
+  archive="$YAME_TEST_ASSETS/yame-$YAME_TEST_VERSION-linux-arm64.zip"
+  cat "$archive"
+  # A successful, complete oversized transfer would create this marker.
+  # A reader-side streaming cap instead closes the pipe and causes SIGPIPE.
+  if [[ -n "${YAME_TEST_DOWNLOAD_COMPLETED_MARKER:-}" ]]; then
+    touch "$YAME_TEST_DOWNLOAD_COMPLETED_MARKER"
+  fi
+fi
+MOCK_CURL
+chmod +x "$sandbox/mock/curl"
+
+make_fixture() {
+  local version="$1" package="$sandbox/package"
+  rm -rf "$package"
+  mkdir -p "$package/yame-$version/bin" "$package/yame-$version/lib"
+  printf '#!/bin/sh\nexit 0\n' > "$package/yame-$version/bin/yame"
+  chmod +x "$package/yame-$version/bin/yame"
+  printf 'test library\n' > "$package/yame-$version/lib/test.txt"
+  (cd "$package" && zip -qr "$YAME_TEST_ASSETS/yame-$version-linux-arm64.zip" "yame-$version")
+}
+
+assert_target() {
+  local link="$1" expected="$2"
+  [[ "$(readlink -f "$YAME_BASE/$link")" == "$YAME_BASE/releases/v$expected" ]] || {
+    echo "Unexpected $link target: $(readlink "$YAME_BASE/$link" || true)" >&2
+    exit 1
+  }
+}
+
+for version in 1.0.0 1.1.0 1.2.0 1.3.0; do
+  make_fixture "$version"
+done
+
+export YAME_TEST_VERSION=1.0.0
+# Reproduce a hardened root environment where new files/directories would
+# otherwise be inaccessible to the unprivileged service account.
+(umask 077; bash "$script_dir/yame-update")
+assert_target current 1.0.0
+
+nonroot_account="$(id -nu 65534)"
+[[ "$(stat -c %a "$YAME_BASE/releases/v1.0.0")" == 755 ]]
+[[ "$(stat -c %a "$YAME_BASE/releases/v1.0.0/bin")" == 755 ]]
+[[ "$(stat -c %a "$YAME_BASE/releases/v1.0.0/lib")" == 755 ]]
+[[ "$(stat -c %a "$YAME_BASE/releases/v1.0.0/bin/yame")" == 755 ]]
+[[ "$(stat -c %a "$YAME_BASE/releases/v1.0.0/lib/test.txt")" == 644 ]]
+runuser -u "$nonroot_account" -- test -x "$YAME_BASE/current/bin/yame"
+runuser -u "$nonroot_account" -- test -r "$YAME_BASE/current/lib/test.txt"
+
+# Emulate a power failure after the creation of both old fixed-name links
+# and an incomplete downloaded staging directory.
+ln -s "releases/v1.0.0" "$YAME_BASE/.current-next"
+ln -s "releases/v1.0.0" "$YAME_BASE/.previous-next"
+mkdir -p "$YAME_BASE/.staging.abandoned"
+printf 'incomplete download' > "$YAME_BASE/.staging.abandoned/release.zip"
+
+export YAME_TEST_VERSION=1.1.0
+bash "$script_dir/yame-update"
+assert_target current 1.1.0
+assert_target previous 1.0.0
+[[ ! -e "$YAME_BASE/.staging.abandoned" ]]
+
+export YAME_TEST_VERSION=1.2.0
+bash "$script_dir/yame-update"
+assert_target current 1.2.0
+assert_target previous 1.1.0
+[[ ! -e "$YAME_BASE/releases/v1.0.0" ]]
+
+# No changes or disk growth when the release is already current.
+bash "$script_dir/yame-update"
+
+# The last installed version must remain available without internet.
+export YAME_TEST_OFFLINE=1
+bash "$script_dir/yame-update"
+unset YAME_TEST_OFFLINE
+assert_target current 1.2.0
+
+# A malicious/buggy API response with no Content-Length must be cut off
+# while streaming, before it can fill Pi 3 RAM or disk.
+export YAME_TEST_METADATA_OVERSIZED=1
+export YAME_TEST_METADATA_FINISHED_MARKER="$sandbox/oversized-metadata-finished"
+bash "$script_dir/yame-update"
+[[ ! -e "$YAME_TEST_METADATA_FINISHED_MARKER" ]] || {
+  echo "Updater buffered the entire oversized GitHub API response" >&2
+  exit 1
+}
+unset YAME_TEST_METADATA_OVERSIZED YAME_TEST_METADATA_FINISHED_MARKER
+assert_target current 1.2.0
+assert_target previous 1.1.0
+
+# Truncated JSON must not be accepted as metadata or overwrite current.
+export YAME_TEST_METADATA_TRUNCATED=1
+bash "$script_dir/yame-update"
+unset YAME_TEST_METADATA_TRUNCATED
+assert_target current 1.2.0
+
+# jq usually accepts multiple JSON texts; the updater requires exactly one.
+export YAME_TEST_METADATA_MULTIPLE=1
+bash "$script_dir/yame-update"
+unset YAME_TEST_METADATA_MULTIPLE
+assert_target current 1.2.0
+
+# Verify a bad digest doesn't replace current/previous.
+export YAME_TEST_VERSION=1.3.0 YAME_TEST_BAD_DIGEST=1
+bash "$script_dir/yame-update"
+unset YAME_TEST_BAD_DIGEST
+assert_target current 1.2.0
+assert_target previous 1.1.0
+[[ ! -e "$YAME_BASE/releases/v1.3.0" ]]
+
+# Root-run extraction must reject highly compressed ZIP bombs before writing
+# unbounded data to the SD card. Generate a 257 MiB archive of zeros that
+# compresses to a fraction of that size without allocating a huge byte array.
+python3 - "$YAME_TEST_ASSETS/yame-1.3.0-linux-arm64.zip" <<'PY_BOMB'
+import sys
+import zipfile
+
+with zipfile.ZipFile(sys.argv[1], "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1) as zf:
+    with zf.open("yame-1.3.0/lib/bomb.bin", "w") as out:
+        for _ in range(257):
+            out.write(b"\0" * (1024 * 1024))
+PY_BOMB
+bash "$script_dir/yame-update"
+assert_target current 1.2.0
+assert_target previous 1.1.0
+
+# Reject path traversal even if metadata reports a harmless total size.
+python3 - "$YAME_TEST_ASSETS/yame-1.3.0-linux-arm64.zip" <<'PY_TRAVERSAL'
+import sys
+import zipfile
+
+with zipfile.ZipFile(sys.argv[1], "w") as zf:
+    zf.writestr("yame-1.3.0/bin/yame", "#!/bin/sh\nexit 0\n")
+    zf.writestr("yame-1.3.0/lib/example.jar", "test")
+    zf.writestr("yame-1.3.0/../../escaped", "danger")
+PY_TRAVERSAL
+bash "$script_dir/yame-update"
+assert_target current 1.2.0
+assert_target previous 1.1.0
+[[ ! -e "$YAME_BASE/escaped" ]]
+[[ ! -e "$sandbox/escaped" ]]
+
+# Reject archives containing more than 4096 entries.
+python3 - "$YAME_TEST_ASSETS/yame-1.3.0-linux-arm64.zip" <<'PY_ENTRIES'
+import sys
+import zipfile
+
+with zipfile.ZipFile(sys.argv[1], "w", compression=zipfile.ZIP_STORED) as zf:
+    for index in range(4097):
+        zf.writestr(f"yame-1.3.0/lib/part-{index}.jar", "x")
+PY_ENTRIES
+bash "$script_dir/yame-update"
+assert_target current 1.2.0
+
+# Model a chunked/unknown-Content-Length 65 MiB download with old curl:
+# it must be cut off DURING streaming, not merely rejected after all 65 MiB
+# have reached the SD card.
+truncate -s $((65 * 1024 * 1024)) "$YAME_TEST_ASSETS/yame-1.3.0-linux-arm64.zip"
+export YAME_TEST_DOWNLOAD_COMPLETED_MARKER="$sandbox/oversized-download-finished"
+bash "$script_dir/yame-update"
+[[ ! -e "$YAME_TEST_DOWNLOAD_COMPLETED_MARKER" ]] || {
+  echo "Updater failed to stop oversized streaming response" >&2
+  exit 1
+}
+unset YAME_TEST_DOWNLOAD_COMPLETED_MARKER
+assert_target current 1.2.0
+assert_target previous 1.1.0
+[[ ! -e "$YAME_BASE/releases/v1.3.0" ]]
+
+# Without a previous install, failure must propagate to the caller so
+# install.sh can leave tty1 untouched.
+rm "$YAME_BASE/current"
+export YAME_TEST_OFFLINE=1
+if bash "$script_dir/yame-update"; then
+  echo "Fresh installation without internet unexpectedly succeeded" >&2
+  exit 1
+fi
+unset YAME_TEST_OFFLINE
+
+echo "Raspberry Pi updater integration tests passed."
