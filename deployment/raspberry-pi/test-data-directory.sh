@@ -59,4 +59,51 @@ if prepare_yame_data_directory "$sandbox/data-link" "$account"; then
 fi
 [[ "$(stat -c '%u:%g:%a' "$protected")" == "$before" ]]
 
+# A root-managed systemd user.conf is authoritative on reinstall. Testing
+# both users must never change data ownership or the existing configuration.
+recorded="$sandbox/user.conf"
+printf '[Service]\nUser=%s\n' "$account" > "$recorded"
+user_conf_before="$(sha256sum "$recorded")"
+data_before="$(stat -c '%u:%g:%a' "$data_dir")"
+verify_yame_service_account "$account" "$recorded" "$data_dir"
+if verify_yame_service_account root "$recorded" "$data_dir"; then
+  echo "Installer accepted a change to an existing service account" >&2
+  exit 1
+fi
+[[ "$(sha256sum "$recorded")" == "$user_conf_before" ]]
+[[ "$(stat -c '%u:%g:%a' "$data_dir")" == "$data_before" ]]
+[[ "$(stat -c '%u:%g:%a' "$data_dir/yame.ini")" == "$regular_before" ]]
+
+# A missing/ambiguous or symlinked service-account drop-in is not permission
+# to overwrite unknown service state.
+printf '[Service]\n' > "$recorded"
+if verify_yame_service_account "$account" "$recorded" "$data_dir"; then
+  echo "Installer accepted a missing User setting" >&2
+  exit 1
+fi
+printf '[Service]\nUser=%s\nUser=root\n' "$account" > "$recorded"
+if verify_yame_service_account "$account" "$recorded" "$data_dir"; then
+  echo "Installer accepted conflicting User settings" >&2
+  exit 1
+fi
+rm "$recorded"
+ln -s "$protected" "$recorded"
+if verify_yame_service_account "$account" "$recorded" "$data_dir"; then
+  echo "Installer accepted symlinked service-account configuration" >&2
+  exit 1
+fi
+rm "$recorded"
+
+# An older installation might have data but no systemd drop-in. It must also
+# reject accidental reassignment of an existing owner's data.
+verify_yame_service_account "$account" "$recorded" "$data_dir"
+if verify_yame_service_account root "$recorded" "$data_dir"; then
+  echo "Installer accepted reassignment of legacy runtime state" >&2
+  exit 1
+fi
+[[ "$(stat -c '%u:%g:%a' "$data_dir")" == "$data_before" ]]
+
+# A genuinely fresh install has no account record and no runtime directory.
+verify_yame_service_account "$account" "$recorded" "$sandbox/fresh-runtime"
+
 echo "Raspberry Pi data-directory security tests passed."
