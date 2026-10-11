@@ -1,0 +1,49 @@
+name: Publish TUI previews
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tui-previews-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+      pull-requests: write
+    steps:
+      # Never check out or execute PR code in this privileged workflow.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Validate source run and live PR
+        id: source
+        uses: actions/github-script@v8
+        with:
+          script: await require('./scripts/ci/tui-previews.cjs').prepare({github, context, core})
+      - name: Download only the PNG artifact
+        if: steps.source.outputs.publish == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: yame-tui-screenshots
+          path: ${{ runner.temp }}/tui-previews
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - name: Commit previews, dispatch verification and update PR comment
+        if: steps.source.outputs.publish == 'true'
+        uses: actions/github-script@v8
+        env:
+          PREVIEW_PR: ${{ steps.source.outputs.pr_number }}
+          PREVIEW_DIRECTORY: ${{ runner.temp }}/tui-previews
+        with:
+          script: await require('./scripts/ci/tui-previews.cjs').publish({github, context, core}, process.env.PREVIEW_PR, process.env.PREVIEW_DIRECTORY)

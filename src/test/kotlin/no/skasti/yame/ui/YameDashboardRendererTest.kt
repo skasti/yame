@@ -434,6 +434,7 @@ class YameDashboardRendererTest {
                 httpHosts = emptyList(),
                 selectedHttpHostIndex = 0,
                 commandPalette = null,
+                activeDetailPanel = DashboardDetailPanel.DNS,
             ),
             width = 120,
             height = 34,

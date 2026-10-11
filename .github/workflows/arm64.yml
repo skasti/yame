@@ -8,9 +8,28 @@ on:
 
 permissions:
   contents: read
+  actions: read
+  pull-requests: read
 
 jobs:
+  preview-gate:
+    runs-on: ubuntu-latest
+    outputs:
+      reuse: ${{ steps.gate.outputs.reuse }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Verify screenshot-only successor
+        if: github.event_name == 'pull_request'
+        id: gate
+        uses: actions/github-script@v8
+        with:
+          script: await require('./scripts/ci/tui-previews.cjs').gate({github, context, core}, {requireArm64: true})
+
   test:
+    needs: preview-gate
+    if: needs.preview-gate.outputs.reuse != 'true'
     runs-on: ubuntu-24.04-arm
     steps:
       - name: Check out source
