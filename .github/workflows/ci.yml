@@ -7,13 +7,54 @@ on:
 
 permissions:
   contents: read
+  actions: read
+  pull-requests: read
 
 concurrency:
   group: ci-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
+  preview-gate:
+    runs-on: ubuntu-latest
+    outputs:
+      reuse: ${{ steps.gate.outputs.reuse }}
+      checkout_ref: ${{ steps.gate.outputs.checkout_ref }}
+      head_sha: ${{ steps.gate.outputs.head_sha }}
+      base_sha: ${{ steps.gate.outputs.base_sha }}
+      pr_number: ${{ steps.gate.outputs.pr_number }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          path: trusted-ci
+          persist-credentials: false
+      - name: Verify screenshot-only successor
+        id: gate
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const gatePath = './trusted-ci/scripts/ci/tui-previews.cjs';
+            if (require('node:fs').existsSync(gatePath)) {
+              await require(gatePath).gate({github, context, core});
+            } else {
+              // Introducing PR: no gate on the base yet, so always run full CI.
+              const {data: pr} = await github.rest.pulls.get({...context.repo, pull_number: context.payload.pull_request.number});
+              const {data: merge} = await github.rest.git.getCommit({...context.repo, commit_sha: context.sha});
+              if (pr.state !== 'open' || pr.head.sha !== context.payload.pull_request.head.sha ||
+                  merge.parents.length !== 2 || merge.parents[0].sha !== pr.base.sha || merge.parents[1].sha !== pr.head.sha) {
+                throw new Error('PR head/base changed; rerun CI');
+              }
+              core.setOutput('reuse', 'false');
+              core.setOutput('checkout_ref', context.sha);
+              core.setOutput('head_sha', pr.head.sha);
+              core.setOutput('base_sha', pr.base.sha);
+              core.setOutput('pr_number', pr.number);
+            }
+
   release-workflow-tests:
+    needs: preview-gate
+    if: needs.preview-gate.outputs.reuse != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -21,31 +62,58 @@ jobs:
         run: |
           python3 -m pip install PyYAML
           python3 -m unittest discover -s tests -p 'test_release_workflow.py'
+          python3 -m unittest discover -s tests -p 'test_tui_previews.py'
+          node --test tests/tui-previews.test.cjs
 
   build-and-test:
+    needs: preview-gate
+    # Keep the required check present, and fail if the gate itself failed.
+    if: always()
     runs-on: ubuntu-latest
 
     steps:
+      - name: Require successful gate
+        env:
+          GATE_RESULT: ${{ needs.preview-gate.result }}
+        run: test "$GATE_RESULT" = success
+
+      - name: Reuse verified build for screenshot-only commit
+        if: needs.preview-gate.outputs.reuse == 'true'
+        run: echo 'Only generated screenshots changed; the parent passed CI against the same base.'
+
       - name: Check out repository
+        if: needs.preview-gate.outputs.reuse != 'true'
         uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.preview-gate.outputs.checkout_ref }}
+          persist-credentials: false
 
       - name: Set up JDK 21
+        if: needs.preview-gate.outputs.reuse != 'true'
         uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
 
       - name: Set up Gradle
+        if: needs.preview-gate.outputs.reuse != 'true'
         uses: gradle/actions/setup-gradle@v6
         with:
           cache-provider: basic
 
+      - name: Install preview font
+        if: needs.preview-gate.outputs.reuse != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes fonts-dejavu-core
+
       - name: Build and test
+        if: needs.preview-gate.outputs.reuse != 'true'
         run: ./gradlew --no-daemon clean build
 
       - name: Upload image transformation visual report
         id: image-gallery
-        if: always()
+        if: always() && needs.preview-gate.outputs.reuse != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: yame-image-transformations
@@ -61,10 +129,36 @@ jobs:
           echo '### Image transformation examples' >> "$GITHUB_STEP_SUMMARY"
           echo "Download the [visual gallery]($ARTIFACT_URL), unzip and open index.html." >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Record tested preview source
+        if: needs.preview-gate.outputs.reuse != 'true'
+        uses: actions/github-script@v8
+        env:
+          PREVIEW_HEAD: ${{ needs.preview-gate.outputs.head_sha }}
+          PREVIEW_BASE: ${{ needs.preview-gate.outputs.base_sha }}
+          PREVIEW_MERGE: ${{ needs.preview-gate.outputs.checkout_ref }}
+          PREVIEW_PR: ${{ needs.preview-gate.outputs.pr_number }}
+        with:
+          script: |
+            require('node:fs').writeFileSync('build/reports/tui-screenshots/source.json', JSON.stringify({
+              run: Number(context.runId), pr: Number(process.env.PREVIEW_PR),
+              head: process.env.PREVIEW_HEAD, base: process.env.PREVIEW_BASE, merge: process.env.PREVIEW_MERGE
+            }));
+
+      - name: Upload TUI screenshots
+        if: needs.preview-gate.outputs.reuse != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: yame-tui-screenshots
+          path: build/reports/tui-screenshots/
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Install DOSBox integration-test dependencies
+        if: needs.preview-gate.outputs.reuse != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install --yes dosbox socat xvfb xauth
 
       - name: DOSBox dial-up PPP, DNS and TCP compatibility suite
+        if: needs.preview-gate.outputs.reuse != 'true'
         run: bash scripts/dosbox-network-integration-test.sh

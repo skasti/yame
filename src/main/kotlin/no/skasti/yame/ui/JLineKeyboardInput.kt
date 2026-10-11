@@ -110,6 +110,7 @@ internal class TerminalKeyDecoder(
 
         return when (first) {
             CTRL_C -> "Ctrl+C"
+            TAB -> "Tab"
             ENTER_CR, ENTER_LF -> "Enter"
             BACKSPACE, DELETE -> "Backspace"
             ESCAPE -> readEscapeSequence()
@@ -144,6 +145,7 @@ internal class TerminalKeyDecoder(
 
     private companion object {
         const val CTRL_C = 3
+        const val TAB = 9
         const val BACKSPACE = 8
         const val ENTER_LF = 10
         const val ENTER_CR = 13
