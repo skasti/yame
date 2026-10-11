@@ -124,10 +124,11 @@ if ! python3 "$EXTRACTOR" "$stage/release.zip" "$stage/unpacked" "$version"; the
   fallback_or_fail "Invalid or oversized ZIP archive"
 fi
 distribution="$stage/unpacked/yame-$version"
-if [[ ! -f "$distribution/bin/yame" || ! -d "$distribution/lib" ]]; then
+# The validated extractor sets directory/file modes (and launcher execute
+# permission) explicitly, independent of the root process's umask.
+if [[ ! -x "$distribution/bin/yame" || ! -d "$distribution/lib" ]]; then
   fallback_or_fail "Release ZIP has an unexpected layout"
 fi
-chmod 755 "$distribution/bin/yame"
 
 if [[ ! -e "$target" ]]; then
   mv "$distribution" "$target"
