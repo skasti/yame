@@ -86,7 +86,8 @@ Boot -> yame-update.service -> yame.service -> HDMI tty1 TUI
   systemd service.
 - Downloads are capped at **64 MiB**. ZIP extraction validates all entry
   names and types, rejects traversal/symlinks and more than **4096 entries**,
-  and caps uncompressed contents at **256 MiB**. Exceeding a limit leaves the
+  and caps uncompressed contents at **256 MiB**. Updates also require enough
+  free space to leave **128 MiB** available for the OS. Exceeding a limit leaves the
   previously installed version untouched. The extractor uses Python 3's
   standard library; `python3` is installed by `install.sh`.
 - If GitHub publishes an SHA256 asset digest, the updater verifies it before
