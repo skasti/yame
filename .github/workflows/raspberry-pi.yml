@@ -25,9 +25,11 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y shellcheck zip python3
-          bash -n deployment/raspberry-pi/install.sh deployment/raspberry-pi/yame-update
-          shellcheck deployment/raspberry-pi/install.sh deployment/raspberry-pi/yame-update deployment/raspberry-pi/test-update.sh
+          bash -n deployment/raspberry-pi/install.sh deployment/raspberry-pi/yame-update deployment/raspberry-pi/data-directory.sh deployment/raspberry-pi/test-data-directory.sh
+          shellcheck deployment/raspberry-pi/install.sh deployment/raspberry-pi/yame-update deployment/raspberry-pi/test-update.sh deployment/raspberry-pi/data-directory.sh deployment/raspberry-pi/test-data-directory.sh
           bash -n deployment/raspberry-pi/test-update.sh
           python3 -m py_compile deployment/raspberry-pi/extract-release.py
+      - name: Verify config symlink does not grant privileges
+        run: sudo bash deployment/raspberry-pi/test-data-directory.sh
       - name: Exercise updater recovery, pruning, and offline fallback
         run: sudo bash deployment/raspberry-pi/test-update.sh
