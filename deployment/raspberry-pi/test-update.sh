@@ -27,6 +27,27 @@ if [[ "$url" == "https://api.github.com/repos/skasti/yame/releases/latest" ]]; t
   if [[ "${YAME_TEST_OFFLINE:-0}" == 1 ]]; then
     exit 22
   fi
+  # Model Bookworm curl: an unknown-length API response is streamed even
+  # though curl accepts --max-filesize. The consumer must enforce the cap.
+  [[ " $* " == *" --max-filesize 1048576 "* ]] || {
+    echo "Missing metadata curl limit" >&2
+    exit 1
+  }
+  if [[ "${YAME_TEST_METADATA_OVERSIZED:-0}" == 1 ]]; then
+    head -c $((4 * 1024 * 1024)) /dev/zero
+    if [[ -n "${YAME_TEST_METADATA_FINISHED_MARKER:-}" ]]; then
+      touch "$YAME_TEST_METADATA_FINISHED_MARKER"
+    fi
+    exit 0
+  fi
+  if [[ "${YAME_TEST_METADATA_TRUNCATED:-0}" == 1 ]]; then
+    printf '{"tag_name":"v1.3.0","assets":['
+    exit 0
+  fi
+  if [[ "${YAME_TEST_METADATA_MULTIPLE:-0}" == 1 ]]; then
+    printf '{}\n{}\n'
+    exit 0
+  fi
   version="$YAME_TEST_VERSION"
   asset="yame-$version-linux-arm64.zip"
   archive="$YAME_TEST_ASSETS/$asset"
@@ -117,6 +138,31 @@ bash "$script_dir/yame-update"
 export YAME_TEST_OFFLINE=1
 bash "$script_dir/yame-update"
 unset YAME_TEST_OFFLINE
+assert_target current 1.2.0
+
+# A malicious/buggy API response with no Content-Length must be cut off
+# while streaming, before it can fill Pi 3 RAM or disk.
+export YAME_TEST_METADATA_OVERSIZED=1
+export YAME_TEST_METADATA_FINISHED_MARKER="$sandbox/oversized-metadata-finished"
+bash "$script_dir/yame-update"
+[[ ! -e "$YAME_TEST_METADATA_FINISHED_MARKER" ]] || {
+  echo "Updater buffered the entire oversized GitHub API response" >&2
+  exit 1
+}
+unset YAME_TEST_METADATA_OVERSIZED YAME_TEST_METADATA_FINISHED_MARKER
+assert_target current 1.2.0
+assert_target previous 1.1.0
+
+# Truncated JSON must not be accepted as metadata or overwrite current.
+export YAME_TEST_METADATA_TRUNCATED=1
+bash "$script_dir/yame-update"
+unset YAME_TEST_METADATA_TRUNCATED
+assert_target current 1.2.0
+
+# jq usually accepts multiple JSON texts; the updater requires exactly one.
+export YAME_TEST_METADATA_MULTIPLE=1
+bash "$script_dir/yame-update"
+unset YAME_TEST_METADATA_MULTIPLE
 assert_target current 1.2.0
 
 # Verify a bad digest doesn't replace current/previous.
