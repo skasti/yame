@@ -82,6 +82,7 @@ class TuiYameObserver(
     private var selectedHttpHost: String? = null
     private var selectedHttpResourceUrl: String? = null
     private var commandPalette: TuiCommandPalette? = null
+    private var activeDashboardPanel = DashboardDetailPanel.PROXY
     private var keyboardInput: JLineKeyboardInput? = null
 
     private val animation = terminal.textAnimation<String> { it }
@@ -520,6 +521,7 @@ class TuiYameObserver(
                                 when {
                                     key == "Ctrl+C" -> requestQuit()
                                     paletteOpen -> handlePaletteKey(key)
+                                    key == "Tab" -> cycleDashboardPanel()
                                     key == "/" -> openCommandPalette()
                                     key.equals("q", ignoreCase = true) -> requestQuit()
                                     key == "ArrowUp" -> moveHttpSelection(-1)
@@ -550,6 +552,13 @@ class TuiYameObserver(
             isDaemon = true
             start()
         }
+    }
+
+    @Synchronized
+    private fun cycleDashboardPanel() {
+        if (terminal.size.width > WIDE_DASHBOARD_THRESHOLD) return
+        activeDashboardPanel = activeDashboardPanel.next()
+        render()
     }
 
     @Synchronized
@@ -990,6 +999,7 @@ class TuiYameObserver(
                         .coerceAtLeast(0),
                     selectedHttpResourceUrl = selectedHttpResourceUrl,
                     commandPalette = commandPalette,
+                    activeDetailPanel = activeDashboardPanel,
                 )
             },
             width = terminal.size.width,
@@ -1151,7 +1161,18 @@ internal data class DashboardState(
     val selectedHttpHostIndex: Int,
     val selectedHttpResourceUrl: String? = null,
     val commandPalette: TuiCommandPalette?,
+    val activeDetailPanel: DashboardDetailPanel = DashboardDetailPanel.PROXY,
 )
+
+internal enum class DashboardDetailPanel(val title: String) {
+    DNS("DNS lookups"),
+    TRANSFERS("Transfers"),
+    PROXY("HTTP / HTTPS compatibility proxy");
+
+    fun next(): DashboardDetailPanel = entries[(ordinal + 1) % entries.size]
+}
+
+private const val WIDE_DASHBOARD_THRESHOLD = 250
 
 internal data class DashboardStyles(
     val border: (String) -> String = { it },
@@ -1225,6 +1246,9 @@ internal object YameDashboardRenderer {
         val footerHeight = 1
         val bodyHeight = renderHeight - headerHeight - footerHeight
         val gap = 1
+        if (renderWidth <= WIDE_DASHBOARD_THRESHOLD) {
+            return renderStackedBody(state, renderWidth, renderHeight, styles)
+        }
         val leftWidth = (renderWidth * 55 / 100)
             .coerceIn(38, renderWidth - 32)
         val rightWidth = renderWidth - leftWidth - gap
@@ -1319,6 +1343,79 @@ internal object YameDashboardRenderer {
         )
 
         return "$header\n$body\n$footer"
+    }
+
+    private fun renderStackedBody(
+        state: DashboardState,
+        width: Int,
+        height: Int,
+        styles: DashboardStyles,
+    ): String {
+        val bodyHeight = height - 2
+        val logHeight = (bodyHeight * 55 / 100).coerceIn(3, bodyHeight - 3)
+        val detailHeight = bodyHeight - logHeight
+        val log = panel(
+            title = "Log",
+            width = width,
+            height = logHeight,
+            lines = logLines(state.logs, logHeight - 2),
+            styles = styles,
+        )
+        val detail = when (val palette = state.commandPalette) {
+            null -> when (state.activeDetailPanel) {
+                DashboardDetailPanel.DNS -> panel(
+                    title = DashboardDetailPanel.DNS.title,
+                    width = width,
+                    height = detailHeight,
+                    lines = dnsLines(state.dnsLookups, detailHeight - 2, width - 4),
+                    styles = styles,
+                )
+                DashboardDetailPanel.TRANSFERS -> panel(
+                    title = DashboardDetailPanel.TRANSFERS.title,
+                    width = width,
+                    height = detailHeight,
+                    lines = transferLines(state.transfers, detailHeight - 2, width - 4),
+                    styles = styles,
+                )
+                DashboardDetailPanel.PROXY -> panel(
+                    title = DashboardDetailPanel.PROXY.title,
+                    width = width,
+                    height = detailHeight,
+                    lines = httpHostLines(
+                        state.httpHosts,
+                        state.selectedHttpHostIndex,
+                        state.selectedHttpResourceUrl,
+                        detailHeight - 2,
+                        width - 4,
+                    ),
+                    styles = styles,
+                )
+            }
+            else -> panel(
+                title = palette.title,
+                width = width,
+                height = detailHeight,
+                lines = paletteLines(palette, detailHeight - 2, width - 4),
+                styles = styles,
+            )
+        }
+        val connection = if (state.connected) "CONNECTED" else "NOT CONNECTED"
+        val proxy = if (state.httpProxyEnabled) "HTTP proxy ON" else "HTTP proxy OFF"
+        val headerText =
+            "[ YAME ${BuildInfo.display}  •  ${state.portName ?: "no port"} @ ${state.baud}  •  " +
+                "$connection  •  DNS ${state.dnsUpstream}  •  $proxy ]"
+        val footerText = if (state.commandPalette == null) {
+            "[Tab] DNS / Transfers / Proxy  [↑/↓] select  [Enter/→] expand  [←] collapse  [/] commands  [q] quit"
+        } else {
+            "[↑/↓] select   [Enter] apply   [Esc] close palette"
+        }
+        return buildString {
+            append(styles.title(clip(headerText, width).padEnd(width)))
+            append('\n')
+            append((log + detail).joinToString("\n"))
+            append('\n')
+            append(styles.muted(clip(footerText, width).padEnd(width)))
+        }
     }
 
     private fun renderCompact(
