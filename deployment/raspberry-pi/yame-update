@@ -86,6 +86,13 @@ if [[ -x "$target/bin/yame" && "$(readlink -f "$CURRENT" 2>/dev/null || true)" =
   exit 0
 fi
 
+# Reserve space for the compressed download and leave 128 MiB for the
+# operating system even if a download fails or runs out of space.
+free_bytes="$(df -B1 --output=avail "$BASE" | tail -n 1 | tr -d '[:space:]')"
+if [[ ! "$free_bytes" =~ ^[0-9]+$ ]] || (( free_bytes < 192 * 1024 * 1024 )); then
+  fallback_or_fail "Insufficient free SD card space for download"
+fi
+
 stage="$(mktemp -d "$BASE/.staging.XXXXXXXX")"
 trap 'rm -rf -- "$stage"' EXIT
 echo "Downloading $asset..."
