@@ -8,6 +8,15 @@ Wayland, X11, Git, Gradle or Kotlin compiler is needed on the Pi.
 YAME's Linux ARM64 release ZIP is a Gradle JVM distribution; it does **not**
 bundle Java. The installation therefore requires an ARM64 Java 21 runtime.
 
+**Raspberry Pi OS Bookworm:** The default package repositories do not
+provide `openjdk-21-jre-headless`. If your Pi is on Bookworm, install an
+ARM64 Java 21 runtime (for example Eclipse Temurin 21) and ensure that
+`java -version` invokes it **before** running the installer. The installer
+reuses an existing Java 21 runtime and only tries installing OpenJDK 21 from
+APT if none is available. Raspberry Pi OS Trixie offers OpenJDK 21 through
+its package repositories. The installer exits with a clear error, without
+taking over `tty1`, if Java 21 cannot be provided.
+
 ## Before installing
 
 1. Flash Raspberry Pi OS Lite **64-bit** and enable SSH in Raspberry Pi Imager.
@@ -19,7 +28,8 @@ bundle Java. The installation therefore requires an ARM64 Java 21 runtime.
    `stty size` reports approximately `30 100`, and `tput colors` reports `8`.
    The Linux virtual console supports fewer colors than a desktop emulator.
 4. Check `uname -m` reports `aarch64`. The 32-bit OS is not supported by
-   this deployment.
+   this deployment. Run `java -version` to check for Java 21, especially
+   when migrating an existing Bookworm installation.
 5. Confirm [GitHub Releases](https://github.com/skasti/yame/releases/latest)
    includes a `yame-<version>-linux-arm64.zip` asset. This deployment is
    available only for releases that include that asset.
@@ -40,7 +50,8 @@ different existing local account:
 sudo YAME_USER=myuser bash deployment/raspberry-pi/install.sh
 ```
 
-The installer installs Java 21 and support utilities, adds the account to
+The installer validates an installed Java 21 runtime, installing it from APT
+only if available, and installs support utilities. It adds the account to
 `dialout` and `audio`, installs systemd units, disables `getty@tty1`
 and starts YAME on `tty1`. It is safe to rerun after modifying deployment
 files. It does not overwrite `yame.ini`.
@@ -60,6 +71,11 @@ Boot -> yame-update.service -> yame.service -> HDMI tty1 TUI
 - Updates are downloaded to a staging directory on the same filesystem and
   unpacked before activation. `/opt/yame/current` is changed via an atomic
   symlink rename, with the prior target saved in `/opt/yame/previous`.
+  Unique temporary links make an interrupted switch retry-safe; abandoned
+  staging directories are removed on the next run.
+- After a successful update, only the current and previous versioned
+  distribution directories are kept under `/opt/yame/releases/`. This bounds
+  disk usage while retaining a version for manual recovery.
 - When the GitHub API, release asset or download is unavailable, the updater
   retains an existing installation and lets the UI start. Initial installation
   needs an internet connection and a published ARM64 asset.
@@ -113,12 +129,13 @@ journalctl -u yame-update.service -b -n 100 --no-pager
 ls -l /opt/yame/current /opt/yame/previous
 ```
 
-For manual rollback while connected over SSH:
+For manual rollback while connected over SSH (note that the normal updater
+will select the latest release again at the next service start):
 
 ```sh
 sudo systemctl stop yame.service
 cd /opt/yame
-sudo ln -s "$(readlink previous)" .current-rollback
+sudo ln -sfn "$(readlink previous)" .current-rollback
 sudo mv -Tf .current-rollback current
 # Restarting yame.service triggers an update check again, which may restore
 # latest. Temporarily disable the update dependency if troubleshooting a bad
@@ -148,6 +165,19 @@ sudo systemctl enable --now getty@tty1.service
   a correct redraw. This deployment PR does not modify TUI rendering.
 - **No internet on first boot**: the updater cannot install a release yet.
   Check the update journal; once online, restart `yame.service`.
+
+## Update regression tests
+
+The updater has offline integration tests using mocked GitHub API/download
+responses. They verify release activation, retention, recovery of an interrupted
+update, offline fallback, and checksum failure without touching the host's
+`/opt/yame` directory:
+
+```sh
+sudo bash deployment/raspberry-pi/test-update.sh
+```
+
+CI runs these tests alongside ShellCheck and Bash syntax validation.
 
 ## Scope
 
