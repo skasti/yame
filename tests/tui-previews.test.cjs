@@ -116,7 +116,7 @@ test('PNG validation rejects arbitrary bytes and incorrect terminal dimensions',
   } finally { fs.rmSync(directory, {recursive: true, force: true}); }
 });
 
-for (const scenario of ['success', 'base-changed', 'closed', 'head-moved', 'get-failed', 'verification-failed', 'status-failed']) {
+for (const scenario of ['success', 'base-changed', 'closed', 'head-moved', 'get-failed', 'verification-failed', 'status-failed', 'push-timeout', 'list-comments-failed', 'create-comment-failed', 'update-comment-failed', 'unchanged-comment-failed', 'create-comment-timeout']) {
 test(`publication recovers safely: ${scenario}`, async () => {
   const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'yame-publish-'));
@@ -125,6 +125,10 @@ test(`publication recovers safely: ${scenario}`, async () => {
   const successor = 'e'.repeat(40);
   const calls = [];
   let moved = false;
+  let failureActive = true;
+  let changedBase = false;
+  let wasClosed = false;
+  let commentExists = false;
   try {
     const names = ['30x100', '30x100-proxy', '30x100-dns', '30x100-transfers',
       '80x200', '80x200-proxy', '80x200-dns', '80x200-transfers', '100x300', '100x300-proxy'];
@@ -136,38 +140,63 @@ test(`publication recovers safely: ${scenario}`, async () => {
     }
     fs.writeFileSync(path.join(directory, 'source.json'), JSON.stringify({run: 123, pr: 71, head, base, merge: mergeSha}));
     env.github.rest.pulls.get = async () => {
-      if (moved && scenario === 'get-failed') throw new Error('Get failed');
-      const current = moved ? {...pr, head: {...pr.head, sha: scenario === 'head-moved' ? mergeSha : successor}} : pr;
-      if (moved && scenario === 'base-changed') return {data: {...current, base: {...pr.base, sha: mergeSha}}};
-      if (moved && scenario === 'closed') return {data: {...current, state: 'closed'}};
-      return {data: current};
+      if (moved && failureActive && scenario === 'get-failed') throw new Error('Get failed');
+      const current = moved ? {...pr, head: {...pr.head, sha: failureActive && scenario === 'head-moved' ? mergeSha : successor}} : pr;
+      if (moved && failureActive && scenario === 'base-changed') changedBase = true;
+      if (moved && failureActive && scenario === 'closed') wasClosed = true;
+      return {data: {...current, base: changedBase ? {...pr.base, sha: mergeSha} : pr.base,
+        state: wasClosed ? 'closed' : pr.state}};
     };
     env.github.rest.git = {
       getCommit: async ({commit_sha}) => ({data: commit_sha === mergeSha
         ? {parents: [{sha: base}, {sha: head}]} : {tree: {sha: 'old-tree'}}}),
       createBlob: async () => ({data: {sha: 'blob'}}),
-      createTree: async args => { calls.push(['tree', args]); return {data: {sha: 'new-tree'}}; },
+      createTree: async args => { calls.push(['tree', args]); return {data: {sha: scenario === 'unchanged-comment-failed' ? 'old-tree' : 'new-tree'}}; },
       createCommit: async args => { calls.push(['commit', args]); return {data: {sha: successor}}; },
-      updateRef: async args => { calls.push(['push', args]); moved = true; },
+      updateRef: async args => { calls.push(['push', args]); moved = true; if (failureActive && scenario === 'push-timeout') throw new Error('Push timed out'); },
     };
     env.github.rest.repos.getCommit = async () => ({data: {...commit, parents: [{sha: head}],
-      ...(scenario === 'verification-failed' ? {files: []} : {})}});
+      ...(failureActive && scenario === 'verification-failed' ? {files: []} : {})}});
     env.github.rest.repos.createCommitStatus = async args => {
       calls.push(['status', args]);
-      if (scenario === 'status-failed') throw new Error('Status failed');
+      if (failureActive && scenario === 'status-failed') throw new Error('Status failed');
     };
-    env.github.rest.issues = {listComments: 'comments', createComment: async args => calls.push(['comment', args])};
+    const comment = async args => {
+      calls.push(['comment', args]);
+      if (failureActive && scenario === 'create-comment-timeout') {
+        commentExists = true;
+        throw new Error('Comment created, but response timed out');
+      }
+      if (failureActive && ['create-comment-failed', 'update-comment-failed', 'unchanged-comment-failed'].includes(scenario)) {
+        throw new Error('Comment failed');
+      }
+    };
+    env.github.rest.issues = {listComments: 'comments', createComment: comment, updateComment: comment};
     const paginate = env.github.paginate;
-    env.github.paginate = async (method, args) => method === 'comments' ? [] : paginate(method, args);
+    env.github.paginate = async (method, args) => {
+      if (method !== 'comments') return paginate(method, args);
+      if (failureActive && scenario === 'list-comments-failed') throw new Error('List comments failed');
+      return commentExists || scenario === 'update-comment-failed'
+        ? [{id: 456, user: {login: 'github-actions[bot]'}, body: '<!-- yame-tui-previews -->'}] : [];
+    };
     const rollback = async (_, args) => {calls.push(['rollback', args]); moved = false;};
     if (!['success', 'head-moved'].includes(scenario)) {
       await assert.rejects(publish(env, 71, directory, {rollback}));
-      assert.deepEqual(calls.at(-1), ['rollback', {branch: pr.head.ref, sha: successor, parent: head}]);
-      assert.ok(!calls.some(c => c[0] === 'comment'));
-      if (scenario !== 'status-failed') assert.ok(!calls.some(c => c[0] === 'status'));
+      if (scenario === 'unchanged-comment-failed') assert.ok(!calls.some(c => c[0] === 'rollback'));
+      else assert.deepEqual(calls.at(-1), ['rollback', {branch: pr.head.ref, sha: successor, parent: head}]);
+      const commentFailure = ['list-comments-failed', 'create-comment-failed', 'update-comment-failed', 'create-comment-timeout'].includes(scenario);
+      if (scenario !== 'status-failed' && !commentFailure) assert.ok(!calls.some(c => c[0] === 'status'));
       // Restoration makes retry possible after a transient error.
       await prepare(env);
+      if (changedBase || wasClosed) {
+        assert.equal(env.outputs.publish, 'false');
+        return;
+      }
       assert.equal(env.outputs.publish, 'true');
+      failureActive = false;
+      await publish(env, 71, directory, {rollback});
+      assert.equal(calls.at(-1)[0], 'comment');
+      if (scenario === 'create-comment-timeout') assert.equal(calls.at(-1)[1].comment_id, 456);
       return;
     }
     await publish(env, 71, directory, {rollback});

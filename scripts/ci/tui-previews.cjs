@@ -162,19 +162,20 @@ async function publish({github, context, core}, number, directory, {rollback = r
   }
   const {data: outputTree} = await github.rest.git.createTree({...repo, base_tree: source.tree.sha, tree});
   let sha = run.head_sha;
-  if (outputTree.sha !== source.tree.sha) {
-    const proof = {pr: pr.number, run: run.id, base: pr.base.sha};
-    const {data: commit} = await github.rest.git.createCommit({...repo,
-      message: `Update TUI screenshots\n\nYAME-Screenshots: ${JSON.stringify(proof)}`,
-      tree: outputTree.sha, parents: [run.head_sha],
-      author: {name: 'github-actions[bot]', email: '41898282+github-actions[bot]@users.noreply.github.com'},
-    });
-    // No force: a concurrent developer push makes this fail rather than overwrite code.
-    await github.rest.git.updateRef({...repo, ref: `heads/${pr.head.ref}`, sha: commit.sha, force: false});
-    sha = commit.sha;
-    // workflow_dispatch job checks do not satisfy PR rulesets. Report the proven
-    // successor as a commit status instead; no new build or write-enabled PR job.
-    try {
+  try {
+    if (outputTree.sha !== source.tree.sha) {
+      const proof = {pr: pr.number, run: run.id, base: pr.base.sha};
+      const {data: commit} = await github.rest.git.createCommit({...repo,
+        message: `Update TUI screenshots\n\nYAME-Screenshots: ${JSON.stringify(proof)}`,
+        tree: outputTree.sha, parents: [run.head_sha],
+        author: {name: 'github-actions[bot]', email: '41898282+github-actions[bot]@users.noreply.github.com'},
+      });
+      // No force: a concurrent developer push makes this fail rather than overwrite code.
+      // Assign before the request: a timeout may arrive after the ref was updated.
+      sha = commit.sha;
+      await github.rest.git.updateRef({...repo, ref: `heads/${pr.head.ref}`, sha, force: false});
+      // workflow_dispatch job checks do not satisfy PR rulesets. Report the proven
+      // successor as a commit status instead; no new build or write-enabled PR job.
       const {data: latest} = await github.rest.pulls.get({...repo, pull_number: pr.number});
       if (latest.head.sha !== sha) {
         core.info('PR head moved after publication; leaving the newer commit untouched.'); return;
@@ -187,20 +188,22 @@ async function publish({github, context, core}, number, directory, {rollback = r
       }
       await github.rest.repos.createCommitStatus({...repo, sha, state: 'success', context: 'build-and-test',
         description: 'Only generated PNGs changed; parent CI passed against the same base.', target_url: run.html_url});
-    } catch (error) {
-      await rollback({context, core}, {branch: pr.head.ref, sha, parent: run.head_sha});
-      throw error;
     }
+    const url = name => `https://raw.githubusercontent.com/${repo.owner}/${repo.repo}/${sha}/assets/screenshots/${name}`;
+    const body = `${marker}\n### YAME terminal previews\n\n` +
+      `Rendered from code commit \`${run.head_sha.slice(0, 8)}\`; [CI run](${run.html_url}). ` +
+      `Fixed font/colors, production dashboard renderer, synthetic data. Sizes are rows × columns.\n\n` +
+      filenames.map(name => `#### ${name.replace('.png', '')}\n\n![${name}](${url(name)})`).join('\n\n');
+    const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number: pr.number});
+    const existing = comments.find(c => ['github-actions[bot]', 'chatgpt-codex-connector[bot]'].includes(c.user.login) && c.body.startsWith(marker));
+    if (existing) await github.rest.issues.updateComment({...repo, comment_id: existing.id, body});
+    else await github.rest.issues.createComment({...repo, issue_number: pr.number, body});
+  } catch (error) {
+    if (sha !== run.head_sha) {
+      await rollback({context, core}, {branch: pr.head.ref, sha, parent: run.head_sha});
+    }
+    throw error;
   }
-  const url = name => `https://raw.githubusercontent.com/${repo.owner}/${repo.repo}/${sha}/assets/screenshots/${name}`;
-  const body = `${marker}\n### YAME terminal previews\n\n` +
-    `Rendered from code commit \`${run.head_sha.slice(0, 8)}\`; [CI run](${run.html_url}). ` +
-    `Fixed font/colors, production dashboard renderer, synthetic data. Sizes are rows × columns.\n\n` +
-    filenames.map(name => `#### ${name.replace('.png', '')}\n\n![${name}](${url(name)})`).join('\n\n');
-  const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number: pr.number});
-  const existing = comments.find(c => ['github-actions[bot]', 'chatgpt-codex-connector[bot]'].includes(c.user.login) && c.body.startsWith(marker));
-  if (existing) await github.rest.issues.updateComment({...repo, comment_id: existing.id, body});
-  else await github.rest.issues.createComment({...repo, issue_number: pr.number, body});
 }
 
 module.exports = {gate, prepare, publish, parseProof, screenshotOnly, successfulSource, validatePng, verifySuccessor, rollbackPreview};
