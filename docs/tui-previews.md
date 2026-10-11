@@ -7,6 +7,9 @@ narrow sizes also show Proxy, DNS and Transfers with fixed synthetic traffic;
 the wide size shows all panels together. These are renderer snapshots, not
 photographs of a running Pi console. They use DejaVu Sans Mono, 9×18 pixel
 cells and a fixed terminal palette, including Mordant's colors and selection.
+The header shows all status fields when they fit, including flow control and
+modem tones. Otherwise it cycles through complete-field pages every five
+seconds, even while idle. Fixtures use elapsed time zero for stable previews.
 No serial hardware or external network service is needed.
 
 Run `./gradlew test --tests '*DashboardScreenshotTest'` locally to regenerate.
