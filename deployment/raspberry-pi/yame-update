@@ -6,6 +6,7 @@ BASE="${YAME_BASE:-/opt/yame}"
 RELEASES="$BASE/releases"
 CURRENT="$BASE/current"
 API="https://api.github.com/repos/$REPO/releases/latest"
+EXTRACTOR="${YAME_EXTRACTOR:-/usr/local/lib/yame/extract-release.py}"
 
 if [[ ${EUID} -ne 0 ]]; then
   echo "yame-update must run as root" >&2
@@ -88,7 +89,7 @@ fi
 stage="$(mktemp -d "$BASE/.staging.XXXXXXXX")"
 trap 'rm -rf -- "$stage"' EXIT
 echo "Downloading $asset..."
-if ! curl --fail --silent --show-error --location --retry 2 --connect-timeout 5 --max-time 120 -o "$stage/release.zip" "$url"; then
+if ! curl --fail --silent --show-error --location --retry 2 --connect-timeout 5 --max-time 120 --max-filesize 67108864 -o "$stage/release.zip" "$url"; then
   fallback_or_fail "Download failed"
 fi
 if [[ -n "$digest" ]]; then
@@ -97,8 +98,8 @@ if [[ -n "$digest" ]]; then
 fi
 
 mkdir -p "$stage/unpacked"
-if ! unzip -q "$stage/release.zip" -d "$stage/unpacked"; then
-  fallback_or_fail "Invalid ZIP archive"
+if ! python3 "$EXTRACTOR" "$stage/release.zip" "$stage/unpacked" "$version"; then
+  fallback_or_fail "Invalid or oversized ZIP archive"
 fi
 distribution="$stage/unpacked/yame-$version"
 if [[ ! -f "$distribution/bin/yame" || ! -d "$distribution/lib" ]]; then
