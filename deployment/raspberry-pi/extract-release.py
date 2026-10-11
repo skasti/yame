@@ -10,6 +10,7 @@ from pathlib import Path
 MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 MAX_UNPACKED_BYTES = 256 * 1024 * 1024
 MAX_ENTRIES = 4096
+MIN_FREE_AFTER_EXTRACTION = 128 * 1024 * 1024
 CHUNK_SIZE = 64 * 1024
 
 
@@ -54,6 +55,9 @@ def extract(archive: Path, destination: Path, version: str) -> None:
             if entry.file_size > MAX_UNPACKED_BYTES - total_size:
                 raise ValueError("release ZIP expands beyond 256 MiB")
             total_size += entry.file_size
+
+        if shutil.disk_usage(destination).free < total_size + MIN_FREE_AFTER_EXTRACTION:
+            raise ValueError("not enough free disk space for release extraction")
 
         for entry in entries:
             target = destination / entry.filename
