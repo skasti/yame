@@ -75,6 +75,21 @@ def extract(archive: Path, destination: Path, version: str) -> None:
             if extracted != entry.file_size:
                 raise ValueError("release ZIP decompressed size differs from metadata")
 
+    # Extraction follows the root-run updater's umask, which may be 077.
+    # Explicitly make the immutable distribution traversable/readable by the
+    # unprivileged YAME service user before it is moved into releases/.
+    # The ZIP has already been validated to exclude symlinks and special files.
+    distribution = destination / prefix
+    if not (distribution / "bin/yame").is_file() or not (distribution / "lib").is_dir():
+        raise ValueError("release ZIP has an unexpected distribution layout")
+    for path in distribution.rglob("*"):
+        if path.is_dir():
+            path.chmod(0o755)
+        else:
+            path.chmod(0o644)
+    distribution.chmod(0o755)
+    (distribution / "bin/yame").chmod(0o755)
+
 
 if __name__ == "__main__":
     if len(sys.argv) != 4:
