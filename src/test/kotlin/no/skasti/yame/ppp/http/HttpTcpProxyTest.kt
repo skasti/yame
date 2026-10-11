@@ -9,7 +9,6 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.test.Ignore
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -17,9 +16,8 @@ import kotlin.test.assertTrue
 
 class HttpTcpProxyTest {
     // Reproduced against main: shutdownOutput fails with "HTTP flow is not connected".
-    // Remove @Ignore when fixing late peer FIN handling; the assertions below
-    // describe the desired behavior rather than accepting the current failure.
-    @Ignore("Known bug: client FIN after HTTP flow removal fails; enable with the lifecycle fix")
+    // Keep this regression active: it describes the desired behavior and is
+    // expected to fail until late peer FIN handling is fixed.
     @Test
     fun `client FIN after completed HTTP response succeeds`() {
         val connectionRemoved = CountDownLatch(1)
