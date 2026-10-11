@@ -5,20 +5,13 @@ on:
     branches:
       - main
 
-  workflow_dispatch:
-    inputs:
-      pr_number:
-        description: PR to verify after an automatic screenshot commit
-        required: true
-        type: string
-
 permissions:
   contents: read
   actions: read
   pull-requests: read
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || inputs.pr_number }}
+  group: ci-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:

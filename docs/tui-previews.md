@@ -19,9 +19,7 @@ identify stale previews.
 `Publish TUI previews` uses `workflow_run` after successful pull-request CI.
 GitHub activates this workflow only once it exists on the default branch.
 Consequently, the introducing PR gets artifacts; automatic commits/comments
-start after this feature has been merged into `main`. The CI workflow's
-`workflow_dispatch` trigger must also be on `main` before publication starts.
-If repository policy disables Actions write access, publication fails visibly;
+start after this feature has been merged into `main`. If repository policy disables Actions write access, publication fails visibly;
 normal read-only CI and its artifacts still work.
 
 The publishing job executes only scripts from the default branch. It never
@@ -31,13 +29,13 @@ validates the expected PNG filenames, signatures, dimensions and size limits,
 and creates a single-parent commit touching only `assets/screenshots/*.png`.
 A non-forced ref update refuses concurrent changes to the branch. PNG files
 are treated only as bytes in this privileged job, not decoded or executed.
-Only the publishing job has contents/actions/pull-request write permissions.
+Only the publishing job has contents/statuses/pull-request write permissions.
 
 The job updates one bot-owned PR comment with immutable image URLs. If PNGs
 are unchanged it makes no commit. The workflow records the successful source
-run, PR number and base SHA in the screenshot commit message and explicitly
-dispatches CI on the updated branch. This avoids relying on recursive events
-from `GITHUB_TOKEN`. Fork PRs retain downloadable artifacts.
+run, PR number and base SHA in the screenshot commit message and verifies the new head again before reporting a successful `build-and-test`
+commit status through the GitHub API. This avoids relying on recursive events
+from `GITHUB_TOKEN`. A `workflow_dispatch` job check would not satisfy PR rulesets. Fork PRs retain downloadable artifacts.
 
 ## Required checks and avoiding rebuilds
 
@@ -54,10 +52,9 @@ Only then can `build-and-test` finish without running Gradle or DOSBox again.
 Release-workflow tests also skip this verified successor. ARM64 skips only if its own parent run also succeeded; otherwise it runs normally. A missing
 proof, changed base, ordinary screenshot edit, code edit, failed parent run or
 incompatible run forces normal CI. If the gate fails, the required job fails.
-The dispatched CI run does not publish another commit; publication accepts
-only successful **pull_request** runs. A redundant native PR event, if GitHub
+Publication accepts only successful **pull_request** runs with a screenshot artifact. A redundant native PR event, if GitHub
 creates one, uses the same gate and cannot cause a screenshot loop.
 
 The publisher activates after merge; test it with the next same-repository PR.
-Confirm the PNG commit is followed by green `build-and-test`, with Gradle and
-DOSBox skipped, and that a subsequent code edit triggers the full suite again.
+Confirm the PNG commit is followed by green `build-and-test`, with a commit status linking to the successful source CI and
+without another Gradle/DOSBox build, and that a subsequent code edit triggers the full suite again.

@@ -45,8 +45,8 @@ test('source requires successful PR CI on exact parent and base', () => {
   }
   assert.equal(successfulSource(run, 71, parent, head), false);
 });
-test('verified screenshot successor skips heavy build on PR and dispatch', async () => {
-  for (const event of ['pull_request', 'workflow_dispatch']) {
+test('verified screenshot successor skips heavy build on PR', async () => {
+  for (const event of ['pull_request']) {
     const env = environment({event}); await gate(env);
     assert.equal(env.outputs.reuse, 'true');
     assert.equal(env.outputs.checkout_ref, mergeSha);
@@ -112,5 +112,50 @@ test('PNG validation rejects arbitrary bytes and incorrect terminal dimensions',
     fs.writeFileSync(file, bytes);
     assert.equal(validatePng(file, '30x100.png').length, 33);
     assert.throws(() => validatePng(file, '80x200.png'), /Invalid screenshot/);
+  } finally { fs.rmSync(directory, {recursive: true, force: true}); }
+});
+
+test('publication writes only PNGs and reports inherited status after verifying successor', async () => {
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'yame-publish-'));
+  const sourceRun = {...run, head_sha: head, html_url: 'https://github.com/skasti/yame/actions/runs/123'};
+  const env = environment({sourceRun});
+  const successor = 'e'.repeat(40);
+  const calls = [];
+  let moved = false;
+  try {
+    const names = ['30x100', '30x100-proxy', '30x100-dns', '30x100-transfers',
+      '80x200', '80x200-proxy', '80x200-dns', '80x200-transfers', '100x300', '100x300-proxy'];
+    for (const name of names) {
+      const [rows, columns] = name.match(/^(\d+)x(\d+)/).slice(1).map(Number);
+      const png = Buffer.alloc(33); Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(png);
+      png.write('IHDR', 12); png.writeUInt32BE(columns * 9, 16); png.writeUInt32BE(rows * 18, 20);
+      fs.writeFileSync(path.join(directory, `${name}.png`), png);
+    }
+    fs.writeFileSync(path.join(directory, 'source.json'), JSON.stringify({run: 123, pr: 71, head, base, merge: mergeSha}));
+    env.github.rest.pulls.get = async () => ({data: moved ? {...pr, head: {...pr.head, sha: successor}} : pr});
+    env.github.rest.git = {
+      getCommit: async ({commit_sha}) => ({data: commit_sha === mergeSha
+        ? {parents: [{sha: base}, {sha: head}]} : {tree: {sha: 'old-tree'}}}),
+      createBlob: async () => ({data: {sha: 'blob'}}),
+      createTree: async args => { calls.push(['tree', args]); return {data: {sha: 'new-tree'}}; },
+      createCommit: async args => { calls.push(['commit', args]); return {data: {sha: successor}}; },
+      updateRef: async args => { calls.push(['push', args]); moved = true; },
+    };
+    env.github.rest.repos.getCommit = async () => ({data: {...commit, parents: [{sha: head}]}});
+    env.github.rest.repos.createCommitStatus = async args => calls.push(['status', args]);
+    env.github.rest.issues = {listComments: 'comments', createComment: async args => calls.push(['comment', args])};
+    const paginate = env.github.paginate;
+    env.github.paginate = async (method, args) => method === 'comments' ? [] : paginate(method, args);
+    await publish(env, 71, directory);
+    assert.deepEqual(calls.map(c => c[0]), ['tree', 'commit', 'push', 'status', 'comment']);
+    assert.equal(calls[0][1].tree.length, 10);
+    assert.ok(calls[0][1].tree.every(t => t.path.startsWith('assets/screenshots/') && t.path.endsWith('.png')));
+    assert.deepEqual(calls[1][1].parents, [head]);
+    assert.equal(calls[2][1].force, false);
+    assert.equal(calls[3][1].sha, successor);
+    assert.equal(calls[3][1].context, 'build-and-test');
+    assert.equal(calls[3][1].state, 'success');
+    assert.ok(calls[4][1].body.includes(`/${successor}/assets/screenshots/30x100.png`));
   } finally { fs.rmSync(directory, {recursive: true, force: true}); }
 });

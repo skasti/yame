@@ -18,7 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      actions: write
+      actions: read
+      statuses: write
       pull-requests: write
     steps:
       # Never check out or execute PR code in this privileged workflow.
@@ -39,7 +40,7 @@ jobs:
           path: ${{ runner.temp }}/tui-previews
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
-      - name: Commit previews, dispatch verification and update PR comment
+      - name: Commit previews, verify successor and update PR comment
         if: steps.source.outputs.publish == 'true'
         uses: actions/github-script@v8
         env:
