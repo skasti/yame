@@ -34,6 +34,11 @@ if [[ "$url" == "https://api.github.com/repos/skasti/yame/releases/latest" ]]; t
   printf '{"tag_name":"v%s","assets":[{"name":"%s","browser_download_url":"https://github.com/skasti/yame/releases/download/v%s/%s","digest":"sha256:%s"}]}\n' \
     "$version" "$asset" "$version" "$asset" "$digest"
 else
+  # Verify the updater supplies curl's streaming download-size limit.
+  [[ " $* " == *" --max-filesize 67108864 "* ]] || {
+    echo "Missing curl download limit" >&2
+    exit 1
+  }
   output=""
   while (( $# )); do
     if [[ "$1" == "-o" ]]; then
