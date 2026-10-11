@@ -387,7 +387,7 @@ class ResourceGraphTest {
             child,
             listOf(
                 ResourceTransformationSummary(
-                    transformerId = "legacy-image-optimization",
+                    transformerId = "legacy-jpeg-optimization",
                     sourceBytes = 1000,
                     outputBytes = 250,
                 ),

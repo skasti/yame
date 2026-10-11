@@ -12,6 +12,11 @@ import no.skasti.yame.ppp.PppFrame
 import no.skasti.yame.observer.TransferState
 import no.skasti.yame.observer.YameEvent
 import no.skasti.yame.ppp.dns.PppDnsConfig
+import no.skasti.yame.ppp.http.HttpConnection
+import no.skasti.yame.ppp.http.HttpRequest
+import no.skasti.yame.ppp.http.HttpRequestHandler
+import no.skasti.yame.ppp.http.HttpResponse
+import no.skasti.yame.ppp.http.HttpTcpProxy
 import no.skasti.yame.ppp.icmp.IcmpEchoProxy
 import no.skasti.yame.ppp.icmp.IcmpPacket
 import no.skasti.yame.ppp.ip.Ipv4Address
@@ -25,12 +30,112 @@ import no.skasti.yame.ppp.udp.UdpFlow
 import no.skasti.yame.ppp.udp.UdpPacket
 import no.skasti.yame.ppp.udp.UdpProxy
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class PppIpv4SessionTest {
+    @Test
+    fun `client FIN after HTTP response receives ACK and closes without transfer failure`() {
+        val sent = CopyOnWriteArrayList<PppFrame>()
+        val logs = CopyOnWriteArrayList<String>()
+        val observed = CopyOnWriteArrayList<YameEvent>()
+        val connectionRemoved = CountDownLatch(1)
+        val handler = object : HttpRequestHandler {
+            override fun handle(connection: HttpConnection, request: HttpRequest): HttpResponse =
+                HttpResponse(200, "OK", listOf("Content-Type" to "text/plain"), "hello".encodeToByteArray())
+
+            override fun connectionClosed(flow: TcpProxyFlow) {
+                connectionRemoved.countDown()
+            }
+        }
+        val proxy = HttpTcpProxy(handler, maxFlows = 1, maxRequestBytes = 1024)
+        val session = newSession(sent, logger = logs::add, tcpProxy = proxy, eventSink = observed::add)
+        val peer = Ipv4Address.parse("10.0.0.2")
+        val remote = Ipv4Address.parse("203.0.113.11")
+
+        fun receiveTcp(sequence: UInt, acknowledgment: UInt = 0u, flags: Int, payload: ByteArray = ByteArray(0)) {
+            session.receive(
+                PppFrame(
+                    PppSession.IPV4_PROTOCOL,
+                    Ipv4Packet(
+                        protocol = Ipv4Packet.TCP_PROTOCOL,
+                        source = peer,
+                        destination = remote,
+                        payload = TcpPacket(
+                            sourcePort = 2049,
+                            destinationPort = 80,
+                            sequenceNumber = sequence,
+                            acknowledgmentNumber = acknowledgment,
+                            flags = flags,
+                            windowSize = 8192,
+                            payload = payload,
+                        ).encode(peer, remote),
+                    ).encode(),
+                ),
+            )
+        }
+
+        fun replies(): List<TcpPacket> = sent.map { frame ->
+            val ip = requireNotNull(Ipv4Packet.parse(frame.payload))
+            requireNotNull(TcpPacket.parse(ip.payload, ip.source, ip.destination))
+        }
+
+        try {
+            openIpcp(session, sent)
+            sent.clear()
+            receiveTcp(sequence = 1000u, flags = TcpPacket.SYN)
+            val synAck = replies().single()
+            val hostSequence = synAck.sequenceNumber + 1u
+            receiveTcp(sequence = 1001u, acknowledgment = hostSequence, flags = TcpPacket.ACK)
+            sent.clear()
+
+            val request = "GET /demo HTTP/1.0\r\nHost: example.test\r\n\r\n".encodeToByteArray()
+            receiveTcp(
+                sequence = 1001u,
+                acknowledgment = hostSequence,
+                flags = TcpPacket.ACK or TcpPacket.PSH,
+                payload = request,
+            )
+            // This callback follows response delivery, host FIN, and HTTP flow
+            // removal, so the client's close below cannot race the worker.
+            assertTrue(connectionRemoved.await(2, TimeUnit.SECONDS), "HTTP flow was not removed")
+            val responsePackets = replies()
+            val response = responsePackets
+                .flatMap { it.payload.asIterable() }.toByteArray().decodeToString()
+            assertTrue(response.startsWith("HTTP/1.0 200 OK\r\n"), response)
+            assertTrue(response.endsWith("hello"), response)
+            val hostFin = responsePackets.single { it.hasFlag(TcpPacket.FIN) }
+            assertEquals(hostSequence + response.encodeToByteArray().size.toUInt(), hostFin.sequenceNumber)
+            val peerSequence = 1001u + request.size.toUInt()
+            val hostEnd = hostFin.sequenceNumber + 1u
+            sent.clear()
+
+            // An ACK of the host FIN advances TCP state without an ACK-of-ACK.
+            receiveTcp(sequence = peerSequence, acknowledgment = hostEnd, flags = TcpPacket.ACK)
+            assertTrue(sent.isEmpty(), "A valid ACK alone should not produce a reply")
+
+            receiveTcp(sequence = peerSequence, acknowledgment = hostEnd, flags = TcpPacket.FIN or TcpPacket.ACK)
+            val finalAck = replies().single()
+            assertEquals(TcpPacket.ACK, finalAck.flags)
+            assertEquals(peerSequence + 1u, finalAck.acknowledgmentNumber)
+            assertEquals(hostEnd, finalAck.sequenceNumber)
+            assertTrue(finalAck.payload.isEmpty())
+            assertTrue(observed.filterIsInstance<YameEvent.TransferStateChanged>().none {
+                it.state == TransferState.FAILED
+            }, observed.toString())
+            assertTrue(observed.filterIsInstance<YameEvent.TransferStateChanged>().any {
+                it.state == TransferState.CLOSED
+            }, observed.toString())
+            assertTrue(logs.none { it.contains("failed:") }, logs.toString())
+        } finally {
+            session.close()
+        }
+    }
+
     @Test
     fun `local ICMP echo request receives IPv4 echo reply over PPP`() {
         val sent = mutableListOf<PppFrame>()

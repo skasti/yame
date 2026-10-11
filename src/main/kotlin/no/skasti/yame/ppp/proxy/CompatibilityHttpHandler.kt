@@ -10,7 +10,8 @@ import no.skasti.yame.ppp.proxy.cookies.BoundedCookieOverrides
 import no.skasti.yame.ppp.proxy.cookies.BoundedCookieStore
 import no.skasti.yame.ppp.proxy.cookies.CookieOverride
 import no.skasti.yame.ppp.proxy.routing.LegacyOriginRouteTable
-import no.skasti.yame.ppp.proxy.transform.ImageResourceTransformer
+import no.skasti.yame.ppp.proxy.transform.JpegResourceTransformer
+import no.skasti.yame.ppp.proxy.transform.PngResourceTransformer
 import no.skasti.yame.ppp.proxy.transform.ImageTagTransformer
 import no.skasti.yame.ppp.proxy.transform.ImageOptimizationPolicy
 import no.skasti.yame.ppp.proxy.transform.LegacyTextResourceTransformer
@@ -97,13 +98,14 @@ internal class SystemHttpCompatibilityHandler(
 
     private val sessionStates = ConcurrentHashMap<SessionKey, SessionState>()
     private val originRoutes = LegacyOriginRouteTable()
-    private val imageOptimizationPolicy = ImageOptimizationPolicy()
+    private val imageOptimizationPolicy = ImageOptimizationPolicy(maxEncodedBytes = config.maxResponseBytes)
     private val resourceTransformations =
         ResourceTransformationPipeline(
             listOf(
                 LegacyTextResourceTransformer(),
                 ImageTagTransformer(imageOptimizationPolicy),
-                ImageResourceTransformer(imageOptimizationPolicy),
+                JpegResourceTransformer(imageOptimizationPolicy),
+                PngResourceTransformer(imageOptimizationPolicy),
             ),
         )
     private val resourceCache = ResourceCache(

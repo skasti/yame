@@ -83,7 +83,7 @@ Bodyless responses may still participate in resource-level transforms when heade
 ## Image dimensions
 
 The HTML compatibility stage applies the same proportional sizing policy as
-JPEG optimization to literal `<img>` tags that contain numeric pixel
+JPEG/PNG optimization to literal `<img>` tags that contain numeric pixel
 `width` and `height` attributes. The default maximum is `600x400`, so the
 result stays within a `640x480` legacy display while preserving aspect ratio.
 Tags with missing dimensions or non-pixel values are left unchanged. The
@@ -102,3 +102,74 @@ Image and other binary transformers process untrusted Internet data. They must t
 - optimization transforms should not replace the source when the candidate representation is larger unless compatibility requires transcoding regardless of size.
 
 Tests should cover the boundary/negative paths explicitly, not only the happy path.
+
+## PNG output and transparency
+
+`PngResourceTransformer` handles `image/png`, independently of
+`JpegResourceTransformer`, which handles JPEG. Both are registered as separate
+optimization stages in the resource pipeline and share `LegacyImageCodec` for
+in-memory ImageIO decoding and resizing. They use the same `600x400` canvas,
+no upscaling, a 16-million decoded-pixel limit, and a 48 MiB estimated decoded-raster limit.
+Before full decode, the image reader's default output sample layout (element size and elements
+per pixel) is used to estimate raster memory; images exceeding either limit pass through.
+This bounds the expected main raster allocation, not every temporary decoder buffer or
+aggregate memory use across simultaneous requests. An encoded-input limit is checked before
+parsing/decoding: the proxy supplies its existing `maxResponseBytes` budget
+(default 16 MiB); standalone image policies default to 32 MiB. Output uses the
+existing source/transformed representation cache and preserves source validators.
+JPEG optimization runs before PNG optimization so PNG-to-JPEG candidates are
+not recompressed by the JPEG stage.
+
+Changing format updates `Content-Type` and removes source byte lengths/digests;
+the HTTP boundary calculates the final `Content-Length`.
+
+Netscape Navigator 4.08 can display PNG, but ignores PNG transparency
+([PNG: The Definitive Guide, browser support table](https://www.libpng.org/pub/png/book/chapter02.html)).
+The deterministic policy is:
+
+- Images fitting an exact 256-entry palette become a non-interlaced GIF. No
+  color quantization is applied. Binary alpha uses one palette entry, allowing
+  up to 255 opaque colors. RGB values of fully transparent pixels are ignored;
+  an opaque black pixel stays distinct from a transparent black pixel.
+- Palette artwork and binary-transparent images use nearest-neighbor reduction,
+  preserving colors and binary alpha. Opaque high-color images use bilinear
+  reduction. All resizing preserves aspect ratio within the shared canvas.
+- Opaque high-color PNGs may become non-progressive baseline JPEG at the shared
+  JPEG quality (default 0.55). A round-trip comparison against the resized RGB
+  image requires channel RMS error at most 12 on the 0–255 scale and at most
+  1% of pixels with any channel error above 48. This is a conservative numeric
+  guard against compression damage, not a guarantee of perceptual equivalence.
+- Partial alpha and binary-transparent images exceeding GIF palette capacity
+  pass through unchanged. There is no alpha threshold, lossy palette reduction
+  or guessed page-background matte. APNG also passes through; the stock PNG
+  decoder would otherwise silently discard its animation.
+- Malformed data, a mismatch between declared format and decoder format,
+  encoded bodies and images exceeding the resource limits remain unchanged.
+- Every candidate must be strictly smaller than the current representation.
+  The original headers and bytes remain intact on all fallback paths.
+
+Passthrough is deliberate: partial-alpha images and other unsupported cases
+retain Netscape's original PNG transparency limitation. Full-alpha rendering on
+an arbitrary page background is outside this policy. Even an exact transparent
+GIF is declined if it would increase transfer size. Tests generate deterministic
+fixtures and verify format, pixels/alpha, size, limits, HTTP framing and cached
+identical-source reuse without relying on external image downloads.
+
+## Visual image transformation examples
+
+The deterministic image transformer tests also generate an offline, side-by-side visual
+gallery from synthetic PNG/JPEG fixtures using the **production** resource transformation
+pipeline. It demonstrates a binary-transparent logo converted to GIF, exact-palette
+artwork, PNG-to-JPEG, JPEG recompression, and a partially transparent PNG deliberately
+left unchanged. Original and resulting files are shown against checkerboard and dark
+backgrounds, alongside their dimensions, encoded sizes, and percentage saved.
+
+Run `./gradlew test --tests '*ImageTransformationVisualReportTest'` to generate
+`build/reports/image-transformations/index.html` with its referenced image files.
+The pull-request CI uploads this directory as the
+`yame-image-transformations` artifact, linked from the build job summary.
+Download and extract the full archive, then open `index.html` locally.
+
+These fixtures are repeatable behavioral examples, **not** a representative corpus
+of real website logos/photos. Visual checks in Netscape 4.08 are still useful,
+especially for browser-specific GIF transparency rendering.

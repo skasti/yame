@@ -13,6 +13,67 @@ import kotlin.test.assertTrue
 
 class YameDashboardRendererTest {
     @Test
+    fun narrowDashboardShowsFullWidthLogAndOnlySelectedDetail() {
+        val base = DashboardState(
+            portName = "COM1",
+            baud = 57600,
+            connected = true,
+            dnsUpstream = "8.8.8.8",
+            httpProxyEnabled = true,
+            logs = listOf("10:00:00  " + "full-width-log-message-".repeat(3)),
+            dnsLookups = emptyList(),
+            transfers = emptyList(),
+            httpHosts = emptyList(),
+            selectedHttpHostIndex = 0,
+            commandPalette = null,
+        )
+        val proxy = YameDashboardRenderer.render(base, width = 100, height = 30)
+        assertContains(proxy, "HTTP / HTTPS compatibility proxy")
+        assertContains(proxy, "full-width-log-message-".repeat(3))
+        assertFalse(proxy.contains("DNS lookups"))
+        assertFalse(proxy.contains("─ Transfers "))
+        assertContains(proxy, "[Tab]")
+        assertTrue(proxy.lines().all { it.length == 100 }, proxy)
+
+        val dns = YameDashboardRenderer.render(
+            base.copy(activeDetailPanel = DashboardDetailPanel.DNS), width = 100, height = 30,
+        )
+        assertContains(dns, "DNS lookups")
+        assertFalse(dns.contains("HTTP / HTTPS compatibility proxy"))
+
+        val transfers = YameDashboardRenderer.render(
+            base.copy(activeDetailPanel = DashboardDetailPanel.TRANSFERS), width = 100, height = 30,
+        )
+        assertContains(transfers, "Transfers")
+        assertFalse(transfers.contains("HTTP / HTTPS compatibility proxy"))
+    }
+
+    @Test
+    fun wideDashboardStartsAbove250Columns() {
+        val base = DashboardState(
+            portName = null,
+            baud = 115200,
+            connected = false,
+            dnsUpstream = "8.8.8.8",
+            httpProxyEnabled = true,
+            logs = emptyList(),
+            dnsLookups = emptyList(),
+            transfers = emptyList(),
+            httpHosts = emptyList(),
+            selectedHttpHostIndex = 0,
+            commandPalette = null,
+        )
+        val narrow = YameDashboardRenderer.render(base, width = 250, height = 30)
+        val wide = YameDashboardRenderer.render(base, width = 251, height = 30)
+        assertFalse(narrow.contains("DNS lookups"))
+        assertContains(wide, "DNS lookups")
+        assertContains(wide, "Transfers")
+        assertContains(wide, "HTTP / HTTPS compatibility proxy")
+        assertEquals(DashboardDetailPanel.DNS, DashboardDetailPanel.PROXY.next())
+        assertEquals(DashboardDetailPanel.TRANSFERS, DashboardDetailPanel.DNS.next())
+    }
+
+    @Test
     fun rendersAllOperationalPanels() {
         val state = DashboardState(
             portName = "COM3",
@@ -64,7 +125,7 @@ class YameDashboardRendererTest {
                             transformations =
                                 listOf(
                                     ResourceTransformationSummary(
-                                        transformerId = "legacy-image-optimization",
+                                        transformerId = "legacy-jpeg-optimization",
                                         sourceBytes = 184 * 1024,
                                         outputBytes = 31 * 1024,
                                         detail = "1600x1000 -> 640x400",
@@ -82,7 +143,7 @@ class YameDashboardRendererTest {
 
         val rendered = YameDashboardRenderer.render(
             state = state,
-            width = 120,
+            width = 260,
             height = 34,
         )
 
@@ -94,7 +155,7 @@ class YameDashboardRendererTest {
         assertContains(rendered, "93.184.216.34:80")
         assertContains(rendered, "example.test  (2)")
         assertContains(rendered, ">  *")
-        assertContains(rendered, "…hero.jpg")
+        assertContains(rendered, "/assets/hero.jpg")
         assertContains(rendered, "[P]")
         assertContains(rendered, "184K->31K -83%")
     }
@@ -373,6 +434,7 @@ class YameDashboardRendererTest {
                 httpHosts = emptyList(),
                 selectedHttpHostIndex = 0,
                 commandPalette = null,
+                activeDetailPanel = DashboardDetailPanel.DNS,
             ),
             width = 120,
             height = 34,
