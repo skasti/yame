@@ -20,7 +20,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 echo "Installing YAME for $YAME_USER (tty1)..."
 
 apt-get update
-apt-get install -y curl jq unzip util-linux
+apt-get install -y curl jq python3 util-linux
 
 # Bookworm does not ship OpenJDK 21 in its standard repositories. An already
 # installed Java 21 runtime (e.g. Temurin 21) is perfectly usable.
@@ -57,7 +57,21 @@ if [[ -f /var/lib/yame/yame.ini ]]; then
 fi
 usermod -aG dialout,audio "$YAME_USER"
 
+install -d -m 755 /usr/local/lib/yame
+install -m 644 "$SCRIPT_DIR/extract-release.py" /usr/local/lib/yame/extract-release.py
 install -m 755 "$SCRIPT_DIR/yame-update" /usr/local/bin/yame-update
+
+# On a fresh installation, establish a usable local release before taking
+# over tty1. A network/download failure must leave the login console intact.
+if [[ ! -x /opt/yame/current/bin/yame ]]; then
+  echo "Downloading the initial YAME release before changing the console..."
+  if ! /usr/local/bin/yame-update || [[ ! -x /opt/yame/current/bin/yame ]]; then
+    echo "Initial YAME installation failed; leaving tty1 login untouched." >&2
+    echo "Check GitHub connectivity and ARM64 release assets, then retry." >&2
+    exit 1
+  fi
+fi
+
 install -m 644 "$SCRIPT_DIR/yame-update.service" /etc/systemd/system/yame-update.service
 install -m 644 "$SCRIPT_DIR/yame.service" /etc/systemd/system/yame.service
 
