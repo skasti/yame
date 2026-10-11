@@ -11,6 +11,9 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 sandbox="$(mktemp -d)"
 trap 'rm -rf -- "$sandbox"' EXIT
 mkdir -p "$sandbox/mock" "$sandbox/assets"
+# Permit the non-root user to traverse the test fixture root while keeping
+# the fake GitHub assets and root-run downloader otherwise unchanged.
+chmod 755 "$sandbox"
 export YAME_BASE="$sandbox/install"
 export YAME_EXTRACTOR="$script_dir/extract-release.py"
 export YAME_TEST_ASSETS="$sandbox/assets"
@@ -74,8 +77,19 @@ for version in 1.0.0 1.1.0 1.2.0 1.3.0; do
 done
 
 export YAME_TEST_VERSION=1.0.0
-bash "$script_dir/yame-update"
+# Reproduce a hardened root environment where new files/directories would
+# otherwise be inaccessible to the unprivileged service account.
+(umask 077; bash "$script_dir/yame-update")
 assert_target current 1.0.0
+
+nonroot_account="$(id -nu 65534)"
+[[ "$(stat -c %a "$YAME_BASE/releases/v1.0.0")" == 755 ]]
+[[ "$(stat -c %a "$YAME_BASE/releases/v1.0.0/bin")" == 755 ]]
+[[ "$(stat -c %a "$YAME_BASE/releases/v1.0.0/lib")" == 755 ]]
+[[ "$(stat -c %a "$YAME_BASE/releases/v1.0.0/bin/yame")" == 755 ]]
+[[ "$(stat -c %a "$YAME_BASE/releases/v1.0.0/lib/test.txt")" == 644 ]]
+runuser -u "$nonroot_account" -- test -x "$YAME_BASE/current/bin/yame"
+runuser -u "$nonroot_account" -- test -r "$YAME_BASE/current/lib/test.txt"
 
 # Emulate a power failure after the creation of both old fixed-name links
 # and an incomplete downloaded staging directory.
