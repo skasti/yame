@@ -50,6 +50,18 @@ different existing local account:
 sudo YAME_USER=myuser bash deployment/raspberry-pi/install.sh
 ```
 
+**The service account is fixed after the initial installation.** Do not
+rerun the installer as a different `sudo` user or with a different
+`YAME_USER`: existing `/var/lib/yame/yame.ini` and other runtime data
+belong to the original account and are not migrated automatically.
+The installer checks the previously recorded service account **before
+changing packages, file permissions, or systemd services**, and refuses
+account changes with a clear error. For older installations with no
+account record, an existing data directory with configuration also
+cannot be silently reassigned. A service-account change requires a
+separate, deliberate backup and migration of runtime data and systemd
+configuration before rerunning the installer.
+
 The installer validates an installed Java 21 runtime, installing it from APT
 only if available, and installs support utilities. It adds the account to
 `dialout` and `audio`, installs systemd units, disables `getty@tty1`
@@ -184,6 +196,10 @@ sudo systemctl enable --now getty@tty1.service
 
 - **No YAME screen**: inspect `journalctl -u yame -b` over SSH. Verify
   `/opt/yame/current/bin/yame` exists and Java is installed.
+- **Installer rejects a different service account**: rerun it as the
+  account used during the initial installation (or set `YAME_USER` to
+  that same account). Do not change accounts without a manual runtime-data
+  migration. This protects existing owner-only configuration and logs.
 - **`AccessDeniedException: /var/lib/yame/yame.ini`**: the file may be
   left over from a root-run instance. The installer will not change a
   user-controlled path as root. Inspect the configuration ownership and file
@@ -219,7 +235,9 @@ sudo bash deployment/raspberry-pi/test-update.sh
 CI runs these tests alongside ShellCheck and Bash syntax validation. The
 separate `test-data-directory.sh` additionally verifies that privileged
 directory setup does not follow or modify a user-controlled `yame.ini`
-symlink (or change an existing regular config file).
+symlink (or change an existing regular config file). It also tests
+service-account preflight: safe same-user reinstall, account-change refusal,
+ambiguous/symlinked account records, and old runtime data without a drop-in.
 
 ## Scope
 
