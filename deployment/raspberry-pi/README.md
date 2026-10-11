@@ -53,8 +53,11 @@ sudo YAME_USER=myuser bash deployment/raspberry-pi/install.sh
 The installer validates an installed Java 21 runtime, installing it from APT
 only if available, and installs support utilities. It adds the account to
 `dialout` and `audio`, installs systemd units, disables `getty@tty1`
-and starts YAME on `tty1`. It is safe to rerun after modifying deployment
-files. It does not overwrite `yame.ini`.
+and starts YAME on `tty1`. On the **first installation**, it first
+downloads and verifies a usable YAME release; if this fails, it stops without
+disabling the existing `tty1` login. Subsequent runs may reuse an already
+installed release without requiring internet. It is safe to rerun after
+modifying deployment files. It does not overwrite `yame.ini`.
 
 If you have already been running YAME manually, **stop that instance**
 before enabling the service; otherwise both processes may try to open the
@@ -78,7 +81,14 @@ Boot -> yame-update.service -> yame.service -> HDMI tty1 TUI
   disk usage while retaining a version for manual recovery.
 - When the GitHub API, release asset or download is unavailable, the updater
   retains an existing installation and lets the UI start. Initial installation
-  needs an internet connection and a published ARM64 asset.
+  needs an internet connection and a published ARM64 asset; without one,
+  the installer preserves the local login console instead of starting a broken
+  systemd service.
+- Downloads are capped at **64 MiB**. ZIP extraction validates all entry
+  names and types, rejects traversal/symlinks and more than **4096 entries**,
+  and caps uncompressed contents at **256 MiB**. Exceeding a limit leaves the
+  previously installed version untouched. The extractor uses Python 3's
+  standard library; `python3` is installed by `install.sh`.
 - If GitHub publishes an SHA256 asset digest, the updater verifies it before
   installation. If the release does not include a digest, GitHub HTTPS is
   relied upon. Releases must be trusted; do not run this installer against an
@@ -163,15 +173,19 @@ sudo systemctl enable --now getty@tty1.service
 - **Dashboard too tall on first draw**: a known observed initial render
   behavior on the 100x30 Linux console; opening the command palette can cause
   a correct redraw. This deployment PR does not modify TUI rendering.
-- **No internet on first boot**: the updater cannot install a release yet.
-  Check the update journal; once online, restart `yame.service`.
+- **No internet during first install**: the installer reports the failed
+  initial update and leaves the console login intact. Once online, rerun
+  `sudo bash deployment/raspberry-pi/install.sh`.
+- **Release rejected for size or archive safety**: check
+  `journalctl -u yame-update.service -b`; the existing release remains active.
 
 ## Update regression tests
 
 The updater has offline integration tests using mocked GitHub API/download
 responses. They verify release activation, retention, recovery of an interrupted
-update, offline fallback, and checksum failure without touching the host's
-`/opt/yame` directory:
+update, offline/first-boot fallback, checksum failure, oversized downloads,
+ZIP expansion limits, excessive file counts and path traversal without
+touching the host's `/opt/yame` directory:
 
 ```sh
 sudo bash deployment/raspberry-pi/test-update.sh
