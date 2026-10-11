@@ -12,6 +12,7 @@ sandbox="$(mktemp -d)"
 trap 'rm -rf -- "$sandbox"' EXIT
 mkdir -p "$sandbox/mock" "$sandbox/assets"
 export YAME_BASE="$sandbox/install"
+export YAME_EXTRACTOR="$script_dir/extract-release.py"
 export YAME_TEST_ASSETS="$sandbox/assets"
 export PATH="$sandbox/mock:$PATH"
 
@@ -43,7 +44,13 @@ else
     fi
   done
   [[ -n "$output" ]] || exit 1
-  cp "$YAME_TEST_ASSETS/yame-$YAME_TEST_VERSION-linux-arm64.zip" "$output"
+  max_size=67108864
+  archive="$YAME_TEST_ASSETS/yame-$YAME_TEST_VERSION-linux-arm64.zip"
+  if (( $(stat -c %s "$archive") > max_size )); then
+    # Emulate curl --max-filesize rejecting an excessive stream.
+    exit 63
+  fi
+  cp "$archive" "$output"
 fi
 MOCK_CURL
 chmod +x "$sandbox/mock/curl"
@@ -109,5 +116,66 @@ unset YAME_TEST_BAD_DIGEST
 assert_target current 1.2.0
 assert_target previous 1.1.0
 [[ ! -e "$YAME_BASE/releases/v1.3.0" ]]
+
+# Root-run extraction must reject highly compressed ZIP bombs before writing
+# unbounded data to the SD card. Generate a 257 MiB archive of zeros that
+# compresses to a fraction of that size without allocating a huge byte array.
+python3 - "$YAME_TEST_ASSETS/yame-1.3.0-linux-arm64.zip" <<'PY_BOMB'
+import sys
+import zipfile
+
+with zipfile.ZipFile(sys.argv[1], "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1) as zf:
+    with zf.open("yame-1.3.0/lib/bomb.bin", "w") as out:
+        for _ in range(257):
+            out.write(b"\0" * (1024 * 1024))
+PY_BOMB
+bash "$script_dir/yame-update"
+assert_target current 1.2.0
+assert_target previous 1.1.0
+
+# Reject path traversal even if metadata reports a harmless total size.
+python3 - "$YAME_TEST_ASSETS/yame-1.3.0-linux-arm64.zip" <<'PY_TRAVERSAL'
+import sys
+import zipfile
+
+with zipfile.ZipFile(sys.argv[1], "w") as zf:
+    zf.writestr("yame-1.3.0/bin/yame", "#!/bin/sh\nexit 0\n")
+    zf.writestr("yame-1.3.0/lib/example.jar", "test")
+    zf.writestr("yame-1.3.0/../../escaped", "danger")
+PY_TRAVERSAL
+bash "$script_dir/yame-update"
+assert_target current 1.2.0
+assert_target previous 1.1.0
+[[ ! -e "$YAME_BASE/escaped" ]]
+[[ ! -e "$sandbox/escaped" ]]
+
+# Reject archives containing more than 4096 entries.
+python3 - "$YAME_TEST_ASSETS/yame-1.3.0-linux-arm64.zip" <<'PY_ENTRIES'
+import sys
+import zipfile
+
+with zipfile.ZipFile(sys.argv[1], "w", compression=zipfile.ZIP_STORED) as zf:
+    for index in range(4097):
+        zf.writestr(f"yame-1.3.0/lib/part-{index}.jar", "x")
+PY_ENTRIES
+bash "$script_dir/yame-update"
+assert_target current 1.2.0
+
+# Reject an oversized download before extraction.
+truncate -s $((65 * 1024 * 1024)) "$YAME_TEST_ASSETS/yame-1.3.0-linux-arm64.zip"
+bash "$script_dir/yame-update"
+assert_target current 1.2.0
+assert_target previous 1.1.0
+[[ ! -e "$YAME_BASE/releases/v1.3.0" ]]
+
+# Without a previous install, failure must propagate to the caller so
+# install.sh can leave tty1 untouched.
+rm "$YAME_BASE/current"
+export YAME_TEST_OFFLINE=1
+if bash "$script_dir/yame-update"; then
+  echo "Fresh installation without internet unexpectedly succeeded" >&2
+  exit 1
+fi
+unset YAME_TEST_OFFLINE
 
 echo "Raspberry Pi updater integration tests passed."
