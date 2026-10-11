@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO="skasti/yame"
-BASE="/opt/yame"
+BASE="${YAME_BASE:-/opt/yame}"
 RELEASES="$BASE/releases"
 CURRENT="$BASE/current"
 API="https://api.github.com/repos/$REPO/releases/latest"
@@ -15,6 +15,30 @@ fi
 mkdir -p "$RELEASES"
 exec 9>"$BASE/.update.lock"
 flock -n 9 || { echo "Another YAME update is running"; exit 0; }
+
+# An interrupted download can leave a large temporary directory behind.
+# Because the lock is held, no other updater is using these directories.
+for stale_stage in "$BASE"/.staging.*; do
+  if [[ -d "$stale_stage" && ! -L "$stale_stage" ]]; then
+    rm -rf -- "$stale_stage"
+  fi
+done
+
+prune_releases() {
+  local current_dir previous_dir candidate
+  current_dir="$(readlink -f "$CURRENT" 2>/dev/null || true)"
+  previous_dir="$(readlink -f "$BASE/previous" 2>/dev/null || true)"
+
+  # Only delete known, versioned directories; never remove current or previous.
+  for candidate in "$RELEASES"/*; do
+    [[ -d "$candidate" && ! -L "$candidate" ]] || continue
+    [[ "${candidate##*/}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+    if [[ "$candidate" != "$current_dir" && "$candidate" != "$previous_dir" ]]; then
+      echo "Removing unused YAME release ${candidate##*/}"
+      rm -rf -- "$candidate"
+    fi
+  done
+}
 
 has_installed_release() {
   [[ -x "$CURRENT/bin/yame" ]]
@@ -57,6 +81,7 @@ fi
 target="$RELEASES/$tag"
 if [[ -x "$target/bin/yame" && "$(readlink -f "$CURRENT" 2>/dev/null || true)" == "$target" ]]; then
   echo "YAME $tag is already installed"
+  prune_releases
   exit 0
 fi
 
@@ -88,12 +113,15 @@ if [[ ! -x "$target/bin/yame" ]]; then
   fallback_or_fail "Installed release has no executable launcher"
 fi
 
+# Create temporary links inside the unique staging directory. An abrupt power
+# loss cannot poison the next update with stale fixed-name symlinks.
 if [[ -L "$CURRENT" && -x "$CURRENT/bin/yame" ]]; then
   old="$(readlink "$CURRENT")"
-  ln -s "$old" "$BASE/.previous-next"
-  mv -Tf "$BASE/.previous-next" "$BASE/previous"
+  ln -s "$old" "$stage/previous-next"
+  mv -Tf "$stage/previous-next" "$BASE/previous"
 fi
 
-ln -s "releases/$tag" "$BASE/.current-next"
-mv -Tf "$BASE/.current-next" "$CURRENT"
+ln -s "releases/$tag" "$stage/current-next"
+mv -Tf "$stage/current-next" "$CURRENT"
 echo "Activated YAME $tag"
+prune_releases
