@@ -26,12 +26,31 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          path: trusted-ci
           persist-credentials: false
       - name: Verify screenshot-only successor
         id: gate
         uses: actions/github-script@v8
         with:
-          script: await require('./scripts/ci/tui-previews.cjs').gate({github, context, core})
+          script: |
+            const gatePath = './trusted-ci/scripts/ci/tui-previews.cjs';
+            if (require('node:fs').existsSync(gatePath)) {
+              await require(gatePath).gate({github, context, core});
+            } else {
+              // Introducing PR: no gate on the base yet, so always run full CI.
+              const {data: pr} = await github.rest.pulls.get({...context.repo, pull_number: context.payload.pull_request.number});
+              const {data: merge} = await github.rest.git.getCommit({...context.repo, commit_sha: context.sha});
+              if (pr.state !== 'open' || pr.head.sha !== context.payload.pull_request.head.sha ||
+                  merge.parents.length !== 2 || merge.parents[0].sha !== pr.base.sha || merge.parents[1].sha !== pr.head.sha) {
+                throw new Error('PR head/base changed; rerun CI');
+              }
+              core.setOutput('reuse', 'false');
+              core.setOutput('checkout_ref', context.sha);
+              core.setOutput('head_sha', pr.head.sha);
+              core.setOutput('base_sha', pr.base.sha);
+              core.setOutput('pr_number', pr.number);
+            }
 
   release-workflow-tests:
     needs: preview-gate
@@ -43,6 +62,7 @@ jobs:
         run: |
           python3 -m pip install PyYAML
           python3 -m unittest discover -s tests -p 'test_release_workflow.py'
+          python3 -m unittest discover -s tests -p 'test_tui_previews.py'
           node --test tests/tui-previews.test.cjs
 
   build-and-test:

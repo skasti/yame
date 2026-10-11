@@ -28,7 +28,11 @@ normal read-only CI and its artifacts still work.
 The publishing job executes only scripts from the default branch. It never
 checks out or executes PR code, and never publishes into fork branches. It
 checks the live PR head and base, downloads the artifact from that exact CI run,
-validates the expected PNG filenames, signatures, dimensions and size limits,
+validates a ZIP of at most 5 MiB before extraction, permits exactly ten PNGs
+and a provenance JSON file, and bounds each PNG to 1 MiB and JSON to 4 KiB
+before reading. Extraction rejects extra paths, duplicate names and symlinks
+and enforces both declared and actual output limits. It then checks PNG
+signatures and dimensions,
 and creates a single-parent commit touching only `assets/screenshots/*.png`.
 A non-forced ref update refuses concurrent changes to the branch. PNG files
 are treated only as bytes in this privileged job, not decoded or executed.
@@ -44,6 +48,10 @@ from `GITHUB_TOKEN`. A `workflow_dispatch` job check would not satisfy PR rulese
 
 Keep the required check named `build-and-test`. Do **not** add workflow-level
 `paths-ignore` or `[skip ci]`: the latest screenshot SHA still needs a check.
+The gate implementation is checked out from the immutable PR base SHA, never
+from the PR tree. If the base does not yet contain the gate (as in this
+introducing PR), CI always runs the full suite after validating the immutable
+merge parents. Workflow paths with GitHub's `@ref` suffix are accepted.
 A cheap gate checks that the new head:
 
 - has exactly one parent and changes only the ten approved screenshot paths;

@@ -32,14 +32,25 @@ jobs:
         uses: actions/github-script@v8
         with:
           script: await require('./scripts/ci/tui-previews.cjs').prepare({github, context, core})
-      - name: Download only the PNG artifact
+      - name: Download bounded preview ZIP
         if: steps.source.outputs.publish == 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/github-script@v8
         with:
-          name: yame-tui-screenshots
-          path: ${{ runner.temp }}/tui-previews
-          run-id: ${{ github.event.workflow_run.id }}
-          github-token: ${{ github.token }}
+          script: |
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts,
+              {...context.repo, run_id: context.payload.workflow_run.id});
+            const artifact = artifacts.find(a => a.name === 'yame-tui-screenshots' && !a.expired);
+            if (!artifact || artifact.size_in_bytes > 5 * 1024 * 1024) throw new Error('Invalid preview archive size');
+            const {data} = await github.rest.actions.downloadArtifact({...context.repo, artifact_id: artifact.id, archive_format: 'zip'});
+            const bytes = Buffer.from(data);
+            if (bytes.length > 5 * 1024 * 1024) throw new Error('Preview ZIP exceeds limit');
+            require('node:fs').writeFileSync(require('node:path').join(process.env.RUNNER_TEMP, 'tui-previews.zip'), bytes);
+      - name: Validate and extract bounded preview files
+        if: steps.source.outputs.publish == 'true'
+        env:
+          PREVIEW_ZIP: ${{ runner.temp }}/tui-previews.zip
+          PREVIEW_DIRECTORY: ${{ runner.temp }}/tui-previews
+        run: python3 scripts/ci/extract-tui-previews.py "$PREVIEW_ZIP" "$PREVIEW_DIRECTORY"
       - name: Commit previews, verify successor and update PR comment
         if: steps.source.outputs.publish == 'true'
         uses: actions/github-script@v8

@@ -39,6 +39,7 @@ test('only exact generated PNG paths and single parent are accepted', () => {
 });
 test('source requires successful PR CI on exact parent and base', () => {
   assert.equal(successfulSource(run, 71, parent, base), true);
+  assert.equal(successfulSource({...run, path: '.github/workflows/ci.yml@main'}, 71, parent, base), true);
   for (const patch of [{conclusion: 'failure'}, {conclusion: 'cancelled'}, {event: 'workflow_dispatch'},
     {path: '.github/workflows/other.yml'}, {head_sha: head}, {pull_requests: []}]) {
     assert.equal(successfulSource({...run, ...patch}, 71, parent, base), false);
@@ -160,4 +161,82 @@ test('publication writes only PNGs and reports inherited status after verifying 
     assert.equal((calls[4][1].body.match(/!\[/g) || []).length, 10);
     assert.ok(!calls[4][1].body.includes('<details>'));
   } finally { fs.rmSync(directory, {recursive: true, force: true}); }
+});
+
+for (const workflow of ['ci.yml', 'arm64.yml']) {
+  test(`${workflow} loads only the base gate and fails closed before it exists`, async () => {
+    const fs = require('node:fs'), vm = require('node:vm');
+    const yaml = fs.readFileSync(require('node:path').join(__dirname, '../.github/workflows', workflow), 'utf8');
+    const gateJob = yaml.split('  preview-gate:')[1].split(/\n  [a-z]/)[0];
+    assert.ok(gateJob.includes('ref: ${{ github.event.pull_request.base.sha || github.sha }}'));
+    assert.ok(gateJob.includes('path: trusted-ci'));
+    const script = gateJob.split('          script: |\n')[1].split('\n').map(line => line.slice(12)).join('\n');
+    for (const exists of [false, true]) {
+      const env = environment();
+      let trustedCalls = 0;
+      const requireTrusted = name => {
+        if (name === 'node:fs') return {existsSync: p => {assert.equal(p, './trusted-ci/scripts/ci/tui-previews.cjs'); return exists;}};
+        assert.equal(name, './trusted-ci/scripts/ci/tui-previews.cjs');
+        return {gate: async (received, options) => {
+          trustedCalls++;
+          assert.equal(Boolean(options?.requireArm64), workflow === 'arm64.yml');
+          received.core.setOutput('reuse', 'false');
+        }};
+      };
+      await vm.runInNewContext(`(async () => {${script}\n})()`, {...env, require: requireTrusted});
+      assert.equal(env.outputs.reuse, 'false');
+      assert.equal(trustedCalls, Number(exists));
+      if (!exists) {
+        assert.equal(env.outputs.checkout_ref, mergeSha);
+        assert.equal(env.outputs.head_sha, head);
+        assert.equal(env.outputs.base_sha, base);
+      }
+    }
+  });
+}
+
+test('oversized provenance and PNG are rejected before reading their bytes', async () => {
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+  const {validatePng} = require('../scripts/ci/tui-previews.cjs');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'yame-bounds-'));
+  const originalRead = fs.readFileSync;
+  try {
+    fs.writeFileSync(path.join(directory, 'source.json'), ' '.repeat(4097));
+    const png = path.join(directory, '30x100.png');
+    fs.writeFileSync(png, Buffer.alloc(1024 * 1024 + 1));
+    fs.readFileSync = () => {throw new Error('Unbounded read attempted');};
+    const env = environment({sourceRun: {...run, head_sha: head}});
+    await assert.rejects(publish(env, 71, directory), /bounded regular artifact/);
+    assert.throws(() => validatePng(png, '30x100.png'), /bounded regular artifact/);
+  } finally {
+    fs.readFileSync = originalRead;
+    fs.rmSync(directory, {recursive: true, force: true});
+  }
+});
+
+test('publisher downloads the exact source artifact with a bounded ZIP before extraction', async () => {
+  const fs = require('node:fs'), vm = require('node:vm');
+  const yaml = fs.readFileSync(require('node:path').join(__dirname, '../.github/workflows/tui-previews.yml'), 'utf8');
+  const step = yaml.split('      - name: Download bounded preview ZIP')[1].split('      - name:')[0];
+  const script = step.split('          script: |\n')[1].trimEnd().split('\n').map(line => line.slice(12)).join('\n');
+  for (const length of [100, 5 * 1024 * 1024 + 1]) {
+    const env = environment();
+    let writes = 0;
+    env.github.rest.actions.downloadArtifact = async args => {
+      assert.equal(args.artifact_id, 456);
+      assert.equal(args.archive_format, 'zip');
+      return {data: new ArrayBuffer(length)};
+    };
+    env.github.paginate = async (method, args) => {
+      assert.equal(args.run_id, 123);
+      return [{id: 456, name: 'yame-tui-screenshots', expired: false, size_in_bytes: 100}];
+    };
+    const requireSafe = name => name === 'node:fs' ? {writeFileSync: () => writes++} : require(name);
+    const execution = vm.runInNewContext(`(async () => {${script}\n})()`, {
+      ...env, require: requireSafe, Buffer, process: {env: {RUNNER_TEMP: '/tmp/test'}},
+    });
+    if (length > 5 * 1024 * 1024) await assert.rejects(execution, /ZIP exceeds limit/);
+    else await execution;
+    assert.equal(writes, Number(length === 100));
+  }
 });

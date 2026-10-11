@@ -26,7 +26,7 @@ function screenshotOnly(commit) {
 }
 
 function successfulSource(run, pr, parent, base) {
-  return run.path === '.github/workflows/ci.yml' && run.event === 'pull_request' &&
+  return typeof run.path === 'string' && run.path.split('@', 1)[0] === '.github/workflows/ci.yml' && run.event === 'pull_request' &&
     run.conclusion === 'success' && run.head_sha === parent &&
     run.pull_requests.some(p => p.number === pr && p.base.sha === base);
 }
@@ -93,9 +93,14 @@ async function prepare({github, context, core}) {
   }
 }
 
+function readBoundedFile(file, limit) {
+  const stat = fs.lstatSync(file);
+  if (!stat.isFile() || stat.size > limit) throw new Error('Expected bounded regular artifact file');
+  return fs.readFileSync(file);
+}
+
 function validatePng(file, name) {
-  if (!fs.lstatSync(file).isFile()) throw new Error('Expected regular PNG file');
-  const data = fs.readFileSync(file);
+  const data = readBoundedFile(file, 1024 * 1024);
   const [rows, columns] = name.match(/^(\d+)x(\d+)/).slice(1).map(Number);
   if (data.length < 33 || data.length > 1024 * 1024 ||
       !data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ||
@@ -115,7 +120,7 @@ async function publish({github, context, core}, number, directory) {
       pr.head.repo.full_name !== `${repo.owner}/${repo.repo}` || pr.head.ref === context.payload.repository.default_branch) {
     core.info('PR moved; discarding stale previews.'); return;
   }
-  const provenance = JSON.parse(fs.readFileSync(path.join(directory, 'source.json'), 'utf8'));
+  const provenance = JSON.parse(readBoundedFile(path.join(directory, 'source.json'), 4096).toString('utf8'));
   if (provenance.run !== run.id || provenance.head !== run.head_sha || provenance.base !== pr.base.sha ||
       provenance.pr !== pr.number || !/^[a-f0-9]{40}$/.test(provenance.merge)) {
     throw new Error('Preview provenance does not match source CI and live PR');
