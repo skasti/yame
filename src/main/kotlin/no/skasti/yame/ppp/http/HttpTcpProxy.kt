@@ -298,11 +298,16 @@ internal class HttpTcpProxy(
     }
 
     override fun shutdownOutput(flow: TcpProxyFlow): Result<Unit> {
+        // HTTP response completion can remove this flow before the peer's FIN
+        // arrives. TCP still owns that closing handshake; there is no HTTP input
+        // left to shut down, so repeated or late shutdown is successful.
         val state = flows[flow]
-            ?: return Result.failure(IllegalStateException("HTTP flow is not connected"))
+            ?: return Result.success(Unit)
 
         val endResult =
             synchronized(state) {
+                // Removal may also have happened after the lookup above.
+                if (state.cancelled) return Result.success(Unit)
                 if (state.processing) {
                     HttpRequestDecodeResult.NeedMoreData
                 } else {

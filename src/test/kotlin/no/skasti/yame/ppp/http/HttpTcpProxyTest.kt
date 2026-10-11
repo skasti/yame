@@ -16,6 +16,60 @@ import kotlin.test.assertTrue
 
 class HttpTcpProxyTest {
     @Test
+    fun `client FIN after completed HTTP response succeeds`() {
+        val connectionRemoved = CountDownLatch(1)
+        val handler =
+            object : HttpRequestHandler {
+                override fun handle(
+                    connection: HttpConnection,
+                    request: HttpRequest,
+                ): HttpResponse =
+                    HttpResponse(
+                        statusCode = 200,
+                        reasonPhrase = "OK",
+                        headers = listOf("Content-Type" to "text/plain"),
+                        body = "hello".toByteArray(StandardCharsets.US_ASCII),
+                    )
+
+                override fun connectionClosed(flow: TcpProxyFlow) {
+                    connectionRemoved.countDown()
+                }
+            }
+        val proxy = HttpTcpProxy(handler, maxFlows = 1, maxRequestBytes = 1024)
+        val events = LinkedBlockingQueue<TcpProxyEvent>()
+        val flow = flow()
+
+        try {
+            proxy.connect(flow, events::offer)
+            assertIs<TcpProxyEvent.Connected>(events.poll(2, TimeUnit.SECONDS))
+            proxy.send(
+                flow,
+                "GET /demo HTTP/1.0\r\nHost: example.test\r\n\r\n"
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+
+            val response = collectResponse(events)
+            assertTrue(response.startsWith("HTTP/1.0 200 OK\r\n"), response)
+            assertTrue(response.contains("Connection: close\r\n"), response)
+            assertTrue(response.endsWith("hello"), response)
+
+            // EOF is emitted before the HTTP flow is removed. Wait for removal so
+            // this exercises a late peer FIN deterministically, without sleeps.
+            assertTrue(connectionRemoved.await(2, TimeUnit.SECONDS), "HTTP flow was not removed")
+
+            // PppSession forwards PeerClosed (the client's FIN) here. A failure
+            // would turn successful response delivery into FAILED and a TCP reset.
+            val shutdown = proxy.shutdownOutput(flow)
+            assertTrue(shutdown.isSuccess, "Client FIN failed: ${shutdown.exceptionOrNull()}")
+            proxy.shutdownOutput(flow).getOrThrow()
+            assertTrue(events.isEmpty(), "Client FIN must not emit another response or EOF")
+            assertTrue(proxy.send(flow, "unexpected data".encodeToByteArray()).isFailure)
+        } finally {
+            proxy.close()
+        }
+    }
+
+    @Test
     fun `adapts TCP payloads into an HTTP request and response`() {
         val requests = LinkedBlockingQueue<HttpRequest>()
         val handler =
