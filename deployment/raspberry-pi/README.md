@@ -84,12 +84,15 @@ Boot -> yame-update.service -> yame.service -> HDMI tty1 TUI
   needs an internet connection and a published ARM64 asset; without one,
   the installer preserves the local login console instead of starting a broken
   systemd service.
-- Downloads are capped at **64 MiB**. ZIP extraction validates all entry
-  names and types, rejects traversal/symlinks and more than **4096 entries**,
-  and caps uncompressed contents at **256 MiB**. Updates also require enough
-  free space to leave **128 MiB** available for the OS. Exceeding a limit leaves the
-  previously installed version untouched. The extractor uses Python 3's
-  standard library; `python3` is installed by `install.sh`.
+- Downloads are capped at **64 MiB** at the byte-stream level, including
+  responses without `Content-Length` (older Bookworm curl versions do not
+  reliably enforce `--max-filesize` for such responses). ZIP extraction
+  validates all entry names and types, rejects traversal/symlinks and more
+  than **4096 entries**, and caps uncompressed contents at **256 MiB**.
+  Updates also require enough free space to leave **128 MiB** available for
+  the OS. Exceeding a limit leaves the previously installed version untouched.
+  The extractor uses Python 3's standard library; `python3` is installed
+  by `install.sh`.
 - If GitHub publishes an SHA256 asset digest, the updater verifies it before
   installation. If the release does not include a digest, GitHub HTTPS is
   relied upon. Releases must be trusted; do not run this installer against an
@@ -185,7 +188,8 @@ sudo systemctl enable --now getty@tty1.service
 The updater has offline integration tests using mocked GitHub API/download
 responses. They verify release activation, retention, recovery of an interrupted
 update, offline/first-boot fallback, checksum failure, oversized downloads,
-ZIP expansion limits, excessive file counts and path traversal without
+ZIP expansion limits, excessive file counts, path traversal and oversized
+streamed downloads without a known Content-Length, without
 touching the host's `/opt/yame` directory:
 
 ```sh
