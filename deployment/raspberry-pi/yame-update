@@ -62,18 +62,42 @@ fallback_or_fail() {
   exit 1
 }
 
+# Keep API metadata off the shell heap until its size and syntax are
+# validated. Old curl versions on Bookworm do not enforce --max-filesize if
+# Content-Length is unknown, so cap the actual streamed bytes independently.
+stage="$(mktemp -d "$BASE/.staging.XXXXXXXX")"
+trap 'rm -rf -- "$stage"' EXIT
+metadata_file="$stage/release-metadata.json"
+MAX_METADATA_BYTES=$((1024 * 1024))
+
 echo "Checking GitHub Releases for latest YAME version..."
-if ! metadata="$(curl --fail --silent --show-error --location --connect-timeout 5 --max-time 15 "$API")"; then
-  fallback_or_fail "GitHub is unavailable"
+metadata_ok=true
+curl --fail --silent --show-error --location --connect-timeout 5 --max-time 15 \
+  --max-filesize "$MAX_METADATA_BYTES" "$API" |
+  head -c "$((MAX_METADATA_BYTES + 1))" > "$metadata_file" || metadata_ok=false
+
+metadata_bytes="$(stat -c %s "$metadata_file")"
+if (( metadata_bytes > MAX_METADATA_BYTES )); then
+  fallback_or_fail "GitHub release metadata exceeds 1 MiB"
+fi
+if [[ "$metadata_ok" != true ]]; then
+  fallback_or_fail "GitHub release metadata download failed"
+fi
+# -s requires a single complete JSON document, rejecting truncated input
+# and concatenated JSON values (which jq otherwise may process separately).
+if ! jq -e -s 'length == 1 and (.[0] | type == "object")' "$metadata_file" >/dev/null; then
+  fallback_or_fail "Invalid GitHub release metadata"
 fi
 
-tag="$(jq -r '.tag_name // empty' <<< "$metadata")"
+tag="$(jq -r '.tag_name // empty' "$metadata_file")"
 if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   fallback_or_fail "Unexpected release tag: $tag"
 fi
 version="${tag#v}"
 asset="yame-$version-linux-arm64.zip"
-asset_json="$(jq -c --arg name "$asset" '[.assets[]? | select(.name == $name)] | first // empty' <<< "$metadata")"
+if ! asset_json="$(jq -c --arg name "$asset" '[.assets[]? | select(.name == $name)] | first // empty' "$metadata_file")"; then
+  fallback_or_fail "Invalid GitHub release assets"
+fi
 if [[ -z "$asset_json" ]]; then
   fallback_or_fail "Release $tag does not have $asset"
 fi
@@ -100,8 +124,6 @@ if [[ ! "$free_bytes" =~ ^[0-9]+$ ]] || (( free_bytes < 192 * 1024 * 1024 )); th
   fallback_or_fail "Insufficient free SD card space for download"
 fi
 
-stage="$(mktemp -d "$BASE/.staging.XXXXXXXX")"
-trap 'rm -rf -- "$stage"' EXIT
 echo "Downloading $asset..."
 MAX_DOWNLOAD_BYTES=$((64 * 1024 * 1024))
 
