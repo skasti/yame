@@ -116,7 +116,8 @@ test('PNG validation rejects arbitrary bytes and incorrect terminal dimensions',
   } finally { fs.rmSync(directory, {recursive: true, force: true}); }
 });
 
-test('publication writes only PNGs and reports inherited status after verifying successor', async () => {
+for (const scenario of ['success', 'base-changed', 'closed', 'head-moved', 'get-failed', 'verification-failed', 'status-failed']) {
+test(`publication recovers safely: ${scenario}`, async () => {
   const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'yame-publish-'));
   const sourceRun = {...run, head_sha: head, html_url: 'https://github.com/skasti/yame/actions/runs/123'};
@@ -134,7 +135,13 @@ test('publication writes only PNGs and reports inherited status after verifying 
       fs.writeFileSync(path.join(directory, `${name}.png`), png);
     }
     fs.writeFileSync(path.join(directory, 'source.json'), JSON.stringify({run: 123, pr: 71, head, base, merge: mergeSha}));
-    env.github.rest.pulls.get = async () => ({data: moved ? {...pr, head: {...pr.head, sha: successor}} : pr});
+    env.github.rest.pulls.get = async () => {
+      if (moved && scenario === 'get-failed') throw new Error('Get failed');
+      const current = moved ? {...pr, head: {...pr.head, sha: scenario === 'head-moved' ? mergeSha : successor}} : pr;
+      if (moved && scenario === 'base-changed') return {data: {...current, base: {...pr.base, sha: mergeSha}}};
+      if (moved && scenario === 'closed') return {data: {...current, state: 'closed'}};
+      return {data: current};
+    };
     env.github.rest.git = {
       getCommit: async ({commit_sha}) => ({data: commit_sha === mergeSha
         ? {parents: [{sha: base}, {sha: head}]} : {tree: {sha: 'old-tree'}}}),
@@ -143,12 +150,31 @@ test('publication writes only PNGs and reports inherited status after verifying 
       createCommit: async args => { calls.push(['commit', args]); return {data: {sha: successor}}; },
       updateRef: async args => { calls.push(['push', args]); moved = true; },
     };
-    env.github.rest.repos.getCommit = async () => ({data: {...commit, parents: [{sha: head}]}});
-    env.github.rest.repos.createCommitStatus = async args => calls.push(['status', args]);
+    env.github.rest.repos.getCommit = async () => ({data: {...commit, parents: [{sha: head}],
+      ...(scenario === 'verification-failed' ? {files: []} : {})}});
+    env.github.rest.repos.createCommitStatus = async args => {
+      calls.push(['status', args]);
+      if (scenario === 'status-failed') throw new Error('Status failed');
+    };
     env.github.rest.issues = {listComments: 'comments', createComment: async args => calls.push(['comment', args])};
     const paginate = env.github.paginate;
     env.github.paginate = async (method, args) => method === 'comments' ? [] : paginate(method, args);
-    await publish(env, 71, directory);
+    const rollback = async (_, args) => {calls.push(['rollback', args]); moved = false;};
+    if (!['success', 'head-moved'].includes(scenario)) {
+      await assert.rejects(publish(env, 71, directory, {rollback}));
+      assert.deepEqual(calls.at(-1), ['rollback', {branch: pr.head.ref, sha: successor, parent: head}]);
+      assert.ok(!calls.some(c => c[0] === 'comment'));
+      if (scenario !== 'status-failed') assert.ok(!calls.some(c => c[0] === 'status'));
+      // Restoration makes retry possible after a transient error.
+      await prepare(env);
+      assert.equal(env.outputs.publish, 'true');
+      return;
+    }
+    await publish(env, 71, directory, {rollback});
+    if (scenario === 'head-moved') {
+      assert.deepEqual(calls.map(c => c[0]), ['tree', 'commit', 'push']);
+      return;
+    }
     assert.deepEqual(calls.map(c => c[0]), ['tree', 'commit', 'push', 'status', 'comment']);
     assert.equal(calls[0][1].tree.length, 10);
     assert.ok(calls[0][1].tree.every(t => t.path.startsWith('assets/screenshots/') && t.path.endsWith('.png')));
@@ -162,6 +188,7 @@ test('publication writes only PNGs and reports inherited status after verifying 
     assert.ok(!calls[4][1].body.includes('<details>'));
   } finally { fs.rmSync(directory, {recursive: true, force: true}); }
 });
+}
 
 for (const workflow of ['ci.yml', 'arm64.yml']) {
   test(`${workflow} loads only the base gate and fails closed before it exists`, async () => {
@@ -238,5 +265,46 @@ test('publisher downloads the exact source artifact with a bounded ZIP before ex
     if (length > 5 * 1024 * 1024) await assert.rejects(execution, /ZIP exceeds limit/);
     else await execution;
     assert.equal(writes, Number(length === 100));
+  }
+});
+
+test('actual Git rollback lease restores only the expected head and rejects a concurrent push', async () => {
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+  const {execFileSync, execFile} = require('node:child_process');
+  const execute = require('node:util').promisify(execFile);
+  const {rollbackPreview} = require('../scripts/ci/tui-previews.cjs');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'yame-lease-'));
+  const remote = path.join(directory, 'remote.git'), writer = path.join(directory, 'writer');
+  const previousToken = process.env.PREVIEW_PUSH_TOKEN;
+  const git = args => execFileSync('git', args, {cwd: writer, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']}).trim();
+  try {
+    fs.mkdirSync(writer);
+    git(['init', '--bare', remote]); git(['init']);
+    const commit = () => {
+      git(['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-m', 'Test']);
+      return git(['rev-parse', 'HEAD']);
+    };
+    const source = commit(), screenshot = commit(), newer = commit();
+    const ref = 'refs/heads/feature/test';
+    git(['push', remote, `${screenshot}:${ref}`]);
+    // Start with an unrelated shallow checkout, as the publisher does.
+    const checkout = path.join(directory, 'checkout'); fs.mkdirSync(checkout);
+    execFileSync('git', ['init', checkout], {stdio: 'ignore'});
+    process.env.PREVIEW_PUSH_TOKEN = 'test-only-token';
+    const runGit = async (command, args, options) => {
+      assert.equal(command, 'git');
+      assert.ok(!args.join(' ').includes('test-only-token'));
+      return execute(command, args.map(arg => arg === 'https://github.com/skasti/yame.git' ? remote : arg), {...options, cwd: checkout});
+    };
+    const env = environment(), state = {branch: 'feature/test', sha: screenshot, parent: source};
+    await rollbackPreview(env, state, runGit);
+    assert.equal(git(['--git-dir', remote, 'rev-parse', ref]), source);
+    git(['push', remote, `${newer}:${ref}`]);
+    await assert.rejects(rollbackPreview(env, state, runGit), /rollback refused or failed/);
+    assert.equal(git(['--git-dir', remote, 'rev-parse', ref]), newer);
+  } finally {
+    if (previousToken === undefined) delete process.env.PREVIEW_PUSH_TOKEN;
+    else process.env.PREVIEW_PUSH_TOKEN = previousToken;
+    fs.rmSync(directory, {recursive: true, force: true});
   }
 });

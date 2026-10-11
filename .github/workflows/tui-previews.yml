@@ -55,6 +55,7 @@ jobs:
         if: steps.source.outputs.publish == 'true'
         uses: actions/github-script@v8
         env:
+          PREVIEW_PUSH_TOKEN: ${{ github.token }}
           PREVIEW_PR: ${{ steps.source.outputs.pr_number }}
           PREVIEW_DIRECTORY: ${{ runner.temp }}/tui-previews
         with:

@@ -34,7 +34,11 @@ before reading. Extraction rejects extra paths, duplicate names and symlinks
 and enforces both declared and actual output limits. It then checks PNG
 signatures and dimensions,
 and creates a single-parent commit touching only `assets/screenshots/*.png`.
-A non-forced ref update refuses concurrent changes to the branch. PNG files
+A non-forced ref update refuses concurrent changes to the branch. If post-push
+validation or status publication fails, the publisher restores the source head
+with Git's explicit `--force-with-lease=<ref>:<screenshot-sha>`. This atomic
+condition prevents rollback from overwriting a concurrent developer push.
+Rollback failures surface as job failures; no unconditional force push is used. PNG files
 are treated only as bytes in this privileged job, not decoded or executed.
 Only the publishing job has contents/statuses/pull-request write permissions.
 

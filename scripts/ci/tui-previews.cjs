@@ -111,7 +111,32 @@ function validatePng(file, name) {
   return data;
 }
 
-async function publish({github, context, core}, number, directory) {
+async function rollbackPreview({context, core}, {branch, sha, parent},
+  runGit = require('node:util').promisify(require('node:child_process').execFile)) {
+  const token = process.env.PREVIEW_PUSH_TOKEN;
+  if (!token) throw new Error('Missing preview rollback credential');
+  const ref = `refs/heads/${branch}`;
+  // Git's explicit lease is atomic. REST updateRef has no expected-old-SHA
+  // condition, so a force update through REST could overwrite a developer push.
+  try {
+    const remote = `https://github.com/${context.repo.owner}/${context.repo.repo}.git`;
+    const options = {
+      timeout: 30_000,
+      env: {...process.env, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_COUNT: '1',
+        GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader',
+        GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`},
+    };
+    // The trusted checkout may be shallow and not contain the PR's source object.
+    await runGit('git', ['fetch', '--no-tags', remote, parent], options);
+    await runGit('git', ['push', `--force-with-lease=${ref}:${sha}`, remote, `${parent}:${ref}`], options);
+    core.info('Restored source head after preview publication failed.');
+  } catch {
+    // Never print subprocess errors: authentication details may appear in them.
+    throw new Error('Preview rollback refused or failed; inspect the live PR head. No unleased force update was attempted.');
+  }
+}
+
+async function publish({github, context, core}, number, directory, {rollback = rollbackPreview} = {}) {
   const repo = context.repo;
   const run = context.payload.workflow_run;
   const {data: pr} = await github.rest.pulls.get({...repo, pull_number: Number(number)});
@@ -149,15 +174,23 @@ async function publish({github, context, core}, number, directory) {
     sha = commit.sha;
     // workflow_dispatch job checks do not satisfy PR rulesets. Report the proven
     // successor as a commit status instead; no new build or write-enabled PR job.
-    const {data: latest} = await github.rest.pulls.get({...repo, pull_number: pr.number});
-    if (latest.head.sha !== sha || latest.base.sha !== pr.base.sha || latest.state !== 'open') {
-      core.info('PR moved after publication; not reporting inherited success.'); return;
+    try {
+      const {data: latest} = await github.rest.pulls.get({...repo, pull_number: pr.number});
+      if (latest.head.sha !== sha) {
+        core.info('PR head moved after publication; leaving the newer commit untouched.'); return;
+      }
+      if (latest.base.sha !== pr.base.sha || latest.state !== 'open') {
+        throw new Error('PR base/state changed after preview publication');
+      }
+      if (!await verifySuccessor(github, repo, pr.number, sha, pr.base.sha)) {
+        throw new Error('Cannot prove screenshot-only successor; not reporting success');
+      }
+      await github.rest.repos.createCommitStatus({...repo, sha, state: 'success', context: 'build-and-test',
+        description: 'Only generated PNGs changed; parent CI passed against the same base.', target_url: run.html_url});
+    } catch (error) {
+      await rollback({context, core}, {branch: pr.head.ref, sha, parent: run.head_sha});
+      throw error;
     }
-    if (!await verifySuccessor(github, repo, pr.number, sha, pr.base.sha)) {
-      throw new Error('Cannot prove screenshot-only successor; not reporting success');
-    }
-    await github.rest.repos.createCommitStatus({...repo, sha, state: 'success', context: 'build-and-test',
-      description: 'Only generated PNGs changed; parent CI passed against the same base.', target_url: run.html_url});
   }
   const url = name => `https://raw.githubusercontent.com/${repo.owner}/${repo.repo}/${sha}/assets/screenshots/${name}`;
   const body = `${marker}\n### YAME terminal previews\n\n` +
@@ -170,4 +203,4 @@ async function publish({github, context, core}, number, directory) {
   else await github.rest.issues.createComment({...repo, issue_number: pr.number, body});
 }
 
-module.exports = {gate, prepare, publish, parseProof, screenshotOnly, successfulSource, validatePng, verifySuccessor};
+module.exports = {gate, prepare, publish, parseProof, screenshotOnly, successfulSource, validatePng, verifySuccessor, rollbackPreview};
