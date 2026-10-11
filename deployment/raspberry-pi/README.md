@@ -119,13 +119,22 @@ YAME still starts without internet if a release was installed previously.
 ```
 
 Configuration and runtime data are intentionally outside the versioned
-application directory. With an existing `yame.ini`, copy it into
-`/var/lib/yame/` and make sure the configured UI user owns it:
+application directory. YAME runs as the configured non-root user and normally
+creates its own private `yame.ini` in `/var/lib/yame/`.
 
-```sh
-sudo chown "$(whoami):$(id -gn)" /var/lib/yame/yame.ini
-sudo chmod 600 /var/lib/yame/yame.ini
-```
+**Security:** The root-run installer deliberately never reads, changes
+ownership of, or changes permissions on an existing `yame.ini`. That file
+lives in a directory writable by the unprivileged YAME user, who could
+replace it with a symlink to a protected system file. Running `sudo chown`
+or `sudo chmod` blindly against that path can unintentionally follow such a
+symlink and modify the target.
+
+If migrating a configuration from another location, copy it as the YAME
+service user from a trusted, readable source so the new file is owned by
+that user. If an existing `yame.ini` is owned by root from an earlier
+manual installation, perform an explicit, carefully checked migration
+(or recreate the settings through YAME). The installer will **not** silently
+change its ownership or permissions.
 
 The updater runs as root; YAME runs as your configured non-root user with
 `dialout` and `audio` supplemental groups. The Java heap is capped at
@@ -167,9 +176,11 @@ sudo systemctl enable --now getty@tty1.service
 
 - **No YAME screen**: inspect `journalctl -u yame -b` over SSH. Verify
   `/opt/yame/current/bin/yame` exists and Java is installed.
-- **`AccessDeniedException: /var/lib/yame/yame.ini`**: correct file and
-  directory ownership. The directory must be accessible to the service user
-  and config should have mode 600.
+- **`AccessDeniedException: /var/lib/yame/yame.ini`**: the file may be
+  left over from a root-run instance. The installer will not change a
+  user-controlled path as root. Inspect the configuration ownership and file
+  type, then migrate a trusted regular config file to the service user or
+  recreate the settings. Avoid following symlinks in privileged file operations.
 - **No serial port**: use `ls /dev/serial/by-id/` when supported by the
   adapter, or `ls -l /dev/ttyUSB*`; choose the port through YAME's palette.
 - **No modem audio**: verify the audio output with `aplay -l` and an ALSA
@@ -196,7 +207,10 @@ touching the host's `/opt/yame` directory:
 sudo bash deployment/raspberry-pi/test-update.sh
 ```
 
-CI runs these tests alongside ShellCheck and Bash syntax validation.
+CI runs these tests alongside ShellCheck and Bash syntax validation. The
+separate `test-data-directory.sh` additionally verifies that privileged
+directory setup does not follow or modify a user-controlled `yame.ini`
+symlink (or change an existing regular config file).
 
 ## Scope
 
