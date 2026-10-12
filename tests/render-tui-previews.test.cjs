@@ -1,0 +1,35 @@
+const {test} = require('node:test');
+const assert = require('node:assert/strict');
+const {
+  filenames, framesToRows, samePixels, CELL_WIDTH, CELL_HEIGHT,
+} = require('../scripts/ci/render-tui-previews.cjs');
+
+test('renders exactly the ten approved compact and wide fixtures', () => {
+  assert.deepEqual(filenames, [
+    '30x100', '30x100-proxy', '30x100-dns', '30x100-transfers',
+    '45x135', '45x135-proxy', '45x135-dns', '45x135-transfers',
+    '50x150', '50x150-proxy',
+  ]);
+  assert.equal(CELL_WIDTH, 9);
+  assert.equal(CELL_HEIGHT, 18);
+});
+
+test('ANSI rows retain styles while malformed frame shapes are rejected', () => {
+  const frame = '\x1b[31mRED\x1b[0m\nsecond';
+  assert.deepEqual(framesToRows(frame, 2), ['\x1b[31mRED\x1b[0m', 'second']);
+  assert.throws(() => framesToRows(frame, 3), /Expected 3/);
+  assert.throws(() => framesToRows('first\r\nsecond', 2), /LF-separated/);
+});
+
+test('pixel comparison ignores encoded bytes but detects actual visual differences', () => {
+  const pixels = {
+    a: {width: 1, height: 1, data: Buffer.from([255, 0, 0, 255])},
+    b: {width: 1, height: 1, data: Buffer.from([255, 0, 0, 255])},
+    c: {width: 1, height: 1, data: Buffer.from([0, 0, 255, 255])},
+    d: {width: 2, height: 1, data: Buffer.from([255, 0, 0, 255, 0, 0, 0, 0])},
+  };
+  const decode = encoded => pixels[encoded.toString('utf8')];
+  assert.ok(samePixels(Buffer.from('a'), Buffer.from('b'), decode));
+  assert.equal(samePixels(Buffer.from('a'), Buffer.from('c'), decode), false);
+  assert.equal(samePixels(Buffer.from('a'), Buffer.from('d'), decode), false);
+});
