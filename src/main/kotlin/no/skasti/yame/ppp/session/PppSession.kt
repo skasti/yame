@@ -10,6 +10,7 @@ import no.skasti.yame.ppp.ip.Ipv4Cidr
 import no.skasti.yame.ppp.ip.Ipv4Packet
 import no.skasti.yame.ppp.ipcp.IpcpOptionType
 import no.skasti.yame.ppp.lcp.LcpOption
+import no.skasti.yame.ppp.lcp.LcpProtocolReject
 import no.skasti.yame.ppp.lcp.LcpPacket
 import no.skasti.yame.ppp.PppAddresses
 import no.skasti.yame.ppp.PppControlOption
@@ -171,9 +172,11 @@ class PppSession(
 
     @Synchronized
     fun receive(frame: PppFrame) {
+        if (closed) return
         when (frame.protocol) {
             LCP_PROTOCOL -> receiveLcp(frame.payload)
             IPCP_PROTOCOL -> receiveIpcp(frame.payload)
+            CCP_PROTOCOL -> rejectCcp(frame.payload)
             IPV4_PROTOCOL -> receiveIpv4(frame.payload)
             else -> unhandledPacket(
                 "ppp-protocol-${frame.protocol}",
@@ -182,6 +185,20 @@ class PppSession(
                 frame.payload,
             )
         }
+    }
+
+    private fun rejectCcp(payload: ByteArray) {
+        // RFC 1661 section 5.7 permits Protocol-Reject only in LCP Opened.
+        if (!lcpOpen) return
+
+        val reject = LcpProtocolReject.create(CCP_PROTOCOL, nextLcpIdentifier, payload, transmitMru)
+        if (reject == null) {
+            sessionLog("CCP .. cannot send Protocol-Reject: peer MRU=$transmitMru is too small")
+            return
+        }
+        nextLcpIdentifier = (nextLcpIdentifier + 1) and 0xff
+        sessionLog("LCP => Protocol-Reject id=${reject.identifier}: CCP (0x80FD); compression unsupported")
+        sendLcp(reject)
     }
 
     private fun receiveLcp(payload: ByteArray) {
@@ -194,6 +211,7 @@ class PppSession(
         when (packet.code) {
             LcpPacket.CONFIGURE_REQUEST -> receiveConfigureRequest(packet)
             LcpPacket.CONFIGURE_ACK -> receiveConfigureAck(packet)
+            LcpPacket.TERMINATE_REQUEST -> receiveTerminateRequest(packet)
             LcpPacket.CONFIGURE_NAK ->
                 sessionLog("LCP <= Configure-Nak id=${packet.identifier}; renegotiation not implemented yet")
             LcpPacket.CONFIGURE_REJECT ->
@@ -202,13 +220,33 @@ class PppSession(
         }
     }
 
+    private fun receiveTerminateRequest(packet: LcpPacket) {
+        val wasOpen = lcpOpen
+        // RTR leaves both Opened and partially acknowledged negotiation states.
+        // Publish that transition before replying or allowing a late Configure-Ack.
+        lcpOpen = false
+        peerConfigured = false
+        localConfigured = false
+        if (wasOpen) {
+            localConfigureRequest = null
+            stopLcpRestartTimer()
+            resetIpcp()
+        } else if (started && localConfigureRequest != null) {
+            // RFC 1661: negotiating states return to Request-Sent. Keep the
+            // outstanding request, but resume retries if its earlier ACK stopped them.
+            startLcpRestartTimer()
+        }
+        sessionLog("LCP => Terminate-Ack id=${packet.identifier}")
+        sendLcp(LcpPacket(LcpPacket.TERMINATE_ACK, packet.identifier, ByteArray(0)))
+    }
+
     private fun receiveConfigureRequest(packet: LcpPacket) {
         val wasOpen = lcpOpen
         peerConfigured = false
         lcpOpen = false
 
-        if (wasOpen) {
-            resetIpcp()
+        if (wasOpen) resetIpcp()
+        if (wasOpen || (started && localConfigureRequest == null)) {
             restartLocalNegotiation()
         }
 
@@ -1870,6 +1908,7 @@ class PppSession(
     companion object {
         const val LCP_PROTOCOL = 0xc021
         const val IPCP_PROTOCOL = 0x8021
+        const val CCP_PROTOCOL = 0x80fd
         const val IPV4_PROTOCOL = 0x0021
         const val DEFAULT_MRU = 1500
         private const val REQUESTED_RECEIVE_ACCM: UInt = 0u

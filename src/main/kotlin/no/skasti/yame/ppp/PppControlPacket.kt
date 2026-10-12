@@ -20,6 +20,8 @@ data class PppControlPacket(
         const val CONFIGURE_ACK = 2
         const val CONFIGURE_NAK = 3
         const val CONFIGURE_REJECT = 4
+        const val TERMINATE_REQUEST = 5
+        const val TERMINATE_ACK = 6
 
         private const val HEADER_SIZE = 4
 
