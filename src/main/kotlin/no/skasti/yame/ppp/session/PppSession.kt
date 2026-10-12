@@ -10,6 +10,7 @@ import no.skasti.yame.ppp.ip.Ipv4Cidr
 import no.skasti.yame.ppp.ip.Ipv4Packet
 import no.skasti.yame.ppp.ipcp.IpcpOptionType
 import no.skasti.yame.ppp.lcp.LcpOption
+import no.skasti.yame.ppp.lcp.LcpProtocolReject
 import no.skasti.yame.ppp.lcp.LcpPacket
 import no.skasti.yame.ppp.PppAddresses
 import no.skasti.yame.ppp.PppControlOption
@@ -174,6 +175,7 @@ class PppSession(
         when (frame.protocol) {
             LCP_PROTOCOL -> receiveLcp(frame.payload)
             IPCP_PROTOCOL -> receiveIpcp(frame.payload)
+            CCP_PROTOCOL -> rejectCcp(frame.payload)
             IPV4_PROTOCOL -> receiveIpv4(frame.payload)
             else -> unhandledPacket(
                 "ppp-protocol-${frame.protocol}",
@@ -182,6 +184,20 @@ class PppSession(
                 frame.payload,
             )
         }
+    }
+
+    private fun rejectCcp(payload: ByteArray) {
+        // RFC 1661 section 5.7 permits Protocol-Reject only in LCP Opened.
+        if (!lcpOpen) return
+
+        val reject = LcpProtocolReject.create(CCP_PROTOCOL, nextLcpIdentifier, payload, transmitMru)
+        if (reject == null) {
+            sessionLog("CCP .. cannot send Protocol-Reject: peer MRU=$transmitMru is too small")
+            return
+        }
+        nextLcpIdentifier = (nextLcpIdentifier + 1) and 0xff
+        sessionLog("LCP => Protocol-Reject id=${reject.identifier}: CCP (0x80FD); compression unsupported")
+        sendLcp(reject)
     }
 
     private fun receiveLcp(payload: ByteArray) {
@@ -1870,6 +1886,7 @@ class PppSession(
     companion object {
         const val LCP_PROTOCOL = 0xc021
         const val IPCP_PROTOCOL = 0x8021
+        const val CCP_PROTOCOL = 0x80fd
         const val IPV4_PROTOCOL = 0x0021
         const val DEFAULT_MRU = 1500
         private const val REQUESTED_RECEIVE_ACCM: UInt = 0u

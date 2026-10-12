@@ -38,6 +38,7 @@ The emulator currently:
 - acknowledges supported peer LCP Configure-Requests, including the options observed from Trumpet Winsock
 - applies peer ACCM/PFC/ACFC negotiation in the correct transmit direction
 - opens LCP only after both directions have been Configure-Acked
+- rejects unsupported CCP compression negotiation (`0x80FD`) with an LCP Protocol-Reject once LCP is open, allowing the peer to continue with uncompressed PPP
 - logs complete valid PPP frames and malformed frames for diagnostics
 - negotiates IPv4 addresses through IPCP
 - handles local and external ICMP echo traffic
