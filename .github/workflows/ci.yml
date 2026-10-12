@@ -133,6 +133,12 @@ jobs:
         if: needs.preview-gate.outputs.reuse != 'true'
         run: npm install --ignore-scripts --no-audit --no-fund --package-lock=false
 
+      - name: Install fixed preview font
+        if: needs.preview-gate.outputs.reuse != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes fonts-dejavu-core
+
       - name: Render ANSI snapshots through xterm.js
         if: needs.preview-gate.outputs.reuse != 'true'
         run: npm run render:tui-previews
