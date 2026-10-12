@@ -4,8 +4,8 @@ const path = require('node:path');
 const marker = '<!-- yame-tui-previews -->';
 const filenames = [
   '30x100.png', '30x100-proxy.png', '30x100-dns.png', '30x100-transfers.png',
-  '80x200.png', '80x200-proxy.png', '80x200-dns.png', '80x200-transfers.png',
-  '100x300.png', '100x300-proxy.png',
+  '45x135.png', '45x135-proxy.png', '45x135-dns.png', '45x135-transfers.png',
+  '50x150.png', '50x150-proxy.png',
 ];
 
 function parseProof(message) {
@@ -85,7 +85,7 @@ async function prepare({github, context, core}) {
         pr.head.repo.full_name !== pr.base.repo.full_name || pr.head.ref === context.payload.repository.default_branch) continue;
     const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts,
       {...context.repo, run_id: run.id});
-    const artifact = artifacts.find(a => a.name === 'yame-tui-screenshots' && !a.expired);
+    const artifact = artifacts.find(a => a.name === 'yame-tui-screenshots-v2' && !a.expired);
     if (!artifact || artifact.size_in_bytes > 5 * 1024 * 1024) return;
     core.setOutput('publish', 'true');
     core.setOutput('pr_number', pr.number);

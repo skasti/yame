@@ -39,7 +39,7 @@ jobs:
           script: |
             const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts,
               {...context.repo, run_id: context.payload.workflow_run.id});
-            const artifact = artifacts.find(a => a.name === 'yame-tui-screenshots' && !a.expired);
+            const artifact = artifacts.find(a => a.name === 'yame-tui-screenshots-v2' && !a.expired);
             if (!artifact || artifact.size_in_bytes > 5 * 1024 * 1024) throw new Error('Invalid preview archive size');
             const {data} = await github.rest.actions.downloadArtifact({...context.repo, artifact_id: artifact.id, archive_format: 'zip'});
             const bytes = Buffer.from(data);

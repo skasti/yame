@@ -49,7 +49,7 @@ class YameDashboardRendererTest {
     }
 
     @Test
-    fun wideDashboardStartsAbove250Columns() {
+    fun wideDashboardStartsAt150Columns() {
         val base = DashboardState(
             portName = null,
             baud = 115200,
@@ -63,8 +63,8 @@ class YameDashboardRendererTest {
             selectedHttpHostIndex = 0,
             commandPalette = null,
         )
-        val narrow = YameDashboardRenderer.render(base, width = 250, height = 30)
-        val wide = YameDashboardRenderer.render(base, width = 251, height = 30)
+        val narrow = YameDashboardRenderer.render(base, width = 149, height = 30)
+        val wide = YameDashboardRenderer.render(base, width = 150, height = 30)
         assertFalse(narrow.contains("DNS lookups"))
         assertContains(wide, "DNS lookups")
         assertContains(wide, "Transfers")

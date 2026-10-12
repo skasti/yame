@@ -1250,7 +1250,7 @@ internal enum class DashboardDetailPanel(val title: String) {
     fun next(): DashboardDetailPanel = entries[(ordinal + 1) % entries.size]
 }
 
-private const val WIDE_DASHBOARD_THRESHOLD = 250
+private const val WIDE_DASHBOARD_THRESHOLD = 149
 
 internal data class DashboardStyles(
     val border: (String) -> String = { it },

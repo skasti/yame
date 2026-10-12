@@ -15,7 +15,7 @@ function environment({sourceRun = run, currentCommit = commit, currentPr = pr, j
     pulls: {get: async () => ({data: currentPr})}, repos: {getCommit: async () => ({data: currentCommit})},
     git: {getCommit: async () => ({data: {parents: [{sha: currentPr.base.sha}, {sha: currentPr.head.sha}]}})},
     actions: {getWorkflowRun: async () => ({data: sourceRun}), listJobsForWorkflowRun: 'jobs', listWorkflowRunArtifacts: 'artifacts'},
-  }, paginate: async method => method === 'jobs' ? jobs : [{name: 'yame-tui-screenshots', expired: false, size_in_bytes: 1000}]};
+  }, paginate: async method => method === 'jobs' ? jobs : [{name: 'yame-tui-screenshots-v2', expired: false, size_in_bytes: 1000}]};
   const context = {repo: {owner: 'skasti', repo: 'yame'}, sha: event === 'pull_request' ? mergeSha : head, eventName: event,
     payload: {pull_request: {number: 71, head: {sha: head}}, inputs: {pr_number: '71'},
       workflow_run: sourceRun, repository: {default_branch: 'main'}}};
@@ -112,7 +112,7 @@ test('PNG validation rejects arbitrary bytes and incorrect terminal dimensions',
     bytes.write('IHDR', 12); bytes.writeUInt32BE(900, 16); bytes.writeUInt32BE(540, 20);
     fs.writeFileSync(file, bytes);
     assert.equal(validatePng(file, '30x100.png').length, 33);
-    assert.throws(() => validatePng(file, '80x200.png'), /Invalid screenshot/);
+    assert.throws(() => validatePng(file, '45x135.png'), /Invalid screenshot/);
   } finally { fs.rmSync(directory, {recursive: true, force: true}); }
 });
 
@@ -131,7 +131,7 @@ test(`publication recovers safely: ${scenario}`, async () => {
   let commentExists = false;
   try {
     const names = ['30x100', '30x100-proxy', '30x100-dns', '30x100-transfers',
-      '80x200', '80x200-proxy', '80x200-dns', '80x200-transfers', '100x300', '100x300-proxy'];
+      '45x135', '45x135-proxy', '45x135-dns', '45x135-transfers', '50x150', '50x150-proxy'];
     for (const name of names) {
       const [rows, columns] = name.match(/^(\d+)x(\d+)/).slice(1).map(Number);
       const png = Buffer.alloc(33); Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(png);
@@ -285,7 +285,7 @@ test('publisher downloads the exact source artifact with a bounded ZIP before ex
     };
     env.github.paginate = async (method, args) => {
       assert.equal(args.run_id, 123);
-      return [{id: 456, name: 'yame-tui-screenshots', expired: false, size_in_bytes: 100}];
+      return [{id: 456, name: 'yame-tui-screenshots-v2', expired: false, size_in_bytes: 100}];
     };
     const requireSafe = name => name === 'node:fs' ? {writeFileSync: () => writes++} : require(name);
     const execution = vm.runInNewContext(`(async () => {${script}\n})()`, {
