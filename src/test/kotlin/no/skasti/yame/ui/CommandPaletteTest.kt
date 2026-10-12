@@ -18,7 +18,7 @@ class CommandPaletteTest {
     @Test
     fun `paths create palettes callbacks only execute on selection and cleanup waits for last child`() {
         var enabled = false
-        val enable = CommandPalette.add("/registry-test/style-remover/enable") { enabled = true }
+        val enable = CommandPalette.add("/registry-test/style-remover/enable", { enabled = true })
         val disable = CommandPalette.add("/registry-test/style-remover/disable") { enabled = false }
         try {
             val palette = assertNotNull(CommandPalette.find("/registry-test/style-remover"))
@@ -41,14 +41,16 @@ class CommandPaletteTest {
     fun `commands are unique ignoring slash and case within each level`() {
         val first = CommandPalette.add("/registry-test/style-remover/on") {}
         val other = CommandPalette.add("/registry-test/script-remover/on") {}
+        val numeric = CommandPalette.add("/registry-test/baud/9600") {}
         try {
             assertFailsWith<IllegalArgumentException> { CommandPalette.add("/REGISTRY-TEST/STYLE-REMOVER/ON") {} }
             assertFailsWith<IllegalArgumentException> { CommandPalette.add("/registry-test/style-remover/on/child") {} }
             assertFailsWith<IllegalArgumentException> { CommandPalette.add("/bad//path") {} }
+            assertEquals("9600", CommandPalette.find("/registry-test/baud")?.item("9600")?.command)
             val palette = Palette("/child", "Child")
             palette.add(PaletteChoice("/on") {})
             assertFailsWith<IllegalArgumentException> { palette.add(PaletteChoice("ON") {}) }
-        } finally { first.close(); other.close() }
+        } finally { first.close(); other.close(); numeric.close() }
     }
 
     @Test

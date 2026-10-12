@@ -55,7 +55,9 @@ object CommandPalette {
 
     fun add(item: PaletteItem): AutoCloseable = root.add(item)
 
-    fun add(path: String, describe: () -> String = { "" }, action: () -> Unit): AutoCloseable = synchronized(root) {
+    fun add(path: String, action: () -> Unit): AutoCloseable = add(path, { "" }, action)
+
+    fun add(path: String, describe: () -> String, action: () -> Unit): AutoCloseable = synchronized(root) {
         require(path.startsWith('/') && !path.endsWith('/') && !path.contains("//")) {
             "Command paths must be absolute and end with a command: $path"
         }
@@ -97,6 +99,6 @@ object CommandPalette {
 
 internal fun paletteCommandKey(command: String): String {
     val key = command.removePrefix("/").lowercase(Locale.ROOT)
-    require(Regex("[a-z][a-z0-9-]*").matches(key)) { "Invalid palette command '$command'" }
+    require(Regex("[a-z0-9][a-z0-9-]*").matches(key)) { "Invalid palette command '$command'" }
     return key
 }
