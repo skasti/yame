@@ -4,13 +4,7 @@ import no.skasti.yame.observer.TransferKind
 import no.skasti.yame.observer.TransferState
 import no.skasti.yame.ppp.proxy.ResourceKind
 import no.skasti.yame.ppp.proxy.ResourceState
-import java.awt.BasicStroke
-import java.awt.Color
-import java.awt.Font
-import java.awt.RenderingHints
-import java.awt.image.BufferedImage
 import java.io.File
-import javax.imageio.ImageIO
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -18,7 +12,7 @@ import kotlin.test.assertEquals
 class DashboardScreenshotTest {
     @Test
     fun generateDashboardScreenshots() {
-        val directory = File("build/reports/tui-screenshots").apply { mkdirs() }
+        val directory = File("build/reports/tui-frames").apply { mkdirs() }
         val startup = DashboardState(
             portName = "/dev/ttyUSB0", baud = 57600, connected = false,
             dnsUpstream = "8.8.8.8", httpProxyEnabled = true,
@@ -49,11 +43,11 @@ class DashboardScreenshotTest {
             ), expanded = true)),
         )
         for ((rows, columns) in listOf(30 to 100, 45 to 135, 50 to 150)) {
-            writeScreenshot(startup, columns, rows, File(directory, "${rows}x${columns}.png"))
+            writeScreenshot(startup, columns, rows, File(directory, "${rows}x${columns}.ansi"))
             for (panel in DashboardDetailPanel.entries) {
                 if (columns > 149 && panel != DashboardDetailPanel.PROXY) continue
                 writeScreenshot(active.copy(activeDetailPanel = panel), columns, rows,
-                    File(directory, "${rows}x${columns}-${panel.name.lowercase()}.png"))
+                    File(directory, "${rows}x${columns}-${panel.name.lowercase()}.ansi"))
             }
         }
     }
@@ -63,136 +57,9 @@ class DashboardScreenshotTest {
         assertEquals(rows, plain.lines().size)
         plain.lines().forEach { assertEquals(columns, it.length) }
         val frame = YameDashboardRenderer.render(state, columns, rows, DashboardStyles.colorful)
-        TerminalFramePng.write(frame, columns, rows, output)
-        // Reuse the checked-in PNG verbatim when the rendered pixels are identical.
-        // This keeps irrelevant encoding/metadata differences out of preview commits.
-        val previous = File("assets/screenshots", output.name)
-        if (previous.isFile) {
-            val current = ImageIO.read(output)
-            val old = ImageIO.read(previous)
-            if (current != null && old != null && current.width == old.width && current.height == old.height &&
-                current.getRGB(0, 0, current.width, current.height, null, 0, current.width)
-                    .contentEquals(old.getRGB(0, 0, old.width, old.height, null, 0, old.width))
-            ) {
-                previous.copyTo(output, overwrite = true)
-            }
-        }
-        val decoded = ImageIO.read(output)
-        assertEquals(columns * TerminalFramePng.CELL_WIDTH, decoded.width)
-        assertEquals(rows * TerminalFramePng.CELL_HEIGHT, decoded.height)
+        // Keep ANSI output intact: xterm.js will interpret styles and character cells.
+        // The separate (read-only) CI preview step produces PNG screenshots.
+        output.writeText(frame, Charsets.UTF_8)
     }
 }
 
-/** Fixed terminal cells, including the SGR colors emitted by Mordant. */
-private object TerminalFramePng {
-    const val CELL_WIDTH = 9
-    const val CELL_HEIGHT = 18
-    private val background = Color(16, 19, 24)
-    private val foreground = Color(220, 224, 230)
-    private val palette = listOf(
-        0x000000, 0xaa0000, 0x00aa00, 0xaa5500, 0x0000aa, 0xaa00aa, 0x00aaaa, 0xaaaaaa,
-        0x555555, 0xff5555, 0x55ff55, 0xffff55, 0x5555ff, 0xff55ff, 0x55ffff, 0xffffff,
-    ).map(::Color)
-    private val sgr = Regex("\\u001B\\[([0-9;]*)m")
-
-    fun write(frame: String, columns: Int, rows: Int, output: File) {
-        val image = BufferedImage(columns * CELL_WIDTH, rows * CELL_HEIGHT, BufferedImage.TYPE_INT_RGB)
-        val graphics = image.createGraphics()
-        try {
-            graphics.color = background
-            graphics.fillRect(0, 0, image.width, image.height)
-            graphics.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
-            var color = foreground
-            var bold = false
-            var inverse = false
-            frame.lines().forEachIndexed { row, line ->
-                var index = 0
-                var column = 0
-                while (index < line.length) {
-                    val match = sgr.find(line, index)?.takeIf { it.range.first == index }
-                    if (match != null) {
-                        val codes = match.groupValues[1].ifEmpty { "0" }.split(';').map(String::toInt)
-                        var i = 0
-                        while (i < codes.size) {
-                            when (val code = codes[i]) {
-                                0 -> { color = foreground; bold = false; inverse = false }
-                                1 -> bold = true
-                                22 -> bold = false
-                                7 -> inverse = true
-                                27 -> inverse = false
-                                39 -> color = foreground
-                                in 30..37 -> color = palette[code - 30]
-                                in 90..97 -> color = palette[code - 90 + 8]
-                                38 -> when (codes.getOrNull(i + 1)) {
-                                    2 -> { color = Color(codes[i + 2], codes[i + 3], codes[i + 4]); i += 4 }
-                                    5 -> { color = indexedColor(codes[i + 2]); i += 2 }
-                                }
-                                else -> error("Unsupported terminal SGR: $code")
-                            }
-                            i++
-                        }
-                        index = match.range.last + 1
-                    } else {
-                        check(line[index] != '\u001B') { "Unsupported terminal escape" }
-                        val x = column * CELL_WIDTH
-                        val y = row * CELL_HEIGHT
-                        graphics.color = if (inverse) color else background
-                        graphics.fillRect(x, y, CELL_WIDTH, CELL_HEIGHT)
-                        graphics.color = if (inverse) background else color
-                        graphics.font = Font("DejaVu Sans Mono", if (bold) Font.BOLD else Font.PLAIN, 14)
-                        if (!drawBoxCharacter(graphics, line[index], x, y)) {
-                            graphics.drawString(line[index].toString(), x, y + 14)
-                        }
-                        column++
-                        index++
-                    }
-                }
-                check(column == columns)
-            }
-            check(ImageIO.write(image, "png", output))
-        } finally {
-            graphics.dispose()
-        }
-    }
-
-    /** Terminal box-drawing characters connect at cell boundaries, unlike font glyphs. */
-    private fun drawBoxCharacter(graphics: java.awt.Graphics2D, char: Char, x: Int, y: Int): Boolean {
-        val connections = when (char) {
-            '─', '━' -> "LR"
-            '│', '┃' -> "UD"
-            '┌', '┏' -> "RD"
-            '┐', '┓' -> "LD"
-            '└', '┗' -> "UR"
-            '┘', '┛' -> "UL"
-            '├', '┣' -> "URD"
-            '┤', '┫' -> "ULD"
-            '┬', '┳' -> "LRD"
-            '┴', '┻' -> "LRU"
-            '┼', '╋' -> "ULRD"
-            else -> return false
-        }
-        val cx = x + CELL_WIDTH / 2
-        val cy = y + CELL_HEIGHT / 2
-        val originalStroke = graphics.stroke
-        try {
-            graphics.stroke = BasicStroke(1f)
-            if ('L' in connections) graphics.drawLine(x, cy, cx, cy)
-            if ('R' in connections) graphics.drawLine(cx, cy, x + CELL_WIDTH - 1, cy)
-            if ('U' in connections) graphics.drawLine(cx, y, cx, cy)
-            if ('D' in connections) graphics.drawLine(cx, cy, cx, y + CELL_HEIGHT - 1)
-        } finally {
-            graphics.stroke = originalStroke
-        }
-        return true
-    }
-
-    private fun indexedColor(index: Int): Color = when {
-        index < 16 -> palette[index]
-        index >= 232 -> Color(8 + (index - 232) * 10, 8 + (index - 232) * 10, 8 + (index - 232) * 10)
-        else -> {
-            val n = index - 16
-            val levels = listOf(0, 95, 135, 175, 215, 255)
-            Color(levels[n / 36], levels[n / 6 % 6], levels[n % 6])
-        }
-    }
-}
