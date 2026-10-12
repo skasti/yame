@@ -12,6 +12,10 @@ import no.skasti.yame.ppp.proxy.cookies.CookieOverride
 import no.skasti.yame.ppp.proxy.routing.LegacyOriginRouteTable
 import no.skasti.yame.ppp.proxy.transform.JpegResourceTransformer
 import no.skasti.yame.ppp.proxy.transform.PngResourceTransformer
+import no.skasti.yame.ppp.proxy.transform.ScriptRemover
+import no.skasti.yame.ppp.proxy.transform.StyleRemover
+import no.skasti.yame.ppp.proxy.transform.ElementSimplifier
+import no.skasti.yame.ppp.proxy.transform.AttributeCleaner
 import no.skasti.yame.ppp.proxy.transform.ImageTagTransformer
 import no.skasti.yame.ppp.proxy.transform.ImageOptimizationPolicy
 import no.skasti.yame.ppp.proxy.transform.LegacyTextResourceTransformer
@@ -102,6 +106,10 @@ internal class SystemHttpCompatibilityHandler(
     private val resourceTransformations =
         ResourceTransformationPipeline(
             listOf(
+                ScriptRemover(),
+                StyleRemover(),
+                ElementSimplifier(),
+                AttributeCleaner(),
                 LegacyTextResourceTransformer(),
                 ImageTagTransformer(imageOptimizationPolicy),
                 JpegResourceTransformer(imageOptimizationPolicy),
