@@ -2,11 +2,11 @@
 
 The normal JVM test suite writes ten PNGs to `build/reports/tui-screenshots/`.
 They render the production `YameDashboardRenderer` at **rows × columns**:
-30×100, 80×200 and 100×300. Each size includes a startup fixture. The two
-narrow sizes also show Proxy, DNS and Transfers with fixed synthetic traffic;
-the wide size shows all panels together. These are renderer snapshots, not
-photographs of a running Pi console. They use DejaVu Sans Mono, 9×18 pixel
-cells and a fixed terminal palette, including Mordant's colors and selection.
+30×100, 45×135 and 50×150. Each size includes a startup fixture. The two compact sizes also show Proxy, DNS and Transfers with fixed synthetic traffic;
+the 150-column wide layout shows all panels together. These are renderer snapshots, not
+photographs of a running Pi console. They use a 9×18 terminal-cell renderer with connected box-drawing strokes,
+DejaVu Sans Mono for text and a fixed ANSI palette, including Mordant's colors and selection.
+They are not screenshots from an interactive VT terminal emulator.
 The header shows all status fields when they fit, including flow control and
 modem tones. Otherwise it cycles through complete-field pages every five
 seconds, even while idle. Fixtures use elapsed time zero for stable previews.
