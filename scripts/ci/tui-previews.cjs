@@ -4,8 +4,8 @@ const path = require('node:path');
 const marker = '<!-- yame-tui-previews -->';
 const filenames = [
   '30x100.png', '30x100-proxy.png', '30x100-dns.png', '30x100-transfers.png',
-  '80x200.png', '80x200-proxy.png', '80x200-dns.png', '80x200-transfers.png',
-  '100x300.png', '100x300-proxy.png',
+  '45x135.png', '45x135-proxy.png', '45x135-dns.png', '45x135-transfers.png',
+  '50x150.png', '50x150-proxy.png',
 ];
 
 function parseProof(message) {
