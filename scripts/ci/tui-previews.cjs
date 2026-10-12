@@ -85,7 +85,7 @@ async function prepare({github, context, core}) {
         pr.head.repo.full_name !== pr.base.repo.full_name || pr.head.ref === context.payload.repository.default_branch) continue;
     const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts,
       {...context.repo, run_id: run.id});
-    const artifact = artifacts.find(a => a.name === 'yame-tui-screenshots' && !a.expired);
+    const artifact = artifacts.find(a => a.name === 'yame-tui-screenshots-v2' && !a.expired);
     if (!artifact || artifact.size_in_bytes > 5 * 1024 * 1024) return;
     core.setOutput('publish', 'true');
     core.setOutput('pr_number', pr.number);
