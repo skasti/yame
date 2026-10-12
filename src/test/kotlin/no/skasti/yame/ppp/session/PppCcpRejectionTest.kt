@@ -92,6 +92,57 @@ class PppCcpRejectionTest {
     }
 
     @Test
+    fun `LCP termination is acknowledged and prevents CCP replies and stale negotiation reopening`() {
+        val sent = mutableListOf<PppFrame>()
+        newSession(sent).use { session ->
+            openLcp(session, sent)
+            val oldLcpRequest = sent.first { it.protocol == PppSession.LCP_PROTOCOL }
+            val oldIpcpRequest = sent.last { it.protocol == PppSession.IPCP_PROTOCOL }
+            openIpcp(session, oldIpcpRequest)
+            sent.clear()
+
+            val terminate = PppFrame(
+                PppSession.LCP_PROTOCOL,
+                LcpPacket(LcpPacket.TERMINATE_REQUEST, 73, byteArrayOf(0x7e, 0x7d)).encode(),
+            )
+            session.receive(terminate)
+            assertFalse(session.lcpOpen)
+            assertFalse(session.ipcpOpen)
+            assertEquals(PppSession.LCP_PROTOCOL, sent.single().protocol)
+            assertContentEquals(byteArrayOf(6, 73, 0, 4), sent.single().payload)
+            sent.clear()
+
+            // A lost Terminate-Ack must be recoverable without reopening the link.
+            session.receive(terminate)
+            assertContentEquals(byteArrayOf(6, 73, 0, 4), sent.single().payload)
+            sent.clear()
+            acknowledge(session, oldLcpRequest)
+            acknowledge(session, oldIpcpRequest)
+            session.receive(PppFrame(PppSession.CCP_PROTOCOL, byteArrayOf(1, 10, 0, 4)))
+            assertTrue(sent.isEmpty())
+            assertFalse(session.lcpOpen)
+            assertFalse(session.ipcpOpen)
+
+            // The live session can negotiate again, but only with a fresh local request.
+            session.receive(peerLcpRequest())
+            val newRequest = sent.single { frame ->
+                frame.protocol == PppSession.LCP_PROTOCOL &&
+                    requireNotNull(LcpPacket.parse(frame.payload)).code == LcpPacket.CONFIGURE_REQUEST
+            }
+            assertTrue(newRequest.payload[1] != oldLcpRequest.payload[1])
+            acknowledge(session, oldLcpRequest)
+            assertFalse(session.lcpOpen)
+            acknowledge(session, newRequest)
+            assertTrue(session.lcpOpen)
+            assertFalse(session.ipcpOpen)
+            sent.clear()
+            val ccp = byteArrayOf(1, 11, 0, 4)
+            session.receive(PppFrame(PppSession.CCP_PROTOCOL, ccp))
+            assertReject(sent.single(), ccp)
+        }
+    }
+
+    @Test
     fun `does not reply to CCP during LCP renegotiation`() {
         val sent = mutableListOf<PppFrame>()
         newSession(sent).use { session ->

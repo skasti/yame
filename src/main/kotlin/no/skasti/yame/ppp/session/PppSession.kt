@@ -172,6 +172,7 @@ class PppSession(
 
     @Synchronized
     fun receive(frame: PppFrame) {
+        if (closed) return
         when (frame.protocol) {
             LCP_PROTOCOL -> receiveLcp(frame.payload)
             IPCP_PROTOCOL -> receiveIpcp(frame.payload)
@@ -210,6 +211,7 @@ class PppSession(
         when (packet.code) {
             LcpPacket.CONFIGURE_REQUEST -> receiveConfigureRequest(packet)
             LcpPacket.CONFIGURE_ACK -> receiveConfigureAck(packet)
+            LcpPacket.TERMINATE_REQUEST -> receiveTerminateRequest(packet)
             LcpPacket.CONFIGURE_NAK ->
                 sessionLog("LCP <= Configure-Nak id=${packet.identifier}; renegotiation not implemented yet")
             LcpPacket.CONFIGURE_REJECT ->
@@ -218,13 +220,27 @@ class PppSession(
         }
     }
 
+    private fun receiveTerminateRequest(packet: LcpPacket) {
+        if (lcpOpen) {
+            // Publish the link-down state before acknowledging termination.
+            lcpOpen = false
+            peerConfigured = false
+            localConfigured = false
+            localConfigureRequest = null
+            stopLcpRestartTimer()
+            resetIpcp()
+        }
+        sessionLog("LCP => Terminate-Ack id=${packet.identifier}")
+        sendLcp(LcpPacket(LcpPacket.TERMINATE_ACK, packet.identifier, ByteArray(0)))
+    }
+
     private fun receiveConfigureRequest(packet: LcpPacket) {
         val wasOpen = lcpOpen
         peerConfigured = false
         lcpOpen = false
 
-        if (wasOpen) {
-            resetIpcp()
+        if (wasOpen) resetIpcp()
+        if (wasOpen || (started && localConfigureRequest == null)) {
             restartLocalNegotiation()
         }
 
