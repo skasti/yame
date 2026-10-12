@@ -10,15 +10,6 @@ import no.skasti.yame.ppp.proxy.cookies.BoundedCookieOverrides
 import no.skasti.yame.ppp.proxy.cookies.BoundedCookieStore
 import no.skasti.yame.ppp.proxy.cookies.CookieOverride
 import no.skasti.yame.ppp.proxy.routing.LegacyOriginRouteTable
-import no.skasti.yame.ppp.proxy.transform.JpegResourceTransformer
-import no.skasti.yame.ppp.proxy.transform.PngResourceTransformer
-import no.skasti.yame.ppp.proxy.transform.ScriptRemover
-import no.skasti.yame.ppp.proxy.transform.StyleRemover
-import no.skasti.yame.ppp.proxy.transform.ElementSimplifier
-import no.skasti.yame.ppp.proxy.transform.AttributeCleaner
-import no.skasti.yame.ppp.proxy.transform.ImageTagTransformer
-import no.skasti.yame.ppp.proxy.transform.ImageOptimizationPolicy
-import no.skasti.yame.ppp.proxy.transform.LegacyTextResourceTransformer
 import no.skasti.yame.ppp.proxy.transform.InFlightResourceWork
 import no.skasti.yame.ppp.proxy.transform.CachedResource
 import no.skasti.yame.ppp.proxy.transform.Resource
@@ -34,6 +25,7 @@ import no.skasti.yame.ppp.proxy.transform.validatorsFrom
 import no.skasti.yame.ppp.proxy.transform.sourceFingerprint
 import no.skasti.yame.ppp.proxy.transform.ResourceTransformationContext
 import no.skasti.yame.ppp.proxy.transform.ResourceTransformationPipeline
+import no.skasti.yame.ppp.proxy.transform.defaultResourceTransformationPipeline
 import no.skasti.yame.ppp.tcp.TcpProxyFlow
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
@@ -67,6 +59,8 @@ internal class SystemHttpCompatibilityHandler(
         .connectTimeout(Duration.ofMillis(config.requestTimeoutMillis))
         .followRedirects(HttpClient.Redirect.NEVER)
         .build(),
+    private val resourceTransformations: ResourceTransformationPipeline =
+        defaultResourceTransformationPipeline(config.maxResponseBytes),
 ) : HttpRequestHandler {
     private data class ClientCookie(val name: String, val value: String)
     private data class SessionKey(val generation: Long, val peerAddress: String)
@@ -102,20 +96,6 @@ internal class SystemHttpCompatibilityHandler(
 
     private val sessionStates = ConcurrentHashMap<SessionKey, SessionState>()
     private val originRoutes = LegacyOriginRouteTable()
-    private val imageOptimizationPolicy = ImageOptimizationPolicy(maxEncodedBytes = config.maxResponseBytes)
-    private val resourceTransformations =
-        ResourceTransformationPipeline(
-            listOf(
-                ScriptRemover(),
-                StyleRemover(),
-                ElementSimplifier(),
-                AttributeCleaner(),
-                LegacyTextResourceTransformer(),
-                ImageTagTransformer(imageOptimizationPolicy),
-                JpegResourceTransformer(imageOptimizationPolicy),
-                PngResourceTransformer(imageOptimizationPolicy),
-            ),
-        )
     private val resourceCache = ResourceCache(
         maxEntries = config.maxRepresentationCacheEntries,
         maxBytes = config.maxRepresentationCacheBytes,
