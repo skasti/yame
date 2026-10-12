@@ -361,7 +361,7 @@ jobs:
     steps:
       # No checkout, Gradle, executable assets, or build cache in this job.
       - name: Download tested release assets
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: release-${{ matrix.tag }}
           path: ${{ runner.temp }}/release-assets
