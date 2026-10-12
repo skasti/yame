@@ -10,9 +10,60 @@ import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class UdpProxyTest {
+    @Test
+    fun `retiring a UDP flow frees its socket without closing a different generation or namespace`() {
+        val loopback = InetAddress.getByName("127.0.0.1")
+        DatagramSocket(0, loopback).use { firstServer ->
+            DatagramSocket(0, loopback).use { secondServer ->
+                firstServer.soTimeout = 2_000
+                secondServer.soTimeout = 2_000
+                SystemUdpProxy(maxFlows = 1, maxQueuedCommands = 8).use { proxy ->
+                    val first = UdpFlow(1105, Ipv4Address.parse("127.0.0.1"), firstServer.localPort, 7,
+                        UdpFlowNamespace.LOCAL_DNS)
+                    val second = first.copy(destinationPort = secondServer.localPort)
+                    val oldCallbacks = java.util.concurrent.CopyOnWriteArrayList<Result<ByteArray>>()
+                    proxy.send(first, byteArrayOf(1), oldCallbacks::add)
+                    firstServer.receive(DatagramPacket(ByteArray(8), 8))
+
+                    proxy.closeFlow(first.copy(generation = 6)).getOrThrow()
+                    proxy.closeFlow(first.copy(namespace = UdpFlowNamespace.EXTERNAL)).getOrThrow()
+                    val failure = CountDownLatch(1)
+                    var result: Result<ByteArray>? = null
+                    proxy.send(second, byteArrayOf(2)) {
+                        result = it
+                        failure.countDown()
+                    }
+                    assertTrue(failure.await(2, TimeUnit.SECONDS))
+                    assertEquals("UDP flow limit reached", requireNotNull(result).exceptionOrNull()?.message)
+
+                    proxy.closeFlow(first).getOrThrow()
+                    val received = CountDownLatch(1)
+                    proxy.send(second, byteArrayOf(3)) {
+                        result = it
+                        received.countDown()
+                    }
+                    val incoming = DatagramPacket(ByteArray(8), 8)
+                    secondServer.receive(incoming)
+                    secondServer.send(DatagramPacket(byteArrayOf(4), 1, incoming.address, incoming.port))
+                    assertTrue(received.await(2, TimeUnit.SECONDS))
+                    assertContentEquals(byteArrayOf(4), requireNotNull(result).getOrThrow())
+                    assertTrue(oldCallbacks.isEmpty(), "Retiring a flow must not report an upstream failure")
+
+                    // A later client query may reuse the original tuple after retirement.
+                    proxy.closeFlow(second).getOrThrow()
+                    proxy.send(first, byteArrayOf(5), oldCallbacks::add)
+                    val reopened = DatagramPacket(ByteArray(8), 8)
+                    firstServer.receive(reopened)
+                    assertEquals(5, reopened.data[0].toInt())
+                }
+            }
+        }
+    }
+
     @Test
     fun `system UDP proxy forwards datagram and returns reply`() {
         val loopback = InetAddress.getByName("127.0.0.1")

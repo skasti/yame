@@ -41,6 +41,8 @@ The emulator currently:
 - logs complete valid PPP frames and malformed frames for diagnostics
 - negotiates IPv4 addresses through IPCP
 - handles local and external ICMP echo traffic
+- consumes ICMP Destination Unreachable reports and retires UDP flows rejected by the client
+- consumes ICMP Router Solicitation locally on the PPP link
 - forwards generic UDP traffic through userspace UDP flows
 - negotiates RFC 1877 primary/secondary DNS options and advertises YAME's local PPP address
 - proxies DNS queries sent to YAME's PPP address to a configurable upstream DNS server
@@ -51,6 +53,21 @@ The emulator currently:
 - provides a `/` command palette for serial connection settings, DNS upstream selection, proxy mode, reconnect/disconnect, and log control
 
 The current networking milestone provides IPv4, ICMP, UDP, DNS and TCP over PPP without requiring host routing/NAT configuration. External TCP SYNs are only acknowledged after the corresponding host socket connects successfully, and payloads are proxied in both directions through YAME's userspace TCP state machine.
+
+ICMP type 3 reports received from the PPP client are logged with their code and
+quoted endpoints, without a reply or upstream forwarding. A valid UDP Port
+Unreachable (code 3) closes only the quoted flow in the current PPP generation;
+quotes of replies from YAME's DNS endpoint are mapped back to the configured
+upstream resolver and the separate local-DNS flow namespace. Other codes and
+TCP quotes remain diagnostic and do not abort connections or change MTUs.
+
+The Win98 captures in issue #80 all quote DNS replies to closed client UDP ports,
+which can occur after a DNS request times out or its socket is closed. They do
+not show an upstream website rejecting IE5. ICMP type 10 is **Router Solicitation**
+([RFC 1256](https://www.rfc-editor.org/rfc/rfc1256.html)); YAME consumes it locally
+without advertising a router or forwarding multicast. PPP/IPCP already supplies
+the point-to-point peer, and YAME proxies sockets rather than operating as an IP
+forwarding router.
 
 ## Telephone and modem tone simulation
 

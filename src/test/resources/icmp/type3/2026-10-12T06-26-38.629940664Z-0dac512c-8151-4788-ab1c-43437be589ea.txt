@@ -1,0 +1,8 @@
+format=yame-unhandled-v1
+timestamp=2026-10-12T06:26:38.629940664Z
+packet-type=icmp-type-3
+reason=ICMP .. type=3 code=3 not handled
+ppp-protocol=33
+encoding=hex
+length=56
+data=450000387c0300008001aabf0a0000020a0000010303f814000000004500009500000000401166560a0000010a0000020035041a00810018

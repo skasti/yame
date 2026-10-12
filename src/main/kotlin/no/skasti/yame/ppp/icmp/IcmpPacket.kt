@@ -41,7 +41,9 @@ data class IcmpPacket(
 
     companion object {
         const val ECHO_REPLY = 0
+        const val DESTINATION_UNREACHABLE = 3
         const val ECHO_REQUEST = 8
+        const val ROUTER_SOLICITATION = 10
 
         private const val HEADER_LENGTH = 4
         private const val ECHO_HEADER_LENGTH = 4

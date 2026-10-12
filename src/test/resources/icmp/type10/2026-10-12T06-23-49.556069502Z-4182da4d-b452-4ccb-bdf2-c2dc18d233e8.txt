@@ -1,0 +1,8 @@
+format=yame-unhandled-v1
+timestamp=2026-10-12T06:23:49.556069502Z
+packet-type=icmp-type-10
+reason=ICMP .. egress type=10 code=0 not handled
+ppp-protocol=33
+encoding=hex
+length=28
+data=4500001c0d000000800143dd0a000002e00000020a00f5ff00000000
