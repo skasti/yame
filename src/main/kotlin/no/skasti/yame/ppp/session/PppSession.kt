@@ -221,14 +221,20 @@ class PppSession(
     }
 
     private fun receiveTerminateRequest(packet: LcpPacket) {
-        if (lcpOpen) {
-            // Publish the link-down state before acknowledging termination.
-            lcpOpen = false
-            peerConfigured = false
-            localConfigured = false
+        val wasOpen = lcpOpen
+        // RTR leaves both Opened and partially acknowledged negotiation states.
+        // Publish that transition before replying or allowing a late Configure-Ack.
+        lcpOpen = false
+        peerConfigured = false
+        localConfigured = false
+        if (wasOpen) {
             localConfigureRequest = null
             stopLcpRestartTimer()
             resetIpcp()
+        } else if (started && localConfigureRequest != null) {
+            // RFC 1661: negotiating states return to Request-Sent. Keep the
+            // outstanding request, but resume retries if its earlier ACK stopped them.
+            startLcpRestartTimer()
         }
         sessionLog("LCP => Terminate-Ack id=${packet.identifier}")
         sendLcp(LcpPacket(LcpPacket.TERMINATE_ACK, packet.identifier, ByteArray(0)))

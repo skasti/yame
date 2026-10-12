@@ -10,6 +10,10 @@ import no.skasti.yame.ppp.ipcp.IpcpOptionType
 import no.skasti.yame.ppp.lcp.LcpOption
 import no.skasti.yame.ppp.lcp.LcpOptionType
 import no.skasti.yame.ppp.lcp.LcpPacket
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -139,6 +143,83 @@ class PppCcpRejectionTest {
             val ccp = byteArrayOf(1, 11, 0, 4)
             session.receive(PppFrame(PppSession.CCP_PROTOCOL, ccp))
             assertReject(sent.single(), ccp)
+        }
+    }
+
+    @Test
+    fun `termination clears negotiation directions in Request-Sent Ack-Sent and Ack-Received`() {
+        for (state in listOf("Request-Sent", "Ack-Sent", "Ack-Received")) {
+            val sent = mutableListOf<PppFrame>()
+            newSession(sent).use { session ->
+                session.start()
+                val request = sent.single()
+                when (state) {
+                    "Ack-Sent" -> session.receive(peerLcpRequest())
+                    "Ack-Received" -> acknowledge(session, request)
+                }
+                assertFalse(session.lcpOpen, state)
+                sent.clear()
+                session.receive(PppFrame(
+                    PppSession.LCP_PROTOCOL,
+                    LcpPacket(LcpPacket.TERMINATE_REQUEST, 74, ByteArray(0)).encode(),
+                ))
+                assertContentEquals(byteArrayOf(6, 74, 0, 4), sent.single().payload, state)
+                sent.clear()
+
+                if (state == "Ack-Received") {
+                    // The old local ACK cannot combine with a new peer request to open LCP.
+                    session.receive(peerLcpRequest())
+                    assertFalse(session.lcpOpen, state)
+                    sent.clear()
+                } else {
+                    // A late local ACK cannot combine with the old peer acknowledgement.
+                    acknowledge(session, request)
+                    assertFalse(session.lcpOpen, state)
+                    assertTrue(sent.isEmpty(), state)
+                }
+                assertFalse(session.ipcpOpen, state)
+                session.receive(PppFrame(PppSession.CCP_PROTOCOL, byteArrayOf(1, 10, 0, 4)))
+                assertTrue(sent.isEmpty(), state)
+
+                // Both directions must complete again before CCP rejection is enabled.
+                if (state == "Ack-Received") acknowledge(session, request)
+                else session.receive(peerLcpRequest())
+                assertTrue(session.lcpOpen, state)
+                assertEquals(PppSession.IPCP_PROTOCOL, sent.last().protocol, state)
+                sent.clear()
+                val ccp = byteArrayOf(1, 11, 0, 4)
+                session.receive(PppFrame(PppSession.CCP_PROTOCOL, ccp))
+                assertReject(sent.single(), ccp)
+            }
+        }
+    }
+
+    @Test
+    fun `termination after local ACK resumes outstanding configure request retries`() {
+        val retried = CountDownLatch(1)
+        val terminated = AtomicBoolean(false)
+        val request = AtomicReference<PppFrame>()
+        PppSession(
+            sendFrame = { frame ->
+                if (frame.protocol == PppSession.LCP_PROTOCOL &&
+                    LcpPacket.parse(frame.payload)?.code == LcpPacket.CONFIGURE_REQUEST
+                ) request.compareAndSet(null, frame)
+            },
+            logger = {
+                if (terminated.get() && it.contains("Configure-Request") && it.endsWith("retry")) {
+                    retried.countDown()
+                }
+            },
+            restartIntervalMillis = 200,
+        ).use { session ->
+            session.start()
+            acknowledge(session, requireNotNull(request.get()))
+            terminated.set(true)
+            session.receive(PppFrame(PppSession.LCP_PROTOCOL,
+                LcpPacket(LcpPacket.TERMINATE_REQUEST, 75, ByteArray(0)).encode()))
+            assertTrue(retried.await(3, TimeUnit.SECONDS), "Negotiation retries did not resume after termination")
+            assertFalse(session.lcpOpen)
+            assertFalse(session.ipcpOpen)
         }
     }
 
