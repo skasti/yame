@@ -1,0 +1,14 @@
+{
+  "name": "yame-tui-preview-tools",
+  "private": true,
+  "description": "Read-only test tooling for headless Mordant terminal screenshots",
+  "scripts": {
+    "render:tui-previews": "node scripts/ci/render-tui-previews.cjs"
+  },
+  "devDependencies": {
+    "@termless/core": "0.10.2",
+    "@termless/xtermjs": "0.10.2",
+    "@resvg/resvg-js": "2.6.2",
+    "pngjs": "7.0.0"
+  }
+}
