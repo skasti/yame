@@ -4,6 +4,8 @@ import no.skasti.yame.ppp.proxy.ReferenceRole
 import no.skasti.yame.ppp.proxy.ResourceKind
 import no.skasti.yame.ppp.proxy.ResourceRelation
 import java.net.URI
+import no.skasti.yame.config.HtmlTransformer
+import no.skasti.yame.config.HtmlTransformerSettings
 
 internal enum class ResourceTransformPhase {
     DECODE,
@@ -24,6 +26,7 @@ internal data class ResourceTransformationContext(
     val requestMethod: String,
     val transformationProfile: String,
     val rewriteText: (String) -> String,
+    val htmlTransformers: HtmlTransformerSettings = HtmlTransformerSettings(),
 )
 
 internal data class ResourceRepresentation(
@@ -105,7 +108,8 @@ internal class ResourceTransformationPipeline(
         resource: Resource,
     ): ResourceTransformationState =
         transformers.fold(ResourceTransformationState(resource)) { current, transformer ->
-            if (!transformer.supports(context, current)) {
+            val configurable = HtmlTransformer.entries.firstOrNull { it.command == transformer.id }
+            if ((configurable != null && !context.htmlTransformers.enabled(configurable)) || !transformer.supports(context, current)) {
                 current
             } else {
                 val next = transformer.transform(context, current)

@@ -2,18 +2,20 @@ package no.skasti.yame.ppp.proxy.transform
 
 import no.skasti.yame.config.ElementSimplifierConfiguration
 import no.skasti.yame.config.ElementSimplifierRule
+import no.skasti.yame.config.HtmlTransformer
+import no.skasti.yame.config.HtmlTransformerControl
 import java.util.Locale
 
 /** Apply explicit tag mappings; unknown elements and existing headings/paragraphs stay intact. */
 internal class ElementSimplifier(
     private val configuration: ElementSimplifierConfiguration = ElementSimplifierConfiguration.defaults(),
     private val maxOutputBytes: Int = 16 * 1024 * 1024,
-) : HtmlCleanupTransformer() {
+    control: HtmlTransformerControl? = null,
+) : HtmlCleanupTransformer(HtmlTransformer.ELEMENT_SIMPLIFIER, control) {
     init {
         require(maxOutputBytes > 0) { "Element-simplifier output limit must be positive" }
     }
 
-    override val id = "element-simplifier"
     override val priority = 40
 
     override fun transform(context: ResourceTransformationContext, state: ResourceTransformationState): ResourceTransformationState {

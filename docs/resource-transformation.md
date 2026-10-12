@@ -14,6 +14,13 @@ Transformers must never mutate or replace the source representation. This lets l
 
 Within one YAME process the transformation pipeline is treated as stable. Therefore, if an upstream resource reports the same validator (or returns `304 Not Modified`), YAME assumes the same source representation and consequently the same transformed representation for the same transformation profile.
 
+Live transformer controls are an exception to the stable-profile assumption:
+the TUI's HTTP handler marks HTML responses `Cache-Control: no-store` and omits
+their source validators. It also suppresses upstream conditional GET headers
+while live controls are active, so browser-cached HTML from a previous switch
+combination cannot be reused through a `304` response. Static handlers retain
+the existing source-validator behavior.
+
 Byte-specific metadata is different. `Content-Length`, content digests and encodings that no longer describe the emitted representation must be removed or regenerated after transformation.
 
 ## Cached 304 responses reuse transformed output
@@ -94,6 +101,14 @@ YAME applies edits and creates fresh representation caches, preserving the
 stable-pipeline assumption for source validators and cached transformed output.
 The bundled INI file is the single source of default mappings. See the README
 for the format and editing behavior.
+
+Live on/off settings are separate from the immutable INI rules. A shared
+runtime control survives PPP/TCP proxy creation, and each HTTP request captures
+one immutable settings snapshot before fetching upstream. Its transformation
+profile and transformed-cache/in-flight-work keys include the four switch
+values; the same source bytes under different settings never share transformed
+output. Source acquisition may still be coalesced because it is independent of
+the transformation profile. Already-running requests retain their snapshot.
 
 Mappings affect only explicitly configured tags, including matching closing
 tags. Generated style values are escaped as attributes. Expansion is limited

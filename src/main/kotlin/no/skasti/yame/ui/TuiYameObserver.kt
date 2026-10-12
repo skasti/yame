@@ -109,6 +109,26 @@ class TuiYameObserver(
     var stopRequested: Boolean = false
         private set
 
+    private val commandRegistrations = registerCommands()
+
+    @Synchronized
+    internal fun paletteSnapshot(): TuiCommandPalette? = commandPalette
+
+    internal fun handleKey(key: String) {
+        val paletteOpen = synchronized(this) { commandPalette != null }
+        when {
+            key == "Ctrl+C" -> requestQuit()
+            paletteOpen -> handlePaletteKey(key)
+            key == "Tab" -> cycleDashboardPanel()
+            key == "/" -> openCommandPalette()
+            key.equals("q", ignoreCase = true) -> requestQuit()
+            key == "ArrowUp" -> moveHttpSelection(-1)
+            key == "ArrowDown" -> moveHttpSelection(1)
+            key == "ArrowRight" || key == "Enter" -> setSelectedHttpHostExpanded(true)
+            key == "ArrowLeft" -> setSelectedHttpHostExpanded(false)
+        }
+    }
+
     @Synchronized
     fun start() {
         if (closed || screenStarted) return
@@ -538,18 +558,7 @@ class TuiYameObserver(
                             while (!closed && !stopRequested) {
                                 val key = keyboard.readKey(INPUT_POLL_MILLIS)
                                     ?: continue
-                                val paletteOpen = synchronized(this) { commandPalette != null }
-                                when {
-                                    key == "Ctrl+C" -> requestQuit()
-                                    paletteOpen -> handlePaletteKey(key)
-                                    key == "Tab" -> cycleDashboardPanel()
-                                    key == "/" -> openCommandPalette()
-                                    key.equals("q", ignoreCase = true) -> requestQuit()
-                                    key == "ArrowUp" -> moveHttpSelection(-1)
-                                    key == "ArrowDown" -> moveHttpSelection(1)
-                                    key == "ArrowRight" || key == "Enter" -> setSelectedHttpHostExpanded(true)
-                                    key == "ArrowLeft" -> setSelectedHttpHostExpanded(false)
-                                }
+                                handleKey(key)
                             }
                         } finally {
                             synchronized(this) {
@@ -716,7 +725,9 @@ class TuiYameObserver(
 
             val pendingAction = when {
                 key == "Escape" -> {
-                    commandPalette = null
+                    commandPalette = if (palette.mode == TuiPaletteMode.COMMANDS && palette.palettePath != "/") {
+                        commandPaletteFor("/", palette.palettePath.substringBeforeLast('/').ifEmpty { "/" })
+                    } else null
                     null
                 }
                 key == "ArrowUp" && palette.mode != TuiPaletteMode.DNS -> {
@@ -731,8 +742,12 @@ class TuiYameObserver(
                 key == "Backspace" -> {
                     when (palette.mode) {
                         TuiPaletteMode.COMMANDS -> {
-                            val next = palette.input.dropLast(1).ifEmpty { "/" }
-                            commandPalette = commandPaletteFor(next)
+                            if (palette.input == "/" && palette.palettePath != "/") {
+                                commandPalette = commandPaletteFor("/", palette.palettePath.substringBeforeLast('/').ifEmpty { "/" })
+                            } else {
+                                val next = palette.input.dropLast(1).ifEmpty { "/" }
+                                commandPalette = commandPaletteFor(next, palette.palettePath)
+                            }
                         }
                         TuiPaletteMode.CAPTURE_LIMIT -> {
                             val prefix = palette.input.substringBefore(' ') + " "
@@ -757,7 +772,9 @@ class TuiYameObserver(
                 palette.mode == TuiPaletteMode.COMMANDS &&
                     key.length == 1 &&
                     !key[0].isISOControl() -> {
-                    commandPalette = commandPaletteFor(palette.input + key)
+                    if (!(key == "/" && palette.input == "/") && palette.input.length < 256) {
+                        commandPalette = commandPaletteFor(palette.input + key, palette.palettePath)
+                    }
                     null
                 }
                 palette.mode == TuiPaletteMode.CAPTURE_LIMIT && key.length == 1 && key[0].isDigit() -> {
@@ -813,7 +830,7 @@ class TuiYameObserver(
             return { onCaptureLimitSelected(command.first, command.second) }
         }
 
-        if (palette.mode == TuiPaletteMode.COMMANDS) {
+        if (palette.mode == TuiPaletteMode.COMMANDS && palette.palettePath == "/") {
             val kind = PacketCaptureLimitKind.entries.firstOrNull {
                 palette.input.startsWith("/${it.commandName} ", ignoreCase = true)
             }
@@ -845,7 +862,7 @@ class TuiYameObserver(
             return { onDnsUpstreamSelected(value) }
         }
 
-        if (palette.mode == TuiPaletteMode.COMMANDS &&
+        if (palette.mode == TuiPaletteMode.COMMANDS && palette.palettePath == "/" &&
             palette.input.startsWith("/tone ", ignoreCase = true)
         ) {
             val enabled = parseToneInput(palette.input)
@@ -859,94 +876,19 @@ class TuiYameObserver(
 
         val selected = palette.options.getOrNull(palette.selectedIndex) ?: return null
         return when (palette.mode) {
-            TuiPaletteMode.COMMANDS -> when (selected.value) {
-                "/port" -> {
-                    { onRefreshPorts(); openPortPalette() }
+            TuiPaletteMode.COMMANDS -> {
+                val item = CommandPalette.find(palette.palettePath)?.item(selected.value) ?: return null
+                when (item) {
+                    is Palette -> {
+                        val path = palette.palettePath.trimEnd('/') + "/" + paletteCommandKey(item.command)
+                        commandPalette = commandPaletteFor("/", path)
+                        null
+                    }
+                    is PaletteChoice -> {
+                        commandPalette = null
+                        item.select
+                    }
                 }
-                "/baud" -> {
-                    openBaudPalette()
-                    null
-                }
-                "/flow-control" -> {
-                    openFlowControlPalette()
-                    null
-                }
-                "/dns-upstream" -> {
-                    openDnsPalette()
-                    null
-                }
-                "/http-proxy" -> {
-                    openHttpPalette()
-                    null
-                }
-                TUI_TONE_COMMAND -> {
-                    openTonePalette()
-                    null
-                }
-                TUI_LOGIN_COMMAND -> {
-                    openLoginAddPalette()
-                    null
-                }
-                "/capture-limit-per-type", "/capture-limit-total" -> {
-                    val kind = PacketCaptureLimitKind.entries.single { "/${it.commandName}" == selected.value }
-                    commandPalette = TuiCommandPalette(
-                        mode = TuiPaletteMode.CAPTURE_LIMIT,
-                        input = "/${kind.commandName} ",
-                        title = "Capture limit (current: ${kind.value(captureLimits)}): enter a positive integer",
-                        options = emptyList(), selectedIndex = 0,
-                    )
-                    null
-                }
-                "/loglevel-modem" -> {
-                    openLogLevelPalette(YameLogModule.MODEM)
-                    null
-                }
-                "/loglevel-serial" -> {
-                    openLogLevelPalette(YameLogModule.SERIAL)
-                    null
-                }
-                "/loglevel-ppp" -> {
-                    openLogLevelPalette(YameLogModule.PPP)
-                    null
-                }
-                "/loglevel-dns" -> {
-                    openLogLevelPalette(YameLogModule.DNS)
-                    null
-                }
-                "/loglevel-proxy" -> {
-                    openLogLevelPalette(YameLogModule.PROXY)
-                    null
-                }
-                "/loglevel-unhandled" -> {
-                    openLogLevelPalette(YameLogModule.UNHANDLED)
-                    null
-                }
-                "/loglevel-transfers" -> {
-                    openLogLevelPalette(YameLogModule.TRANSFERS)
-                    null
-                }
-                "/reconnect" -> {
-                    commandPalette = null
-                    { onReconnect() }
-                }
-                "/disconnect" -> {
-                    commandPalette = null
-                    { onDisconnect() }
-                }
-                "/refresh-ports" -> {
-                    commandPalette = null
-                    { onRefreshPorts() }
-                }
-                "/clear-log" -> {
-                    logs.clear()
-                    commandPalette = null
-                    null
-                }
-                "/quit" -> {
-                    commandPalette = null
-                    ::requestQuit
-                }
-                else -> null
             }
 
             TuiPaletteMode.PORTS -> {
@@ -1014,9 +956,9 @@ class TuiYameObserver(
         render()
     }
 
-    private fun commandPaletteFor(input: String): TuiCommandPalette {
+    private fun commandPaletteFor(input: String, path: String = "/"): TuiCommandPalette {
         val normalized = if (input.startsWith("/")) input else "/$input"
-        if (normalized.startsWith(TUI_LOGIN_PREFIX, ignoreCase = true)) {
+        if (path == "/" && normalized.startsWith(TUI_LOGIN_PREFIX, ignoreCase = true)) {
             return TuiCommandPalette(
                 mode = TuiPaletteMode.LOGIN,
                 input = normalized,
@@ -1025,15 +967,48 @@ class TuiYameObserver(
                 selectedIndex = 0,
             )
         }
-        return TuiCommandPalette(
-            mode = TuiPaletteMode.COMMANDS,
-            input = normalized,
-            title = "Commands",
-            options = COMMAND_OPTIONS.filter {
-                it.value.startsWith(normalized, ignoreCase = true)
-            },
-            selectedIndex = 0,
-        )
+        return registeredCommandPalette(normalized, path)
+    }
+
+    private fun registerCommands(): List<AutoCloseable> {
+        val handles = mutableListOf<AutoCloseable>()
+        fun add(command: String, description: String, action: () -> Unit) {
+            handles += CommandPalette.add(PaletteChoice(command, { description }, action))
+        }
+        try {
+            add("/port", "Select serial port") { onRefreshPorts(); openPortPalette() }
+            add("/baud", "Select baud rate", ::openBaudPalette)
+            add("/flow-control", "Select serial flow control", ::openFlowControlPalette)
+            add("/dns-upstream", "Change upstream resolver and reconnect", ::openDnsPalette)
+            add("/http-proxy", "Enable or disable HTTP/TLS compatibility", ::openHttpPalette)
+            add(TUI_TONE_COMMAND, "Enable or disable modem tones", ::openTonePalette)
+            add(TUI_LOGIN_COMMAND, "Set terminal login credentials", ::openLoginAddPalette)
+            PacketCaptureLimitKind.entries.forEach { kind ->
+                add("/${kind.commandName}", "Maximum packet captures") {
+                    synchronized(this) {
+                        commandPalette = TuiCommandPalette(
+                            mode = TuiPaletteMode.CAPTURE_LIMIT,
+                            input = "/${kind.commandName} ",
+                            title = "Capture limit (current: ${kind.value(captureLimits)}): enter a positive integer",
+                            options = emptyList(), selectedIndex = 0,
+                        )
+                        render()
+                    }
+                }
+            }
+            YameLogModule.entries.forEach { module ->
+                add("/loglevel-${module.fileName}", "Set ${module.fileName} file log level") { openLogLevelPalette(module) }
+            }
+            add("/reconnect", "Open the selected serial port", onReconnect)
+            add("/disconnect", "Close the current serial port", onDisconnect)
+            add("/refresh-ports", "Rescan serial ports", onRefreshPorts)
+            add("/clear-log", "Clear dashboard log history") { synchronized(this) { logs.clear(); render() } }
+            add("/quit", "Quit YAME", ::requestQuit)
+            return handles
+        } catch (error: Exception) {
+            handles.forEach(AutoCloseable::close)
+            throw error
+        }
     }
 
     private fun requestQuit() {
@@ -1087,6 +1062,7 @@ class TuiYameObserver(
     override fun close() {
         if (closed) return
         closed = true
+        commandRegistrations.forEach(AutoCloseable::close)
         headerTimer.shutdownNow()
         keyboardInput?.close()
         keyboardInput = null
@@ -1106,29 +1082,7 @@ class TuiYameObserver(
         const val HIDE_CURSOR = "\u001B[?25l"
         const val SHOW_CURSOR = "\u001B[?25h"
         val TIME_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
-        val COMMAND_OPTIONS = listOf(
-            TuiCommandOption("/port", "Select serial port", "/port"),
-            TuiCommandOption("/baud", "Select baud rate", "/baud"),
-            TuiCommandOption("/flow-control", "Select serial flow control", "/flow-control"),
-            TuiCommandOption("/dns-upstream", "Change upstream resolver and reconnect", "/dns-upstream"),
-            TuiCommandOption("/http-proxy", "Enable or disable HTTP/TLS compatibility", "/http-proxy"),
-            TuiCommandOption(TUI_TONE_COMMAND, "Enable or disable modem tones", TUI_TONE_COMMAND),
-            TuiCommandOption(TUI_LOGIN_COMMAND, "Set terminal login credentials", TUI_LOGIN_COMMAND),
-            TuiCommandOption("/capture-limit-per-type", "Maximum captures per packet type", "/capture-limit-per-type"),
-            TuiCommandOption("/capture-limit-total", "Maximum captures across all packet types", "/capture-limit-total"),
-            TuiCommandOption("/loglevel-modem", "Set modem file log level", "/loglevel-modem"),
-            TuiCommandOption("/loglevel-serial", "Set serial file log level", "/loglevel-serial"),
-            TuiCommandOption("/loglevel-ppp", "Set ppp file log level", "/loglevel-ppp"),
-            TuiCommandOption("/loglevel-dns", "Set dns file log level", "/loglevel-dns"),
-            TuiCommandOption("/loglevel-proxy", "Set proxy file log level", "/loglevel-proxy"),
-            TuiCommandOption("/loglevel-unhandled", "Set unhandled file log level", "/loglevel-unhandled"),
-            TuiCommandOption("/loglevel-transfers", "Set transfers file log level", "/loglevel-transfers"),
-            TuiCommandOption("/reconnect", "Open the selected serial port", "/reconnect"),
-            TuiCommandOption("/disconnect", "Close the current serial port", "/disconnect"),
-            TuiCommandOption("/refresh-ports", "Rescan serial ports", "/refresh-ports"),
-            TuiCommandOption("/clear-log", "Clear dashboard log history", "/clear-log"),
-            TuiCommandOption("/quit", "Quit YAME", "/quit"),
-        )
+
     }
 }
 
@@ -1221,6 +1175,7 @@ internal data class TuiCommandPalette(
     val title: String,
     val options: List<TuiCommandOption>,
     val selectedIndex: Int,
+    val palettePath: String = "/",
 )
 
 internal data class DashboardState(
@@ -1405,7 +1360,8 @@ internal object YameDashboardRenderer {
         val footerText = if (state.commandPalette == null) {
             "[↑/↓] select   [Enter/Right] expand   [Left] collapse   [/] commands   [q/Ctrl-C] quit"
         } else {
-            "[↑/↓] select   [Enter] apply   [Esc] close palette"
+            "[↑/↓] select   [Enter] apply   [Esc] " +
+                if (state.commandPalette.palettePath == "/") "close palette" else "parent palette"
         }
         val footer = styles.muted(
             clip(footerText, renderWidth).padEnd(renderWidth),
@@ -1471,7 +1427,8 @@ internal object YameDashboardRenderer {
         val footerText = if (state.commandPalette == null) {
             "[Tab] DNS / Transfers / Proxy  [↑/↓] select  [Enter/→] expand  [←] collapse  [/] commands  [q] quit"
         } else {
-            "[↑/↓] select   [Enter] apply   [Esc] close palette"
+            "[↑/↓] select   [Enter] apply   [Esc] " +
+                if (state.commandPalette.palettePath == "/") "close palette" else "parent palette"
         }
         return buildString {
             append(styles.title(DashboardHeader.render(state, width)))

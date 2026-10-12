@@ -163,4 +163,20 @@ class YameConfigurationStoreTest {
         )
         assertEquals(YameLogManager.defaultLevels(), YameConfiguration().logLevels)
     }
+
+    @Test
+    fun `HTML transformer switches persist independently of element mapping file`() {
+        val path = tempDirectory.resolve("switches.ini")
+        val store = YameConfigurationStore(path)
+        val configuration = YameConfiguration(modemConfig = HayesModemConfig(
+            pppHttpCompatibilityConfig = PppHttpCompatibilityConfig(
+                htmlTransformers = HtmlTransformerSettings(scriptRemover = false, elementSimplifier = false),
+            ),
+        ))
+        store.save(configuration)
+        assertEquals(configuration, store.load())
+        assertTrue(Files.readString(path).contains("transformers.script-remover.enabled=false"))
+        Files.writeString(path, "transformers.style-remover.enabled=maybe")
+        assertFailsWith<IllegalStateException> { store.load() }
+    }
 }

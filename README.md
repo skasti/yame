@@ -232,6 +232,29 @@ by the proxy response-size limit; an oversized mapping falls back to the content
 from the preceding cleanup stages. This is pragmatic markup conversion, not a
 full HTML parser or CSS compatibility engine.
 
+Open `/transformers` in the command palette to enable or disable the four HTML
+cleanup stages. Within that palette, type `/style-remover off` or select
+`/style-remover` and then `off`. A full path such as
+`/transformers/style-remover/off` also works from the root palette.
+`Esc` returns to the parent palette; `Backspace` does the same when the local
+input is empty. The current choice is marked in the on/off palette.
+
+Changes apply to subsequent HTTP requests without reconnecting PPP. Reload the
+page to see the new result. A request already in progress finishes using its
+original settings. TUI changes are saved as `transformers.<name>.enabled` in
+`yame.ini`, independently of the mapping rules in `element-simplifier.ini`.
+Turning off `style-remover` retains style blocks and linked stylesheets;
+`attribute-cleaner` separately controls removal of upstream inline styles.
+
+Features register palette commands through `CommandPalette.add(item)` or
+`CommandPalette.add("/group/command/choice") { ... }`. The path form creates
+missing sub-palettes. `CommandPalette.find("/group/command")` retrieves a
+palette for explicit additions. Commands must be unique within their own level,
+ignoring case and an optional leading slash. Registrations return an
+`AutoCloseable` handle; release it when the owning feature closes. Each HTML
+transformer registers its own on/off actions once per shared runtime control,
+so the TUI needs no transformer list or selection callbacks.
+
 By default, YAME uses `--ui auto`. On an interactive ANSI terminal it opens the dashboard; if exactly one serial port is available it auto-selects and opens it, otherwise it stays disconnected until a port is selected from the command palette. Press `/` to open the palette.
 
 The dashboard contains:

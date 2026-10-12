@@ -96,6 +96,9 @@ class YameConfigurationStore(private val path: Path) {
                     "http-https-proxy.enabled",
                     modemDefaults.pppHttpCompatibilityConfig.enabled,
                 ),
+                htmlTransformers = HtmlTransformer.entries.fold(modemDefaults.pppHttpCompatibilityConfig.htmlTransformers) { settings, transformer ->
+                    settings.withEnabled(transformer, boolean(properties, "transformers.${transformer.command}.enabled", settings.enabled(transformer)))
+                },
             ),
         )
 
@@ -161,6 +164,10 @@ class YameConfigurationStore(private val path: Path) {
             )
             PacketCaptureLimitKind.entries.forEach { kind ->
                 setProperty(kind.configKey, kind.value(configuration.captureLimits).toString())
+            }
+            HtmlTransformer.entries.forEach { transformer ->
+                setProperty("transformers.${transformer.command}.enabled",
+                    configuration.modemConfig.pppHttpCompatibilityConfig.htmlTransformers.enabled(transformer).toString())
             }
             configuration.logLevels.forEach { (module, level) ->
                 setProperty("loglevel.${module.fileName}", level.name.lowercase())
