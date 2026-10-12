@@ -4,6 +4,7 @@ import no.skasti.yame.observer.TransferKind
 import no.skasti.yame.observer.TransferState
 import no.skasti.yame.ppp.proxy.ResourceKind
 import no.skasti.yame.ppp.proxy.ResourceState
+import java.awt.BasicStroke
 import java.awt.Color
 import java.awt.Font
 import java.awt.RenderingHints
@@ -47,10 +48,10 @@ class DashboardScreenshotTest {
                 DashboardHttpResource("http://example.test/assets/banner.jpg", ResourceState.FETCHING, ResourceKind.IMAGE),
             ), expanded = true)),
         )
-        for ((rows, columns) in listOf(30 to 100, 80 to 200, 100 to 300)) {
+        for ((rows, columns) in listOf(30 to 100, 45 to 135, 50 to 150)) {
             writeScreenshot(startup, columns, rows, File(directory, "${rows}x${columns}.png"))
             for (panel in DashboardDetailPanel.entries) {
-                if (columns > 250 && panel != DashboardDetailPanel.PROXY) continue
+                if (columns > 149 && panel != DashboardDetailPanel.PROXY) continue
                 writeScreenshot(active.copy(activeDetailPanel = panel), columns, rows,
                     File(directory, "${rows}x${columns}-${panel.name.lowercase()}.png"))
             }
@@ -126,7 +127,9 @@ private object TerminalFramePng {
                         graphics.fillRect(x, y, CELL_WIDTH, CELL_HEIGHT)
                         graphics.color = if (inverse) background else color
                         graphics.font = Font("DejaVu Sans Mono", if (bold) Font.BOLD else Font.PLAIN, 14)
-                        graphics.drawString(line[index].toString(), x, y + 14)
+                        if (!drawBoxCharacter(graphics, line[index], x, y)) {
+                            graphics.drawString(line[index].toString(), x, y + 14)
+                        }
                         column++
                         index++
                     }
@@ -137,6 +140,37 @@ private object TerminalFramePng {
         } finally {
             graphics.dispose()
         }
+    }
+
+    /** Terminal box-drawing characters connect at cell boundaries, unlike font glyphs. */
+    private fun drawBoxCharacter(graphics: java.awt.Graphics2D, char: Char, x: Int, y: Int): Boolean {
+        val connections = when (char) {
+            '─', '━' -> "LR"
+            '│', '┃' -> "UD"
+            '┌', '┏' -> "RD"
+            '┐', '┓' -> "LD"
+            '└', '┗' -> "UR"
+            '┘', '┛' -> "UL"
+            '├', '┣' -> "URD"
+            '┤', '┫' -> "ULD"
+            '┬', '┳' -> "LRD"
+            '┴', '┻' -> "LRU"
+            '┼', '╋' -> "ULRD"
+            else -> return false
+        }
+        val cx = x + CELL_WIDTH / 2
+        val cy = y + CELL_HEIGHT / 2
+        val originalStroke = graphics.stroke
+        try {
+            graphics.stroke = BasicStroke(1f)
+            if ('L' in connections) graphics.drawLine(x, cy, cx, cy)
+            if ('R' in connections) graphics.drawLine(cx, cy, x + CELL_WIDTH - 1, cy)
+            if ('U' in connections) graphics.drawLine(cx, y, cx, cy)
+            if ('D' in connections) graphics.drawLine(cx, cy, cx, y + CELL_HEIGHT - 1)
+        } finally {
+            graphics.stroke = originalStroke
+        }
+        return true
     }
 
     private fun indexedColor(index: Int): Color = when {
