@@ -13,7 +13,7 @@ seconds, even while idle. Fixtures use elapsed time zero for stable previews.
 No serial hardware or external network service is needed.
 
 Run `./gradlew test --tests '*DashboardScreenshotTest'` locally to regenerate.
-CI uploads the PNGs as the `yame-tui-screenshots` artifact. Normal `clean build`
+CI uploads the PNGs as the `yame-tui-screenshots-v2` artifact. Normal `clean build`
 also generates them. The source commit/version in the dashboard header helps
 identify stale previews.
 
