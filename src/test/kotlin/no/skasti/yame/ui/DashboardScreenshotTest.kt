@@ -64,6 +64,19 @@ class DashboardScreenshotTest {
         plain.lines().forEach { assertEquals(columns, it.length) }
         val frame = YameDashboardRenderer.render(state, columns, rows, DashboardStyles.colorful)
         TerminalFramePng.write(frame, columns, rows, output)
+        // Reuse the checked-in PNG verbatim when the rendered pixels are identical.
+        // This keeps irrelevant encoding/metadata differences out of preview commits.
+        val previous = File("assets/screenshots", output.name)
+        if (previous.isFile) {
+            val current = ImageIO.read(output)
+            val old = ImageIO.read(previous)
+            if (current != null && old != null && current.width == old.width && current.height == old.height &&
+                current.getRGB(0, 0, current.width, current.height, null, 0, current.width)
+                    .contentEquals(old.getRGB(0, 0, old.width, old.height, null, 0, old.width))
+            ) {
+                previous.copyTo(output, overwrite = true)
+            }
+        }
         val decoded = ImageIO.read(output)
         assertEquals(columns * TerminalFramePng.CELL_WIDTH, decoded.width)
         assertEquals(rows * TerminalFramePng.CELL_HEIGHT, decoded.height)
