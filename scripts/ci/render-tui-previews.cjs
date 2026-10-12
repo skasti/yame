@@ -29,8 +29,8 @@ function samePixels(previousBytes, currentBytes, decode) {
 }
 
 async function generate({root = process.cwd()} = {}) {
-  const {createTerminal} = require('@termless/core');
-  const {createXtermBackend} = require('@termless/xtermjs');
+  const {createTerminal} = await import('@termless/core');
+  const {createXtermBackend} = await import('@termless/xtermjs');
   const {PNG} = require('pngjs');
   const outputDirectory = path.join(root, 'build/reports/tui-screenshots');
   const inputDirectory = path.join(root, 'build/reports/tui-frames');
