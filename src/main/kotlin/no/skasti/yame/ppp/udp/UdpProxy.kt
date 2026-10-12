@@ -40,6 +40,9 @@ interface UdpProxy : Closeable {
 
     fun invalidateBefore(generation: Long) = Unit
 
+    /** Retire exactly this flow. Success means the bounded worker queue accepted the request. */
+    fun closeFlow(flow: UdpFlow): Result<Unit> = Result.success(Unit)
+
     override fun close() = Unit
 }
 
@@ -48,11 +51,15 @@ class SystemUdpProxy(
     private val maxFlows: Int = DEFAULT_MAX_FLOWS,
     maxQueuedCommands: Int = DEFAULT_MAX_QUEUED_COMMANDS,
 ) : UdpProxy {
+    private sealed interface Command
+
+    private data class CloseCommand(val flow: UdpFlow) : Command
+
     private data class SendCommand(
         val flow: UdpFlow,
         val payload: ByteArray,
         val onReply: (Result<ByteArray>) -> Unit,
-    )
+    ) : Command
 
     private data class FlowState(
         val flow: UdpFlow,
@@ -68,7 +75,7 @@ class SystemUdpProxy(
     }
 
     private val selector = Selector.open()
-    private val commands = ArrayBlockingQueue<SendCommand>(maxQueuedCommands)
+    private val commands = ArrayBlockingQueue<Command>(maxQueuedCommands)
     private val flows = mutableMapOf<UdpFlow, FlowState>()
     private val idleTimeoutNanos = TimeUnit.MILLISECONDS.toNanos(idleTimeoutMillis)
     private val minimumGeneration = AtomicLong(Long.MIN_VALUE)
@@ -131,7 +138,10 @@ class SystemUdpProxy(
         while (true) {
             val command = commands.poll() ?: return
             if (closed) return
-            sendCommand(command)
+            when (command) {
+                is SendCommand -> sendCommand(command)
+                is CloseCommand -> flows[command.flow]?.let(::removeFlow)
+            }
         }
     }
 
@@ -268,6 +278,15 @@ class SystemUdpProxy(
     override fun invalidateBefore(generation: Long) {
         minimumGeneration.accumulateAndGet(generation, ::maxOf)
         selector.wakeup()
+    }
+
+    override fun closeFlow(flow: UdpFlow): Result<Unit> {
+        if (closed) return Result.failure(IllegalStateException("UDP proxy is closed"))
+        if (!commands.offer(CloseCommand(flow))) {
+            return Result.failure(IllegalStateException("UDP proxy is busy"))
+        }
+        selector.wakeup()
+        return Result.success(Unit)
     }
 
     override fun close() {

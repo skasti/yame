@@ -20,6 +20,7 @@ import no.skasti.yame.ppp.PppFrame
 import no.skasti.yame.ppp.PppFramer
 import no.skasti.yame.ppp.dns.summarizeDnsMessage
 import no.skasti.yame.ppp.icmp.IcmpEchoProxy
+import no.skasti.yame.ppp.icmp.IcmpDestinationUnreachable
 import no.skasti.yame.ppp.icmp.IcmpPacket
 import no.skasti.yame.ppp.icmp.SystemPingIcmpEchoProxy
 import no.skasti.yame.ppp.lcp.LcpOptionType
@@ -453,6 +454,8 @@ class PppSession(
             return
         }
 
+        if (receiveIcmpControl(packet, icmp)) return
+
         val reply = icmp.toEchoReply()
         if (reply == null) {
             unhandledPacket(
@@ -639,6 +642,8 @@ class PppSession(
             return
         }
 
+        if (receiveIcmpControl(packet, icmp)) return
+
         val reply = icmp.toEchoReply()
         if (reply == null) {
             unhandledPacket(
@@ -685,6 +690,58 @@ class PppSession(
                 },
             )
         }
+    }
+
+    private fun receiveIcmpControl(packet: Ipv4Packet, icmp: IcmpPacket): Boolean {
+        when (icmp.type) {
+            IcmpPacket.ROUTER_SOLICITATION -> {
+                if (icmp.code != 0 || icmp.body.size < 4) {
+                    sessionLog("ICMP !! malformed Router Solicitation")
+                } else {
+                    // YAME terminates PPP and proxies sockets; it does not forward IP multicast
+                    // or implement an RFC 1256 advertising router. IPCP already supplies the peer.
+                    sessionLog("ICMP <= Router Solicitation ${packet.source} -> ${packet.destination}; consumed on PPP link")
+                }
+            }
+            IcmpPacket.DESTINATION_UNREACHABLE -> {
+                val error = IcmpDestinationUnreachable.parse(icmp)
+                if (error == null) {
+                    sessionLog("ICMP !! malformed Destination Unreachable or unsupported code=${icmp.code}")
+                    return true
+                }
+                if (error.source != packet.destination || error.destination != peerIpAddress) {
+                    sessionLog("ICMP .. Destination Unreachable quote does not match this PPP peer and endpoint; ignored")
+                    return true
+                }
+                sessionLog(
+                    "ICMP <= Destination Unreachable code=${error.code} (${error.reason}); " +
+                        "quoted protocol=${error.protocol} ${error.source}:${error.sourcePort} -> " +
+                        "${error.destination}:${error.destinationPort}",
+                )
+                // Only a client-side UDP port rejection retires a socket. Other errors are
+                // diagnostic, especially TCP soft errors and PMTU reports on this proxied link.
+                if (error.code == IcmpDestinationUnreachable.PORT_UNREACHABLE &&
+                    error.protocol == Ipv4Packet.UDP_PROTOCOL &&
+                    error.sourcePort != null && error.destinationPort != null
+                ) {
+                    val localDns = error.source == localIpAddress
+                    if (localDns && error.sourcePort != DNS_PORT) return true
+                    val flow = UdpFlow(
+                        peerPort = error.destinationPort,
+                        destination = if (localDns) dnsConfig.upstreamServer else error.source,
+                        destinationPort = if (localDns) dnsConfig.upstreamPort else error.sourcePort,
+                        generation = ipcpGeneration,
+                        namespace = if (localDns) UdpFlowNamespace.LOCAL_DNS else UdpFlowNamespace.EXTERNAL,
+                    )
+                    udpProxy.closeFlow(flow).onFailure { failure ->
+                        sessionLog("ICMP !! could not retire rejected UDP flow: ${failure.message}")
+                    }
+                }
+            }
+            else -> return false
+        }
+        // ICMP errors never receive an ICMP reply, and neither control message goes upstream.
+        return true
     }
 
     private fun receiveExternalUdp(packet: Ipv4Packet) {
