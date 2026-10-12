@@ -1,21 +1,38 @@
 # TUI previews in pull requests
 
-The normal JVM test suite writes ten PNGs to `build/reports/tui-screenshots/`.
-They render the production `YameDashboardRenderer` at **rows × columns**:
-30×100, 45×135 and 50×150. Each size includes a startup fixture. The two compact sizes also show Proxy, DNS and Transfers with fixed synthetic traffic;
-the 150-column wide layout shows all panels together. These are renderer snapshots, not
-photographs of a running Pi console. They use a 9×18 terminal-cell renderer with connected box-drawing strokes,
-DejaVu Sans Mono for text and a fixed ANSI palette, including Mordant's colors and selection.
-They are not screenshots from an interactive VT terminal emulator.
-The header shows all status fields when they fit, including flow control and
-modem tones. Otherwise it cycles through complete-field pages every five
-seconds, even while idle. Fixtures use elapsed time zero for stable previews.
-No serial hardware or external network service is needed.
+The JVM test suite renders the production `YameDashboardRenderer` into ten
+styled Mordant ANSI fixtures under `build/reports/tui-frames/`. The read-only CI
+job feeds these into **Termless + headless xterm.js**, then renders PNG with
+resvg to `build/reports/tui-screenshots/`. Unlike the previous Java AWT
+implementation, ANSI escape sequences are interpreted by a real VT terminal
+emulator before rasterization. The PNG renderer uses DejaVu Sans Mono, 9×18
+pixel cells and a fixed font install in CI. These are snapshots of the
+production dashboard renderer, not captures of a running serial modem or Pi.
 
-Run `./gradlew test --tests '*DashboardScreenshotTest'` locally to regenerate.
-CI uploads the PNGs as the `yame-tui-screenshots-v2` artifact. Normal `clean build`
-also generates them. The source commit/version in the dashboard header helps
-identify stale previews.
+The tested terminal sizes (rows × columns) are **30×100**, **45×135**
+and **50×150**. Both compact layouts include startup, Proxy, DNS and Transfers
+views; the 150-column wide layout includes startup and the combined active
+dashboard. The wide-layout threshold is 150 columns (149 remains compact).
+Synthetic traffic and elapsed time zero keep fixtures stable.
+
+Regenerate locally after installing Node.js 24 and the test-only npm packages:
+
+```bash
+./gradlew test --tests '*DashboardScreenshotTest'
+npm install --ignore-scripts --no-audit --no-fund --package-lock=false
+npm run render:tui-previews
+```
+
+Before writing each PNG, the unprivileged renderer decodes and compares its
+pixels to the checked-in version. If they are identical, it copies the
+old PNG bytes instead: changes to PNG compression or metadata alone never
+cause a screenshot commit. The privileged publisher only handles bounded PNG
+bytes and cannot parse untrusted image content.
+
+CI uploads `yame-tui-screenshots-v2` rather than the old artifact name so that
+the existing default-branch publisher ignores this PR's changed filename list.
+Once merged, the updated default-branch publisher recognizes v2. The source
+commit/version in the header helps identify stale previews.
 
 ## Publication and activation
 
