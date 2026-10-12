@@ -15,7 +15,7 @@ function environment({sourceRun = run, currentCommit = commit, currentPr = pr, j
     pulls: {get: async () => ({data: currentPr})}, repos: {getCommit: async () => ({data: currentCommit})},
     git: {getCommit: async () => ({data: {parents: [{sha: currentPr.base.sha}, {sha: currentPr.head.sha}]}})},
     actions: {getWorkflowRun: async () => ({data: sourceRun}), listJobsForWorkflowRun: 'jobs', listWorkflowRunArtifacts: 'artifacts'},
-  }, paginate: async method => method === 'jobs' ? jobs : [{name: 'yame-tui-screenshots', expired: false, size_in_bytes: 1000}]};
+  }, paginate: async method => method === 'jobs' ? jobs : [{name: 'yame-tui-screenshots-v2', expired: false, size_in_bytes: 1000}]};
   const context = {repo: {owner: 'skasti', repo: 'yame'}, sha: event === 'pull_request' ? mergeSha : head, eventName: event,
     payload: {pull_request: {number: 71, head: {sha: head}}, inputs: {pr_number: '71'},
       workflow_run: sourceRun, repository: {default_branch: 'main'}}};
@@ -285,7 +285,7 @@ test('publisher downloads the exact source artifact with a bounded ZIP before ex
     };
     env.github.paginate = async (method, args) => {
       assert.equal(args.run_id, 123);
-      return [{id: 456, name: 'yame-tui-screenshots', expired: false, size_in_bytes: 100}];
+      return [{id: 456, name: 'yame-tui-screenshots-v2', expired: false, size_in_bytes: 100}];
     };
     const requireSafe = name => name === 'node:fs' ? {writeFileSync: () => writes++} : require(name);
     const execution = vm.runInNewContext(`(async () => {${script}\n})()`, {
