@@ -186,6 +186,52 @@ passwords to 64 printable ASCII characters each.
 It stores the terminal password as plain text, with owner-only file permissions
 on POSIX systems; `/yame.ini` is ignored by Git.
 
+### HTML element simplification
+
+YAME creates `element-simplifier.ini` alongside `yame.ini` on first normal
+startup. With `--config /var/lib/yame/yame.ini`, the mapping file is
+`/var/lib/yame/element-simplifier.ini`. Existing files are never overwritten.
+Edit the file and restart YAME to apply changes.
+
+Each section names a source HTML tag, with a required `target` tag and an
+optional inline `style`:
+
+```ini
+[summary]
+target=p
+style=font-weight:bold;
+
+[time]
+target=span
+
+[news-title]
+target=h3
+```
+
+Rules rename both opening and closing tags, preserving their text and nested
+elements. The default mappings use `div` for structural containers such as
+`main`, `article`, `section`, `header`, and `details`; `p` for `figcaption` and
+`summary`; and `span` for `time` and `mark`. `summary` gets the bold style above.
+Existing `h1`–`h6` and `p` elements remain unchanged unless explicitly mapped.
+Custom tag names can be added as shown above.
+
+The file is the complete mapping, not an override layered over defaults:
+remove a section to leave that tag unchanged, or use an empty file to disable
+element mapping. A missing file uses the bundled defaults. Tag names and keys
+are case insensitive. `;` and `#` start comments only at the beginning of a
+line; CSS semicolons and values containing `=` are preserved. Invalid or
+duplicate rules stop startup with a configuration error. The file is limited
+to 32 KiB, 256 rules, and 1024 characters per style. Targets must be ordinary
+container tags, rather than void elements or script/style/raw-text elements.
+
+The pipeline removes upstream scripts/styles and cleans attributes before
+applying element mappings. Configured styles therefore survive cleanup, while
+upstream inline styles do not. A configured style replaces any existing style
+on that element and is escaped as an HTML attribute. Output expansion is bounded
+by the proxy response-size limit; an oversized mapping falls back to the content
+from the preceding cleanup stages. This is pragmatic markup conversion, not a
+full HTML parser or CSS compatibility engine.
+
 By default, YAME uses `--ui auto`. On an interactive ANSI terminal it opens the dashboard; if exactly one serial port is available it auto-selects and opens it, otherwise it stays disconnected until a port is selected from the command palette. Press `/` to open the palette.
 
 The dashboard contains:

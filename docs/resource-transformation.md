@@ -80,6 +80,27 @@ Transformer applicability and cacheability are evaluated against the representat
 
 Bodyless responses may still participate in resource-level transforms when header/status-based transforms are valid. Conversely, partial-body responses such as `206 Partial Content` must bypass ordinary full-representation transformation/cache handling unless explicit range-aware semantics are implemented.
 
+## HTML cleanup and element rules
+
+The structural stages run in this order: `script-remover`, `style-remover`,
+`attribute-cleaner`, then `element-simplifier`. Attribute cleanup removes
+upstream inline styles before element rules add explicitly configured styles.
+URL rewriting and image optimization run afterward.
+
+`element-simplifier.ini` is loaded alongside `yame.ini` into an immutable rule
+snapshot at startup, then passed through the HTTP configuration into the
+pipeline. Neither request handling nor transformation reads the file. Restarting
+YAME applies edits and creates fresh representation caches, preserving the
+stable-pipeline assumption for source validators and cached transformed output.
+The bundled INI file is the single source of default mappings. See the README
+for the format and editing behavior.
+
+Mappings affect only explicitly configured tags, including matching closing
+tags. Generated style values are escaped as attributes. Expansion is limited
+by `maxResponseBytes`; an oversized result leaves the representation from the
+preceding stage intact. These transforms preserve the upstream source and
+operate only on complete identity-encoded `200 text/html` representations.
+
 ## Image dimensions
 
 The HTML compatibility stage applies the same proportional sizing policy as

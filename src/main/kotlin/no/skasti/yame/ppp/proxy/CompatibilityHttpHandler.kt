@@ -60,7 +60,7 @@ internal class SystemHttpCompatibilityHandler(
         .followRedirects(HttpClient.Redirect.NEVER)
         .build(),
     private val resourceTransformations: ResourceTransformationPipeline =
-        defaultResourceTransformationPipeline(config.maxResponseBytes),
+        defaultResourceTransformationPipeline(config.maxResponseBytes, config.elementSimplifier),
 ) : HttpRequestHandler {
     private data class ClientCookie(val name: String, val value: String)
     private data class SessionKey(val generation: Long, val peerAddress: String)

@@ -3,6 +3,7 @@ package no.skasti.yame
 import com.github.ajalt.mordant.terminal.Terminal
 import no.skasti.yame.config.YameConfiguration
 import no.skasti.yame.config.YameConfigurationStore
+import no.skasti.yame.config.ElementSimplifierConfigurationStore
 import no.skasti.yame.logging.PacketCaptureLimits
 import no.skasti.yame.logging.PacketCaptureLimitKind
 import no.skasti.yame.logging.YameLogLevel
@@ -13,7 +14,6 @@ import no.skasti.yame.modem.HayesModemConfig
 import no.skasti.yame.ppp.ip.Ipv4Address
 import no.skasti.yame.ppp.ip.Ipv4Cidr
 import no.skasti.yame.ppp.dns.PppDnsConfig
-import no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig
 import no.skasti.yame.ppp.PppIpConfig
 import no.skasti.yame.serial.SerialConnection
 import no.skasti.yame.serial.SerialFlowControl
@@ -89,6 +89,10 @@ fun main(args: Array<String>) {
                 System.err.println("YAME could not create ${options.configPath}: ${error.message}")
             }
     }
+    runCatching { ElementSimplifierConfigurationStore.alongside(options.configPath).createDefaultIfMissing() }
+        .onFailure { error ->
+            System.err.println("YAME could not create element-simplifier.ini: ${error.message}")
+        }
 
     val detectedTerminal = Terminal()
     val useTui = when (options.uiMode) {
@@ -387,7 +391,7 @@ private fun parseArgs(
             password = password,
             pppIpConfig = PppIpConfig(configuredSubnet = pppSubnet),
             pppDnsConfig = PppDnsConfig(upstreamServer = dnsUpstream),
-            pppHttpCompatibilityConfig = PppHttpCompatibilityConfig(
+            pppHttpCompatibilityConfig = defaults.pppHttpCompatibilityConfig.copy(
                 enabled = httpCompatibilityEnabled,
             ),
         ),

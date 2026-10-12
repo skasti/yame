@@ -1,5 +1,8 @@
 package no.skasti.yame.ppp.proxy.transform
 
+import no.skasti.yame.config.ElementSimplifierConfiguration
+import no.skasti.yame.config.ElementSimplifierRule
+
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -27,6 +30,46 @@ class HtmlCleanupTransformerTest {
         val input = """<a href="/news" class="x" data-id="2" onclick="go()" title="Read">News</a><img src="/x.gif" width="10" height="20" alt="x">"""
         val out = apply(AttributeCleaner(), input)
         assertEquals("""<a href="/news" title="Read">News</a><img src="/x.gif" width="10" height="20" alt="x">""", out)
+    }
+
+    @Test fun elementSimplifierUsesBlockAndInlineMappingsAndKeepsLegacyElements() {
+        val input = "<figure><figcaption>Caption</figcaption></figure><time>Today</time><mark>News</mark>" +
+            "<h2>Heading</h2><p>Paragraph</p><custom-card>Unknown</custom-card>"
+        assertEquals("<div><p>Caption</p></div><span>Today</span><span>News</span>" +
+            "<h2>Heading</h2><p>Paragraph</p><custom-card>Unknown</custom-card>", apply(ElementSimplifier(), input))
+    }
+
+    @Test fun configuredStyleSurvivesAttributeCleanupAndDetailsBecomeVisible() {
+        val input = """<details><SUMMARY class="x" style="display:none" onclick="go()">Title</SUMMARY><p>Text</p></details>"""
+        val source = ResourceRepresentation(200, mapOf("content-type" to listOf("text/html")), input.toByteArray())
+        val result = defaultResourceTransformationPipeline(1024).transform(context(), Resource(java.net.URI("http://example.com/"), source))
+        assertEquals("""<div><p style="font-weight:bold;">Title</p><p>Text</p></div>""",
+            result.resource.representation.body.toString(Charsets.UTF_8))
+        assertEquals(input, result.resource.source.body.toString(Charsets.UTF_8))
+    }
+
+    @Test fun customMappingsReplaceExistingStyleEscapeQuotesAndRenameBothTags() {
+        val configuration = ElementSimplifierConfiguration(mapOf(
+            "news-title" to ElementSimplifierRule("h3", "font-family:\"Foo & Bar\";"),
+        ))
+        val input = """<news-title title="A > B" style='display:none'>News</news-title><summary>Unmapped</summary>"""
+        assertEquals("""<h3 title="A > B" style="font-family:&quot;Foo &amp; Bar&quot;;">News</h3><summary>Unmapped</summary>""",
+            apply(ElementSimplifier(configuration), input))
+    }
+
+    @Test fun configuredStylesRespectSelfClosingTagEndingAndEmptyRulesPassThrough() {
+        val configuration = ElementSimplifierConfiguration(mapOf("time" to ElementSimplifierRule("span", "color:red;")))
+        assertEquals("""<span style="color:red;"/>""", apply(ElementSimplifier(configuration), "<time/>"))
+        assertEquals("<summary>Title</summary>",
+            apply(ElementSimplifier(ElementSimplifierConfiguration(emptyMap())), "<summary>Title</summary>"))
+    }
+
+    @Test fun excessiveConfiguredStyleExpansionFallsBackWithoutPartialMapping() {
+        val input = "<summary>x</summary>"
+        for (style in listOf("x".repeat(100), "\u20ac".repeat(20))) {
+            val configuration = ElementSimplifierConfiguration(mapOf("summary" to ElementSimplifierRule("p", style)))
+            assertEquals(input, apply(ElementSimplifier(configuration, maxOutputBytes = 50), input))
+        }
     }
 
     @Test fun doesNotTransformBinaryOrEncodedResponses() {

@@ -28,7 +28,7 @@ internal class SystemHttpCompatibilityProxy(
             .followRedirects(HttpClient.Redirect.NEVER)
             .build(),
     resourceTransformations: ResourceTransformationPipeline =
-        defaultResourceTransformationPipeline(config.maxResponseBytes),
+        defaultResourceTransformationPipeline(config.maxResponseBytes, config.elementSimplifier),
 ) : TcpProxy {
     private val handler =
         SystemHttpCompatibilityHandler(

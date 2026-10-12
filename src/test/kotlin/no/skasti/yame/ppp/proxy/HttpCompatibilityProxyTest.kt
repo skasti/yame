@@ -1,5 +1,7 @@
 package no.skasti.yame.ppp.proxy
 import no.skasti.yame.ppp.ip.Ipv4Address
+import no.skasti.yame.config.ElementSimplifierConfiguration
+import no.skasti.yame.config.ElementSimplifierRule
 import no.skasti.yame.ppp.proxy.transform.LegacyTextResourceTransformer
 import no.skasti.yame.ppp.proxy.transform.ResourceTransformationPipeline
 import no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig
@@ -835,13 +837,14 @@ class HttpCompatibilityProxyTest {
     }
 
     @Test
-    fun `default proxy cleans HTML before rewriting retained links and frames the cleaned body`() {
+    fun `proxy uses configured HTML mappings before rewriting retained links and frames the cleaned body`() {
         val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
         val originalBody = """
             <html><head><link rel="stylesheet" href="https://assets.example/style.css">
             <style>body{display:none}</style><script src="https://assets.example/app.js"></script></head>
             <body><main class="news" data-id="1"><article hidden onclick="go()" style="color:red">
-            <a href="https://news.example/story" title="Read">News</a></article></main></body></html>
+            <a href="https://news.example/story" title="Read">News</a></article></main>
+            <details><summary style="display:none">More</summary><p>Extra</p></details></body></html>
         """.trimIndent()
         val thread = serveOnce(server) {
             "HTTP/1.1 200 OK\r\n" +
@@ -850,8 +853,11 @@ class HttpCompatibilityProxyTest {
                 "ETag: \"source\"\r\n" +
                 "Connection: close\r\n\r\n" + originalBody
         }
+        val rules = ElementSimplifierConfiguration(
+            ElementSimplifierConfiguration.defaults().rules + ("summary" to ElementSimplifierRule("h3", "font-weight:bold;")),
+        )
         val proxy = SystemHttpCompatibilityProxy(
-            config = PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000),
+            config = PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000, elementSimplifier = rules),
         )
         val events = LinkedBlockingQueue<TcpProxyEvent>()
         val flow = httpFlow(peerPort = 2197)
@@ -872,7 +878,8 @@ class HttpCompatibilityProxyTest {
                 <html><head>
                 </head>
                 <body><div><div>
-                <a href="http://news.example/story" title="Read">News</a></div></div></body></html>
+                <a href="http://news.example/story" title="Read">News</a></div></div>
+                <div><h3 style="font-weight:bold;">More</h3><p>Extra</p></div></body></html>
             """.trimIndent()
             assertTrue(response.startsWith("HTTP/1.0 200 OK\r\n"), response)
             assertEquals(expectedBody, body)

@@ -69,25 +69,11 @@ internal class StyleRemover : HtmlCleanupTransformer() {
     }
 }
 
-/** Rename only known HTML5 container elements: an arbitrary custom element might have different semantics. */
-internal class ElementSimplifier : HtmlCleanupTransformer() {
-    override val id = "element-simplifier"
-    override val priority = 30
-    override fun clean(html: String): String = HtmlCleanupMarkup.tags.replace(html) { m ->
-        val tag = m.value
-        val name = HtmlCleanupMarkup.name(tag)
-        if (name !in modernContainers) tag
-        else tag.replaceFirst(Regex("""(?i)(<\s*/?\s*)[\w:-]+"""), "${'$'}1div")
-    }
-    private companion object {
-        val modernContainers = setOf("main", "article", "section", "nav", "header", "footer", "aside", "figure", "figcaption")
-    }
-}
-
 /** Preserve navigation, form, image and accessibility attributes; remove presentation and JS hooks. */
 internal class AttributeCleaner : HtmlCleanupTransformer() {
     override val id = "attribute-cleaner"
-    override val priority = 40
+    // Strip upstream styles before ElementSimplifier adds explicitly configured legacy styles.
+    override val priority = 30
     override fun clean(html: String): String = HtmlCleanupMarkup.tags.replace(html) { m ->
         val tag = m.value
         val tagName = HtmlCleanupMarkup.name(tag)

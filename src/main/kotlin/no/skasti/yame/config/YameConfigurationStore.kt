@@ -8,7 +8,6 @@ import no.skasti.yame.ppp.PppIpConfig
 import no.skasti.yame.ppp.dns.PppDnsConfig
 import no.skasti.yame.ppp.ip.Ipv4Address
 import no.skasti.yame.ppp.ip.Ipv4Cidr
-import no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig
 import no.skasti.yame.serial.SerialFlowControl
 import no.skasti.yame.tone.HandshakeProfile
 import java.io.ByteArrayInputStream
@@ -30,7 +29,12 @@ import kotlin.time.Duration.Companion.nanoseconds
 
 class YameConfigurationStore(private val path: Path) {
     fun load(defaults: YameConfiguration = YameConfiguration()): YameConfiguration {
-        if (!Files.exists(path)) return defaults
+        val httpDefaults = defaults.modemConfig.pppHttpCompatibilityConfig
+        val elementSimplifier = ElementSimplifierConfigurationStore.alongside(path).load(httpDefaults.elementSimplifier)
+        val loadedDefaults = defaults.copy(modemConfig = defaults.modemConfig.copy(
+            pppHttpCompatibilityConfig = httpDefaults.copy(elementSimplifier = elementSimplifier),
+        ))
+        if (!Files.exists(path)) return loadedDefaults
         require(Files.isRegularFile(path)) {
             "Configuration path must be a regular file: $path"
         }
@@ -61,7 +65,7 @@ class YameConfigurationStore(private val path: Path) {
             }
         }
 
-        val modemDefaults = defaults.modemConfig
+        val modemDefaults = loadedDefaults.modemConfig
         val modemConfig = HayesModemConfig(
             pickupTime = duration(properties, "modem.pickup-time-nanos", modemDefaults.pickupTime),
             dialToneTime = duration(properties, "modem.dial-tone-time-nanos", modemDefaults.dialToneTime),
@@ -86,7 +90,7 @@ class YameConfigurationStore(private val path: Path) {
                     ?.let(Ipv4Address::parse)
                     ?: modemDefaults.pppDnsConfig.upstreamServer,
             ),
-            pppHttpCompatibilityConfig = PppHttpCompatibilityConfig(
+            pppHttpCompatibilityConfig = modemDefaults.pppHttpCompatibilityConfig.copy(
                 enabled = boolean(
                     properties,
                     "http-https-proxy.enabled",
