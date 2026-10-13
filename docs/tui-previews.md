@@ -46,8 +46,10 @@ Changed or tampered PNG bytes force rendering, and the privileged publisher
 checks every output PNG against the SHA-256 digest in the generated metadata
 before creating Git objects. Changed input is rendered, but a pixel-for-pixel
 comparison still reuses the old PNG bytes if the image itself did not change (including compression/metadata
-differences). The first PR after adoption may bootstrap the new text snapshots
-and renderer identity even if its own change is unrelated to the TUI.
+differences). The first regular PR after adoption bootstraps the diffable text snapshots and
+renderer identity. Before those files are merged into `main`, Dependabot
+cannot bootstrap snapshots. Once the baseline exists, dependency PRs get
+the same result comparison and publication behavior as all other PRs.
 The privileged publisher validates bounded text snapshots and metadata, but
 keeps PNGs opaque and never decodes untrusted image content.
 
@@ -66,10 +68,11 @@ normal read-only CI and its artifacts still work.
 
 The publishing job executes only scripts from the default branch. It never
 checks out or executes PR code, and never publishes into fork branches.
-Dependabot PRs also keep their read-only CI artifacts, but the publisher skips
-them: an automated dependency update must not gain unrelated screenshot
-commits or trigger a new build on a generated PNG-only successor. It
-checks the live PR head and base, downloads the artifact from that exact CI run,
+Dependabot PRs keep their read-only CI artifacts. The publisher skips a
+Dependabot PR only if the immutable base does not yet contain the complete
+snapshot baseline; once bootstrapped, Mordant and other dependency upgrades
+can publish actual ANSI or rendered pixel changes. It checks the live PR head
+and base, downloads the artifact from that exact CI run,
 validates a ZIP of at most 5 MiB before extraction, and permits exactly ten
 PNGs, ten ANSI text snapshots, a renderer identity JSON, and a provenance JSON
 file. Each PNG is bounded to 1 MiB, each text snapshot to 256 KiB, and each
@@ -86,9 +89,20 @@ Rollback failures surface as job failures; no unconditional force push is used. 
 are treated only as bytes in this privileged job, not decoded or executed.
 Only the publishing job has contents/statuses/pull-request write permissions.
 
-The job updates one bot-owned PR comment with immutable image URLs and links
-to the corresponding diffable ANSI inputs. If all PNGs, ANSI snapshots and the
-renderer identity are unchanged it makes no commit. The workflow records the successful source
+Publication compares the **generated ANSI and PNG files** to the immutable
+base commit, using their Git blob hashes. The unprivileged renderer already
+reuses the checked-in PNG bytes whenever pixels match, so compression-only
+changes do not count as visual changes. A change solely to `render-info.json`
+(for example a renderer dependency upgrade that produces identical output)
+does not cause a generated commit or update a PR comment. The publisher retains
+the base's metadata until a genuine PNG/ANSI change is published, when it
+refreshes the metadata as well. This can cost an extra render on later runs but
+prevents pointless snapshot churn. If the PR has manually modified generated
+snapshots with no corresponding output change, the publisher restores those
+files from the trusted base instead of accepting a self-authored diff.
+
+For a changed preview, the job updates one bot-owned PR comment with immutable
+image URLs and links to the corresponding diffable ANSI inputs. The workflow records the successful source
 run, PR number and base SHA in the screenshot commit message and verifies the new head again before reporting a successful `build-and-test`
 commit status through the GitHub API. This avoids relying on recursive events
 from `GITHUB_TOKEN`. A `workflow_dispatch` job check would not satisfy PR rulesets. Fork PRs retain downloadable artifacts.
