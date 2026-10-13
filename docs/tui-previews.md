@@ -3,7 +3,8 @@
 The JVM test suite renders the production `YameDashboardRenderer` into ten
 styled Mordant ANSI fixtures under `build/reports/tui-frames/`. The read-only CI job stores each ANSI fixture as a diffable JSON-escaped
 `*.ansi.txt` snapshot, and feeds changed frames into **Termless + headless
-xterm.js** to render PNG with resvg into `build/reports/tui-screenshots/`. Unlike the previous Java AWT
+xterm.js** to render PNG with resvg into `build/reports/tui-screenshots/`.
+Unlike the previous Java AWT
 implementation, ANSI escape sequences are interpreted by a real VT terminal
 emulator before rasterization. The PNG renderer uses DejaVu Sans Mono, 9×18
 pixel cells and a fixed font install in CI. These are snapshots of the
@@ -37,8 +38,9 @@ reliably, the cache is disabled. Set `YAME_FORCE_TUI_RENDER=1` to force renderin
 Changed input is rendered, but a pixel-for-pixel comparison still reuses the
 old PNG bytes if the image itself did not change (including compression/metadata
 differences). The first PR after adoption may bootstrap the new text snapshots
-and renderer identity even if its own change is unrelated to the TUI. The privileged publisher only handles bounded PNG
-bytes and cannot parse untrusted image content.
+and renderer identity even if its own change is unrelated to the TUI.
+The privileged publisher validates bounded text snapshots and metadata, but
+keeps PNGs opaque and never decodes untrusted image content.
 
 CI uploads `yame-tui-screenshots-v3`. The older default-branch publisher ignores
 this new artifact while the migration PR is open; after merge the publisher
@@ -56,12 +58,13 @@ normal read-only CI and its artifacts still work.
 The publishing job executes only scripts from the default branch. It never
 checks out or executes PR code, and never publishes into fork branches. It
 checks the live PR head and base, downloads the artifact from that exact CI run,
-validates a ZIP of at most 5 MiB before extraction, permits exactly ten PNGs, ten ANSI text snapshots, a renderer identity JSON,
-and a provenance JSON file; each PNG is bounded to 1 MiB, text snapshot to
-256 KiB, and JSON file to 4 KiB
-before reading. Extraction rejects extra paths, duplicate names and symlinks
-and enforces both declared and actual output limits. It then checks PNG signatures and dimensions, canonical JSON-escaped ANSI rows,
-renderer identity structure, and creates a single-parent commit touching only
+validates a ZIP of at most 5 MiB before extraction, and permits exactly ten
+PNGs, ten ANSI text snapshots, a renderer identity JSON, and a provenance JSON
+file. Each PNG is bounded to 1 MiB, each text snapshot to 256 KiB, and each
+JSON file to 4 KiB before reading. Extraction rejects extra paths, duplicate names and symlinks
+and enforces both declared and actual output limits. It then checks PNG
+signatures and dimensions, canonical JSON-escaped ANSI rows and renderer
+identity structure, then creates a single-parent commit touching only
 approved files under `assets/screenshots/`.
 A non-forced ref update refuses concurrent changes to the branch. If post-push
 validation, status publication or comment listing/creation/update fails, the publisher restores the source head
@@ -72,8 +75,8 @@ are treated only as bytes in this privileged job, not decoded or executed.
 Only the publishing job has contents/statuses/pull-request write permissions.
 
 The job updates one bot-owned PR comment with immutable image URLs and links
-  to the corresponding diffable ANSI inputs. If PNGs
-are unchanged it makes no commit. The workflow records the successful source
+to the corresponding diffable ANSI inputs. If all PNGs, ANSI snapshots and the
+renderer identity are unchanged it makes no commit. The workflow records the successful source
 run, PR number and base SHA in the screenshot commit message and verifies the new head again before reporting a successful `build-and-test`
 commit status through the GitHub API. This avoids relying on recursive events
 from `GITHUB_TOKEN`. A `workflow_dispatch` job check would not satisfy PR rulesets. Fork PRs retain downloadable artifacts.
