@@ -18,6 +18,12 @@ and **50×150**. Both compact layouts include startup, Proxy, DNS and Transfers
 views; the 150-column wide layout includes startup and the combined active
 dashboard. The wide-layout threshold is 150 columns (149 remains compact).
 Synthetic traffic and elapsed time zero keep fixtures stable.
+The dashboard's production header still shows the real Git commit. In screenshot
+fixtures only, the revision inside `v<version> (<commit>)` is replaced with
+same-length zeroes before saving ANSI frames, so GitHub's per-PR synthetic
+merge commit does not make otherwise identical preview output appear changed.
+The release version remains intact, and ANSI styling and terminal cell layout
+are unaffected.
 
 Regenerate locally after installing Node.js 24 and the test-only npm packages:
 
