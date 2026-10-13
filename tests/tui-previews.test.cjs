@@ -150,6 +150,11 @@ test('PNG validation rejects arbitrary bytes and incorrect terminal dimensions',
     fs.writeFileSync(file, bytes);
     assert.equal(validatePng(file, '30x100.png').length, 33);
     assert.throws(() => validatePng(file, '45x135.png'), /Invalid screenshot/);
+    assert.throws(() => validatePng(file, '30x100.png', {cellWidth: 10, cellHeight: 20}),
+      /Invalid screenshot/);
+    bytes.writeUInt32BE(1000, 16); bytes.writeUInt32BE(600, 20);
+    fs.writeFileSync(file, bytes);
+    assert.equal(validatePng(file, '30x100.png', {cellWidth: 10, cellHeight: 20}).length, 33);
   } finally { fs.rmSync(directory, {recursive: true, force: true}); }
 });
 
@@ -182,7 +187,7 @@ test(`publication recovers safely: ${scenario}`, async () => {
     }
     fs.writeFileSync(path.join(directory, 'render-info.json'), JSON.stringify({
       schema: 2, rendererSha256: 'a'.repeat(64), dependenciesSha256: 'b'.repeat(64),
-      fontSha256: 'c'.repeat(64), nodeMajor: 24, terminalOptions: {scale: 1},
+      fontSha256: 'c'.repeat(64), nodeMajor: 24, terminalOptions: {scale: 1, cellWidth: 9, cellHeight: 18},
       pngSha256: hashes,
     }, null, 2) + '\n');
     fs.writeFileSync(path.join(directory, 'source.json'), JSON.stringify({run: 123, pr: 71, head, base, merge: mergeSha}));
@@ -412,11 +417,13 @@ test('publisher validates canonical, bounded ANSI rows and renderer metadata', (
     const info = path.join(dir, 'render-info.json');
     const valid = {schema: 2, rendererSha256: 'a'.repeat(64),
       dependenciesSha256: 'b'.repeat(64), fontSha256: null,
-      nodeMajor: 24, terminalOptions: {fontSize: 14},
+      nodeMajor: 24, terminalOptions: {fontSize: 14, cellWidth: 9, cellHeight: 18},
       pngSha256: Object.fromEntries(pngNames.map(name => [name, digest(name)]))};
     fs.writeFileSync(info, JSON.stringify(valid, null, 2) + '\n');
     assert.equal(validateRendererInfo(info).toString(), JSON.stringify(valid, null, 2) + '\n');
     fs.writeFileSync(info, JSON.stringify({...valid, rendererSha256: 'invalid'}, null, 2) + '\n');
+    assert.throws(() => validateRendererInfo(info), /Invalid renderer identity/);
+    fs.writeFileSync(info, JSON.stringify({...valid, terminalOptions: {cellWidth: 0, cellHeight: 18}}, null, 2) + '\n');
     assert.throws(() => validateRendererInfo(info), /Invalid renderer identity/);
     fs.writeFileSync(info, JSON.stringify({...valid, pngSha256: {'30x100.png': digest('missing')}}, null, 2) + '\n');
     assert.throws(() => validateRendererInfo(info), /Invalid renderer identity/);
@@ -447,7 +454,7 @@ test('publisher rejects altered PNG bytes against renderer metadata before creat
     fs.writeFileSync(path.join(dir, 'render-info.json'), JSON.stringify({
       schema: 2, rendererSha256: 'a'.repeat(64), dependenciesSha256: 'b'.repeat(64),
       fontSha256: 'c'.repeat(64), nodeMajor: 24,
-      terminalOptions: {scale: 1}, pngSha256: hashes,
+      terminalOptions: {scale: 1, cellWidth: 9, cellHeight: 18}, pngSha256: hashes,
     }, null, 2) + '\n');
     fs.writeFileSync(path.join(dir, 'source.json'),
       JSON.stringify({run: 123, pr: 71, head, base, merge: mergeSha}));
