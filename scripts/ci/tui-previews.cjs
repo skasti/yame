@@ -76,6 +76,38 @@ async function gate({github, context, core}, {requireArm64 = false} = {}) {
   core.info(reuse ? 'Verified screenshot-only successor of successful CI; no rebuild needed.' : 'Full build required.');
 }
 
+
+// Read Git objects from the immutable PR base, never from the PR checkout.
+async function basePreviews(github, repo, baseSha) {
+  const {data: commit} = await github.rest.git.getCommit({...repo, commit_sha: baseSha});
+  const {data: tree} = await github.rest.git.getTree({...repo, tree_sha: commit.tree.sha, recursive: 'true'});
+  if (tree.truncated) throw new Error('Truncated immutable base tree');
+  const files = new Map((tree.tree || []).filter(item =>
+    item.type === 'blob' && item.mode === '100644' &&
+    generatedFilenames.some(name => item.path === 'assets/screenshots/' + name))
+    .map(item => [item.path.slice('assets/screenshots/'.length), item.sha]));
+  return files;
+}
+
+function gitBlobSha(data) {
+  return createHash('sha1').update('blob ' + data.length + '\0').update(data).digest('hex');
+}
+
+// Renderer metadata affects the *cache*, not the visible preview. A dependency,
+// font, or tool version bump should regenerate for comparison but never create
+// a screenshot commit when all actual PNG pixels and ANSI frames stay unchanged.
+function previewPublicationPlan(files, baseline) {
+  const byName = new Map(files.map(file => [file.name, file.data]));
+  const complete = generatedFilenames.every(name => baseline.has(name));
+  const changed = !complete || [...filenames, ...frameFilenames].some(name =>
+    gitBlobSha(byName.get(name)) !== baseline.get(name));
+  return {complete, changed, entries: generatedFilenames.map(name => ({
+    name,
+    sha: changed ? gitBlobSha(byName.get(name)) : baseline.get(name),
+    data: changed ? byName.get(name) : null,
+  }))};
+}
+
 async function prepare({github, context, core}) {
   const run = context.payload.workflow_run;
   core.setOutput('publish', 'false');
@@ -84,11 +116,18 @@ async function prepare({github, context, core}) {
   // Resolve live PR data rather than trusting artifact-supplied PR numbers or refs.
   for (const candidate of run.pull_requests) {
     const {data: pr} = await github.rest.pulls.get({...context.repo, pull_number: candidate.number});
-    // Dependency bumps should not acquire generated TUI commits. They retain
-    // read-only preview artifacts from CI for inspection.
-    if (pr.user?.login === 'dependabot[bot]') continue;
     if (pr.state !== 'open' || pr.head.sha !== run.head_sha || pr.base.sha !== candidate.base.sha ||
         pr.head.repo.full_name !== pr.base.repo.full_name || pr.head.ref === context.payload.repository.default_branch) continue;
+    // Until the diffable baseline is checked into main, never bootstrap it in
+    // a Dependabot branch. Once it exists, dependency upgrades are treated
+    // exactly like code changes and may publish genuine ANSI/visual diffs.
+    if (pr.user?.login === 'dependabot[bot]') {
+      const baseline = await basePreviews(github, context.repo, pr.base.sha);
+      if (!generatedFilenames.every(name => baseline.has(name))) {
+        core.info('Skipping Dependabot preview bootstrap until main has complete snapshots.');
+        continue;
+      }
+    }
     const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts,
       {...context.repo, run_id: run.id});
     const artifact = artifacts.find(a => a.name === 'yame-tui-screenshots-v3' && !a.expired);
@@ -219,12 +258,22 @@ async function publish({github, context, core}, number, directory, {rollback = r
     }
     return {name, data};
   });
+  const baseline = await basePreviews(github, repo, pr.base.sha);
+  const plan = previewPublicationPlan(files, baseline);
   const tree = [];
-  for (const {name, data} of files) {
-    const {data: blob} = await github.rest.git.createBlob({...repo, content: data.toString('base64'), encoding: 'base64'});
-    tree.push({path: `assets/screenshots/${name}`, mode: '100644', type: 'blob', sha: blob.sha});
+  for (const entry of plan.entries) {
+    if (entry.data) {
+      const {data: blob} = await github.rest.git.createBlob({...repo,
+        content: entry.data.toString('base64'), encoding: 'base64'});
+      if (blob.sha !== entry.sha) throw new Error('Git blob checksum mismatch: ' + entry.name);
+    }
+    tree.push({path: 'assets/screenshots/' + entry.name, mode: '100644', type: 'blob', sha: entry.sha});
   }
   const {data: outputTree} = await github.rest.git.createTree({...repo, base_tree: source.tree.sha, tree});
+  if (!plan.changed && outputTree.sha === source.tree.sha) {
+    core.info('ANSI and PNG previews match base; no generated commit or PR comment.');
+    return;
+  }
   let sha = run.head_sha;
   try {
     if (outputTree.sha !== source.tree.sha) {
@@ -272,4 +321,4 @@ async function publish({github, context, core}, number, directory, {rollback = r
   }
 }
 
-module.exports = {gate, prepare, publish, parseProof, screenshotOnly, successfulSource, validatePng, validateFrame, validateRendererInfo, verifySuccessor, rollbackPreview};
+module.exports = {gate, prepare, publish, basePreviews, gitBlobSha, previewPublicationPlan, parseProof, screenshotOnly, successfulSource, validatePng, validateFrame, validateRendererInfo, verifySuccessor, rollbackPreview};
