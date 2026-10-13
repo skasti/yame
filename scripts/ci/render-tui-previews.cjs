@@ -30,7 +30,6 @@ function samePixels(previousBytes, currentBytes, decode) {
   return a.width === b.width && a.height === b.height && a.data.equals(b.data);
 }
 
-
 // Store ANSI as one JSON-escaped terminal row per line. Raw ESC bytes are not
 // reliably displayed as a textual diff by GitHub, while this is UTF-8 text.
 function frameSnapshot(rows) {
@@ -127,11 +126,11 @@ async function generate({root = process.cwd()} = {}) {
       await term.close();
     }
     if (image.length > PNG_LIMIT) throw new Error(`Preview exceeds 1 MiB: ${name}`);
+    const decode = buffer => PNG.sync.read(buffer);
     const decoded = decode(image);
     if (decoded.width !== cols * CELL_WIDTH || decoded.height !== rows * CELL_HEIGHT) {
       throw new Error(`Wrong preview dimensions: ${name}`);
     }
-    const decode = buffer => PNG.sync.read(buffer);
     if (fs.existsSync(previous) && samePixels(fs.readFileSync(previous), image, decode)) {
       image = fs.readFileSync(previous);
     }
