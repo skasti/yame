@@ -49,13 +49,52 @@ const terminalOptions = {
   theme: {background: '#101318', foreground: '#dce0e6', cursor: '#101318'},
 };
 
-function fontHash() {
+const FONT_FACES = [
+  'DejaVu Sans Mono:style=Book',
+  'DejaVu Sans Mono:style=Bold',
+  'DejaVu Sans Mono:style=Oblique',
+  'DejaVu Sans Mono:style=Bold Oblique',
+];
+
+function fontHash(resolve = pattern => {
+  const output = execFileSync('fc-match', ['-f', '%{family}\\n%{style}\\n%{file}', pattern],
+    {encoding: 'utf8', timeout: 5000}).trimEnd().split('\\n');
+  if (output.length !== 3 || !output[2]) throw new Error('Unknown font face');
+  return {family: output[0], style: output[1], bytes: fs.readFileSync(output[2])};
+}) {
   try {
-    const file = execFileSync('fc-match', ['-f', '%{file}', 'DejaVu Sans Mono'],
-      {encoding: 'utf8', timeout: 5000}).trim();
-    return file ? sha256(fs.readFileSync(file)) : null;
+    // Font rendering can select separate bold/italic faces for ANSI styles.
+    const faces = FONT_FACES.map(pattern => {
+      const font = resolve(pattern);
+      if (!font?.bytes || !font.family || !font.style) throw new Error('Unknown font face');
+      return [pattern, font.family, font.style, sha256(font.bytes)].join('\\0');
+    });
+    return sha256(Buffer.from(faces.join('\\n')));
   } catch {
-    // Without a known font, do not trust a renderer cache from another machine.
+    // Without verified faces, never reuse a PNG from another machine.
+    return null;
+  }
+}
+
+function dependencyHash(root, installedTree = () => execFileSync('npm', ['ls', '--all', '--json'],
+  {cwd: root, encoding: 'utf8', timeout: 20000, maxBuffer: 8 * 1024 * 1024})) {
+  try {
+    const tree = JSON.parse(installedTree());
+    const packages = [];
+    const visit = (node, path) => {
+      if (typeof node?.version !== 'string') throw new Error('Unresolved dependency');
+      packages.push([path, node.name || '', node.version].join('\\0'));
+      for (const [name, child] of Object.entries(node.dependencies || {}).sort(
+        ([a], [b]) => a.localeCompare(b))) {
+        visit(child, path + '/' + name);
+      }
+    };
+    if (!tree.dependencies || !Object.keys(tree.dependencies).length) return null;
+    visit(tree, 'root');
+    const manifest = fs.readFileSync(require('node:path').join(root, 'package.json'));
+    return sha256(Buffer.concat([manifest, Buffer.from('\\n' + packages.join('\\n'))]));
+  } catch {
+    // A missing/invalid npm tree cannot establish whether renderer output changed.
     return null;
   }
 }
@@ -64,7 +103,7 @@ function rendererIdentity(root) {
   return {
     schema: 2,
     rendererSha256: sha256(fs.readFileSync(__filename)),
-    dependenciesSha256: sha256(fs.readFileSync(path.join(root, 'package.json'))),
+    dependenciesSha256: dependencyHash(root),
     fontSha256: fontHash(),
     nodeMajor: Number(process.versions.node.split('.')[0]),
     terminalOptions,
@@ -74,6 +113,7 @@ function rendererIdentity(root) {
 function canReuseFrame(snapshot, previousSnapshot, rendererIdentity, previousMetadata,
   pngName, pngBytes, force = false) {
   if (force || !pngBytes || rendererIdentity.fontSha256 === null ||
+      rendererIdentity.dependenciesSha256 === null ||
       !previousMetadata || typeof previousMetadata !== 'object') return false;
   const {pngSha256, ...previousIdentity} = previousMetadata;
   return snapshot === previousSnapshot &&
@@ -159,4 +199,4 @@ if (require.main === module) {
   generate().catch(error => {console.error(error); process.exitCode = 1;});
 }
 
-module.exports = {sizes, filenames, framesToRows, frameSnapshot, canReuseFrame, samePixels, generate, CELL_WIDTH, CELL_HEIGHT};
+module.exports = {sizes, filenames, framesToRows, frameSnapshot, canReuseFrame, fontHash, dependencyHash, samePixels, generate, CELL_WIDTH, CELL_HEIGHT};
