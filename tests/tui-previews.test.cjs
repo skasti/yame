@@ -15,7 +15,7 @@ function environment({sourceRun = run, currentCommit = commit, currentPr = pr, j
     pulls: {get: async () => ({data: currentPr})}, repos: {getCommit: async () => ({data: currentCommit})},
     git: {getCommit: async () => ({data: {parents: [{sha: currentPr.base.sha}, {sha: currentPr.head.sha}]}})},
     actions: {getWorkflowRun: async () => ({data: sourceRun}), listJobsForWorkflowRun: 'jobs', listWorkflowRunArtifacts: 'artifacts'},
-  }, paginate: async method => method === 'jobs' ? jobs : [{name: 'yame-tui-screenshots-v2', expired: false, size_in_bytes: 1000}]};
+  }, paginate: async method => method === 'jobs' ? jobs : [{name: 'yame-tui-screenshots-v3', expired: false, size_in_bytes: 1000}]};
   const context = {repo: {owner: 'skasti', repo: 'yame'}, sha: event === 'pull_request' ? mergeSha : head, eventName: event,
     payload: {pull_request: {number: 71, head: {sha: head}}, inputs: {pr_number: '71'},
       workflow_run: sourceRun, repository: {default_branch: 'main'}}};
@@ -28,8 +28,12 @@ test('proof rejects malformed data', () => {
   assert.equal(parseProof('YAME-Screenshots: {}'), null);
   assert.deepEqual(parseProof(commit.commit.message), proof);
 });
-test('only exact generated PNG paths and single parent are accepted', () => {
+test('only allowlisted generated TUI files and single parent are accepted', () => {
   assert.equal(screenshotOnly(commit), true);
+  assert.equal(screenshotOnly({...commit, files: [
+    {filename: 'assets/screenshots/30x100.ansi.txt', status: 'added'},
+    {filename: 'assets/screenshots/render-info.json', status: 'added'},
+  ]}), true);
   for (const files of [[], [{filename: 'src/main.kt', status: 'modified'}],
     [{filename: 'assets/screenshots/30x100.png', status: 'renamed'}],
     [{filename: 'assets/screenshots/arbitrary.sh', status: 'added'}]]) {
@@ -137,7 +141,13 @@ test(`publication recovers safely: ${scenario}`, async () => {
       const png = Buffer.alloc(33); Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(png);
       png.write('IHDR', 12); png.writeUInt32BE(columns * 9, 16); png.writeUInt32BE(rows * 18, 20);
       fs.writeFileSync(path.join(directory, `${name}.png`), png);
+      fs.writeFileSync(path.join(directory, `${name}.ansi.txt`),
+        Array(rows).fill(JSON.stringify('synthetic frame')).join('\n') + '\n');
     }
+    fs.writeFileSync(path.join(directory, 'render-info.json'), JSON.stringify({
+      schema: 1, rendererSha256: 'a'.repeat(64), dependenciesSha256: 'b'.repeat(64),
+      fontSha256: 'c'.repeat(64), nodeMajor: 24, terminalOptions: {scale: 1},
+    }, null, 2) + '\n');
     fs.writeFileSync(path.join(directory, 'source.json'), JSON.stringify({run: 123, pr: 71, head, base, merge: mergeSha}));
     env.github.rest.pulls.get = async () => {
       if (moved && failureActive && scenario === 'get-failed') throw new Error('Get failed');
@@ -205,8 +215,9 @@ test(`publication recovers safely: ${scenario}`, async () => {
       return;
     }
     assert.deepEqual(calls.map(c => c[0]), ['tree', 'commit', 'push', 'status', 'comment']);
-    assert.equal(calls[0][1].tree.length, 10);
-    assert.ok(calls[0][1].tree.every(t => t.path.startsWith('assets/screenshots/') && t.path.endsWith('.png')));
+    assert.equal(calls[0][1].tree.length, 21);
+    assert.ok(calls[0][1].tree.every(t => t.path.startsWith('assets/screenshots/') &&
+      /\.(?:png|ansi\.txt)$|\/render-info\.json$/.test(t.path)));
     assert.deepEqual(calls[1][1].parents, [head]);
     assert.equal(calls[2][1].force, false);
     assert.equal(calls[3][1].sha, successor);
@@ -214,6 +225,7 @@ test(`publication recovers safely: ${scenario}`, async () => {
     assert.equal(calls[3][1].state, 'success');
     assert.ok(calls[4][1].body.includes(`/${successor}/assets/screenshots/30x100.png`));
     assert.equal((calls[4][1].body.match(/!\[/g) || []).length, 10);
+    assert.ok(calls[4][1].body.includes('30x100.ansi.txt'));
     assert.ok(!calls[4][1].body.includes('<details>'));
   } finally { fs.rmSync(directory, {recursive: true, force: true}); }
 });
@@ -285,7 +297,7 @@ test('publisher downloads the exact source artifact with a bounded ZIP before ex
     };
     env.github.paginate = async (method, args) => {
       assert.equal(args.run_id, 123);
-      return [{id: 456, name: 'yame-tui-screenshots-v2', expired: false, size_in_bytes: 100}];
+      return [{id: 456, name: 'yame-tui-screenshots-v3', expired: false, size_in_bytes: 100}];
     };
     const requireSafe = name => name === 'node:fs' ? {writeFileSync: () => writes++} : require(name);
     const execution = vm.runInNewContext(`(async () => {${script}\n})()`, {
@@ -336,4 +348,31 @@ test('actual Git rollback lease restores only the expected head and rejects a co
     else process.env.PREVIEW_PUSH_TOKEN = previousToken;
     fs.rmSync(directory, {recursive: true, force: true});
   }
+});
+
+test('publisher validates canonical, bounded ANSI rows and renderer metadata', () => {
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+  const {validateFrame, validateRendererInfo} = require('../scripts/ci/tui-previews.cjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yame-ansi-'));
+  try {
+    const frame = path.join(dir, '30x100.ansi.txt');
+    const rows = Array(30).fill(JSON.stringify('\x1b[31mTUI\x1b[0m')).join('\n') + '\n';
+    fs.writeFileSync(frame, rows);
+    assert.equal(validateFrame(frame, '30x100.ansi.txt').toString(), rows);
+    fs.writeFileSync(frame, rows.replace('\\u001b', '\x1b'));
+    assert.throws(() => validateFrame(frame, '30x100.ansi.txt'), /Invalid ANSI/);
+    fs.writeFileSync(frame, rows.slice(0, -1));
+    assert.throws(() => validateFrame(frame, '30x100.ansi.txt'), /Invalid ANSI/);
+    fs.writeFileSync(frame, rows + JSON.stringify('extra') + '\n');
+    assert.throws(() => validateFrame(frame, '30x100.ansi.txt'), /Invalid ANSI/);
+
+    const info = path.join(dir, 'render-info.json');
+    const valid = {schema: 1, rendererSha256: 'a'.repeat(64),
+      dependenciesSha256: 'b'.repeat(64), fontSha256: null,
+      nodeMajor: 24, terminalOptions: {fontSize: 14}};
+    fs.writeFileSync(info, JSON.stringify(valid, null, 2) + '\n');
+    assert.equal(validateRendererInfo(info).toString(), JSON.stringify(valid, null, 2) + '\n');
+    fs.writeFileSync(info, JSON.stringify({...valid, rendererSha256: 'invalid'}, null, 2) + '\n');
+    assert.throws(() => validateRendererInfo(info), /Invalid renderer identity/);
+  } finally { fs.rmSync(dir, {recursive: true, force: true}); }
 });
