@@ -1,5 +1,6 @@
 package no.skasti.yame.ui
 
+import no.skasti.yame.BuildInfo
 import no.skasti.yame.observer.TransferKind
 import no.skasti.yame.observer.TransferState
 import no.skasti.yame.ppp.proxy.ResourceKind
@@ -52,14 +53,32 @@ class DashboardScreenshotTest {
         }
     }
 
+    @Test
+    fun previewRevisionIsStableWithoutAlteringLayoutOrStyling() {
+        val first = "\u001b[94;1m[ YAME v0.1.0 (deadbeef) ]\u001b[39;22m" 
+        val second = first.replace("deadbeef", "f00ba123")
+        val expected = "\u001b[94;1m[ YAME v0.1.0 (00000000) ]\u001b[39;22m"
+        assertEquals(expected, normalizeBuildRevision(first, "0.1.0", "deadbeef"))
+        assertEquals(expected, normalizeBuildRevision(second, "0.1.0", "f00ba123"))
+        assertEquals(first.length, expected.length)
+        assertEquals("v0.1.0 (deadbeef)", normalizeBuildRevision("v0.1.0 (deadbeef)", "0.2.0", "deadbeef"))
+    }
+
+    private fun normalizeBuildRevision(frame: String, version: String, gitCommit: String): String =
+        frame.replace("v$version ($gitCommit)", "v$version (${"0".repeat(gitCommit.length)})")
+
     private fun writeScreenshot(state: DashboardState, columns: Int, rows: Int, output: File) {
         val plain = YameDashboardRenderer.render(state, columns, rows)
         assertEquals(rows, plain.lines().size)
         plain.lines().forEach { assertEquals(columns, it.length) }
         val frame = YameDashboardRenderer.render(state, columns, rows, DashboardStyles.colorful)
-        // Keep ANSI output intact: xterm.js will interpret styles and character cells.
-        // The separate (read-only) CI preview step produces PNG screenshots.
-        output.writeText(frame, Charsets.UTF_8)
+        // Keep the real build revision in production, but normalize it in visual
+        // fixtures. CI builds each PR using a fresh synthetic merge SHA, which
+        // otherwise makes every screenshot appear changed even with identical TUI.
+        // Preserve character count so layout and wrapping remain representative.
+        val stableFrame = normalizeBuildRevision(frame, BuildInfo.version, BuildInfo.gitCommit)
+        // Keep ANSI styles intact: xterm.js interprets the actual terminal cells.
+        output.writeText(stableFrame, Charsets.UTF_8)
     }
 }
 
