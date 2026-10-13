@@ -105,13 +105,14 @@ function readBoundedFile(file, limit) {
   return fs.readFileSync(file);
 }
 
-function validatePng(file, name) {
+function validatePng(file, name, dimensions = {cellWidth: 9, cellHeight: 18}) {
   const data = readBoundedFile(file, 1024 * 1024);
   const [rows, columns] = name.match(/^(\d+)x(\d+)/).slice(1).map(Number);
   if (data.length < 33 || data.length > 1024 * 1024 ||
       !data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ||
       data.toString('ascii', 12, 16) !== 'IHDR' ||
-      data.readUInt32BE(16) !== columns * 9 || data.readUInt32BE(20) !== rows * 18) {
+      data.readUInt32BE(16) !== columns * dimensions.cellWidth ||
+      data.readUInt32BE(20) !== rows * dimensions.cellHeight) {
     throw new Error(`Invalid screenshot: ${name}`);
   }
   return data;
@@ -155,6 +156,10 @@ function validateRendererInfo(file) {
       (info.fontSha256 !== null && !digest(info.fontSha256)) ||
       !Number.isSafeInteger(info.nodeMajor) || info.nodeMajor < 1 ||
       !info.terminalOptions || typeof info.terminalOptions !== 'object' ||
+      !Number.isSafeInteger(info.terminalOptions.cellWidth) ||
+      !Number.isSafeInteger(info.terminalOptions.cellHeight) ||
+      info.terminalOptions.cellWidth < 5 || info.terminalOptions.cellWidth > 32 ||
+      info.terminalOptions.cellHeight < 8 || info.terminalOptions.cellHeight > 48 ||
       !info.pngSha256 || typeof info.pngSha256 !== 'object' ||
       Array.isArray(info.pngSha256) ||
       Object.keys(info.pngSha256).length !== filenames.length ||
@@ -212,7 +217,7 @@ async function publish({github, context, core}, number, directory, {rollback = r
   const metadata = JSON.parse(metadataBytes.toString('utf8'));
   const files = generatedFilenames.map(name => {
     const file = path.join(directory, name);
-    const data = name.endsWith('.png') ? validatePng(file, name)
+    const data = name.endsWith('.png') ? validatePng(file, name, metadata.terminalOptions)
       : name.endsWith('.ansi.txt') ? validateFrame(file, name) : metadataBytes;
     if (name.endsWith('.png') && sha256(data) !== metadata.pngSha256[name]) {
       throw new Error('PNG digest does not match renderer metadata: ' + name);
