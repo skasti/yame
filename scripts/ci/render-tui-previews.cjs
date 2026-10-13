@@ -62,7 +62,7 @@ function fontHash() {
 
 function rendererIdentity(root) {
   return {
-    schema: 1,
+    schema: 2,
     rendererSha256: sha256(fs.readFileSync(__filename)),
     dependenciesSha256: sha256(fs.readFileSync(path.join(root, 'package.json'))),
     fontSha256: fontHash(),
@@ -71,11 +71,14 @@ function rendererIdentity(root) {
   };
 }
 
-function canReuseFrame(snapshot, previousSnapshot, rendererIdentity, previousRendererIdentity,
-  hasPng, force = false) {
-  return !force && hasPng && rendererIdentity.fontSha256 !== null &&
-    JSON.stringify(rendererIdentity, null, 2) + '\n' === previousRendererIdentity &&
-    snapshot === previousSnapshot;
+function canReuseFrame(snapshot, previousSnapshot, rendererIdentity, previousMetadata,
+  pngName, pngBytes, force = false) {
+  if (force || !pngBytes || rendererIdentity.fontSha256 === null ||
+      !previousMetadata || typeof previousMetadata !== 'object') return false;
+  const {pngSha256, ...previousIdentity} = previousMetadata;
+  return snapshot === previousSnapshot &&
+    JSON.stringify(rendererIdentity) === JSON.stringify(previousIdentity) &&
+    pngSha256 && pngSha256[pngName] === sha256(pngBytes);
 }
 
 async function generate({root = process.cwd()} = {}) {
@@ -85,11 +88,14 @@ async function generate({root = process.cwd()} = {}) {
   const baselineDirectory = path.join(root, 'assets/screenshots');
   fs.mkdirSync(outputDirectory, {recursive: true});
   const config = rendererIdentity(root);
-  const configContents = JSON.stringify(config, null, 2) + '\n';
   const previousConfigFile = path.join(baselineDirectory, 'render-info.json');
-  const previousConfig = fs.existsSync(previousConfigFile)
-    ? fs.readFileSync(previousConfigFile, 'utf8') : null;
-  fs.writeFileSync(path.join(outputDirectory, 'render-info.json'), configContents);
+  let previousConfig = null;
+  if (fs.existsSync(previousConfigFile)) {
+    try {
+      previousConfig = JSON.parse(fs.readFileSync(previousConfigFile, 'utf8'));
+    } catch { /* Invalid or older cache metadata requires rendering. */ }
+  }
+  const outputPngHashes = {};
   for (const name of filenames) {
     const match = /^(\d+)x(\d+)/.exec(name);
     const rows = Number(match[1]), cols = Number(match[2]);
@@ -100,10 +106,13 @@ async function generate({root = process.cwd()} = {}) {
     const previousSnapshotFile = path.join(baselineDirectory, name + '.ansi.txt');
     const previousSnapshot = fs.existsSync(previousSnapshotFile)
       ? fs.readFileSync(previousSnapshotFile, 'utf8') : null;
-    const previous = path.join(baselineDirectory, name + '.png');
+    const pngName = name + '.png';
+    const previous = path.join(baselineDirectory, pngName);
+    const previousPng = fs.existsSync(previous) ? fs.readFileSync(previous) : null;
     if (canReuseFrame(snapshot, previousSnapshot, config, previousConfig,
-      fs.existsSync(previous), process.env.YAME_FORCE_TUI_RENDER === '1')) {
-      fs.copyFileSync(previous, path.join(outputDirectory, name + '.png'));
+      pngName, previousPng, process.env.YAME_FORCE_TUI_RENDER === '1')) {
+      outputPngHashes[pngName] = sha256(previousPng);
+      fs.writeFileSync(path.join(outputDirectory, pngName), previousPng);
       continue;
     }
     if (!renderer) {
@@ -132,11 +141,18 @@ async function generate({root = process.cwd()} = {}) {
     if (decoded.width !== cols * CELL_WIDTH || decoded.height !== rows * CELL_HEIGHT) {
       throw new Error(`Wrong preview dimensions: ${name}`);
     }
-    if (fs.existsSync(previous) && samePixels(fs.readFileSync(previous), image, decode)) {
-      image = fs.readFileSync(previous);
+    // A mismatched digest forces rendering. Only preserve an older PNG when its
+    // *actual decoded pixels* match the freshly rendered output.
+    if (previousPng) {
+      try {
+        if (samePixels(previousPng, image, decode)) image = previousPng;
+      } catch { /* Corrupt baseline PNG: use freshly rendered pixels. */ }
     }
-    fs.writeFileSync(path.join(outputDirectory, name + '.png'), image);
+    outputPngHashes[pngName] = sha256(image);
+    fs.writeFileSync(path.join(outputDirectory, pngName), image);
   }
+  fs.writeFileSync(path.join(outputDirectory, 'render-info.json'),
+    JSON.stringify({...config, pngSha256: outputPngHashes}, null, 2) + '\n');
 }
 
 if (require.main === module) {
