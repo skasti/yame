@@ -84,6 +84,9 @@ async function prepare({github, context, core}) {
   // Resolve live PR data rather than trusting artifact-supplied PR numbers or refs.
   for (const candidate of run.pull_requests) {
     const {data: pr} = await github.rest.pulls.get({...context.repo, pull_number: candidate.number});
+    // Dependency bumps should not acquire generated TUI commits. They retain
+    // read-only preview artifacts from CI for inspection.
+    if (pr.user?.login === 'dependabot[bot]') continue;
     if (pr.state !== 'open' || pr.head.sha !== run.head_sha || pr.base.sha !== candidate.base.sha ||
         pr.head.repo.full_name !== pr.base.repo.full_name || pr.head.ref === context.payload.repository.default_branch) continue;
     const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts,

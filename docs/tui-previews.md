@@ -65,7 +65,10 @@ start after this feature has been merged into `main`. If repository policy disab
 normal read-only CI and its artifacts still work.
 
 The publishing job executes only scripts from the default branch. It never
-checks out or executes PR code, and never publishes into fork branches. It
+checks out or executes PR code, and never publishes into fork branches.
+Dependabot PRs also keep their read-only CI artifacts, but the publisher skips
+them: an automated dependency update must not gain unrelated screenshot
+commits or trigger a new build on a generated PNG-only successor. It
 checks the live PR head and base, downloads the artifact from that exact CI run,
 validates a ZIP of at most 5 MiB before extraction, and permits exactly ten
 PNGs, ten ANSI text snapshots, a renderer identity JSON, and a provenance JSON

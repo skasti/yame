@@ -79,6 +79,18 @@ test('publisher refuses forks, failed runs, dispatch runs and stale heads', asyn
     const env = environment({sourceRun}); await prepare(env); assert.equal(env.outputs.publish, 'false');
   }
 });
+
+test('publisher skips Dependabot PRs without fetching artifacts or creating commits', async () => {
+  const env = environment({
+    sourceRun: {...run, head_sha: head},
+    currentPr: {...pr, user: {login: 'dependabot[bot]'}},
+  });
+  env.github.paginate = async () => { throw new Error('Unexpected artifact lookup'); };
+  await prepare(env);
+  assert.equal(env.outputs.publish, 'false');
+  assert.equal(env.outputs.pr_number, undefined);
+});
+
 test('publisher permits live same-repo PR with bounded artifact', async () => {
   const env = environment({sourceRun: {...run, head_sha: head}}); await prepare(env);
   assert.equal(env.outputs.publish, 'true'); assert.equal(env.outputs.pr_number, 71);
