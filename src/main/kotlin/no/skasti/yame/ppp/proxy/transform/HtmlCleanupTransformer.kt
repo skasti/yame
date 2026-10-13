@@ -46,29 +46,29 @@ internal abstract class HtmlCleanupTransformer(
     }
 }
 
-/** Match whole tags while respecting quoted > characters. Not a full HTML5 parser. */
+/** Attribute/name helpers for complete tags found by the bounded markup scanner. */
 internal object HtmlCleanupMarkup {
-    val tags = Regex("""(?s)<(?:[^>'"]|"[^"]*"|'[^']*')*>""")
-    val attribute = Regex("""(?s)\s+([\w:-]+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?""")
+    // Only attempt a match at the beginning of a whitespace run; do not rescan long tails.
+    val attribute = Regex("""(?s)(?<!\s)\s++([\w:-]+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?""")
+    private val tagName = Regex("""^<\s*+/?\s*+([A-Za-z][\w:-]*)""")
+    private val closingTag = Regex("""^<\s*/""")
     fun name(tag: String): String? =
-        Regex("""^<\s*/?\s*([A-Za-z][\w:-]*)""").find(tag)?.groupValues?.get(1)?.lowercase(Locale.ROOT)
-    fun closing(tag: String): Boolean = tag.startsWith("</")
+        tagName.find(tag)?.groupValues?.get(1)?.lowercase(Locale.ROOT)
+    fun closing(tag: String): Boolean = closingTag.containsMatchIn(tag)
 }
 
 /** Removes executable script elements and their contents, not script-looking text in attributes. */
 internal class ScriptRemover(control: HtmlTransformerControl? = null) : HtmlCleanupTransformer(HtmlTransformer.SCRIPT_REMOVER, control) {
     override val priority = 10
     override fun clean(html: String): String =
-        Regex("""(?is)<script\b(?:[^>'"]|"[^"]*"|'[^']*')*>.*?</script\s*>""").replace(html, "")
+        HtmlMarkupScanner.rewrite(html, removeElements = setOf("script"))
 }
 
 /** Removes embedded style blocks and stylesheet link elements; does not fetch them. */
 internal class StyleRemover(control: HtmlTransformerControl? = null) : HtmlCleanupTransformer(HtmlTransformer.STYLE_REMOVER, control) {
     override val priority = 20
     override fun clean(html: String): String {
-        val withoutBlocks = Regex("""(?is)<style\b(?:[^>'"]|"[^"]*"|'[^']*')*>.*?</style\s*>""").replace(html, "")
-        return HtmlCleanupMarkup.tags.replace(withoutBlocks) { m ->
-            val tag = m.value
+        return HtmlMarkupScanner.rewrite(html, removeElements = setOf("style")) { tag ->
             if (HtmlCleanupMarkup.name(tag) != "link") tag
             else if (Regex("""(?i)\brel\s*=\s*(?:"[^"]*stylesheet[^"]*"|'[^']*stylesheet[^']*'|stylesheet)""").containsMatchIn(tag)) "" else tag
         }
@@ -79,14 +79,13 @@ internal class StyleRemover(control: HtmlTransformerControl? = null) : HtmlClean
 internal class AttributeCleaner(control: HtmlTransformerControl? = null) : HtmlCleanupTransformer(HtmlTransformer.ATTRIBUTE_CLEANER, control) {
     // Strip upstream styles before ElementSimplifier adds explicitly configured legacy styles.
     override val priority = 30
-    override fun clean(html: String): String = HtmlCleanupMarkup.tags.replace(html) { m ->
-        val tag = m.value
+    override fun clean(html: String): String = HtmlMarkupScanner.rewrite(html) { tag ->
         val tagName = HtmlCleanupMarkup.name(tag)
         if (tagName == null || HtmlCleanupMarkup.closing(tag) || tag.startsWith("<!")) tag
         else HtmlCleanupMarkup.attribute.replace(tag) { attr ->
             val name = attr.groupValues[1].lowercase(Locale.ROOT)
             if (name == "style" || name.startsWith("on") || name.startsWith("data-") ||
-                name in setOf("class", "id", "role", "tabindex", "contenteditable", "draggable", "hidden")) "" else attr.value
+                name in setOf("class", "role", "tabindex", "contenteditable", "draggable", "hidden")) "" else attr.value
         }
     }
 }

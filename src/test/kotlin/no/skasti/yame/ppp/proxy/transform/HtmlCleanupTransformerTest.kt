@@ -2,6 +2,8 @@ package no.skasti.yame.ppp.proxy.transform
 
 import no.skasti.yame.config.ElementSimplifierConfiguration
 import no.skasti.yame.config.ElementSimplifierRule
+import no.skasti.yame.config.HtmlTransformerSettings
+import org.junit.jupiter.api.Timeout
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -9,6 +11,84 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class HtmlCleanupTransformerTest {
+    @Test @Timeout(5)
+    fun unmatchedRawElementsAreScannedOnceAndRetained() {
+        for ((tag, transformer) in listOf("script" to ScriptRemover(), "style" to StyleRemover())) {
+            val html = "<$tag>".repeat(16_000)
+            assertEquals(html, apply(transformer, html))
+        }
+        assertEquals("<p>Before</p><script>unclosed<main class='x'>",
+            apply(ScriptRemover(), "<p>Before</p><script>unclosed<main class='x'>"))
+    }
+
+    @Test @Timeout(5)
+    fun longUnterminatedTagsPassThroughWithoutRecursiveMatching() {
+        for (html in listOf("<aaaa".repeat(32_000), "<main title='" + "<aaaa".repeat(32_000))) {
+            for (transformer in listOf(ScriptRemover(), StyleRemover(), AttributeCleaner(), ElementSimplifier())) {
+                assertEquals(html, apply(transformer, html))
+            }
+        }
+    }
+
+    @Test @Timeout(5)
+    fun longWhitespaceRunsDoNotRescanTagOrAttributeTails() {
+        val whitespace = " ".repeat(160_000)
+        assertEquals("<$whitespace>", apply(AttributeCleaner(), "<$whitespace>"))
+        assertEquals("<main$whitespace>", apply(AttributeCleaner(), "<main$whitespace>"))
+        assertEquals("<p style=\"font-weight:bold;\"$whitespace>Title</p>",
+            apply(ElementSimplifier(), "<summary$whitespace>Title</summary>"))
+    }
+
+    @Test fun retainedScriptBodiesAreOpaqueToOtherEnabledStages() {
+        val script = """<script>document.write('<style>p{color:red}</style><link rel="stylesheet" href="x.css"><summary class="x" onclick="go()">Title</summary>');</script>"""
+        val input = "<main class='x'><style>p{color:blue}</style>$script<summary>Title</summary></main>"
+        assertEquals("<div>$script<p style=\"font-weight:bold;\">Title</p></div>",
+            applyDefault(input, HtmlTransformerSettings(scriptRemover = false)))
+        val unmatched = "<script>document.write('<style>x</style><main class=\"x\">');"
+        assertEquals(unmatched, applyDefault(unmatched, HtmlTransformerSettings(scriptRemover = false)))
+    }
+
+    @Test fun retainedStyleAndOtherTextBodiesAreOpaque() {
+        val style = """<style>p::after{content:'<script>go()</script><main class="x">'}</style>"""
+        assertEquals("$style<div>News</div>",
+            applyDefault("$style<main class='x'>News</main>", HtmlTransformerSettings(styleRemover = false)))
+        for (tag in listOf("textarea", "title", "xmp", "iframe", "noembed", "noframes")) {
+            val raw = "<$tag><script>go()</script><style>x</style><main class='x'>Text</main></$tag>"
+            assertEquals(raw, applyDefault(raw))
+        }
+    }
+
+    @Test fun commentsAndQuotedTagDelimitersArePreserved() {
+        val input = """<!-- <script>x</script><main class="x"> --><main title="A > B <style>x</style>" class="x">Text</main>"""
+        assertEquals("""<!-- <script>x</script><main class="x"> --><div title="A > B <style>x</style>">Text</div>""",
+            applyDefault(input))
+        assertEquals("<p>Before</p><!-- <main class='x'>", applyDefault("<p>Before</p><!-- <main class='x'>"))
+        assertEquals("<scripture>Text</scripture><p>After</p>",
+            apply(ScriptRemover(), "<scripture>Text</scripture><SCRIPT title='>'>x</ScRiPt ><p>After</p>"))
+    }
+
+    @Test fun attributeCleanerPreservesFragmentTargetsAndFormAssociations() {
+        val input = """<a href="#details">Details</a><h2 id="details" class="x">Title</h2><label for="name">Name</label><input id="name" name="name" data-x="1">"""
+        assertEquals("""<a href="#details">Details</a><h2 id="details">Title</h2><label for="name">Name</label><input id="name" name="name">""",
+            apply(AttributeCleaner(), input))
+    }
+
+    @Test fun urlRewritingPreservesAllCleanupSummaries() {
+        val input = """<main class="x"><script>go()</script><style>x</style><a href="https://example.com/news">News</a></main>"""
+        val source = ResourceRepresentation(200, mapOf("content-type" to listOf("text/html")), input.toByteArray())
+        val result = defaultResourceTransformationPipeline(1024).transform(
+            context().copy(rewriteText = { it.replace("https://", "http://") }),
+            Resource(java.net.URI("http://example.com/"), source),
+        )
+        assertEquals("""<div><a href="http://example.com/news">News</a></div>""",
+            result.resource.representation.body.toString(Charsets.UTF_8))
+        val summaries = requireNotNull(result.resource.transformed).transformations
+        assertEquals(listOf("script-remover", "style-remover", "attribute-cleaner", "element-simplifier"),
+            summaries.map { it.transformerId })
+        assertTrue(summaries.sumOf { it.savedBytes } > 0)
+        assertEquals(input, result.resource.source.body.toString(Charsets.UTF_8))
+    }
+
     @Test fun scriptRemoverDropsScriptsButKeepsMarkup() {
         val html = """<h1>News</h1><script type="module">window.alert("<tag>")</script><p>Story</p>"""
         val out = apply(ScriptRemover(), html)
@@ -100,6 +180,13 @@ class HtmlCleanupTransformerTest {
         val resource = Resource(java.net.URI("http://example.com/"), rep)
         return ResourceTransformationPipeline(listOf(transformer)).transform(context(), resource)
             .resource.representation.body.toString(Charsets.UTF_8)
+    }
+
+    private fun applyDefault(html: String, settings: HtmlTransformerSettings = HtmlTransformerSettings()): String {
+        val source = ResourceRepresentation(200, mapOf("content-type" to listOf("text/html; charset=UTF-8")), html.toByteArray())
+        return defaultResourceTransformationPipeline(1024 * 1024).transform(
+            context().copy(htmlTransformers = settings), Resource(java.net.URI("http://example.com/"), source),
+        ).resource.representation.body.toString(Charsets.UTF_8)
     }
 
     private fun context() = ResourceTransformationContext(

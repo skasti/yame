@@ -46,6 +46,7 @@ internal class LegacyTextResourceTransformer : ResourceTransformer {
                 transformed = TransformedRepresentation(
                     profile = context.transformationProfile,
                     representation = transformed,
+                    transformations = state.resource.transformed?.transformations.orEmpty(),
                 ),
             ),
         )
