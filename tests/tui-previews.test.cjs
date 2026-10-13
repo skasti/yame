@@ -431,3 +431,14 @@ test('publisher rejects altered PNG bytes against renderer metadata before creat
     assert.equal(blobs, 0);
   } finally { fs.rmSync(dir, {recursive: true, force: true}); }
 });
+
+test('CI uses the immutable PR base checkout for preview cache inputs', () => {
+  const fs = require('node:fs'), path = require('node:path');
+  const ci = fs.readFileSync(path.join(__dirname, '../.github/workflows/ci.yml'), 'utf8');
+  const renderer = fs.readFileSync(path.join(__dirname, '../scripts/ci/render-tui-previews.cjs'), 'utf8');
+  assert.ok(ci.includes('- name: Check out immutable screenshot baseline'));
+  assert.ok(ci.includes('ref: ' + '$' + '{{ needs.preview-gate.outputs.base_sha }}'));
+  assert.ok(ci.includes('path: trusted-preview-base'));
+  assert.ok(ci.includes('YAME_TUI_BASELINE_DIR: ' + '$' + '{{ github.workspace }}/trusted-preview-base/assets/screenshots'));
+  assert.ok(renderer.includes('process.env.YAME_TUI_BASELINE_DIR'));
+});

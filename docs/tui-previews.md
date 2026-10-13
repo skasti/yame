@@ -29,8 +29,11 @@ terminal row per line, retaining ANSI styles while avoiding raw ESC control
 characters that would make GitHub diffs hard to read. The generated text snapshots
 are committed next to the PNGs, so TUI changes are reviewable as text diffs.
 
-Before rendering, CI compares each ANSI snapshot and the `render-info.json`
-renderer identity against the checked-in versions. The identity covers renderer
+Before rendering, CI checks out the PR's exact immutable base SHA in a separate
+read-only directory and compares each generated ANSI snapshot and `render-info.json`
+renderer identity against **that base's** files—not editable PNGs or metadata
+from the PR checkout. This also prevents a PR from bypassing the cache guard by
+modifying an image and its matching digest together. The identity covers renderer
 source, the resolved installed npm dependency tree (including transitive versions),
 Node major version, terminal options, and checksums for regular, bold, oblique,
 and bold-oblique font faces. If npm dependencies or any font face cannot be

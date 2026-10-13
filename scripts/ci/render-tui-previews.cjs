@@ -128,7 +128,12 @@ async function generate({root = process.cwd()} = {}) {
   let renderer = null;
   const outputDirectory = path.join(root, 'build/reports/tui-screenshots');
   const inputDirectory = path.join(root, 'build/reports/tui-frames');
-  const baselineDirectory = path.join(root, 'assets/screenshots');
+  // A PR may contain self-authored PNGs/digests; compare against the base SHA.
+  const baselineDirectory = process.env.YAME_TUI_BASELINE_DIR ||
+    path.join(root, 'assets/screenshots');
+  if (!fs.existsSync(baselineDirectory)) {
+    throw new Error('TUI preview baseline directory is missing: ' + baselineDirectory);
+  }
   fs.mkdirSync(outputDirectory, {recursive: true});
   const config = rendererIdentity(root);
   const previousConfigFile = path.join(baselineDirectory, 'render-info.json');
