@@ -1,12 +1,15 @@
 // Loaded by github-script. Publication runs only from the default branch via workflow_run.
 const fs = require('node:fs');
 const path = require('node:path');
+const {createHash} = require('node:crypto');
 const marker = '<!-- yame-tui-previews -->';
 const filenames = [
   '30x100.png', '30x100-proxy.png', '30x100-dns.png', '30x100-transfers.png',
   '45x135.png', '45x135-proxy.png', '45x135-dns.png', '45x135-transfers.png',
   '50x150.png', '50x150-proxy.png',
 ];
+const frameFilenames = filenames.map(name => name.replace(/\.png$/, '.ansi.txt'));
+const generatedFilenames = [...filenames, ...frameFilenames, 'render-info.json'];
 
 function parseProof(message) {
   const line = message.split('\n').find(line => line.startsWith('YAME-Screenshots: '));
@@ -20,9 +23,9 @@ function parseProof(message) {
 
 function screenshotOnly(commit) {
   return commit.parents.length === 1 && commit.files?.length > 0 &&
-    commit.files.length <= filenames.length && commit.files.every(file =>
+    commit.files.length <= generatedFilenames.length && commit.files.every(file =>
       ['added', 'modified'].includes(file.status) &&
-      filenames.some(name => file.filename === `assets/screenshots/${name}`));
+      generatedFilenames.some(name => file.filename === `assets/screenshots/${name}`));
 }
 
 function successfulSource(run, pr, parent, base) {
@@ -85,7 +88,7 @@ async function prepare({github, context, core}) {
         pr.head.repo.full_name !== pr.base.repo.full_name || pr.head.ref === context.payload.repository.default_branch) continue;
     const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts,
       {...context.repo, run_id: run.id});
-    const artifact = artifacts.find(a => a.name === 'yame-tui-screenshots-v2' && !a.expired);
+    const artifact = artifacts.find(a => a.name === 'yame-tui-screenshots-v3' && !a.expired);
     if (!artifact || artifact.size_in_bytes > 5 * 1024 * 1024) return;
     core.setOutput('publish', 'true');
     core.setOutput('pr_number', pr.number);
@@ -107,6 +110,53 @@ function validatePng(file, name) {
       data.toString('ascii', 12, 16) !== 'IHDR' ||
       data.readUInt32BE(16) !== columns * 9 || data.readUInt32BE(20) !== rows * 18) {
     throw new Error(`Invalid screenshot: ${name}`);
+  }
+  return data;
+}
+
+
+function validateFrame(file, name) {
+  const data = readBoundedFile(file, 256 * 1024);
+  const text = data.toString('utf8');
+  const [rows] = name.match(/^(\d+)x(\d+)/).slice(1).map(Number);
+  // One canonical JSON string per terminal line, with ESC/control bytes escaped.
+  if (!data.equals(Buffer.from(text)) || !text.endsWith('\n')) {
+    throw new Error('Invalid ANSI text snapshot: ' + name);
+  }
+  const lines = text.slice(0, -1).split('\n');
+  if (lines.length !== rows) throw new Error('Invalid ANSI row count: ' + name);
+  for (const line of lines) {
+    let value;
+    try { value = JSON.parse(line); } catch { throw new Error('Invalid ANSI row JSON: ' + name); }
+    if (typeof value !== 'string' || JSON.stringify(value) !== line ||
+        value.includes('\r') || value.includes('\n')) {
+      throw new Error('Invalid ANSI row encoding: ' + name);
+    }
+  }
+  return data;
+}
+
+function sha256(data) {
+  return createHash('sha256').update(data).digest('hex');
+}
+
+function validateRendererInfo(file) {
+  const data = readBoundedFile(file, 4096);
+  const text = data.toString('utf8');
+  let info;
+  try { info = JSON.parse(text); } catch { throw new Error('Invalid renderer identity JSON'); }
+  const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+  if (!data.equals(Buffer.from(text)) || JSON.stringify(info, null, 2) + '\n' !== text ||
+      info.schema !== 2 || !digest(info.rendererSha256) ||
+      (info.dependenciesSha256 !== null && !digest(info.dependenciesSha256)) ||
+      (info.fontSha256 !== null && !digest(info.fontSha256)) ||
+      !Number.isSafeInteger(info.nodeMajor) || info.nodeMajor < 1 ||
+      !info.terminalOptions || typeof info.terminalOptions !== 'object' ||
+      !info.pngSha256 || typeof info.pngSha256 !== 'object' ||
+      Array.isArray(info.pngSha256) ||
+      Object.keys(info.pngSha256).length !== filenames.length ||
+      !filenames.every(name => digest(info.pngSha256[name]))) {
+    throw new Error('Invalid renderer identity');
   }
   return data;
 }
@@ -154,9 +204,20 @@ async function publish({github, context, core}, number, directory, {rollback = r
   if (testedMerge.parents.length !== 2 || testedMerge.parents[0].sha !== provenance.base ||
       testedMerge.parents[1].sha !== run.head_sha) throw new Error('Invalid tested merge parents');
   const {data: source} = await github.rest.git.getCommit({...repo, commit_sha: run.head_sha});
+  // Validate all file contents and PNG digests before creating any Git blobs.
+  const metadataBytes = validateRendererInfo(path.join(directory, 'render-info.json'));
+  const metadata = JSON.parse(metadataBytes.toString('utf8'));
+  const files = generatedFilenames.map(name => {
+    const file = path.join(directory, name);
+    const data = name.endsWith('.png') ? validatePng(file, name)
+      : name.endsWith('.ansi.txt') ? validateFrame(file, name) : metadataBytes;
+    if (name.endsWith('.png') && sha256(data) !== metadata.pngSha256[name]) {
+      throw new Error('PNG digest does not match renderer metadata: ' + name);
+    }
+    return {name, data};
+  });
   const tree = [];
-  for (const name of filenames) {
-    const data = validatePng(path.join(directory, name), name);
+  for (const {name, data} of files) {
     const {data: blob} = await github.rest.git.createBlob({...repo, content: data.toString('base64'), encoding: 'base64'});
     tree.push({path: `assets/screenshots/${name}`, mode: '100644', type: 'blob', sha: blob.sha});
   }
@@ -187,13 +248,15 @@ async function publish({github, context, core}, number, directory, {rollback = r
         throw new Error('Cannot prove screenshot-only successor; not reporting success');
       }
       await github.rest.repos.createCommitStatus({...repo, sha, state: 'success', context: 'build-and-test',
-        description: 'Only generated PNGs changed; parent CI passed against the same base.', target_url: run.html_url});
+        description: 'Only generated TUI previews changed; parent CI passed against the same base.', target_url: run.html_url});
     }
     const url = name => `https://raw.githubusercontent.com/${repo.owner}/${repo.repo}/${sha}/assets/screenshots/${name}`;
+    const sourceUrl = name => 'https://github.com/' + repo.owner + '/' + repo.repo +
+      '/blob/' + sha + '/assets/screenshots/' + name.replace(/\.png$/, '.ansi.txt');
     const body = `${marker}\n### YAME terminal previews\n\n` +
       `Rendered from code commit \`${run.head_sha.slice(0, 8)}\`; [CI run](${run.html_url}). ` +
       `Fixed font/colors, production dashboard renderer, synthetic data. Sizes are rows × columns.\n\n` +
-      filenames.map(name => `#### ${name.replace('.png', '')}\n\n![${name}](${url(name)})`).join('\n\n');
+      filenames.map(name => `#### ${name.replace('.png', '')}\n\n![${name}](${url(name)})\n\n[Diffable ANSI input](${sourceUrl(name)})`).join('\n\n');
     const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number: pr.number});
     const existing = comments.find(c => ['github-actions[bot]', 'chatgpt-codex-connector[bot]'].includes(c.user.login) && c.body.startsWith(marker));
     if (existing) await github.rest.issues.updateComment({...repo, comment_id: existing.id, body});
@@ -206,4 +269,4 @@ async function publish({github, context, core}, number, directory, {rollback = r
   }
 }
 
-module.exports = {gate, prepare, publish, parseProof, screenshotOnly, successfulSource, validatePng, verifySuccessor, rollbackPreview};
+module.exports = {gate, prepare, publish, parseProof, screenshotOnly, successfulSource, validatePng, validateFrame, validateRendererInfo, verifySuccessor, rollbackPreview};

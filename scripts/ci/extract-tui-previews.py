@@ -9,7 +9,13 @@ PNG_NAMES = (
     "45x135.png", "45x135-proxy.png", "45x135-dns.png", "45x135-transfers.png",
     "50x150.png", "50x150-proxy.png",
 )
-LIMITS = {**dict.fromkeys(PNG_NAMES, 1024 * 1024), "source.json": 4096}
+FRAME_NAMES = tuple(name.removesuffix(".png") + ".ansi.txt" for name in PNG_NAMES)
+LIMITS = {
+    **dict.fromkeys(PNG_NAMES, 1024 * 1024),
+    **dict.fromkeys(FRAME_NAMES, 256 * 1024),
+    "render-info.json": 4096,
+    "source.json": 4096,
+}
 ZIP_LIMIT = 5 * 1024 * 1024
 TOTAL_LIMIT = sum(LIMITS.values())
 

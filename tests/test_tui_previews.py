@@ -29,8 +29,8 @@ class PreviewArchiveTest(unittest.TestCase):
             extractor.extract(self.archive(directory), target)
             self.assertEqual({p.name for p in target.iterdir()}, set(extractor.LIMITS))
 
-    def test_compressed_provenance_and_png_bombs_fail_before_extraction(self):
-        for name in ("source.json", "30x100.png"):
+    def test_compressed_provenance_png_and_ansi_bombs_fail_before_extraction(self):
+        for name in ("source.json", "render-info.json", "30x100.png", "30x100.ansi.txt"):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
                 archive = self.archive(directory, {name: b"a" * (extractor.LIMITS[name] + 1)})
                 self.assertLess(archive.stat().st_size, extractor.ZIP_LIMIT)
