@@ -1,4 +1,4 @@
-"\u001b[94;1m[ YAME v0.1.0-SNAPSHOT (f12e3611)  •  /dev/ttyUSB0 @ 57600  •  CONNECTED  •  Disabled  •  DNS 8.8.8.8  •  HTTP proxy ON  •  tones ON ]                \u001b[39;22m"
+"\u001b[94;1m[ YAME v0.1.0-SNAPSHOT (00000000)  •  /dev/ttyUSB0 @ 57600  •  CONNECTED  •  Disabled  •  DNS 8.8.8.8  •  HTTP proxy ON  •  tones ON ]                \u001b[39;22m"
 "\u001b[94m┌\u001b[39m\u001b[94m─ Log \u001b[39m\u001b[94m──────────────────────────────────────────────────────────────────────────\u001b[39m\u001b[94m┐\u001b[39m \u001b[94m┌\u001b[39m\u001b[94m─ DNS lookups \u001b[39m\u001b[94m───────────────────────────────────────────────────\u001b[39m\u001b[94m┐\u001b[39m"
 "\u001b[94m│\u001b[39m 10:00:01  PPP session established at 57600 baud                                \u001b[94m│\u001b[39m \u001b[94m│\u001b[39m \u001b[92;1m10:00:02 U A     example.test  NOERROR 1 ans                   \u001b[39;22m \u001b[94m│\u001b[39m"
 "\u001b[94m│\u001b[39m 10:00:02  DNS example.test A -> 93.184.216.34                                  \u001b[94m│\u001b[39m \u001b[94m│\u001b[39m                                                                 \u001b[94m│\u001b[39m"
