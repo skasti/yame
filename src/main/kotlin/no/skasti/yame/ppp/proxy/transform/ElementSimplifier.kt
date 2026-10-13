@@ -23,22 +23,11 @@ internal class ElementSimplifier(
         return if (result.resource.representation.body.size <= maxOutputBytes) result else state
     }
 
-    override fun clean(html: String): String {
-        val result = StringBuilder(minOf(html.length, maxOutputBytes))
-        var position = 0
-        for (match in HtmlCleanupMarkup.tags.findAll(html)) {
-            val name = HtmlCleanupMarkup.name(match.value)
-            val replacement = name?.let(configuration.rules::get)?.let { rewriteTag(match.value, it) } ?: match.value
-            val textLength = match.range.first - position
-            // Bound expansion from a short tag plus a long configured style. Fall back as a whole.
-            if (textLength > maxOutputBytes - result.length ||
-                replacement.length > maxOutputBytes - result.length - textLength) return html
-            result.append(html, position, match.range.first).append(replacement)
-            position = match.range.last + 1
+    override fun clean(html: String): String =
+        HtmlMarkupScanner.rewrite(html, maxOutputLength = maxOutputBytes) { tag ->
+            val name = HtmlCleanupMarkup.name(tag)
+            name?.let(configuration.rules::get)?.let { rewriteTag(tag, it) } ?: tag
         }
-        if (html.length - position > maxOutputBytes - result.length) return html
-        return result.append(html, position, html.length).toString()
-    }
 
     private fun rewriteTag(tag: String, rule: ElementSimplifierRule): String {
         val name = requireNotNull(TAG_START.find(tag))
@@ -48,14 +37,15 @@ internal class ElementSimplifier(
         renamed = HtmlCleanupMarkup.attribute.replace(renamed) { attribute ->
             if (attribute.groupValues[1].lowercase(Locale.ROOT) == "style") "" else attribute.value
         }
-        val ending = requireNotNull(TAG_END.find(renamed))
+        var endingStart = renamed.lastIndex
+        if (endingStart > 0 && renamed[endingStart - 1] == '/') endingStart--
+        while (endingStart > 0 && renamed[endingStart - 1].isWhitespace()) endingStart--
         val style = rule.style.replace("&", "&amp;").replace("\"", "&quot;")
             .replace("<", "&lt;").replace(">", "&gt;")
-        return renamed.substring(0, ending.range.first) + " style=\"$style\"" + ending.value
+        return renamed.substring(0, endingStart) + " style=\"$style\"" + renamed.substring(endingStart)
     }
 
     private companion object {
-        val TAG_START = Regex("""^<\s*(/?)\s*([A-Za-z][\w:-]*)""")
-        val TAG_END = Regex("""\s*/?>$""")
+        val TAG_START = Regex("""^<\s*+(/?)\s*+([A-Za-z][\w:-]*)""")
     }
 }

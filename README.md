@@ -469,17 +469,111 @@ for one run. Counts must be positive integers; zero does not mean unlimited.
 Lowering either limit schedules background cleanup of existing captures, even if no
 new packets arrive. Startup also applies the configured limits to previous captures.
 Malformed packets and expected lifecycle drops (such as traffic before IPCP opens)
-remain in the existing pr…1535 tokens truncated…OOT) == "style") "" else attribute.value
-        }
-        var endingStart = renamed.lastIndex
-        if (endingStart > 0 && renamed[endingStart - 1] == '/') endingStart--
-        while (endingStart > 0 && renamed[endingStart - 1].isWhitespace()) endingStart--
-        val style = rule.style.replace("&", "&amp;").replace("\"", "&quot;")
-            .replace("<", "&lt;").replace(">", "&gt;")
-        return renamed.substring(0, endingStart) + " style=\"$style\"" + renamed.substring(endingStart)
-    }
+remain in the existing protocol logs rather than this unsupported-packet collection.
 
-    private companion object {
-        val TAG_START = Regex("""^<\s*+(/?)\s*+([A-Za-z][\w:-]*)""")
-    }
-}
+## Test tone
+
+Play a complete dialing and default V.34 modem-handshake sequence without opening a serial port:
+
+```shell
+./gradlew run --args="--test-tone '+47 345 76 543'"
+```
+
+The test uses the same modem configuration path as a real AT dial. The defaults are a 500 ms dial tone, two seconds before pickup, and the `v34` handshake profile. All three can be overridden:
+
+```shell
+./gradlew run --args="--test-tone '+47 345 76 543' --pickup-time 3s --dial-tone-time 750ms --handshake-profile v34"
+./gradlew run --args="--test-tone '+47 345 76 543' --handshake-profile none"
+```
+
+Dialing/handshake progress is always logged. Typical output looks like:
+
+```text
+MODEM dialing 004734576543
+TONE [dial_tone] 425 Hz dial tone
+TONE [dtmf_dialing] DTMF dialing 004734576543
+TONE [ringback] 425 Hz ringback; waiting for pickup...
+TONE [remote_answered] remote side answered
+TONE [v8_ansam] V.8 ANSam answer tone (2100 Hz)
+TONE [v8_negotiation] V.8 CM/JM capability negotiation
+TONE [v34_phase2] V.34 phase 2 carriers and guard tone
+TONE [v34_line_probe_l1] V.34 L1 line probe
+TONE [v34_line_probe_l2] V.34 L2 line probe
+TONE [v34_training] V.34 scrambled QAM-like equalizer training
+TONE [v34_final_exchange] V.34 final parameter/data exchange
+TONE [complete] dialing/handshake complete; CONNECT may be returned
+MODEM connected
+```
+
+`--test-tone` calls the same public `HayesModem.dial()` path used by AT dialing, but does not attach a serial output or open a port. With the `v34` profile, the V.8/V.34 handshake continues after the simulated pickup before the test exits. With `none`, the test exits immediately after pickup.
+
+Run the automated tests with:
+
+```shell
+./gradlew test
+```
+
+## Expected first test
+
+Configure the old laptop's modem/dial-up connection to use its serial port and dial any number, for example `5551234`.
+
+Typical exchange should look roughly like:
+
+```text
+AT <= AT
+AT => OK
+AT <= AT&F...
+AT => OK
+AT <= ATDT5551234
+MODEM dialing 5551234
+# dial/ring/handshake audio plays here
+MODEM connected
+AT => CONNECT 38400
+PPP <= protocol=LCP (0xC021), payload=24 bytes: 01 0B 00 18 01 04 02 40 ...
+```
+
+When the client actually starts PPP, YAME replies to its first LCP Configure-Request and then starts its own side by sending a Configure-Request. Once both directions are acknowledged it logs `LCP open`; the next useful real-hardware test is whether Trumpet Winsock then advances to IPCP.
+
+## PPP architecture
+
+Connected-mode bytes are handed from `HayesModem` to a `PppHandler`. The default `RetroPppHandler` owns the wire-level `PppFramer`/`PppEncoder` pair and creates a fresh `PppSession` whenever the modem connects. `CONNECT` itself does not start LCP; `RetroPppHandler` waits until the peer sends the first valid PPP frame, which accommodates clients such as Trumpet Winsock that remain in terminal/script mode briefly after the modem connects:
+
+```text
+HayesModem
+  └─ PppHandler
+      └─ RetroPppHandler
+          ├─ PppFramer
+          ├─ PppEncoder
+          └─ PppSession
+              └─ LCP
+```
+
+This keeps PPP details out of `Main` and keeps the Hayes layer from needing to know how LCP/IPCP packets are represented.
+
+## Supported modem behavior
+
+Explicitly handled commands currently include:
+
+- `AT`
+- `ATZ`
+- `AT&F`
+- `ATE0`
+- `ATE1`
+- `ATH`
+- `ATD...`
+
+Other valid-looking `AT...` commands are accepted with `OK` for compatibility with old modem initialization strings.
+
+
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the build,
+testing, compatibility, and pull-request guidelines. The project's more detailed
+architecture and review constraints are documented in [AGENTS.md](AGENTS.md).
+
+Please report potential security vulnerabilities according to
+[SECURITY.md](SECURITY.md) rather than opening a public issue.
+
+## License
+
+YAME is licensed under the [Apache License 2.0](LICENSE).
