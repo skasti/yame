@@ -84,6 +84,9 @@ internal object HtmlMarkupScanner {
             var end = candidate + 2 + name.length
             if (html.regionMatches(candidate + 2, name, 0, name.length, ignoreCase = true)) {
                 while (end < html.length && html[end].isWhitespace()) end++
+                // Browsers tolerate a trailing slash on an end tag; it still closes raw text.
+                if (end < html.length && html[end] == '/') end++
+                while (end < html.length && html[end].isWhitespace()) end++
                 if (end < html.length && html[end] == '>') return candidate
             }
             position = candidate + 2
