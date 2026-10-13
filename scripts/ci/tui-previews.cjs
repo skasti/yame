@@ -147,7 +147,8 @@ function validateRendererInfo(file) {
   try { info = JSON.parse(text); } catch { throw new Error('Invalid renderer identity JSON'); }
   const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
   if (!data.equals(Buffer.from(text)) || JSON.stringify(info, null, 2) + '\n' !== text ||
-      info.schema !== 2 || !digest(info.rendererSha256) || !digest(info.dependenciesSha256) ||
+      info.schema !== 2 || !digest(info.rendererSha256) ||
+      (info.dependenciesSha256 !== null && !digest(info.dependenciesSha256)) ||
       (info.fontSha256 !== null && !digest(info.fontSha256)) ||
       !Number.isSafeInteger(info.nodeMajor) || info.nodeMajor < 1 ||
       !info.terminalOptions || typeof info.terminalOptions !== 'object' ||
