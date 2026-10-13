@@ -1,0 +1,31 @@
+{
+  "schema": 2,
+  "rendererSha256": "31cec61f9028ee1f6c04613970c8b9242c3a00f30b750f479df49f56639161e1",
+  "dependenciesSha256": null,
+  "fontSha256": "6a26b8a954cc65f3bcd9f3c6aaa690f226bb606f444cfb00647d4b67551b3667",
+  "nodeMajor": 24,
+  "terminalOptions": {
+    "scale": 1,
+    "fontFamily": "'DejaVu Sans Mono', monospace",
+    "fontSize": 14,
+    "cellWidth": 9,
+    "cellHeight": 18,
+    "theme": {
+      "background": "#101318",
+      "foreground": "#dce0e6",
+      "cursor": "#101318"
+    }
+  },
+  "pngSha256": {
+    "30x100.png": "4fd3c2fc396e58afce216964f1282429f0fa81e57d174fa5cb24273a3f3d9e18",
+    "30x100-proxy.png": "e502239068c170c79937924e2f6f179b867abcec7718fb5e0ca7a05d30cfdc8c",
+    "30x100-dns.png": "99150683743d2892723d4eae10c47bcbbf77c00b4cbca134458cfe3f339b6d87",
+    "30x100-transfers.png": "67814b6841887072eb2567b20c41cd85a1cc1af02548d355feec3b0264db1c1c",
+    "45x135.png": "0e25d021523294d8353203c56c2acb37b39923b3e868f947ee184fab4b9610c6",
+    "45x135-proxy.png": "164c6a5532aa8b77b76c71dc0a3e0110bc86bee313c2f5a723f2377171aa7a72",
+    "45x135-dns.png": "5e510b00d8ce868c4e8a657d65c0407d7bbe35c51cfd23f744deb631c788e368",
+    "45x135-transfers.png": "6bd710982fd79fa66b609146fb2cb9f0804e5882f36c9270ae3a66be70f6972f",
+    "50x150.png": "5e1d1a81b43589c3f815f8199744d75acba779ef14e171bd6975ea606e35eb2a",
+    "50x150-proxy.png": "2a8c42be35d2b3cee599bfff4c258eb3d5d6aeecd5a50cf1ed27d8b38e463ed2"
+  }
+}
