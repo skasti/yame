@@ -1,7 +1,7 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  filenames, framesToRows, samePixels, CELL_WIDTH, CELL_HEIGHT,
+  filenames, framesToRows, frameSnapshot, canReuseFrame, samePixels, CELL_WIDTH, CELL_HEIGHT,
 } = require('../scripts/ci/render-tui-previews.cjs');
 
 test('renders exactly the ten approved compact and wide fixtures', () => {
@@ -32,4 +32,23 @@ test('pixel comparison ignores encoded bytes but detects actual visual differenc
   assert.ok(samePixels(Buffer.from('a'), Buffer.from('b'), decode));
   assert.equal(samePixels(Buffer.from('a'), Buffer.from('c'), decode), false);
   assert.equal(samePixels(Buffer.from('a'), Buffer.from('d'), decode), false);
+});
+
+test('ANSI snapshots escape control characters into reviewable UTF-8 rows', () => {
+  const rows = ['\x1b[31mHello\x1b[0m', 'Windows\\folder', 'norsk æøå'];
+  const snapshot = frameSnapshot(rows);
+  assert.equal(snapshot.split('\n').length, 4);
+  assert.ok(snapshot.includes('\\u001b[31m'));
+  assert.ok(!snapshot.includes('\x1b'));
+  assert.deepEqual(snapshot.trimEnd().split('\n').map(JSON.parse), rows);
+});
+
+test('reuse requires identical snapshot and full renderer identity, plus existing PNG', () => {
+  const config = '{"version":1}';
+  assert.equal(canReuseFrame('frame', 'frame', config, config, true), true);
+  assert.equal(canReuseFrame('changed', 'frame', config, config, true), false);
+  assert.equal(canReuseFrame('frame', 'frame', config, 'other', true), false);
+  assert.equal(canReuseFrame('frame', 'frame', config, config, false), false);
+  assert.equal(canReuseFrame('frame', 'frame', config, config, true, true), false);
+  assert.equal(canReuseFrame('frame', 'frame', config, null, true), false);
 });
