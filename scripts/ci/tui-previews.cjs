@@ -1,6 +1,7 @@
 // Loaded by github-script. Publication runs only from the default branch via workflow_run.
 const fs = require('node:fs');
 const path = require('node:path');
+const {createHash} = require('node:crypto');
 const marker = '<!-- yame-tui-previews -->';
 const filenames = [
   '30x100.png', '30x100-proxy.png', '30x100-dns.png', '30x100-transfers.png',
@@ -135,6 +136,10 @@ function validateFrame(file, name) {
   return data;
 }
 
+function sha256(data) {
+  return createHash('sha256').update(data).digest('hex');
+}
+
 function validateRendererInfo(file) {
   const data = readBoundedFile(file, 4096);
   const text = data.toString('utf8');
@@ -142,10 +147,14 @@ function validateRendererInfo(file) {
   try { info = JSON.parse(text); } catch { throw new Error('Invalid renderer identity JSON'); }
   const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
   if (!data.equals(Buffer.from(text)) || JSON.stringify(info, null, 2) + '\n' !== text ||
-      info.schema !== 1 || !digest(info.rendererSha256) || !digest(info.dependenciesSha256) ||
+      info.schema !== 2 || !digest(info.rendererSha256) || !digest(info.dependenciesSha256) ||
       (info.fontSha256 !== null && !digest(info.fontSha256)) ||
       !Number.isSafeInteger(info.nodeMajor) || info.nodeMajor < 1 ||
-      !info.terminalOptions || typeof info.terminalOptions !== 'object') {
+      !info.terminalOptions || typeof info.terminalOptions !== 'object' ||
+      !info.pngSha256 || typeof info.pngSha256 !== 'object' ||
+      Array.isArray(info.pngSha256) ||
+      Object.keys(info.pngSha256).length !== filenames.length ||
+      !filenames.every(name => digest(info.pngSha256[name]))) {
     throw new Error('Invalid renderer identity');
   }
   return data;
@@ -194,11 +203,20 @@ async function publish({github, context, core}, number, directory, {rollback = r
   if (testedMerge.parents.length !== 2 || testedMerge.parents[0].sha !== provenance.base ||
       testedMerge.parents[1].sha !== run.head_sha) throw new Error('Invalid tested merge parents');
   const {data: source} = await github.rest.git.getCommit({...repo, commit_sha: run.head_sha});
-  const tree = [];
-  for (const name of generatedFilenames) {
+  // Validate all file contents and PNG digests before creating any Git blobs.
+  const metadataBytes = validateRendererInfo(path.join(directory, 'render-info.json'));
+  const metadata = JSON.parse(metadataBytes.toString('utf8'));
+  const files = generatedFilenames.map(name => {
     const file = path.join(directory, name);
     const data = name.endsWith('.png') ? validatePng(file, name)
-      : name.endsWith('.ansi.txt') ? validateFrame(file, name) : validateRendererInfo(file);
+      : name.endsWith('.ansi.txt') ? validateFrame(file, name) : metadataBytes;
+    if (name.endsWith('.png') && sha256(data) !== metadata.pngSha256[name]) {
+      throw new Error('PNG digest does not match renderer metadata: ' + name);
+    }
+    return {name, data};
+  });
+  const tree = [];
+  for (const {name, data} of files) {
     const {data: blob} = await github.rest.git.createBlob({...repo, content: data.toString('base64'), encoding: 'base64'});
     tree.push({path: `assets/screenshots/${name}`, mode: '100644', type: 'blob', sha: blob.sha});
   }
