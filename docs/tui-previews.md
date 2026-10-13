@@ -1,9 +1,9 @@
 # TUI previews in pull requests
 
 The JVM test suite renders the production `YameDashboardRenderer` into ten
-styled Mordant ANSI fixtures under `build/reports/tui-frames/`. The read-only CI
-job feeds these into **Termless + headless xterm.js**, then renders PNG with
-resvg to `build/reports/tui-screenshots/`. Unlike the previous Java AWT
+styled Mordant ANSI fixtures under `build/reports/tui-frames/`. The read-only CI job stores each ANSI fixture as a diffable JSON-escaped
+`*.ansi.txt` snapshot, and feeds changed frames into **Termless + headless
+xterm.js** to render PNG with resvg into `build/reports/tui-screenshots/`. Unlike the previous Java AWT
 implementation, ANSI escape sequences are interpreted by a real VT terminal
 emulator before rasterization. The PNG renderer uses DejaVu Sans Mono, 9×18
 pixel cells and a fixed font install in CI. These are snapshots of the
@@ -23,15 +23,26 @@ npm install --ignore-scripts --no-audit --no-fund --package-lock=false
 npm run render:tui-previews
 ```
 
-Before writing each PNG, the unprivileged renderer decodes and compares its
-pixels to the checked-in version. If they are identical, it copies the
-old PNG bytes instead: changes to PNG compression or metadata alone never
-cause a screenshot commit. The privileged publisher only handles bounded PNG
+Each `assets/screenshots/<size>-<panel>.ansi.txt` contains one JSON-escaped
+terminal row per line, retaining ANSI styles while avoiding raw ESC control
+characters that would make GitHub diffs hard to read. The generated text snapshots
+are committed next to the PNGs, so TUI changes are reviewable as text diffs.
+
+Before rendering, CI compares each ANSI snapshot and the `render-info.json`
+renderer identity against the checked-in versions. The identity covers renderer
+source, package dependencies, Node major version, terminal options, and the
+actual selected font file checksum. If all match and a PNG exists, CI copies
+the checked-in PNG without starting xterm.js. If the font cannot be identified
+reliably, the cache is disabled. Set `YAME_FORCE_TUI_RENDER=1` to force rendering.
+Changed input is rendered, but a pixel-for-pixel comparison still reuses the
+old PNG bytes if the image itself did not change (including compression/metadata
+differences). The first PR after adoption may bootstrap the new text snapshots
+and renderer identity even if its own change is unrelated to the TUI. The privileged publisher only handles bounded PNG
 bytes and cannot parse untrusted image content.
 
-CI uploads `yame-tui-screenshots-v2` rather than the old artifact name so that
-the existing default-branch publisher ignores this PR's changed filename list.
-Once merged, the updated default-branch publisher recognizes v2. The source
+CI uploads `yame-tui-screenshots-v3`. The older default-branch publisher ignores
+this new artifact while the migration PR is open; after merge the publisher
+recognizes v3 and publishes both PNG and text snapshots. The source
 commit/version in the header helps identify stale previews.
 
 ## Publication and activation
@@ -45,12 +56,13 @@ normal read-only CI and its artifacts still work.
 The publishing job executes only scripts from the default branch. It never
 checks out or executes PR code, and never publishes into fork branches. It
 checks the live PR head and base, downloads the artifact from that exact CI run,
-validates a ZIP of at most 5 MiB before extraction, permits exactly ten PNGs
-and a provenance JSON file, and bounds each PNG to 1 MiB and JSON to 4 KiB
+validates a ZIP of at most 5 MiB before extraction, permits exactly ten PNGs, ten ANSI text snapshots, a renderer identity JSON,
+and a provenance JSON file; each PNG is bounded to 1 MiB, text snapshot to
+256 KiB, and JSON file to 4 KiB
 before reading. Extraction rejects extra paths, duplicate names and symlinks
-and enforces both declared and actual output limits. It then checks PNG
-signatures and dimensions,
-and creates a single-parent commit touching only `assets/screenshots/*.png`.
+and enforces both declared and actual output limits. It then checks PNG signatures and dimensions, canonical JSON-escaped ANSI rows,
+renderer identity structure, and creates a single-parent commit touching only
+approved files under `assets/screenshots/`.
 A non-forced ref update refuses concurrent changes to the branch. If post-push
 validation, status publication or comment listing/creation/update fails, the publisher restores the source head
 with Git's explicit `--force-with-lease=<ref>:<screenshot-sha>`. This atomic
@@ -59,7 +71,8 @@ Rollback failures surface as job failures; no unconditional force push is used. 
 are treated only as bytes in this privileged job, not decoded or executed.
 Only the publishing job has contents/statuses/pull-request write permissions.
 
-The job updates one bot-owned PR comment with immutable image URLs. If PNGs
+The job updates one bot-owned PR comment with immutable image URLs and links
+  to the corresponding diffable ANSI inputs. If PNGs
 are unchanged it makes no commit. The workflow records the successful source
 run, PR number and base SHA in the screenshot commit message and verifies the new head again before reporting a successful `build-and-test`
 commit status through the GitHub API. This avoids relying on recursive events
@@ -75,7 +88,8 @@ introducing PR), CI always runs the full suite after validating the immutable
 merge parents. Workflow paths with GitHub's `@ref` suffix are accepted.
 A cheap gate checks that the new head:
 
-- has exactly one parent and changes only the ten approved screenshot paths;
+- has exactly one parent and changes only the ten PNGs, ten ANSI text snapshots,
+  and renderer identity file under `assets/screenshots/`;
 - references a successful **pull_request** run of `.github/workflows/ci.yml`
   whose head SHA is that parent and whose `build-and-test` job succeeded;
 - belongs to the same PR and uses the same base SHA as that successful run.
