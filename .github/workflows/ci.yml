@@ -31,7 +31,7 @@ jobs:
           persist-credentials: false
       - name: Verify screenshot-only successor
         id: gate
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const gatePath = './trusted-ci/scripts/ci/tui-previews.cjs';
@@ -165,7 +165,7 @@ jobs:
 
       - name: Record tested preview source
         if: needs.preview-gate.outputs.reuse != 'true'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           PREVIEW_HEAD: ${{ needs.preview-gate.outputs.head_sha }}
           PREVIEW_BASE: ${{ needs.preview-gate.outputs.base_sha }}

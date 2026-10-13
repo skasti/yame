@@ -25,7 +25,7 @@ jobs:
       - name: Verify screenshot-only successor
         if: github.event_name == 'pull_request'
         id: gate
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const gatePath = './trusted-ci/scripts/ci/tui-previews.cjs';
