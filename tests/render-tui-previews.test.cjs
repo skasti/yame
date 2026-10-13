@@ -43,12 +43,16 @@ test('ANSI snapshots escape control characters into reviewable UTF-8 rows', () =
   assert.deepEqual(snapshot.trimEnd().split('\n').map(JSON.parse), rows);
 });
 
-test('reuse requires identical snapshot and full renderer identity, plus existing PNG', () => {
-  const config = '{"version":1}';
-  assert.equal(canReuseFrame('frame', 'frame', config, config, true), true);
-  assert.equal(canReuseFrame('changed', 'frame', config, config, true), false);
+test('reuse requires identical snapshot, fingerprinted font and full renderer identity', () => {
+  const config = {schema: 1, fontSha256: 'a'.repeat(64)};
+  const prior = JSON.stringify(config, null, 2) + '\n';
+  assert.equal(canReuseFrame('frame', 'frame', config, prior, true), true);
+  assert.equal(canReuseFrame('changed', 'frame', config, prior, true), false);
   assert.equal(canReuseFrame('frame', 'frame', config, 'other', true), false);
-  assert.equal(canReuseFrame('frame', 'frame', config, config, false), false);
-  assert.equal(canReuseFrame('frame', 'frame', config, config, true, true), false);
+  assert.equal(canReuseFrame('frame', 'frame', config, prior, false), false);
+  assert.equal(canReuseFrame('frame', 'frame', config, prior, true, true), false);
   assert.equal(canReuseFrame('frame', 'frame', config, null, true), false);
+  const unknownFont = {...config, fontSha256: null};
+  assert.equal(canReuseFrame('frame', 'frame', unknownFont,
+    JSON.stringify(unknownFont, null, 2) + '\n', true), false);
 });
