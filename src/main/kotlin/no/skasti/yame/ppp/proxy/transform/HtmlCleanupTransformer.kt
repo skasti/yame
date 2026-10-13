@@ -46,10 +46,8 @@ internal abstract class HtmlCleanupTransformer(
     }
 }
 
-/** Attribute/name helpers for complete tags found by the bounded markup scanner. */
+/** Name helpers for complete tags found by the bounded markup scanner. */
 internal object HtmlCleanupMarkup {
-    // Only attempt a match at the beginning of a whitespace run; do not rescan long tails.
-    val attribute = Regex("""(?s)(?<!\s)\s++([\w:-]+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?""")
     private val tagName = Regex("""^<\s*+/?\s*+([A-Za-z][\w:-]*)""")
     private val closingTag = Regex("""^<\s*/""")
     fun name(tag: String): String? =
@@ -70,7 +68,11 @@ internal class StyleRemover(control: HtmlTransformerControl? = null) : HtmlClean
     override fun clean(html: String): String {
         return HtmlMarkupScanner.rewrite(html, removeElements = setOf("style")) { tag ->
             if (HtmlCleanupMarkup.name(tag) != "link") tag
-            else if (Regex("""(?i)\brel\s*=\s*(?:"[^"]*stylesheet[^"]*"|'[^']*stylesheet[^']*'|stylesheet)""").containsMatchIn(tag)) "" else tag
+            else {
+                val relation = HtmlTagAttributes.scan(tag).firstOrNull { it.name.equals("rel", true) }?.value
+                if (relation?.splitToSequence(' ', '\t', '\r', '\n', '\u000c')
+                        ?.any { it.equals("stylesheet", true) } == true) "" else tag
+            }
         }
     }
 }
@@ -82,10 +84,10 @@ internal class AttributeCleaner(control: HtmlTransformerControl? = null) : HtmlC
     override fun clean(html: String): String = HtmlMarkupScanner.rewrite(html) { tag ->
         val tagName = HtmlCleanupMarkup.name(tag)
         if (tagName == null || HtmlCleanupMarkup.closing(tag) || tag.startsWith("<!")) tag
-        else HtmlCleanupMarkup.attribute.replace(tag) { attr ->
-            val name = attr.groupValues[1].lowercase(Locale.ROOT)
-            if (name == "style" || name.startsWith("on") || name.startsWith("data-") ||
-                name in setOf("class", "role", "tabindex", "contenteditable", "draggable", "hidden")) "" else attr.value
+        else HtmlTagAttributes.remove(tag) { attr ->
+            val name = attr.name.lowercase(Locale.ROOT)
+            name == "style" || name.startsWith("on") || name.startsWith("data-") ||
+                name in setOf("class", "role", "tabindex", "contenteditable", "draggable", "hidden")
         }
     }
 }

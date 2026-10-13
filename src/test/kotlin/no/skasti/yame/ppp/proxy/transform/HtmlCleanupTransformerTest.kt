@@ -73,6 +73,22 @@ class HtmlCleanupTransformerTest {
             apply(AttributeCleaner(), input))
     }
 
+    @Test fun attributeLikeTextInQuotedValuesIsPreserved() {
+        val retained = """title="choose class=compact" x.note='choose data-mode=wide' aria-label="click onclick=go()""""
+        assertEquals("<a $retained>News</a>",
+            apply(AttributeCleaner(), "<a $retained class='remove' data-id=2>News</a>"))
+        assertEquals("""<p title='choose style=compact' x.note="style='unchanged'" style="font-weight:bold;">Title</p>""",
+            apply(ElementSimplifier(), """<summary title='choose style=compact' x.note="style='unchanged'" style="color:red">Title</summary>"""))
+    }
+
+    @Test fun stylesheetRemovalUsesOnlyActualRelAttributeTokens() {
+        val retained = """<link rel="icon" href="/favicon?rel=stylesheet"><link title="rel=stylesheet" rel='not-stylesheet'><link rel=stylesheet-extra><link title='stylesheet'>"""
+        val stylesheets = """<link rel="alternate STYLESHEET" href="x.css"><link rel='stylesheet' href='x.css'><link rel=stylesheet href=x.css>"""
+        assertEquals(retained, apply(StyleRemover(), retained + stylesheets))
+        assertEquals("""<link rel="icon" rel="stylesheet">""",
+            apply(StyleRemover(), """<link rel="icon" rel="stylesheet">"""))
+    }
+
     @Test fun urlRewritingPreservesAllCleanupSummaries() {
         val input = """<main class="x"><script>go()</script><style>x</style><a href="https://example.com/news">News</a></main>"""
         val source = ResourceRepresentation(200, mapOf("content-type" to listOf("text/html")), input.toByteArray())

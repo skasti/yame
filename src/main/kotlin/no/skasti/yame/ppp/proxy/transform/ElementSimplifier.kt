@@ -4,7 +4,6 @@ import no.skasti.yame.config.ElementSimplifierConfiguration
 import no.skasti.yame.config.ElementSimplifierRule
 import no.skasti.yame.config.HtmlTransformer
 import no.skasti.yame.config.HtmlTransformerControl
-import java.util.Locale
 
 /** Apply explicit tag mappings; unknown elements and existing headings/paragraphs stay intact. */
 internal class ElementSimplifier(
@@ -34,9 +33,7 @@ internal class ElementSimplifier(
         val nameRange = requireNotNull(name.groups[2]).range
         var renamed = tag.replaceRange(nameRange, rule.target)
         if (name.groupValues[1] == "/" || rule.style == null) return renamed
-        renamed = HtmlCleanupMarkup.attribute.replace(renamed) { attribute ->
-            if (attribute.groupValues[1].lowercase(Locale.ROOT) == "style") "" else attribute.value
-        }
+        renamed = HtmlTagAttributes.remove(renamed) { it.name.equals("style", true) }
         var endingStart = renamed.lastIndex
         if (endingStart > 0 && renamed[endingStart - 1] == '/') endingStart--
         while (endingStart > 0 && renamed[endingStart - 1].isWhitespace()) endingStart--
