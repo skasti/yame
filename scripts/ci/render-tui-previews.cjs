@@ -71,10 +71,11 @@ function rendererIdentity(root) {
   };
 }
 
-function canReuseFrame(snapshot, previousSnapshot, renderConfig, previousRenderConfig,
+function canReuseFrame(snapshot, previousSnapshot, rendererIdentity, previousRendererIdentity,
   hasPng, force = false) {
-  return !force && hasPng && renderConfig.fontSha256 !== null &&
-    renderConfig === previousRenderConfig && snapshot === previousSnapshot;
+  return !force && hasPng && rendererIdentity.fontSha256 !== null &&
+    JSON.stringify(rendererIdentity, null, 2) + '\n' === previousRendererIdentity &&
+    snapshot === previousSnapshot;
 }
 
 async function generate({root = process.cwd()} = {}) {
@@ -100,7 +101,7 @@ async function generate({root = process.cwd()} = {}) {
     const previousSnapshot = fs.existsSync(previousSnapshotFile)
       ? fs.readFileSync(previousSnapshotFile, 'utf8') : null;
     const previous = path.join(baselineDirectory, name + '.png');
-    if (canReuseFrame(snapshot, previousSnapshot, configContents, previousConfig,
+    if (canReuseFrame(snapshot, previousSnapshot, config, previousConfig,
       fs.existsSync(previous), process.env.YAME_FORCE_TUI_RENDER === '1')) {
       fs.copyFileSync(previous, path.join(outputDirectory, name + '.png'));
       continue;
