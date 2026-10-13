@@ -2,6 +2,9 @@ package no.skasti.yame.ui
 
 import com.github.ajalt.mordant.terminal.Terminal
 import no.skasti.yame.config.YameConfiguration
+import no.skasti.yame.config.HtmlTransformerControl
+import no.skasti.yame.config.HtmlTransformerSettings
+import no.skasti.yame.ppp.proxy.transform.defaultResourceTransformationPipeline
 import no.skasti.yame.logging.PacketCaptureLimitKind
 import no.skasti.yame.logging.YameLogLevel
 import no.skasti.yame.logging.YameLogManager
@@ -54,6 +57,11 @@ class InteractiveYameApplication(
     @Volatile
     private var modemConfig: HayesModemConfig = initialModemConfig
 
+    private val transformerControl = HtmlTransformerControl(
+        initialModemConfig.pppHttpCompatibilityConfig.htmlTransformers,
+        ::applyTransformerSettings,
+    )
+
     private var generation = 0
     private var connectionAttemptGeneration: Int? = null
     private var activeConnection: SerialConnection? = null
@@ -93,6 +101,15 @@ class InteractiveYameApplication(
     )
 
     init {
+        modemConfig = modemConfig.copy(pppHttpCompatibilityConfig = modemConfig.pppHttpCompatibilityConfig.copy(
+            transformerControl = transformerControl,
+        ))
+        // Construct the transformers to let each publish its commands before any port connects.
+        defaultResourceTransformationPipeline(
+            modemConfig.pppHttpCompatibilityConfig.maxResponseBytes,
+            modemConfig.pppHttpCompatibilityConfig.elementSimplifier,
+            transformerControl,
+        )
         resourceRegistryHooks.onRootAdded += observer::handleResourceRootAdded
         resourceRegistryHooks.onRootRemoved += observer::handleResourceRootRemoved
         resourceRegistryHooks.onRootUsed += observer::handleResourceRootUsed
@@ -265,6 +282,22 @@ class InteractiveYameApplication(
         }
         updateObserverSettings()
         observer.onLog("Tone simulation ${if (enabled) "enabled" else "disabled"}")
+    }
+
+    private fun applyTransformerSettings(@Suppress("UNUSED_PARAMETER") settings: HtmlTransformerSettings) {
+        synchronized(lock) {
+            modemConfig = modemConfig.copy(pppHttpCompatibilityConfig = modemConfig.pppHttpCompatibilityConfig.copy(
+                htmlTransformers = transformerControl.snapshot(),
+            ))
+        }
+        persistConfiguration { saved ->
+            saved.copy(modemConfig = saved.modemConfig.copy(
+                pppHttpCompatibilityConfig = saved.modemConfig.pppHttpCompatibilityConfig.copy(
+                    htmlTransformers = transformerControl.snapshot(),
+                ),
+            ))
+        }
+        observer.onLog("HTML transformer settings changed; reload the page (PPP stays connected)")
     }
 
     private fun selectCaptureLimit(kind: PacketCaptureLimitKind, value: Int) {
@@ -572,6 +605,7 @@ class InteractiveYameApplication(
     override fun close() {
         shutdown()
         observer.close()
+        transformerControl.close()
         resourceUiExecutor.shutdownNow()
     }
 

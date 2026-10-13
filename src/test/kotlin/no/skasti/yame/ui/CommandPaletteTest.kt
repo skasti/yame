@@ -1,0 +1,131 @@
+package no.skasti.yame.ui
+
+import com.github.ajalt.mordant.terminal.Terminal
+import no.skasti.yame.config.HtmlTransformer
+import no.skasti.yame.config.HtmlTransformerControl
+import no.skasti.yame.config.HtmlTransformerSettings
+import no.skasti.yame.ppp.proxy.transform.defaultResourceTransformationPipeline
+import no.skasti.yame.serial.SerialFlowControl
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+class CommandPaletteTest {
+    @Test
+    fun `paths create palettes callbacks only execute on selection and cleanup waits for last child`() {
+        var enabled = false
+        val enable = CommandPalette.add("/registry-test/style-remover/enable", { enabled = true })
+        val disable = CommandPalette.add("/registry-test/style-remover/disable") { enabled = false }
+        try {
+            val palette = assertNotNull(CommandPalette.find("/registry-test/style-remover"))
+            assertEquals(listOf("enable", "disable"), palette.items().map { it.command })
+            val view = registeredCommandPalette("/registry-test/style-remover/enable")
+            assertEquals("/registry-test/style-remover", view.palettePath)
+            assertFalse(enabled)
+            (palette.item("enable") as PaletteChoice).select()
+            assertTrue(enabled)
+            enable.close()
+            assertNotNull(CommandPalette.find("/registry-test/style-remover"))
+        } finally {
+            enable.close()
+            disable.close()
+        }
+        assertNull(CommandPalette.find("/registry-test"))
+    }
+
+    @Test
+    fun `commands are unique ignoring slash and case within each level`() {
+        val first = CommandPalette.add("/registry-test/style-remover/on") {}
+        val other = CommandPalette.add("/registry-test/script-remover/on") {}
+        val numeric = CommandPalette.add("/registry-test/baud/9600") {}
+        try {
+            assertFailsWith<IllegalArgumentException> { CommandPalette.add("/REGISTRY-TEST/STYLE-REMOVER/ON") {} }
+            assertFailsWith<IllegalArgumentException> { CommandPalette.add("/registry-test/style-remover/on/child") {} }
+            assertFailsWith<IllegalArgumentException> { CommandPalette.add("/bad//path") {} }
+            assertEquals("9600", CommandPalette.find("/registry-test/baud")?.item("9600")?.command)
+            val palette = Palette("/child", "Child")
+            palette.add(PaletteChoice("/on") {})
+            assertFailsWith<IllegalArgumentException> { palette.add(PaletteChoice("ON") {}) }
+        } finally { first.close(); other.close(); numeric.close() }
+    }
+
+    @Test
+    fun `transformers register their own switches once across repeated pipeline construction`() {
+        HtmlTransformerControl(HtmlTransformerSettings()).use { control ->
+            repeat(2) { defaultResourceTransformationPipeline(1024, control = control) }
+            val parent = assertNotNull(CommandPalette.find("/transformers"))
+            assertEquals(HtmlTransformer.entries.map { "/${it.command}" }, parent.items().map { it.command })
+            val options = assertNotNull(CommandPalette.find("/transformers/style-remover"))
+            (options.item("off") as PaletteChoice).select()
+            assertFalse(control.snapshot().styleRemover)
+            assertTrue(control.snapshot().scriptRemover)
+            assertEquals("current", options.item("off")?.description)
+        }
+        assertNull(CommandPalette.find("/transformers"))
+    }
+
+    @Test
+    fun `keyboard browses nested palettes goes back and executes local on off arguments`() {
+        HtmlTransformerControl(HtmlTransformerSettings()).use { control ->
+            defaultResourceTransformationPipeline(1024, control = control)
+            observer().use { observer ->
+                observer.type("/transformers")
+                assertEquals(listOf("/transformers"), observer.paletteSnapshot()?.options?.map { it.value })
+                observer.handleKey("Enter")
+                assertEquals("/transformers", observer.paletteSnapshot()?.palettePath)
+                observer.type("style-remover")
+                observer.handleKey("Enter")
+                assertEquals("/transformers/style-remover", observer.paletteSnapshot()?.palettePath)
+                observer.handleKey("Escape")
+                assertEquals("/transformers", observer.paletteSnapshot()?.palettePath)
+                observer.type("/style-remover off")
+                observer.handleKey("Enter")
+                assertFalse(control.snapshot().styleRemover)
+                assertNull(observer.paletteSnapshot())
+                observer.type("/transformers/style-remover/on")
+                observer.handleKey("Enter")
+                assertTrue(control.snapshot().styleRemover)
+                observer.type("/transformers")
+                observer.handleKey("Enter")
+                observer.handleKey("Backspace")
+                assertEquals("/", observer.paletteSnapshot()?.palettePath)
+                observer.handleKey("Escape")
+                assertNull(observer.paletteSnapshot())
+            }
+        }
+    }
+
+    @Test
+    fun `existing tone baud and login commands survive registry migration and observer recreation`() {
+        repeat(2) {
+            var tone: Boolean? = null
+            var login: Pair<String, String>? = null
+            observer(onTone = { tone = it }, onLogin = { user, password -> login = user to password }).use { observer ->
+                observer.type("/tone off")
+                observer.handleKey("Enter")
+                assertEquals(false, tone)
+                observer.type("/baud")
+                observer.handleKey("Enter")
+                assertEquals(TuiPaletteMode.BAUD, observer.paletteSnapshot()?.mode)
+                observer.handleKey("Escape")
+                observer.type("/login user:secret")
+                assertEquals(TuiPaletteMode.LOGIN, observer.paletteSnapshot()?.mode)
+                observer.handleKey("Enter")
+                assertEquals("user" to "secret", login)
+            }
+        }
+        assertNull(CommandPalette.find("/")?.item("baud"))
+    }
+
+    private fun observer(onTone: (Boolean) -> Unit = {}, onLogin: (String, String) -> Unit = { _, _ -> }) = TuiYameObserver(
+        initialPortName = "COM1", initialBaud = 38400, initialFlowControl = SerialFlowControl.DISABLED,
+        initialDnsUpstream = "8.8.8.8", initialHttpProxyEnabled = true, initialToneSimulationEnabled = true,
+        onToneSimulationSelected = onTone, onLoginAdded = onLogin, terminal = Terminal(interactive = false),
+    )
+
+    private fun TuiYameObserver.type(text: String) { text.forEach { handleKey(it.toString()) } }
+}

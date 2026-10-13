@@ -1,5 +1,9 @@
 package no.skasti.yame.ppp.proxy
 
+import no.skasti.yame.config.ElementSimplifierConfiguration
+import no.skasti.yame.config.HtmlTransformerControl
+import no.skasti.yame.config.HtmlTransformerSettings
+
 data class PppHttpCompatibilityConfig(
     val enabled: Boolean = true,
     val maxRedirects: Int = 8,
@@ -13,6 +17,9 @@ data class PppHttpCompatibilityConfig(
     val transformationProfile: String = "netscape-4.08-v1",
     val maxRepresentationCacheEntries: Int = 256,
     val maxRepresentationCacheBytes: Long = 64L * 1024 * 1024,
+    val elementSimplifier: ElementSimplifierConfiguration = ElementSimplifierConfiguration.defaults(),
+    val htmlTransformers: HtmlTransformerSettings = HtmlTransformerSettings(),
+    val transformerControl: HtmlTransformerControl? = null,
 ) {
     init {
         require(maxRedirects >= 0) { "HTTP compatibility maxRedirects must not be negative" }

@@ -186,6 +186,81 @@ passwords to 64 printable ASCII characters each.
 It stores the terminal password as plain text, with owner-only file permissions
 on POSIX systems; `/yame.ini` is ignored by Git.
 
+### HTML element simplification
+
+YAME creates `element-simplifier.ini` alongside `yame.ini` on first normal
+startup. With `--config /var/lib/yame/yame.ini`, the mapping file is
+`/var/lib/yame/element-simplifier.ini`. Existing files are never overwritten.
+Edit the file and restart YAME to apply changes.
+
+Each section names a source HTML tag, with a required `target` tag and an
+optional inline `style`:
+
+```ini
+[summary]
+target=p
+style=font-weight:bold;
+
+[time]
+target=span
+
+[news-title]
+target=h3
+```
+
+Rules rename both opening and closing tags, preserving their text and nested
+elements. The default mappings use `div` for structural containers such as
+`main`, `article`, `section`, `header`, and `details`; `p` for `figcaption` and
+`summary`; and `span` for `time` and `mark`. `summary` gets the bold style above.
+Existing `h1`–`h6` and `p` elements remain unchanged unless explicitly mapped.
+Custom tag names can be added as shown above.
+
+The file is the complete mapping, not an override layered over defaults:
+remove a section to leave that tag unchanged, or use an empty file to disable
+element mapping. A missing file uses the bundled defaults. Tag names and keys
+are case insensitive. `;` and `#` start comments only at the beginning of a
+line; CSS semicolons and values containing `=` are preserved. Invalid or
+duplicate rules stop startup with a configuration error. The file is limited
+to 32 KiB, 256 rules, and 1024 characters per style. Targets must be ordinary
+container tags, rather than void elements or script/style/raw-text elements.
+
+The pipeline removes upstream scripts/styles and cleans attributes before
+applying element mappings. Configured styles therefore survive cleanup, while
+upstream inline styles do not. A configured style replaces any existing style
+on that element and is escaped as an HTML attribute. Output expansion is bounded
+by the proxy response-size limit; an oversized mapping falls back to the content
+from the preceding cleanup stages. This is pragmatic markup conversion, not a
+full HTML parser or CSS compatibility engine.
+
+Markup cleanup uses an iterative scan. Comments and retained script, style,
+and other raw-text contents stay opaque to the cleanup stages, so independent
+switches do not rewrite embedded HTML templates. Unterminated tags or raw-text
+elements retain the remaining content unchanged. Attribute cleanup preserves
+IDs used by fragment links and form associations.
+
+Open `/transformers` in the command palette to enable or disable the four HTML
+cleanup stages. Within that palette, type `/style-remover off` or select
+`/style-remover` and then `off`. A full path such as
+`/transformers/style-remover/off` also works from the root palette.
+`Esc` returns to the parent palette; `Backspace` does the same when the local
+input is empty. The current choice is marked in the on/off palette.
+
+Changes apply to subsequent HTTP requests without reconnecting PPP. Reload the
+page to see the new result. A request already in progress finishes using its
+original settings. TUI changes are saved as `transformers.<name>.enabled` in
+`yame.ini`, independently of the mapping rules in `element-simplifier.ini`.
+Turning off `style-remover` retains style blocks and linked stylesheets;
+`attribute-cleaner` separately controls removal of upstream inline styles.
+
+Features register palette commands through `CommandPalette.add(item)` or
+`CommandPalette.add("/group/command/choice") { ... }`. The path form creates
+missing sub-palettes. `CommandPalette.find("/group/command")` retrieves a
+palette for explicit additions. Commands must be unique within their own level,
+ignoring case and an optional leading slash. Registrations return an
+`AutoCloseable` handle; release it when the owning feature closes. Each HTML
+transformer registers its own on/off actions once per shared runtime control,
+so the TUI needs no transformer list or selection callbacks.
+
 By default, YAME uses `--ui auto`. On an interactive ANSI terminal it opens the dashboard; if exactly one serial port is available it auto-selects and opens it, otherwise it stays disconnected until a port is selected from the command palette. Press `/` to open the palette.
 
 The dashboard contains:

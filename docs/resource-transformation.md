@@ -14,6 +14,13 @@ Transformers must never mutate or replace the source representation. This lets l
 
 Within one YAME process the transformation pipeline is treated as stable. Therefore, if an upstream resource reports the same validator (or returns `304 Not Modified`), YAME assumes the same source representation and consequently the same transformed representation for the same transformation profile.
 
+Live transformer controls are an exception to the stable-profile assumption:
+the TUI's HTTP handler marks HTML responses `Cache-Control: no-store` and omits
+their source validators. It also suppresses upstream conditional GET headers
+while live controls are active, so browser-cached HTML from a previous switch
+combination cannot be reused through a `304` response. Static handlers retain
+the existing source-validator behavior.
+
 Byte-specific metadata is different. `Content-Length`, content digests and encodings that no longer describe the emitted representation must be removed or regenerated after transformation.
 
 ## Cached 304 responses reuse transformed output
@@ -79,6 +86,35 @@ Resource caching and in-flight coalescing have different identity requirements a
 Transformer applicability and cacheability are evaluated against the representation as it evolves through the pipeline. Do not make a separate preflight decision against only the original representation when later transforms may change headers, bytes, or transformer applicability.
 
 Bodyless responses may still participate in resource-level transforms when header/status-based transforms are valid. Conversely, partial-body responses such as `206 Partial Content` must bypass ordinary full-representation transformation/cache handling unless explicit range-aware semantics are implemented.
+
+## HTML cleanup and element rules
+
+The structural stages run in this order: `script-remover`, `style-remover`,
+`attribute-cleaner`, then `element-simplifier`. Attribute cleanup removes
+upstream inline styles before element rules add explicitly configured styles.
+URL rewriting and image optimization run afterward.
+
+`element-simplifier.ini` is loaded alongside `yame.ini` into an immutable rule
+snapshot at startup, then passed through the HTTP configuration into the
+pipeline. Neither request handling nor transformation reads the file. Restarting
+YAME applies edits and creates fresh representation caches, preserving the
+stable-pipeline assumption for source validators and cached transformed output.
+The bundled INI file is the single source of default mappings. See the README
+for the format and editing behavior.
+
+Live on/off settings are separate from the immutable INI rules. A shared
+runtime control survives PPP/TCP proxy creation, and each HTTP request captures
+one immutable settings snapshot before fetching upstream. Its transformation
+profile and transformed-cache/in-flight-work keys include the four switch
+values; the same source bytes under different settings never share transformed
+output. Source acquisition may still be coalesced because it is independent of
+the transformation profile. Already-running requests retain their snapshot.
+
+Mappings affect only explicitly configured tags, including matching closing
+tags. Generated style values are escaped as attributes. Expansion is limited
+by `maxResponseBytes`; an oversized result leaves the representation from the
+preceding stage intact. These transforms preserve the upstream source and
+operate only on complete identity-encoded `200 text/html` representations.
 
 ## Image dimensions
 

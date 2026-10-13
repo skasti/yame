@@ -1,5 +1,9 @@
 package no.skasti.yame.ppp.proxy
 import no.skasti.yame.ppp.ip.Ipv4Address
+import no.skasti.yame.config.ElementSimplifierConfiguration
+import no.skasti.yame.config.ElementSimplifierRule
+import no.skasti.yame.ppp.proxy.transform.LegacyTextResourceTransformer
+import no.skasti.yame.ppp.proxy.transform.ResourceTransformationPipeline
 import no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig
 import no.skasti.yame.ppp.proxy.SystemHttpCompatibilityProxy
 import no.skasti.yame.ppp.proxy.SystemRoutingTcpProxy
@@ -296,6 +300,8 @@ class HttpCompatibilityProxyTest {
 
         val proxy = SystemHttpCompatibilityProxy(
             config = PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000),
+            // Exercise URL routing with script/style references retained.
+            resourceTransformations = ResourceTransformationPipeline(listOf(LegacyTextResourceTransformer())),
         )
         val pageEvents = LinkedBlockingQueue<TcpProxyEvent>()
         val frameEvents = LinkedBlockingQueue<TcpProxyEvent>()
@@ -684,6 +690,8 @@ class HttpCompatibilityProxyTest {
 
         val proxy = SystemHttpCompatibilityProxy(
             config = PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000),
+            // Exercise URL routing with script/style references retained.
+            resourceTransformations = ResourceTransformationPipeline(listOf(LegacyTextResourceTransformer())),
         )
         val pageEvents = LinkedBlockingQueue<TcpProxyEvent>()
         val firstCssEvents = LinkedBlockingQueue<TcpProxyEvent>()
@@ -789,6 +797,8 @@ class HttpCompatibilityProxyTest {
         }
         val proxy = SystemHttpCompatibilityProxy(
             config = PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000),
+            // Exercise URL routing with script/style references retained.
+            resourceTransformations = ResourceTransformationPipeline(listOf(LegacyTextResourceTransformer())),
         )
         val events = LinkedBlockingQueue<TcpProxyEvent>()
         val flow = httpFlow(peerPort = 2196)
@@ -819,6 +829,63 @@ class HttpCompatibilityProxyTest {
                 response,
             )
             assertTrue(!response.contains("https://www.googletagmanager.com/"), response)
+        } finally {
+            proxy.close()
+            runCatching { server.close() }
+            thread.join(2_000)
+        }
+    }
+
+    @Test
+    fun `proxy uses configured HTML mappings before rewriting retained links and frames the cleaned body`() {
+        val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val originalBody = """
+            <html><head><link rel="stylesheet" href="https://assets.example/style.css">
+            <style>body{display:none}</style><script src="https://assets.example/app.js"></script></head>
+            <body><main class="news" data-id="1"><article hidden onclick="go()" style="color:red">
+            <a href="https://news.example/story" title="Read">News</a></article></main>
+            <details><summary style="display:none">More</summary><p>Extra</p></details></body></html>
+        """.trimIndent()
+        val thread = serveOnce(server) {
+            "HTTP/1.1 200 OK\r\n" +
+                "Content-Type: text/html; charset=utf-8\r\n" +
+                "Content-Length: ${originalBody.toByteArray(StandardCharsets.UTF_8).size}\r\n" +
+                "ETag: \"source\"\r\n" +
+                "Connection: close\r\n\r\n" + originalBody
+        }
+        val rules = ElementSimplifierConfiguration(
+            ElementSimplifierConfiguration.defaults().rules + ("summary" to ElementSimplifierRule("h3", "font-weight:bold;")),
+        )
+        val proxy = SystemHttpCompatibilityProxy(
+            config = PppHttpCompatibilityConfig(requestTimeoutMillis = 2_000, elementSimplifier = rules),
+        )
+        val events = LinkedBlockingQueue<TcpProxyEvent>()
+        val flow = httpFlow(peerPort = 2197)
+
+        try {
+            proxy.connect(flow, events::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(events.poll(2, TimeUnit.SECONDS)))
+            proxy.send(
+                flow,
+                ("GET /news HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\n\r\n")
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+
+            val response = collectResponse(events)
+            val headers = response.substringBefore("\r\n\r\n")
+            val body = response.substringAfter("\r\n\r\n")
+            val expectedBody = """
+                <html><head>
+                </head>
+                <body><div><div>
+                <a href="http://news.example/story" title="Read">News</a></div></div>
+                <div><h3 style="font-weight:bold;">More</h3><p>Extra</p></div></body></html>
+            """.trimIndent()
+            assertTrue(response.startsWith("HTTP/1.0 200 OK\r\n"), response)
+            assertEquals(expectedBody, body)
+            assertTrue(headers.contains("Content-Length: ${body.toByteArray(StandardCharsets.UTF_8).size}"), headers)
+            assertTrue(headers.contains("Connection: close"), headers)
+            assertTrue(headers.contains("etag: \"source\"", ignoreCase = true), headers)
         } finally {
             proxy.close()
             runCatching { server.close() }

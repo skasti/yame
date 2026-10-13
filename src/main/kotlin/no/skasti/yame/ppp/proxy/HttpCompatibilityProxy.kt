@@ -2,6 +2,8 @@ package no.skasti.yame.ppp.proxy
 
 import no.skasti.yame.observer.YameEvent
 import no.skasti.yame.ppp.http.HttpTcpProxy
+import no.skasti.yame.ppp.proxy.transform.ResourceTransformationPipeline
+import no.skasti.yame.ppp.proxy.transform.defaultResourceTransformationPipeline
 import no.skasti.yame.ppp.tcp.TcpProxy
 import no.skasti.yame.ppp.tcp.TcpProxyEvent
 import no.skasti.yame.ppp.tcp.TcpProxyFlow
@@ -25,6 +27,8 @@ internal class SystemHttpCompatibilityProxy(
             .connectTimeout(Duration.ofMillis(config.requestTimeoutMillis))
             .followRedirects(HttpClient.Redirect.NEVER)
             .build(),
+    resourceTransformations: ResourceTransformationPipeline =
+        defaultResourceTransformationPipeline(config.maxResponseBytes, config.elementSimplifier, config.transformerControl),
 ) : TcpProxy {
     private val handler =
         SystemHttpCompatibilityHandler(
@@ -34,6 +38,7 @@ internal class SystemHttpCompatibilityProxy(
             resourceRegistryHooks = resourceRegistryHooks,
             resourceGraphs = resourceGraphs,
             httpClient = httpClient,
+            resourceTransformations = resourceTransformations,
         )
 
     private val http =

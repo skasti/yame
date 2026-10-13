@@ -1,8 +1,10 @@
 /build/
 .gradle/
+.kotlin/
 .idea/
 *.iml
 /out/
 /logs/
 /yame.ini
+/element-simplifier.ini
 /node_modules/
