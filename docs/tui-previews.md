@@ -6,8 +6,11 @@ styled Mordant ANSI fixtures under `build/reports/tui-frames/`. The read-only CI
 xterm.js** to render PNG with resvg into `build/reports/tui-screenshots/`.
 Unlike the previous Java AWT
 implementation, ANSI escape sequences are interpreted by a real VT terminal
-emulator before rasterization. The PNG renderer uses DejaVu Sans Mono, 9×18
-pixel cells and a fixed font install in CI. These are snapshots of the
+emulator before rasterization. The PNG renderer uses **JetBrainsMono Nerd Font
+Mono** at 14 px, installed from the checksum-pinned Nerd Fonts v3.5.1 release.
+The terminal cell width and height are measured from the actual font's fixed
+glyph advance and hhea line metrics, rounded up to whole pixels; they are not
+hardcoded to the previous DejaVu 9×18 dimensions. These are snapshots of the
 production dashboard renderer, not captures of a running serial modem or Pi.
 
 The tested terminal sizes (rows × columns) are **30×100**, **45×135**
@@ -21,6 +24,8 @@ Regenerate locally after installing Node.js 24 and the test-only npm packages:
 ```bash
 ./gradlew test --tests '*DashboardScreenshotTest'
 npm install --ignore-scripts --no-audit --no-fund --package-lock=false
+# First install JetBrainsMono Nerd Font Mono v3.5.1 (Regular/Bold/Italic/Bold Italic),
+# as done by .github/workflows/ci.yml (checksum-verified archive).
 npm run render:tui-previews
 ```
 
@@ -35,8 +40,8 @@ renderer identity against **that base's** files—not editable PNGs or metadata
 from the PR checkout. This also prevents a PR from bypassing the cache guard by
 modifying an image and its matching digest together. The identity covers renderer
 source, the resolved installed npm dependency tree (including transitive versions),
-Node major version, terminal options, and checksums for regular, bold, oblique,
-and bold-oblique font faces. If npm dependencies or any font face cannot be
+Node major version, measured terminal cell dimensions, and checksums for
+regular, bold, italic, and bold-italic font faces. If npm dependencies or any font face cannot be
 resolved, cache reuse is disabled. The same file also records the SHA-256
 checksum of each PNG. CI copies a checked-in PNG without starting xterm.js
 only when its ANSI input, renderer identity, and actual PNG bytes all match
@@ -75,7 +80,8 @@ can publish actual ANSI or rendered pixel changes. It checks the live PR head
 and base, downloads the artifact from that exact CI run,
 validates a ZIP of at most 5 MiB before extraction, and permits exactly ten
 PNGs, ten ANSI text snapshots, a renderer identity JSON, and a provenance JSON
-file. Each PNG is bounded to 1 MiB, each text snapshot to 256 KiB, and each
+file. Each PNG is bounded to 1 MiB and validated against the cell dimensions stored
+in the bounded renderer metadata, each text snapshot to 256 KiB, and each
 JSON file to 4 KiB before reading. Extraction rejects extra paths, duplicate names and symlinks
 and enforces both declared and actual output limits. It then checks PNG
 signatures and dimensions, canonical JSON-escaped ANSI rows and renderer
