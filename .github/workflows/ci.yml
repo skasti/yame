@@ -63,7 +63,7 @@ jobs:
           python3 -m pip install PyYAML
           python3 -m unittest discover -s tests -p 'test_release_workflow.py'
           python3 -m unittest discover -s tests -p 'test_tui_previews.py'
-          node --test tests/tui-previews.test.cjs tests/render-tui-previews.test.cjs
+          node --test tests/tui-previews.test.cjs tests/render-tui-previews.test.cjs tests/font-metrics.test.cjs
 
   build-and-test:
     needs: preview-gate
