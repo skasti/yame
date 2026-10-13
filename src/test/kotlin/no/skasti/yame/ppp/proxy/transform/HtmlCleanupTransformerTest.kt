@@ -103,6 +103,20 @@ class HtmlCleanupTransformerTest {
             applyDefault("$retained<main class='x'>News</main>", HtmlTransformerSettings(scriptRemover = false)))
     }
 
+    @Test fun attributesOnRawElementEndTagsAreIgnoredAndFollowingMarkupIsCleaned() {
+        for ((tag, remover) in listOf("script" to ScriptRemover(), "style" to StyleRemover())) {
+            for (ending in listOf(" foo>", " foo='>' >", " data-x=1/>", " data-x=1 / >")) {
+                val raw = "<$tag>example</$tag$ending"
+                assertEquals("<main class='x'>News</main>",
+                    apply(remover, "$raw<main class='x'>News</main>"))
+                assertEquals("<div>News</div>", applyDefault("$raw<main class='x'>News</main>"))
+            }
+        }
+        val retained = "<script>document.write('<main class=\"x\">');</script ignored='>'>"
+        assertEquals("$retained<div>News</div>",
+            applyDefault("$retained<main class='x'>News</main>", HtmlTransformerSettings(scriptRemover = false)))
+    }
+
     @Test fun urlRewritingPreservesAllCleanupSummaries() {
         val input = """<main class="x"><script>go()</script><style>x</style><a href="https://example.com/news">News</a></main>"""
         val source = ResourceRepresentation(200, mapOf("content-type" to listOf("text/html")), input.toByteArray())

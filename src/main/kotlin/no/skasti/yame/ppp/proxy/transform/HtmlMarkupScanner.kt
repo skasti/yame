@@ -42,16 +42,16 @@ internal object HtmlMarkupScanner {
             val tag = html.substring(start, end)
             val name = HtmlCleanupMarkup.name(tag)
             if (!HtmlCleanupMarkup.closing(tag) && name in rawElements) {
-                val closingStart = if (name == "plaintext") -1 else rawClosingStart(html, end, requireNotNull(name))
-                if (closingStart < 0) {
+                val closingTag = if (name == "plaintext") null else rawClosingTag(html, end, requireNotNull(name))
+                if (closingTag == null) {
                     // Unmatched raw elements are retained as one opaque tail, even for a remover.
                     position = start
                     break
                 }
-                val closingEnd = html.indexOf('>', closingStart) + 1
                 if (name !in removeElements &&
-                    (!appendTag(start, end) || !append(end, closingStart) || !appendTag(closingStart, closingEnd))) return html
-                position = closingEnd
+                    (!appendTag(start, end) || !append(end, closingTag.start) ||
+                        !appendTag(closingTag.start, closingTag.end))) return html
+                position = closingTag.end
             } else {
                 if (!appendTag(start, end)) return html
                 position = end
@@ -76,21 +76,25 @@ internal object HtmlMarkupScanner {
         return -1
     }
 
-    private fun rawClosingStart(html: String, start: Int, name: String): Int {
+    private fun rawClosingTag(html: String, start: Int, name: String): RawClosingTag? {
         var position = start
         while (position < html.length) {
             val candidate = html.indexOf("</", position)
-            if (candidate < 0) return -1
-            var end = candidate + 2 + name.length
+            if (candidate < 0) return null
+            val nameEnd = candidate + 2 + name.length
             if (html.regionMatches(candidate + 2, name, 0, name.length, ignoreCase = true)) {
-                while (end < html.length && html[end].isWhitespace()) end++
-                // Browsers tolerate a trailing slash on an end tag; it still closes raw text.
-                if (end < html.length && html[end] == '/') end++
-                while (end < html.length && html[end].isWhitespace()) end++
-                if (end < html.length && html[end] == '>') return candidate
+                val delimiter = html.getOrNull(nameEnd)
+                if (delimiter == '>' || delimiter == '/' || delimiter?.isWhitespace() == true) {
+                    // Browsers ignore attributes and a trailing slash on raw-text end tags.
+                    // Use the quote-aware bounded tag scan so '>' inside a value is not the end.
+                    val end = tagEnd(html, nameEnd)
+                    return if (end < 0) null else RawClosingTag(candidate, end)
+                }
             }
             position = candidate + 2
         }
-        return -1
+        return null
     }
+
+    private data class RawClosingTag(val start: Int, val end: Int)
 }
