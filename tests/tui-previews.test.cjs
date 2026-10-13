@@ -1,6 +1,7 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {parseProof, screenshotOnly, successfulSource, gate, prepare, publish} = require('../scripts/ci/tui-previews.cjs');
+const {parseProof, screenshotOnly, successfulSource, gate, prepare, publish, gitBlobSha, previewPublicationPlan} =
+  require('../scripts/ci/tui-previews.cjs');
 const head = 'a'.repeat(40), parent = 'b'.repeat(40), base = 'c'.repeat(40), mergeSha = 'd'.repeat(40);
 const proof = {pr: 71, run: 123, base};
 const commit = {parents: [{sha: parent}], files: [{filename: 'assets/screenshots/30x100.png', status: 'modified'}],
@@ -80,15 +81,35 @@ test('publisher refuses forks, failed runs, dispatch runs and stale heads', asyn
   }
 });
 
-test('publisher skips Dependabot PRs without fetching artifacts or creating commits', async () => {
+test('publisher delays Dependabot only while the base lacks diffable snapshots', async () => {
   const env = environment({
     sourceRun: {...run, head_sha: head},
     currentPr: {...pr, user: {login: 'dependabot[bot]'}},
   });
   env.github.paginate = async () => { throw new Error('Unexpected artifact lookup'); };
+  env.github.rest.git.getCommit = async () => ({data: {tree: {sha: 'base-tree'}}});
+  env.github.rest.git.getTree = async () => ({data: {truncated: false, tree: []}});
   await prepare(env);
   assert.equal(env.outputs.publish, 'false');
   assert.equal(env.outputs.pr_number, undefined);
+});
+
+test('publisher allows Dependabot when base contains complete snapshots', async () => {
+  const env = environment({
+    sourceRun: {...run, head_sha: head},
+    currentPr: {...pr, user: {login: 'dependabot[bot]'}},
+  });
+  const names = ['30x100', '30x100-proxy', '30x100-dns', '30x100-transfers',
+    '45x135', '45x135-proxy', '45x135-dns', '45x135-transfers',
+    '50x150', '50x150-proxy'];
+  const snapshotPaths = [...names.map(n => n + '.png'), ...names.map(n => n + '.ansi.txt'), 'render-info.json'];
+  env.github.rest.git.getCommit = async () => ({data: {tree: {sha: 'base-tree'}}});
+  env.github.rest.git.getTree = async () => ({data: {truncated: false, tree: snapshotPaths.map(name => ({
+    path: 'assets/screenshots/' + name, sha: 'a'.repeat(40), type: 'blob', mode: '100644',
+  }))}});
+  await prepare(env);
+  assert.equal(env.outputs.publish, 'true');
+  assert.equal(env.outputs.pr_number, 71);
 });
 
 test('publisher permits live same-repo PR with bounded artifact', async () => {
@@ -129,11 +150,11 @@ test('PNG validation rejects arbitrary bytes and incorrect terminal dimensions',
     fs.writeFileSync(file, bytes);
     assert.equal(validatePng(file, '30x100.png').length, 33);
     assert.throws(() => validatePng(file, '45x135.png'), /Invalid screenshot/);
-    assert.throws(() => validatePng(file, '30x100.png', {cellWidth: 9, cellHeight: 19}),
+    assert.throws(() => validatePng(file, '30x100.png', {cellWidth: 10, cellHeight: 20}),
       /Invalid screenshot/);
-    bytes.writeUInt32BE(900, 16); bytes.writeUInt32BE(570, 20);
+    bytes.writeUInt32BE(1000, 16); bytes.writeUInt32BE(600, 20);
     fs.writeFileSync(file, bytes);
-    assert.equal(validatePng(file, '30x100.png', {cellWidth: 9, cellHeight: 19}).length, 33);
+    assert.equal(validatePng(file, '30x100.png', {cellWidth: 10, cellHeight: 20}).length, 33);
   } finally { fs.rmSync(directory, {recursive: true, force: true}); }
 });
 
@@ -181,7 +202,8 @@ test(`publication recovers safely: ${scenario}`, async () => {
     env.github.rest.git = {
       getCommit: async ({commit_sha}) => ({data: commit_sha === mergeSha
         ? {parents: [{sha: base}, {sha: head}]} : {tree: {sha: 'old-tree'}}}),
-      createBlob: async () => ({data: {sha: 'blob'}}),
+      getTree: async () => ({data: {truncated: false, tree: []}}),
+      createBlob: async ({content}) => ({data: {sha: gitBlobSha(Buffer.from(content, 'base64'))}}),
       createTree: async args => { calls.push(['tree', args]); return {data: {sha: scenario === 'unchanged-comment-failed' ? 'old-tree' : 'new-tree'}}; },
       createCommit: async args => { calls.push(['commit', args]); return {data: {sha: successor}}; },
       updateRef: async args => { calls.push(['push', args]); moved = true; if (failureActive && scenario === 'push-timeout') throw new Error('Push timed out'); },
@@ -401,7 +423,7 @@ test('publisher validates canonical, bounded ANSI rows and renderer metadata', (
     assert.equal(validateRendererInfo(info).toString(), JSON.stringify(valid, null, 2) + '\n');
     fs.writeFileSync(info, JSON.stringify({...valid, rendererSha256: 'invalid'}, null, 2) + '\n');
     assert.throws(() => validateRendererInfo(info), /Invalid renderer identity/);
-    fs.writeFileSync(info, JSON.stringify({...valid, terminalOptions: {cellWidth: 0, cellHeight: 19}}, null, 2) + '\n');
+    fs.writeFileSync(info, JSON.stringify({...valid, terminalOptions: {cellWidth: 0, cellHeight: 18}}, null, 2) + '\n');
     assert.throws(() => validateRendererInfo(info), /Invalid renderer identity/);
     fs.writeFileSync(info, JSON.stringify({...valid, pngSha256: {'30x100.png': digest('missing')}}, null, 2) + '\n');
     assert.throws(() => validateRendererInfo(info), /Invalid renderer identity/);
@@ -445,6 +467,7 @@ test('publisher rejects altered PNG bytes against renderer metadata before creat
     let blobs = 0;
     env.github.rest.git.getCommit = async ({commit_sha}) => ({data:
       commit_sha === mergeSha ? {parents: [{sha: base}, {sha: head}]} : {tree: {sha: 'old-tree'}}});
+    env.github.rest.git.getTree = async () => ({data: {truncated: false, tree: []}});
     env.github.rest.git.createBlob = async () => { blobs++; throw new Error('Unexpected blob'); };
     await assert.rejects(publish(env, 71, dir), /PNG digest does not match/);
     assert.equal(blobs, 0);
@@ -460,4 +483,46 @@ test('CI uses the immutable PR base checkout for preview cache inputs', () => {
   assert.ok(ci.includes('path: trusted-preview-base'));
   assert.ok(ci.includes('YAME_TUI_BASELINE_DIR: ' + '$' + '{{ github.workspace }}/trusted-preview-base/assets/screenshots'));
   assert.ok(renderer.includes('process.env.YAME_TUI_BASELINE_DIR'));
+});
+
+test('preview comparison ignores renderer metadata unless PNG or ANSI bytes change', () => {
+  const names = ['30x100.png', '30x100.ansi.txt', 'render-info.json'];
+  const before = [Buffer.from('image'), Buffer.from('ANSI'), Buffer.from('old metadata')];
+  const files = names.map((name, i) => ({name, data: before[i]}));
+  // Full list is needed to mark a baseline as complete. Use the production
+  // allowlist, with mock bytes for every other permitted file.
+  const {filenames} = require('../scripts/ci/render-tui-previews.cjs');
+  const all = [...filenames.map(name => name + '.png'), ...filenames.map(name => name + '.ansi.txt'),
+    'render-info.json'];
+  const prior = new Map(all.map(name => [name, gitBlobSha(files.find(x => x.name === name)?.data || Buffer.from('same'))]));
+  const artifact = all.map(name => ({
+    name, data: files.find(x => x.name === name)?.data || Buffer.from('same'),
+  }));
+  artifact.find(x => x.name === 'render-info.json').data = Buffer.from('new metadata');
+  const unchanged = previewPublicationPlan(artifact, prior);
+  assert.equal(unchanged.complete, true);
+  assert.equal(unchanged.changed, false);
+  assert.equal(unchanged.entries.find(x => x.name === 'render-info.json').sha,
+    gitBlobSha(Buffer.from('old metadata')));
+  assert.ok(unchanged.entries.every(x => x.data === null));
+
+  const changedAnsi = artifact.map(x => x.name === '30x100.ansi.txt'
+    ? {...x, data: Buffer.from('different ANSI')} : x);
+  assert.equal(previewPublicationPlan(changedAnsi, prior).changed, true);
+  const changedImage = artifact.map(x => x.name === '30x100.png'
+    ? {...x, data: Buffer.from('new pixels')} : x);
+  assert.equal(previewPublicationPlan(changedImage, prior).changed, true);
+  const missing = new Map(prior);
+  missing.delete('30x100.ansi.txt');
+  assert.equal(previewPublicationPlan(artifact, missing).complete, false);
+  assert.equal(previewPublicationPlan(artifact, missing).changed, true);
+});
+
+test('base preview lookup refuses truncated trees', async () => {
+  const {basePreviews} = require('../scripts/ci/tui-previews.cjs');
+  const github = {rest: {git: {
+    getCommit: async () => ({data: {tree: {sha: 'base'}}}),
+    getTree: async () => ({data: {truncated: true, tree: []}}),
+  }}};
+  await assert.rejects(basePreviews(github, {owner: 'skasti', repo: 'yame'}, base), /Truncated/);
 });

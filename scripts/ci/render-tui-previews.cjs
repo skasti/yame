@@ -4,14 +4,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const {execFileSync} = require('node:child_process');
+const {measureCellSize} = require('./font-metrics.cjs');
 
 const sizes = [[30, 100], [45, 135], [50, 150]];
 const filenames = sizes.flatMap(([rows, cols]) => [
   `${rows}x${cols}`,
   ...((cols < 150 ? ['proxy', 'dns', 'transfers'] : ['proxy']).map(panel => `${rows}x${cols}-${panel}`)),
 ]);
-const CELL_WIDTH = 9;
-const CELL_HEIGHT = 18;
+const FONT_FAMILY = 'JetBrainsMono Nerd Font Mono';
+const FONT_SIZE = 14;
 const PNG_LIMIT = 1024 * 1024;
 
 function framesToRows(input, expectedRows) {
@@ -42,31 +43,33 @@ function sha256(bytes) {
 
 const terminalOptions = {
   scale: 1,
-  fontFamily: "'DejaVu Sans Mono', monospace",
-  fontSize: 14,
-  cellWidth: CELL_WIDTH,
-  cellHeight: CELL_HEIGHT,
+  fontFamily: "'JetBrainsMono Nerd Font Mono', monospace",
+  fontSize: FONT_SIZE,
   theme: {background: '#101318', foreground: '#dce0e6', cursor: '#101318'},
 };
 
 const FONT_FACES = [
-  'DejaVu Sans Mono:style=Book',
-  'DejaVu Sans Mono:style=Bold',
-  'DejaVu Sans Mono:style=Oblique',
-  'DejaVu Sans Mono:style=Bold Oblique',
+  FONT_FAMILY + ':style=Regular',
+  FONT_FAMILY + ':style=Bold',
+  FONT_FAMILY + ':style=Italic',
+  FONT_FAMILY + ':style=Bold Italic',
 ];
 
-function fontHash(resolve = pattern => {
+function resolveFont(pattern) {
   const output = execFileSync('fc-match', ['-f', '%{family}\\n%{style}\\n%{file}', pattern],
     {encoding: 'utf8', timeout: 5000}).trimEnd().split('\n');
   if (output.length !== 3 || !output[2]) throw new Error('Unknown font face');
   return {family: output[0], style: output[1], bytes: fs.readFileSync(output[2])};
-}) {
+}
+
+function fontHash(resolve = resolveFont) {
   try {
     // Font rendering can select separate bold/italic faces for ANSI styles.
     const faces = FONT_FACES.map(pattern => {
       const font = resolve(pattern);
-      if (!font?.bytes || !font.family || !font.style) throw new Error('Unknown font face');
+      if (!font?.bytes || !font.style || !font.family.split(',').some(f => f.trim() === FONT_FAMILY)) {
+        throw new Error('Expected JetBrainsMono Nerd Font Mono font face');
+      }
       return [pattern, font.family, font.style, sha256(font.bytes)].join('\\0');
     });
     return sha256(Buffer.from(faces.join('\\n')));
@@ -103,13 +106,20 @@ function dependencyHash(root, installedTree = () => execFileSync('npm', ['ls', '
 }
 
 function rendererIdentity(root) {
+  const regular = resolveFont(FONT_FACES[0]);
+  if (!regular.family.split(',').some(f => f.trim() === FONT_FAMILY)) {
+    throw new Error('JetBrainsMono Nerd Font Mono is not installed');
+  }
+  const measured = measureCellSize(regular.bytes, FONT_SIZE);
+  console.log(`Measured ${FONT_FAMILY} at ${FONT_SIZE}px: ${measured.cellWidth}x${measured.cellHeight}px cells; ` +
+    JSON.stringify(measured.metrics));
   return {
     schema: 2,
     rendererSha256: sha256(fs.readFileSync(__filename)),
     dependenciesSha256: dependencyHash(root),
     fontSha256: fontHash(),
     nodeMajor: Number(process.versions.node.split('.')[0]),
-    terminalOptions,
+    terminalOptions: {...terminalOptions, cellWidth: measured.cellWidth, cellHeight: measured.cellHeight},
   };
 }
 
@@ -179,14 +189,15 @@ async function generate({root = process.cwd()} = {}) {
       for (let i = 0; i < frameRows.length; i++) {
         term.feed(`\x1b[${i + 1};1H${frameRows[i]}`);
       }
-      image = Buffer.from(await term.screenshotPng(terminalOptions));
+      image = Buffer.from(await term.screenshotPng(config.terminalOptions));
     } finally {
       await term.close();
     }
     if (image.length > PNG_LIMIT) throw new Error(`Preview exceeds 1 MiB: ${name}`);
     const decode = buffer => PNG.sync.read(buffer);
     const decoded = decode(image);
-    if (decoded.width !== cols * CELL_WIDTH || decoded.height !== rows * CELL_HEIGHT) {
+    if (decoded.width !== cols * config.terminalOptions.cellWidth ||
+        decoded.height !== rows * config.terminalOptions.cellHeight) {
       throw new Error(`Wrong preview dimensions: ${name}`);
     }
     // A mismatched digest forces rendering. Only preserve an older PNG when its
@@ -207,4 +218,4 @@ if (require.main === module) {
   generate().catch(error => {console.error(error); process.exitCode = 1;});
 }
 
-module.exports = {sizes, filenames, framesToRows, frameSnapshot, canReuseFrame, fontHash, dependencyHash, samePixels, generate, CELL_WIDTH, CELL_HEIGHT};
+module.exports = {sizes, filenames, framesToRows, frameSnapshot, canReuseFrame, fontHash, dependencyHash, samePixels, generate, FONT_FAMILY, FONT_SIZE};
