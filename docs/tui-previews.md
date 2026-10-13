@@ -31,8 +31,10 @@ are committed next to the PNGs, so TUI changes are reviewable as text diffs.
 
 Before rendering, CI compares each ANSI snapshot and the `render-info.json`
 renderer identity against the checked-in versions. The identity covers renderer
-source, package dependencies, Node major version, terminal options, and the
-actual selected font file checksum. The same file also records the SHA-256
+source, the resolved installed npm dependency tree (including transitive versions),
+Node major version, terminal options, and checksums for regular, bold, oblique,
+and bold-oblique font faces. If npm dependencies or any font face cannot be
+resolved, cache reuse is disabled. The same file also records the SHA-256
 checksum of each PNG. CI copies a checked-in PNG without starting xterm.js
 only when its ANSI input, renderer identity, and actual PNG bytes all match
 their recorded values. If the font cannot be identified
