@@ -2,7 +2,7 @@ const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const {
   filenames, framesToRows, frameSnapshot, canReuseFrame, fontHash, dependencyHash,
-  samePixels, CELL_WIDTH, CELL_HEIGHT,
+  samePixels, FONT_FAMILY, FONT_SIZE,
 } = require('../scripts/ci/render-tui-previews.cjs');
 
 test('renders exactly the ten approved compact and wide fixtures', () => {
@@ -11,8 +11,8 @@ test('renders exactly the ten approved compact and wide fixtures', () => {
     '45x135', '45x135-proxy', '45x135-dns', '45x135-transfers',
     '50x150', '50x150-proxy',
   ]);
-  assert.equal(CELL_WIDTH, 9);
-  assert.equal(CELL_HEIGHT, 18);
+  assert.equal(FONT_FAMILY, 'JetBrainsMono Nerd Font Mono');
+  assert.equal(FONT_SIZE, 14);
 });
 
 test('ANSI rows retain styles while malformed frame shapes are rejected', () => {
@@ -71,14 +71,14 @@ test('reuse verifies ANSI input, renderer identity, and the checked-in PNG diges
 
 test('font fingerprint includes bold and oblique faces as well as regular', () => {
   const faces = {
-    Book: Buffer.from('regular'),
+    Regular: Buffer.from('regular'),
     Bold: Buffer.from('bold'),
-    Oblique: Buffer.from('italic'),
-    'Bold Oblique': Buffer.from('bold italic'),
+    Italic: Buffer.from('italic'),
+    'Bold Italic': Buffer.from('bold italic'),
   };
   const resolve = pattern => {
     const style = pattern.split('style=')[1];
-    return {family: 'DejaVu Sans Mono', style, bytes: faces[style]};
+    return {family: FONT_FAMILY, style, bytes: faces[style]};
   };
   const original = fontHash(resolve);
   assert.match(original, /^[a-f0-9]{64}$/);
@@ -89,6 +89,8 @@ test('font fingerprint includes bold and oblique faces as well as regular', () =
     faces[style] = originalBytes;
   }
   assert.equal(fontHash(() => null), null);
+  assert.equal(fontHash(() => ({family: 'DejaVu Sans Mono', style: 'Regular',
+    bytes: Buffer.from('fallback')})), null);
 });
 
 test('dependency fingerprint tracks transitive versions independent of JSON map order', () => {
