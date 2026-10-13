@@ -162,7 +162,7 @@ jobs:
         if: needs.preview-gate.outputs.reuse != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: yame-tui-screenshots-v2
+          name: yame-tui-screenshots-v3
           path: build/reports/tui-screenshots/
           if-no-files-found: error
           retention-days: 30
