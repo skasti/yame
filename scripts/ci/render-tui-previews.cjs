@@ -58,7 +58,7 @@ const FONT_FACES = [
 
 function fontHash(resolve = pattern => {
   const output = execFileSync('fc-match', ['-f', '%{family}\\n%{style}\\n%{file}', pattern],
-    {encoding: 'utf8', timeout: 5000}).trimEnd().split('\\n');
+    {encoding: 'utf8', timeout: 5000}).trimEnd().split('\n');
   if (output.length !== 3 || !output[2]) throw new Error('Unknown font face');
   return {family: output[0], style: output[1], bytes: fs.readFileSync(output[2])};
 }) {
