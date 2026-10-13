@@ -32,11 +32,15 @@ are committed next to the PNGs, so TUI changes are reviewable as text diffs.
 Before rendering, CI compares each ANSI snapshot and the `render-info.json`
 renderer identity against the checked-in versions. The identity covers renderer
 source, package dependencies, Node major version, terminal options, and the
-actual selected font file checksum. If all match and a PNG exists, CI copies
-the checked-in PNG without starting xterm.js. If the font cannot be identified
+actual selected font file checksum. The same file also records the SHA-256
+checksum of each PNG. CI copies a checked-in PNG without starting xterm.js
+only when its ANSI input, renderer identity, and actual PNG bytes all match
+their recorded values. If the font cannot be identified
 reliably, the cache is disabled. Set `YAME_FORCE_TUI_RENDER=1` to force rendering.
-Changed input is rendered, but a pixel-for-pixel comparison still reuses the
-old PNG bytes if the image itself did not change (including compression/metadata
+Changed or tampered PNG bytes force rendering, and the privileged publisher
+checks every output PNG against the SHA-256 digest in the generated metadata
+before creating Git objects. Changed input is rendered, but a pixel-for-pixel
+comparison still reuses the old PNG bytes if the image itself did not change (including compression/metadata
 differences). The first PR after adoption may bootstrap the new text snapshots
 and renderer identity even if its own change is unrelated to the TUI.
 The privileged publisher validates bounded text snapshots and metadata, but
