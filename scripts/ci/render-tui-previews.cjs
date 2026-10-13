@@ -81,16 +81,19 @@ function dependencyHash(root, installedTree = () => execFileSync('npm', ['ls', '
   try {
     const tree = JSON.parse(installedTree());
     const packages = [];
-    const visit = (node, path) => {
-      if (typeof node?.version !== 'string') throw new Error('Unresolved dependency');
-      packages.push([path, node.name || '', node.version].join('\\0'));
+    const visit = (node, path, isRoot = false) => {
+      // This project's package.json intentionally has no version field.
+      if (!node || (!isRoot && typeof node.version !== 'string')) {
+        throw new Error('Unresolved dependency');
+      }
+      packages.push([path, node.name || '', node.version || '(root)'].join('\\0'));
       for (const [name, child] of Object.entries(node.dependencies || {}).sort(
         ([a], [b]) => a.localeCompare(b))) {
         visit(child, path + '/' + name);
       }
     };
     if (!tree.dependencies || !Object.keys(tree.dependencies).length) return null;
-    visit(tree, 'root');
+    visit(tree, 'root', true);
     const manifest = fs.readFileSync(require('node:path').join(root, 'package.json'));
     return sha256(Buffer.concat([manifest, Buffer.from('\\n' + packages.join('\\n'))]));
   } catch {
