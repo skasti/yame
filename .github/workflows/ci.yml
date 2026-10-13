@@ -133,11 +133,20 @@ jobs:
         if: needs.preview-gate.outputs.reuse != 'true'
         run: npm install --ignore-scripts --no-audit --no-fund --package-lock=false
 
-      - name: Install fixed preview font
+      - name: Install pinned JetBrainsMono Nerd Font Mono
         if: needs.preview-gate.outputs.reuse != 'true'
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes fonts-dejavu-core
+          set -euo pipefail
+          archive="$RUNNER_TEMP/JetBrainsMono-v3.5.1.tar.xz"
+          curl --fail --location --retry 3 --output "$archive" \
+            https://github.com/ryanoasis/nerd-fonts/releases/download/v3.5.1/JetBrainsMono.tar.xz
+          echo "04d5e8f903693f9dd13e16f867e994834e681eb3c72c0d337a770dcda09010cf  $archive" | sha256sum --check
+          font_dir="$HOME/.local/share/fonts/yame-preview"
+          mkdir -p "$font_dir"
+          tar --extract --xz --file "$archive" --directory "$font_dir" \
+            --wildcards --no-anchored 'JetBrainsMonoNerdFontMono-*.ttf'
+          fc-cache --force "$font_dir"
+          fc-match -f '%{family}: %{style}\\n' 'JetBrainsMono Nerd Font Mono:style=Regular'
 
       # Compare only to files from the immutable PR base, not the PR checkout.
       - name: Check out immutable screenshot baseline
