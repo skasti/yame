@@ -136,17 +136,21 @@ test(`publication recovers safely: ${scenario}`, async () => {
   try {
     const names = ['30x100', '30x100-proxy', '30x100-dns', '30x100-transfers',
       '45x135', '45x135-proxy', '45x135-dns', '45x135-transfers', '50x150', '50x150-proxy'];
+    const hashes = {};
+    const {createHash} = require('node:crypto');
     for (const name of names) {
       const [rows, columns] = name.match(/^(\d+)x(\d+)/).slice(1).map(Number);
       const png = Buffer.alloc(33); Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(png);
       png.write('IHDR', 12); png.writeUInt32BE(columns * 9, 16); png.writeUInt32BE(rows * 18, 20);
       fs.writeFileSync(path.join(directory, `${name}.png`), png);
+      hashes[`${name}.png`] = createHash('sha256').update(png).digest('hex');
       fs.writeFileSync(path.join(directory, `${name}.ansi.txt`),
         Array(rows).fill(JSON.stringify('synthetic frame')).join('\n') + '\n');
     }
     fs.writeFileSync(path.join(directory, 'render-info.json'), JSON.stringify({
-      schema: 1, rendererSha256: 'a'.repeat(64), dependenciesSha256: 'b'.repeat(64),
+      schema: 2, rendererSha256: 'a'.repeat(64), dependenciesSha256: 'b'.repeat(64),
       fontSha256: 'c'.repeat(64), nodeMajor: 24, terminalOptions: {scale: 1},
+      pngSha256: hashes,
     }, null, 2) + '\n');
     fs.writeFileSync(path.join(directory, 'source.json'), JSON.stringify({run: 123, pr: 71, head, base, merge: mergeSha}));
     env.github.rest.pulls.get = async () => {
@@ -354,6 +358,11 @@ test('publisher validates canonical, bounded ANSI rows and renderer metadata', (
   const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
   const {validateFrame, validateRendererInfo} = require('../scripts/ci/tui-previews.cjs');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yame-ansi-'));
+  const {createHash} = require('node:crypto');
+  const digest = data => createHash('sha256').update(data).digest('hex');
+  const pngNames = ['30x100.png', '30x100-proxy.png', '30x100-dns.png', '30x100-transfers.png',
+    '45x135.png', '45x135-proxy.png', '45x135-dns.png', '45x135-transfers.png',
+    '50x150.png', '50x150-proxy.png'];
   try {
     const frame = path.join(dir, '30x100.ansi.txt');
     const rows = Array(30).fill(JSON.stringify('\x1b[31mTUI\x1b[0m')).join('\n') + '\n';
@@ -367,12 +376,58 @@ test('publisher validates canonical, bounded ANSI rows and renderer metadata', (
     assert.throws(() => validateFrame(frame, '30x100.ansi.txt'), /Invalid ANSI/);
 
     const info = path.join(dir, 'render-info.json');
-    const valid = {schema: 1, rendererSha256: 'a'.repeat(64),
+    const valid = {schema: 2, rendererSha256: 'a'.repeat(64),
       dependenciesSha256: 'b'.repeat(64), fontSha256: null,
-      nodeMajor: 24, terminalOptions: {fontSize: 14}};
+      nodeMajor: 24, terminalOptions: {fontSize: 14},
+      pngSha256: Object.fromEntries(pngNames.map(name => [name, digest(name)]))};
     fs.writeFileSync(info, JSON.stringify(valid, null, 2) + '\n');
     assert.equal(validateRendererInfo(info).toString(), JSON.stringify(valid, null, 2) + '\n');
     fs.writeFileSync(info, JSON.stringify({...valid, rendererSha256: 'invalid'}, null, 2) + '\n');
     assert.throws(() => validateRendererInfo(info), /Invalid renderer identity/);
+    fs.writeFileSync(info, JSON.stringify({...valid, pngSha256: {'30x100.png': digest('missing')}}, null, 2) + '\n');
+    assert.throws(() => validateRendererInfo(info), /Invalid renderer identity/);
+  } finally { fs.rmSync(dir, {recursive: true, force: true}); }
+});
+
+test('publisher rejects altered PNG bytes against renderer metadata before creating blobs', async () => {
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+  const {createHash} = require('node:crypto');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yame-unsafe-preview-'));
+  const names = ['30x100', '30x100-proxy', '30x100-dns', '30x100-transfers',
+    '45x135', '45x135-proxy', '45x135-dns', '45x135-transfers',
+    '50x150', '50x150-proxy'];
+  const sha256 = data => createHash('sha256').update(data).digest('hex');
+  try {
+    const hashes = {};
+    for (const name of names) {
+      const [rows, columns] = name.match(/^(\d+)x(\d+)/).slice(1).map(Number);
+      const png = Buffer.alloc(33);
+      Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(png);
+      png.write('IHDR', 12); png.writeUInt32BE(columns * 9, 16);
+      png.writeUInt32BE(rows * 18, 20);
+      fs.writeFileSync(path.join(dir, name + '.png'), png);
+      hashes[name + '.png'] = sha256(png);
+      fs.writeFileSync(path.join(dir, name + '.ansi.txt'),
+        Array(rows).fill(JSON.stringify('frame')).join('\n') + '\n');
+    }
+    fs.writeFileSync(path.join(dir, 'render-info.json'), JSON.stringify({
+      schema: 2, rendererSha256: 'a'.repeat(64), dependenciesSha256: 'b'.repeat(64),
+      fontSha256: 'c'.repeat(64), nodeMajor: 24,
+      terminalOptions: {scale: 1}, pngSha256: hashes,
+    }, null, 2) + '\n');
+    fs.writeFileSync(path.join(dir, 'source.json'),
+      JSON.stringify({run: 123, pr: 71, head, base, merge: mergeSha}));
+    // Keep PNG signature/size valid but tamper with the byte contents.
+    const target = path.join(dir, '30x100.png');
+    const bytes = fs.readFileSync(target);
+    bytes[32] ^= 1;
+    fs.writeFileSync(target, bytes);
+    const env = environment({sourceRun: {...run, head_sha: head}});
+    let blobs = 0;
+    env.github.rest.git.getCommit = async ({commit_sha}) => ({data:
+      commit_sha === mergeSha ? {parents: [{sha: base}, {sha: head}]} : {tree: {sha: 'old-tree'}}});
+    env.github.rest.git.createBlob = async () => { blobs++; throw new Error('Unexpected blob'); };
+    await assert.rejects(publish(env, 71, dir), /PNG digest does not match/);
+    assert.equal(blobs, 0);
   } finally { fs.rmSync(dir, {recursive: true, force: true}); }
 });
