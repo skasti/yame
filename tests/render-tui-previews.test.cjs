@@ -43,16 +43,23 @@ test('ANSI snapshots escape control characters into reviewable UTF-8 rows', () =
   assert.deepEqual(snapshot.trimEnd().split('\n').map(JSON.parse), rows);
 });
 
-test('reuse requires identical snapshot, fingerprinted font and full renderer identity', () => {
-  const config = {schema: 1, fontSha256: 'a'.repeat(64)};
-  const prior = JSON.stringify(config, null, 2) + '\n';
-  assert.equal(canReuseFrame('frame', 'frame', config, prior, true), true);
-  assert.equal(canReuseFrame('changed', 'frame', config, prior, true), false);
-  assert.equal(canReuseFrame('frame', 'frame', config, 'other', true), false);
-  assert.equal(canReuseFrame('frame', 'frame', config, prior, false), false);
-  assert.equal(canReuseFrame('frame', 'frame', config, prior, true, true), false);
-  assert.equal(canReuseFrame('frame', 'frame', config, null, true), false);
+test('reuse verifies ANSI input, renderer identity, and the checked-in PNG digest', () => {
+  const {createHash} = require('node:crypto');
+  const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+  const config = {schema: 2, fontSha256: 'a'.repeat(64), rendererSha256: 'b'.repeat(64)};
+  const png = Buffer.from('rendered PNG placeholder');
+  const previous = {...config, pngSha256: {'30x100.png': hash(png)}};
+  const reuse = (snapshot, old, metadata, image, force = false) =>
+    canReuseFrame(snapshot, old, config, metadata, '30x100.png', image, force);
+  assert.equal(reuse('frame', 'frame', previous, png), true);
+  assert.equal(reuse('changed', 'frame', previous, png), false);
+  assert.equal(reuse('frame', 'frame', previous, Buffer.from('replaced PNG')), false);
+  assert.equal(reuse('frame', 'frame', {...previous, pngSha256: {}}, png), false);
+  assert.equal(reuse('frame', 'frame', {...previous, rendererSha256: 'c'.repeat(64)}, png), false);
+  assert.equal(reuse('frame', 'frame', previous, null), false);
+  assert.equal(reuse('frame', 'frame', previous, png, true), false);
+  assert.equal(reuse('frame', 'frame', null, png), false);
   const unknownFont = {...config, fontSha256: null};
   assert.equal(canReuseFrame('frame', 'frame', unknownFont,
-    JSON.stringify(unknownFont, null, 2) + '\n', true), false);
+    {...unknownFont, pngSha256: previous.pngSha256}, '30x100.png', png), false);
 });
