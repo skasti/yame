@@ -1,5 +1,15 @@
 package no.skasti.yame.ui
 
+import no.skasti.yame.config.ConfigStore
+import no.skasti.yame.function.FunctionStore
+import no.skasti.yame.serial.SerialSettings
+import no.skasti.yame.serial.ConnectionFunctions
+import no.skasti.yame.modem.ModemSettings
+import no.skasti.yame.modem.LoginCredentials
+import no.skasti.yame.ppp.dns.DnsSettings
+import no.skasti.yame.ppp.proxy.ProxySettings
+import no.skasti.yame.logging.LogSettings
+import no.skasti.yame.lifecycle.ApplicationFunctions
 import com.github.ajalt.mordant.animation.textAnimation
 import com.github.ajalt.mordant.rendering.TextColors.Companion.gray
 import com.github.ajalt.mordant.rendering.TextColors.brightBlue
@@ -38,22 +48,35 @@ class TuiYameObserver(
     initialHttpProxyEnabled: Boolean,
     initialToneSimulationEnabled: Boolean,
     initialCaptureLimits: PacketCaptureLimits = PacketCaptureLimits(),
-    private val onCaptureLimitSelected: (PacketCaptureLimitKind, Int) -> Unit = { _, _ -> },
     initialLogLevels: Map<YameLogModule, YameLogLevel> = emptyMap(),
-    private val onQuit: () -> Unit = {},
-    private val onPortSelected: (String) -> Unit = {},
-    private val onBaudSelected: (Int) -> Unit = {},
-    private val onFlowControlSelected: (SerialFlowControl) -> Unit = {},
-    private val onDnsUpstreamSelected: (String) -> Unit = {},
-    private val onHttpProxySelected: (Boolean) -> Unit = {},
-    private val onToneSimulationSelected: (Boolean) -> Unit = {},
-    private val onLogLevelSelected: (YameLogModule, YameLogLevel) -> Unit = { _, _ -> },
-    private val onLoginAdded: (String, String) -> Unit = { _, _ -> },
-    private val onDisconnect: () -> Unit = {},
-    private val onReconnect: () -> Unit = {},
-    private val onRefreshPorts: () -> Unit = {},
     private val terminal: Terminal = Terminal(interactive = true),
-) : AutoCloseable {
+    configStore: ConfigStore = no.skasti.yame.config.applicationConfigStore(no.skasti.yame.config.YameConfiguration(
+        portName = initialPortName, baudRate = initialBaud, flowControl = initialFlowControl,
+        modemConfig = no.skasti.yame.modem.HayesModemConfig(
+            pppDnsConfig = no.skasti.yame.ppp.dns.PppDnsConfig(no.skasti.yame.ppp.ip.Ipv4Address.parse(initialDnsUpstream)),
+            pppHttpCompatibilityConfig = no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig(enabled = initialHttpProxyEnabled),
+            toneSimulationEnabled = initialToneSimulationEnabled,
+        ),
+        captureLimits = initialCaptureLimits,
+        logLevels = no.skasti.yame.logging.YameLogManager.defaultLevels() + initialLogLevels,
+    )),
+    functions: FunctionStore = FunctionStore(),
+) : AutoCloseable, no.skasti.yame.runtime.RuntimeObserver {
+    private val paletteRegistry = CommandPalette()
+    private val onPortSelected: (String) -> Unit = { value -> configStore.set(SerialSettings.Port to value) }
+    private val onBaudSelected: (Int) -> Unit = { value -> configStore.set(SerialSettings.Baud to value) }
+    private val onFlowControlSelected: (SerialFlowControl) -> Unit = { value -> configStore.set(SerialSettings.FlowControl to value) }
+    private val onDnsUpstreamSelected: (String) -> Unit = { value -> configStore.set(DnsSettings.Upstream to no.skasti.yame.ppp.ip.Ipv4Address.parse(value)) }
+    private val onHttpProxySelected: (Boolean) -> Unit = { value -> configStore.set(ProxySettings.Enabled to value) }
+    private val onToneSimulationSelected: (Boolean) -> Unit = { value -> configStore.set(ModemSettings.Tone to value) }
+    private val onQuit: () -> Unit = { functions.invoke(ApplicationFunctions.Quit) }
+    private val onDisconnect: () -> Unit = { functions.invoke(ConnectionFunctions.Disconnect) }
+    private val onReconnect: () -> Unit = { functions.invoke(ConnectionFunctions.Reconnect) }
+    private val onRefreshPorts: () -> Unit = { functions.invoke(ConnectionFunctions.RefreshPorts) }
+    private val onCaptureLimitSelected: (PacketCaptureLimitKind, Int) -> Unit = { kind, value -> configStore.set(LogSettings.CaptureLimits.getValue(kind) to value) }
+    private val onLogLevelSelected: (YameLogModule, YameLogLevel) -> Unit = { module, level -> configStore.set(LogSettings.Levels.getValue(module) to level) }
+    private val onLoginAdded: (String, String) -> Unit = { username, password -> configStore.set(ModemSettings.Login to LoginCredentials(username, password)) }
+
     private var captureLimits = initialCaptureLimits
 
     @Synchronized
@@ -109,7 +132,20 @@ class TuiYameObserver(
     var stopRequested: Boolean = false
         private set
 
-    private val commandRegistrations = registerCommands()
+    private val commandRegistrations = registerCommands() + registerTransformerCommands(configStore, paletteRegistry)
+    private val configurationSubscription = configStore.onChange.subscribe(initial = true) { changes ->
+        synchronized(this) {
+            changes[SerialSettings.Port]?.let { portName = it.value }
+            changes[SerialSettings.Baud]?.let { baud = it.value }
+            changes[SerialSettings.FlowControl]?.let { flowControl = it.value }
+            changes[DnsSettings.Upstream]?.let { dnsUpstream = it.value.toString() }
+            changes[ProxySettings.Enabled]?.let { httpProxyEnabled = it.value }
+            changes[ModemSettings.Tone]?.let { toneSimulationEnabled = it.value }
+            LogSettings.Levels.forEach { (module, key) -> changes[key]?.let { logLevels[module] = it.value } }
+            LogSettings.CaptureLimits.forEach { (kind, key) -> changes[key]?.let { captureLimits = kind.apply(captureLimits, it.value) } }
+            render()
+        }
+    }
 
     @Synchronized
     internal fun paletteSnapshot(): TuiCommandPalette? = commandPalette
@@ -167,13 +203,13 @@ class TuiYameObserver(
     }
 
     @Synchronized
-    fun updateConnected(value: Boolean) {
+    override fun updateConnected(value: Boolean) {
         connected = value
         render()
     }
 
     @Synchronized
-    fun closeActiveTransfers(detail: String? = null) {
+    override fun closeActiveTransfers(detail: String?) {
         if (transfers.isEmpty()) return
         val now = System.nanoTime()
         transfers.replaceAll { _, transfer ->
@@ -194,7 +230,7 @@ class TuiYameObserver(
     }
 
     @Synchronized
-    fun updateAvailablePorts(ports: List<SerialPortDescriptor>) {
+    override fun updateAvailablePorts(ports: List<SerialPortDescriptor>) {
         val previousPalette = commandPalette
         val selectedValue = previousPalette
             ?.takeIf { it.mode == TuiPaletteMode.PORTS }
@@ -227,7 +263,7 @@ class TuiYameObserver(
     }
 
     @Synchronized
-    fun onLog(message: String) {
+    override fun onLog(message: String) {
         appendLog(message)
         render()
     }
@@ -241,7 +277,7 @@ class TuiYameObserver(
     }
 
     @Synchronized
-    fun onEvent(event: YameEvent) {
+    override fun onEvent(event: YameEvent) {
         when (event) {
             is YameEvent.UnhandledPacket -> appendLog(event.reason)
             is YameEvent.DnsQuery -> {
@@ -805,7 +841,9 @@ class TuiYameObserver(
             pendingAction
         }
 
-        action?.invoke()
+        try { action?.invoke() } catch (error: Exception) {
+            onLog("Command failed: ${error.javaClass.simpleName}")
+        }
     }
 
     private fun movePaletteSelection(delta: Int) {
@@ -877,7 +915,7 @@ class TuiYameObserver(
         val selected = palette.options.getOrNull(palette.selectedIndex) ?: return null
         return when (palette.mode) {
             TuiPaletteMode.COMMANDS -> {
-                val item = CommandPalette.find(palette.palettePath)?.item(selected.value) ?: return null
+                val item = paletteRegistry.find(palette.palettePath)?.item(selected.value) ?: return null
                 when (item) {
                     is Palette -> {
                         val path = palette.palettePath.trimEnd('/') + "/" + paletteCommandKey(item.command)
@@ -967,13 +1005,13 @@ class TuiYameObserver(
                 selectedIndex = 0,
             )
         }
-        return registeredCommandPalette(normalized, path)
+        return registeredCommandPalette(normalized, path, paletteRegistry)
     }
 
     private fun registerCommands(): List<AutoCloseable> {
         val handles = mutableListOf<AutoCloseable>()
         fun add(command: String, description: String, action: () -> Unit) {
-            handles += CommandPalette.add(PaletteChoice(command, { description }, action))
+            handles += paletteRegistry.add(PaletteChoice(command, { description }, action))
         }
         try {
             add("/port", "Select serial port") { onRefreshPorts(); openPortPalette() }
@@ -1062,6 +1100,7 @@ class TuiYameObserver(
     override fun close() {
         if (closed) return
         closed = true
+        configurationSubscription.close()
         commandRegistrations.forEach(AutoCloseable::close)
         headerTimer.shutdownNow()
         keyboardInput?.close()

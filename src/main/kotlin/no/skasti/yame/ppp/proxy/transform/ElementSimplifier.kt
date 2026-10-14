@@ -3,14 +3,12 @@ package no.skasti.yame.ppp.proxy.transform
 import no.skasti.yame.config.ElementSimplifierConfiguration
 import no.skasti.yame.config.ElementSimplifierRule
 import no.skasti.yame.config.HtmlTransformer
-import no.skasti.yame.config.HtmlTransformerControl
 
 /** Apply explicit tag mappings; unknown elements and existing headings/paragraphs stay intact. */
 internal class ElementSimplifier(
     private val configuration: ElementSimplifierConfiguration = ElementSimplifierConfiguration.defaults(),
     private val maxOutputBytes: Int = 16 * 1024 * 1024,
-    control: HtmlTransformerControl? = null,
-) : HtmlCleanupTransformer(HtmlTransformer.ELEMENT_SIMPLIFIER, control) {
+) : HtmlCleanupTransformer(HtmlTransformer.ELEMENT_SIMPLIFIER) {
     init {
         require(maxOutputBytes > 0) { "Element-simplifier output limit must be positive" }
     }

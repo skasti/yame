@@ -200,7 +200,6 @@ class YameConfigurationStore(private val path: Path) {
             } catch (_: AtomicMoveNotSupportedException) {
                 Files.move(temporary, destination, StandardCopyOption.REPLACE_EXISTING)
             }
-            restrictPermissions(destination)
         } finally {
             Files.deleteIfExists(temporary)
         }

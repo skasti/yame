@@ -1,6 +1,5 @@
 package no.skasti.yame.config
 
-import java.util.concurrent.atomic.AtomicReference
 
 enum class HtmlTransformer(val command: String) {
     SCRIPT_REMOVER("script-remover"),
@@ -32,31 +31,27 @@ data class HtmlTransformerSettings(
     val profileToken: String get() = HtmlTransformer.entries.joinToString("") { if (enabled(it)) "1" else "0" }
 }
 
-/** Shared across PPP/TCP instances; each HTTP request takes one immutable snapshot. */
+/** Read-through request snapshot adapter; authoritative state lives exclusively in ConfigStore. */
 class HtmlTransformerControl(
     initial: HtmlTransformerSettings,
-    private val onChanged: (HtmlTransformerSettings) -> Unit = {},
+    val configStore: ConfigStore = applicationConfigStore(YameConfiguration(
+        modemConfig = no.skasti.yame.modem.HayesModemConfig(
+            pppHttpCompatibilityConfig = no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig(htmlTransformers = initial),
+        ),
+    )),
 ) : AutoCloseable {
-    private val settings = AtomicReference(initial)
-    private val registrations = linkedMapOf<HtmlTransformer, AutoCloseable>()
-    private var closed = false
-
-    fun snapshot(): HtmlTransformerSettings = settings.get()
-
+    fun snapshot(): HtmlTransformerSettings {
+        val changes = configStore.snapshot()
+        val keys = no.skasti.yame.ppp.proxy.transform.TransformerSettings
+        return HtmlTransformerSettings(
+            scriptRemover = requireNotNull(changes[keys.Script]).value,
+            styleRemover = requireNotNull(changes[keys.Style]).value,
+            attributeCleaner = requireNotNull(changes[keys.Attributes]).value,
+            elementSimplifier = requireNotNull(changes[keys.Elements]).value,
+        )
+    }
     fun setEnabled(transformer: HtmlTransformer, enabled: Boolean) {
-        val previous = settings.getAndUpdate { it.withEnabled(transformer, enabled) }
-        if (previous.enabled(transformer) != enabled) onChanged(snapshot())
+        configStore.set(no.skasti.yame.ppp.proxy.transform.TransformerSettings.key(transformer) to enabled)
     }
-
-    @Synchronized
-    internal fun registerOnce(transformer: HtmlTransformer, register: () -> AutoCloseable) {
-        if (!closed && transformer !in registrations) registrations[transformer] = register()
-    }
-
-    @Synchronized
-    override fun close() {
-        closed = true
-        registrations.values.forEach(AutoCloseable::close)
-        registrations.clear()
-    }
+    override fun close() {}
 }

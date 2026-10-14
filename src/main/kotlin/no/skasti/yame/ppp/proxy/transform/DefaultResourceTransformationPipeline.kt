@@ -11,10 +11,10 @@ internal fun defaultResourceTransformationPipeline(
     val imagePolicy = ImageOptimizationPolicy(maxEncodedBytes = maxResponseBytes)
     return ResourceTransformationPipeline(
         listOf(
-            ScriptRemover(control),
-            StyleRemover(control),
-            AttributeCleaner(control),
-            ElementSimplifier(elementSimplifier, maxResponseBytes, control),
+            ScriptRemover(),
+            StyleRemover(),
+            AttributeCleaner(),
+            ElementSimplifier(elementSimplifier, maxResponseBytes),
             LegacyTextResourceTransformer(),
             ImageTagTransformer(imagePolicy),
             JpegResourceTransformer(imagePolicy),

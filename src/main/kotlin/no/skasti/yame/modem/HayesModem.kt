@@ -83,7 +83,7 @@ class HayesModem(
         }
     }
 
-    fun updateLoginCredentials(username: String, password: String) {
+    fun updateLoginCredentials(username: String?, password: String?) {
         val validated = config.copy(username = username, password = password)
         loginCredentials = LoginCredentials(validated.username, validated.password)
     }

@@ -20,7 +20,6 @@ import no.skasti.yame.serial.SerialFlowControl
 import no.skasti.yame.tone.DialString
 import no.skasti.yame.tone.HandshakeProfile
 import no.skasti.yame.ui.InteractiveYameApplication
-import java.util.concurrent.CountDownLatch
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.time.Duration
@@ -142,67 +141,25 @@ fun main(args: Array<String>) {
         return
     }
 
-    val modemConsoleLogger: (String) -> Unit = { message ->
-        println(message)
-        logManager.logger(YameLogModule.MODEM)(message)
-    }
-    val pppConsoleLogger: (String) -> Unit = { message ->
-        println(message)
-        logManager.logger(YameLogModule.PPP)(message)
-    }
-    val dnsConsoleLogger: (String) -> Unit = { message ->
-        println(message)
-        logManager.debugLogger(YameLogModule.DNS)(message)
-    }
-    val transferConsoleLogger: (String) -> Unit = { message ->
-        println(message)
-        logManager.debugLogger(YameLogModule.TRANSFERS)(message)
-    }
-    val proxyConsoleLogger: (String) -> Unit = { message ->
-        println(message)
-        logManager.debugLogger(YameLogModule.PROXY)(message)
-    }
-    val serialConsoleLogger: (String) -> Unit = { message ->
-        println(message)
-        logManager.logger(YameLogModule.SERIAL)(message)
-    }
-    val modem = HayesModem(
-        baudRate = options.baudRate,
-        config = options.modemConfig,
-        logger = modemConsoleLogger,
-        pppLogger = pppConsoleLogger,
-        dnsLogger = dnsConsoleLogger,
-        transferLogger = transferConsoleLogger,
-        proxyLogger = proxyConsoleLogger,
-        eventSink = logManager::eventSink,
+    val effectiveConfiguration = YameConfiguration(
+        portName, options.baudRate, options.flowControl, options.modemConfig, options.captureLimits, options.logLevels,
     )
-    val connection = SerialConnection(
-        portName = portName,
-        baudRate = options.baudRate,
-        flowControl = options.flowControl,
-        logger = serialConsoleLogger,
+    val runtimeConfigStore = no.skasti.yame.config.applicationConfigStore(savedConfiguration, effectiveConfiguration, configStore::save)
+    val functions = no.skasti.yame.function.FunctionStore()
+    val runtime = no.skasti.yame.runtime.YameRuntime(
+        portName, options.baudRate, options.flowControl, options.modemConfig,
+        object : no.skasti.yame.runtime.RuntimeObserver {
+            override fun onLog(message: String) { println(message) }
+        },
+        runtimeConfigStore, functions,
+        logManager = logManager, initialLogLevels = options.logLevels,
     )
-    val shutdown = CountDownLatch(1)
-
-    try {
-        connection.open()
-        modem.attachOutput(connection.output)
-        modem.attachCarrierPresent(connection::setCarrierPresent)
-    } catch (e: Exception) {
-        modem.close()
-        connection.close()
-        throw e
+    val hook = Thread(runtime::close, "yame-shutdown")
+    Runtime.getRuntime().addShutdownHook(hook)
+    try { runtime.run() } finally {
+        runtime.close()
+        runCatching { Runtime.getRuntime().removeShutdownHook(hook) }
     }
-
-    Runtime.getRuntime().addShutdownHook(Thread {
-        modem.close()
-        connection.close()
-        shutdown.countDown()
-    })
-
-    connection.startReading(modem::receive)
-    println("YAME ready. Press Ctrl+C to stop.")
-    shutdown.await()
     } finally {
         logManager.close()
     }

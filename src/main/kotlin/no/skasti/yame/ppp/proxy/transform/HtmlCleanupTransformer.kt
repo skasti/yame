@@ -2,8 +2,6 @@ package no.skasti.yame.ppp.proxy.transform
 
 import java.util.Locale
 import no.skasti.yame.config.HtmlTransformer
-import no.skasti.yame.config.HtmlTransformerControl
-import no.skasti.yame.ui.registerTransformerCommand
 
 /**
  * The four independently registered stages deliberately operate on markup, not a reconstructed DOM:
@@ -11,10 +9,8 @@ import no.skasti.yame.ui.registerTransformerCommand
  */
 internal abstract class HtmlCleanupTransformer(
     transformer: HtmlTransformer,
-    control: HtmlTransformerControl? = null,
 ) : ResourceTransformer {
     final override val id = transformer.command
-    init { control?.let { registerTransformerCommand(transformer, it) } }
     override val phase = ResourceTransformPhase.STRUCTURAL
     override val cacheable = true
 
@@ -56,14 +52,14 @@ internal object HtmlCleanupMarkup {
 }
 
 /** Removes executable script elements and their contents, not script-looking text in attributes. */
-internal class ScriptRemover(control: HtmlTransformerControl? = null) : HtmlCleanupTransformer(HtmlTransformer.SCRIPT_REMOVER, control) {
+internal class ScriptRemover() : HtmlCleanupTransformer(HtmlTransformer.SCRIPT_REMOVER) {
     override val priority = 10
     override fun clean(html: String): String =
         HtmlMarkupScanner.rewrite(html, removeElements = setOf("script"))
 }
 
 /** Removes embedded style blocks and stylesheet link elements; does not fetch them. */
-internal class StyleRemover(control: HtmlTransformerControl? = null) : HtmlCleanupTransformer(HtmlTransformer.STYLE_REMOVER, control) {
+internal class StyleRemover() : HtmlCleanupTransformer(HtmlTransformer.STYLE_REMOVER) {
     override val priority = 20
     override fun clean(html: String): String {
         return HtmlMarkupScanner.rewrite(html, removeElements = setOf("style")) { tag ->
@@ -78,7 +74,7 @@ internal class StyleRemover(control: HtmlTransformerControl? = null) : HtmlClean
 }
 
 /** Preserve navigation, form, image and accessibility attributes; remove presentation and JS hooks. */
-internal class AttributeCleaner(control: HtmlTransformerControl? = null) : HtmlCleanupTransformer(HtmlTransformer.ATTRIBUTE_CLEANER, control) {
+internal class AttributeCleaner() : HtmlCleanupTransformer(HtmlTransformer.ATTRIBUTE_CLEANER) {
     // Strip upstream styles before ElementSimplifier adds explicitly configured legacy styles.
     override val priority = 30
     override fun clean(html: String): String = HtmlMarkupScanner.rewrite(html) { tag ->

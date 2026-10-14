@@ -48,8 +48,16 @@ class Palette(
     }
 }
 
-/** Process registry; registration handles release callbacks when their owning feature closes. */
-object CommandPalette {
+/** Each presentation adapter owns its navigation registry. */
+class CommandPalette {
+    companion object {
+        // Compatibility entry point for explicitly shared palettes and existing callers.
+        val global = CommandPalette()
+        fun add(item: PaletteItem): AutoCloseable = global.add(item)
+        fun add(path: String, action: () -> Unit): AutoCloseable = global.add(path, action)
+        fun add(path: String, describe: () -> String, action: () -> Unit): AutoCloseable = global.add(path, describe, action)
+        fun find(path: String): Palette? = global.find(path)
+    }
     private val root = Palette("/", "Commands")
     private val automaticPalettes = mutableSetOf<Palette>()
 

@@ -54,9 +54,11 @@ class CommandPaletteTest {
     }
 
     @Test
-    fun `transformers register their own switches once across repeated pipeline construction`() {
+    fun `presentation registers transformer switches independently of pipeline construction`() {
         HtmlTransformerControl(HtmlTransformerSettings()).use { control ->
             repeat(2) { defaultResourceTransformationPipeline(1024, control = control) }
+            val registrations = registerTransformerCommands(control.configStore)
+            try {
             val parent = assertNotNull(CommandPalette.find("/transformers"))
             assertEquals(HtmlTransformer.entries.map { "/${it.command}" }, parent.items().map { it.command })
             val options = assertNotNull(CommandPalette.find("/transformers/style-remover"))
@@ -64,6 +66,7 @@ class CommandPaletteTest {
             assertFalse(control.snapshot().styleRemover)
             assertTrue(control.snapshot().scriptRemover)
             assertEquals("current", options.item("off")?.description)
+            } finally { registrations.forEach(AutoCloseable::close) }
         }
         assertNull(CommandPalette.find("/transformers"))
     }
@@ -72,7 +75,7 @@ class CommandPaletteTest {
     fun `keyboard browses nested palettes goes back and executes local on off arguments`() {
         HtmlTransformerControl(HtmlTransformerSettings()).use { control ->
             defaultResourceTransformationPipeline(1024, control = control)
-            observer().use { observer ->
+            observer(configStore = control.configStore).use { observer ->
                 observer.type("/transformers")
                 assertEquals(listOf("/transformers"), observer.paletteSnapshot()?.options?.map { it.value })
                 observer.handleKey("Enter")
@@ -121,11 +124,21 @@ class CommandPaletteTest {
         assertNull(CommandPalette.find("/")?.item("baud"))
     }
 
-    private fun observer(onTone: (Boolean) -> Unit = {}, onLogin: (String, String) -> Unit = { _, _ -> }) = TuiYameObserver(
-        initialPortName = "COM1", initialBaud = 38400, initialFlowControl = SerialFlowControl.DISABLED,
-        initialDnsUpstream = "8.8.8.8", initialHttpProxyEnabled = true, initialToneSimulationEnabled = true,
-        onToneSimulationSelected = onTone, onLoginAdded = onLogin, terminal = Terminal(interactive = false),
-    )
+    private fun observer(
+        onTone: (Boolean) -> Unit = {},
+        onLogin: (String, String) -> Unit = { _, _ -> },
+        configStore: no.skasti.yame.config.ConfigStore = no.skasti.yame.config.applicationConfigStore(no.skasti.yame.config.YameConfiguration()),
+    ): TuiYameObserver {
+        configStore.onChange[no.skasti.yame.modem.ModemSettings.Group].subscribe { changes ->
+            changes[no.skasti.yame.modem.ModemSettings.Tone]?.let { onTone(it.value) }
+            changes[no.skasti.yame.modem.ModemSettings.Login]?.let { onLogin(it.value.username!!, it.value.password!!) }
+        }
+        return TuiYameObserver(
+            initialPortName = "COM1", initialBaud = 38400, initialFlowControl = SerialFlowControl.DISABLED,
+            initialDnsUpstream = "8.8.8.8", initialHttpProxyEnabled = true, initialToneSimulationEnabled = true,
+            configStore = configStore, terminal = Terminal(interactive = false),
+        )
+    }
 
     private fun TuiYameObserver.type(text: String) { text.forEach { handleKey(it.toString()) } }
 }
