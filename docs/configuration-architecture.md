@@ -112,3 +112,14 @@ Unregistering removes future invocations; an already selected operation may fini
 The runtime registers disconnect, reconnect, refresh-ports and quit. Palette
 navigation and clearing presentation history remain presentation responsibilities.
 No core component knows about a palette, GUI toolkit or network transport.
+
+## Component configuration snapshots
+
+Component configuration follows the pattern in `AGENTS.md`: a local immutable
+config type exposes `fromConfigStore()`, and its component accepts that type as a
+non-null constructor argument defaulting to the factory call. Explicit arguments
+bypass global configuration entirely. A factory maps a single committed snapshot;
+it does not subscribe or introduce another mutable authority. `ConfigStore.current`
+is the process store installed by the composition root; standalone use starts with
+application defaults. Element-simplifier rules are a read-only startup setting
+loaded from the existing separate INI file; runtime writes are rejected.

@@ -55,6 +55,21 @@ data class HayesModemConfig(
     }
 
     companion object {
+        fun fromConfigStore(): HayesModemConfig {
+            val snapshot = no.skasti.yame.config.ConfigStore.current.snapshot()
+            val login = requireNotNull(snapshot[ModemSettings.Login]).value
+            return HayesModemConfig(
+                pickupTime = requireNotNull(snapshot[ModemSettings.PickupTime]).value,
+                dialToneTime = requireNotNull(snapshot[ModemSettings.DialToneTime]).value,
+                handshakeProfile = requireNotNull(snapshot[ModemSettings.Handshake]).value,
+                toneSimulationEnabled = requireNotNull(snapshot[ModemSettings.Tone]).value,
+                username = login.username, password = login.password,
+                pppIpConfig = PppIpConfig(requireNotNull(snapshot[no.skasti.yame.ppp.PppSettings.Subnet]).value),
+                pppDnsConfig = PppDnsConfig(requireNotNull(snapshot[no.skasti.yame.ppp.dns.DnsSettings.Upstream]).value),
+                pppHttpCompatibilityConfig = PppHttpCompatibilityConfig.fromSnapshot(snapshot),
+            )
+        }
+
         const val MAX_LOGIN_USERNAME_LENGTH = 64
         const val MAX_LOGIN_PASSWORD_LENGTH = 64
     }

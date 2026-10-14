@@ -33,6 +33,9 @@ class ElementSimplifierConfiguration(rules: Map<String, ElementSimplifierRule>) 
     override fun hashCode(): Int = rules.hashCode()
 
     companion object {
+        fun fromConfigStore(): ElementSimplifierConfiguration =
+            ConfigStore.current[no.skasti.yame.ppp.proxy.transform.TransformerSettings.Rules]
+
         fun defaults(): ElementSimplifierConfiguration = ElementSimplifierIni.defaults
     }
 }

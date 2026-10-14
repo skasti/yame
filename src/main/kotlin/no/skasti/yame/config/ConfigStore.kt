@@ -8,6 +8,16 @@ class ConfigStore(
     private val validateSnapshot: (ConfigChanges) -> Unit = {},
     private val onSubscriberFailure: (Throwable) -> Unit = { System.err.println("Configuration subscriber failed: ${it.javaClass.simpleName}") },
 ) {
+    companion object {
+        /** Process configuration; standalone components start with application defaults. */
+        @Volatile private var installed: ConfigStore? = null
+        private val defaults by lazy { applicationConfigStore(YameConfiguration()) }
+        val current: ConfigStore get() = installed ?: defaults
+
+        /** Called by the composition root before constructing runtime components. */
+        fun install(store: ConfigStore) { installed = store }
+    }
+
     private val lock = Any()
     private var saved = persistent.associateByTo(linkedMapOf()) { it.key }
     private var effective = LinkedHashMap(saved)

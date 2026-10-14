@@ -22,7 +22,12 @@ fun applicationConfigStore(
         persistent = bindings.map { it.change(saved) },
         overrides = bindings.map { it.change(effective) },
         persist = { save(configuration(it)) },
-        validateSnapshot = { configuration(it) },
+        validateSnapshot = {
+            require(it[TransformerSettings.Rules]?.value == saved.modemConfig.pppHttpCompatibilityConfig.elementSimplifier) {
+                "Element-simplifier rules are startup configuration; edit element-simplifier.ini and restart"
+            }
+            configuration(it)
+        },
         onSubscriberFailure = onSubscriberFailure,
     )
 }

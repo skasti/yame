@@ -21,6 +21,18 @@ data class PppHttpCompatibilityConfig(
     val htmlTransformers: HtmlTransformerSettings = HtmlTransformerSettings(),
     val transformerControl: HtmlTransformerControl? = null,
 ) {
+    companion object {
+        fun fromConfigStore(): PppHttpCompatibilityConfig =
+            fromSnapshot(no.skasti.yame.config.ConfigStore.current.snapshot())
+
+        internal fun fromSnapshot(snapshot: no.skasti.yame.config.ConfigChanges): PppHttpCompatibilityConfig =
+            PppHttpCompatibilityConfig(
+                enabled = requireNotNull(snapshot[ProxySettings.Enabled]).value,
+                elementSimplifier = requireNotNull(snapshot[no.skasti.yame.ppp.proxy.transform.TransformerSettings.Rules]).value,
+                htmlTransformers = HtmlTransformerSettings.fromSnapshot(snapshot),
+            )
+    }
+
     init {
         require(maxRedirects >= 0) { "HTTP compatibility maxRedirects must not be negative" }
         require(requestTimeoutMillis > 0) { "HTTP compatibility request timeout must be positive" }

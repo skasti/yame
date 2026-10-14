@@ -31,6 +31,7 @@ class InteractiveYameApplication(
         onConfigurationChanged,
         { error -> logManager.logger(YameLogModule.MODEM)("Configuration subscriber failed: ${error.javaClass.simpleName}") },
     )
+    init { ConfigStore.install(configStore) }
     val functions = FunctionStore()
     private val observer = TuiYameObserver(
         initialPortName, initialBaud, initialFlowControl,

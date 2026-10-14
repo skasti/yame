@@ -45,7 +45,7 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.ConcurrentHashMap
 
 internal class SystemHttpCompatibilityHandler(
-    private val config: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig(enabled = true),
+    private val config: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig.fromConfigStore(),
     private val logger: (String) -> Unit = {},
     private val eventSink: (YameEvent) -> Unit = {},
     private val resourceRegistryHooks: ResourceRegistryHooks = ResourceRegistryHooks(),

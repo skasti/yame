@@ -26,7 +26,7 @@ private fun reservedRangeOverlapping(subnet: Ipv4Cidr): ReservedIpv4Range? =
     UNUSABLE_PPP_ENDPOINT_RANGES.firstOrNull { subnet.overlaps(it.subnet) }
 
 class PppAddressResolver(
-    private val config: PppIpConfig = PppIpConfig(),
+    private val config: PppIpConfig = PppIpConfig.fromConfigStore(),
     localNetworksProvider: () -> List<LocalIpv4Network> = ::discoverLocalIpv4Networks,
     private val logger: (String) -> Unit = ::println,
 ) {

@@ -11,7 +11,7 @@ import java.net.http.HttpClient
 import java.time.Duration
 
 internal class SystemHttpCompatibilityProxy(
-    config: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig(enabled = true),
+    config: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig.fromConfigStore(),
     logger: (String) -> Unit = {},
     eventSink: (YameEvent) -> Unit = {},
     resourceRegistryHooks: ResourceRegistryHooks = ResourceRegistryHooks(),

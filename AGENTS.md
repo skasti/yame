@@ -111,3 +111,18 @@ of the HTTP-to-HTTPS routing and URL-rewrite feature.
 Security review is still in scope: never weaken TLS toward the modern upstream,
 leak credentials or cookies across origins, corrupt HTTP framing, or permit
 unbounded buffering.
+
+## Component configuration pattern
+
+- Keep a component's immutable configuration type beside its owning component.
+- Provide `ConfigType.fromConfigStore()` on its companion object. Read a single
+  snapshot from `ConfigStore.current` when mapping multiple setting keys.
+- Accept explicit configuration with a non-null constructor default, for example
+  `config: ConfigType = ConfigType.fromConfigStore()`. Do not pass the store into
+  that factory or use a nullable config argument merely to implement a fallback.
+- Explicit config must allow isolated tests without installing or modifying a
+  global store. Config data-class defaults remain ordinary standalone defaults.
+- Factories produce snapshots. Live updates require a separately owned subscription;
+  never silently overwrite explicit constructor configuration.
+- The composition root installs the process store before constructing components.
+- Local config types do not require a nested application-wide config tree.

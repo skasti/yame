@@ -6,7 +6,7 @@ import no.skasti.yame.config.HtmlTransformer
 
 /** Apply explicit tag mappings; unknown elements and existing headings/paragraphs stay intact. */
 internal class ElementSimplifier(
-    private val configuration: ElementSimplifierConfiguration = ElementSimplifierConfiguration.defaults(),
+    private val configuration: ElementSimplifierConfiguration = ElementSimplifierConfiguration.fromConfigStore(),
     private val maxOutputBytes: Int = 16 * 1024 * 1024,
 ) : HtmlCleanupTransformer(HtmlTransformer.ELEMENT_SIMPLIFIER) {
     init {

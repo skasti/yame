@@ -145,6 +145,7 @@ fun main(args: Array<String>) {
         portName, options.baudRate, options.flowControl, options.modemConfig, options.captureLimits, options.logLevels,
     )
     val runtimeConfigStore = no.skasti.yame.config.applicationConfigStore(savedConfiguration, effectiveConfiguration, configStore::save)
+    no.skasti.yame.config.ConfigStore.install(runtimeConfigStore)
     val functions = no.skasti.yame.function.FunctionStore()
     val runtime = no.skasti.yame.runtime.YameRuntime(
         portName, options.baudRate, options.flowControl, options.modemConfig,

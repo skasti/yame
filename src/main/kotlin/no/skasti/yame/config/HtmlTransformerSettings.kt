@@ -14,6 +14,20 @@ data class HtmlTransformerSettings(
     val attributeCleaner: Boolean = true,
     val elementSimplifier: Boolean = true,
 ) {
+    companion object {
+        fun fromConfigStore(): HtmlTransformerSettings = fromSnapshot(ConfigStore.current.snapshot())
+
+        internal fun fromSnapshot(changes: ConfigChanges): HtmlTransformerSettings {
+            val keys = no.skasti.yame.ppp.proxy.transform.TransformerSettings
+            return HtmlTransformerSettings(
+                requireNotNull(changes[keys.Script]).value,
+                requireNotNull(changes[keys.Style]).value,
+                requireNotNull(changes[keys.Attributes]).value,
+                requireNotNull(changes[keys.Elements]).value,
+            )
+        }
+    }
+
     fun enabled(transformer: HtmlTransformer): Boolean = when (transformer) {
         HtmlTransformer.SCRIPT_REMOVER -> scriptRemover
         HtmlTransformer.STYLE_REMOVER -> styleRemover
@@ -40,16 +54,7 @@ class HtmlTransformerControl(
         ),
     )),
 ) : AutoCloseable {
-    fun snapshot(): HtmlTransformerSettings {
-        val changes = configStore.snapshot()
-        val keys = no.skasti.yame.ppp.proxy.transform.TransformerSettings
-        return HtmlTransformerSettings(
-            scriptRemover = requireNotNull(changes[keys.Script]).value,
-            styleRemover = requireNotNull(changes[keys.Style]).value,
-            attributeCleaner = requireNotNull(changes[keys.Attributes]).value,
-            elementSimplifier = requireNotNull(changes[keys.Elements]).value,
-        )
-    }
+    fun snapshot(): HtmlTransformerSettings = HtmlTransformerSettings.fromSnapshot(configStore.snapshot())
     fun setEnabled(transformer: HtmlTransformer, enabled: Boolean) {
         configStore.set(no.skasti.yame.ppp.proxy.transform.TransformerSettings.key(transformer) to enabled)
     }

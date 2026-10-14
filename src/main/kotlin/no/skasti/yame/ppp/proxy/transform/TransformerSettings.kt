@@ -16,7 +16,11 @@ object TransformerSettings {
         no.skasti.yame.config.HtmlTransformer.ATTRIBUTE_CLEANER -> Attributes
         no.skasti.yame.config.HtmlTransformer.ELEMENT_SIMPLIFIER -> Elements
     }
+    val Rules = SettingKey<no.skasti.yame.config.ElementSimplifierConfiguration>("html-transformers.element-rules", Group)
     internal val bindings: List<ConfigurationBinding<*>> = listOf(
+        ConfigurationBinding(Rules,
+            { c -> c.modemConfig.pppHttpCompatibilityConfig.elementSimplifier },
+            { c, v -> c.copy(modemConfig = c.modemConfig.copy(pppHttpCompatibilityConfig = c.modemConfig.pppHttpCompatibilityConfig.copy(elementSimplifier = v))) }),
         ConfigurationBinding(Script,
             { c -> c.modemConfig.pppHttpCompatibilityConfig.htmlTransformers.scriptRemover },
             { c, v -> c.copy(modemConfig = c.modemConfig.copy(pppHttpCompatibilityConfig = c.modemConfig.pppHttpCompatibilityConfig.copy(htmlTransformers = c.modemConfig.pppHttpCompatibilityConfig.htmlTransformers.copy(scriptRemover = v)))) }),
