@@ -1,9 +1,9 @@
 package no.skasti.yame.ui
 
 /** Resolve either local commands or a typed path, without executing actions while filtering. */
-internal fun registeredCommandPalette(input: String, initialPath: String = "/"): TuiCommandPalette {
+internal fun registeredCommandPalette(input: String, initialPath: String = "/", registry: CommandPalette = CommandPalette.global): TuiCommandPalette {
     var path = initialPath
-    var palette = CommandPalette.find(path) ?: requireNotNull(CommandPalette.find("/")).also { path = "/" }
+    var palette = registry.find(path) ?: requireNotNull(registry.find("/")).also { path = "/" }
     var query = input.removePrefix("/")
     while (true) {
         val separator = query.indexOfFirst { it == '/' || it == ' ' }

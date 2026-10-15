@@ -4,8 +4,6 @@ import no.skasti.yame.ppp.proxy.ReferenceRole
 import no.skasti.yame.ppp.proxy.ResourceKind
 import no.skasti.yame.ppp.proxy.ResourceRelation
 import java.net.URI
-import no.skasti.yame.config.HtmlTransformer
-import no.skasti.yame.config.HtmlTransformerSettings
 
 internal enum class ResourceTransformPhase {
     DECODE,

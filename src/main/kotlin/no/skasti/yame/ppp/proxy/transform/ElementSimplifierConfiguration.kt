@@ -1,5 +1,6 @@
-package no.skasti.yame.config
+package no.skasti.yame.ppp.proxy.transform
 
+import no.skasti.yame.config.*
 import java.util.Collections
 import java.util.Locale
 
@@ -33,6 +34,9 @@ class ElementSimplifierConfiguration(rules: Map<String, ElementSimplifierRule>) 
     override fun hashCode(): Int = rules.hashCode()
 
     companion object {
+        fun fromConfigStore(): ElementSimplifierConfiguration =
+            ConfigStore.current[TransformerSettings.Rules]
+
         fun defaults(): ElementSimplifierConfiguration = ElementSimplifierIni.defaults
     }
 }

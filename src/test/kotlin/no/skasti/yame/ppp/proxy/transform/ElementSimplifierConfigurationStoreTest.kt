@@ -1,4 +1,6 @@
-package no.skasti.yame.config
+package no.skasti.yame.ppp.proxy.transform
+
+import no.skasti.yame.persistence.YameConfigurationStore
 
 import java.nio.file.Files
 import java.nio.file.Path
@@ -86,7 +88,7 @@ class ElementSimplifierConfigurationStoreTest {
         val store = YameConfigurationStore(configPath)
         val configuration = store.load()
         assertEquals(mapOf("summary" to ElementSimplifierRule("h3", "font-weight:bold;")),
-            configuration.modemConfig.pppHttpCompatibilityConfig.elementSimplifier.rules)
+            configuration.pppHttpCompatibilityConfig.elementSimplifier.rules)
         store.save(configuration)
         assertEquals(configuration, store.load())
         assertEquals("[summary]\ntarget=h3\nstyle=font-weight:bold;\n", Files.readString(elementPath))

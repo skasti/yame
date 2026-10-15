@@ -1,7 +1,6 @@
 package no.skasti.yame.serial
 
 import com.fazecast.jSerialComm.SerialPort
-import java.io.Closeable
 import java.io.InputStream
 import java.io.OutputStream
 import kotlin.concurrent.thread
@@ -16,17 +15,17 @@ class SerialConnection(
     private val baudRate: Int,
     private val flowControl: SerialFlowControl = SerialFlowControl.DISABLED,
     private val logger: (String) -> Unit = ::println,
-) : Closeable {
+) : SerialTransport {
     private val port: SerialPort = SerialPort.getCommPort(portName)
     private var readerThread: Thread? = null
 
-    val output: OutputStream
+    override val output: OutputStream
         get() {
             check(port.isOpen) { "Serial port must be open before accessing its output stream" }
             return port.outputStream
         }
 
-    fun open() {
+    override fun open() {
         port.setComPortParameters(
             baudRate,
             8,
@@ -46,9 +45,9 @@ class SerialConnection(
         )
     }
 
-    fun startReading(
+    override fun startReading(
         onBytes: (ByteArray) -> Unit,
-        onStopped: (Throwable?) -> Unit = {},
+        onStopped: (Throwable?) -> Unit,
     ) {
         check(port.isOpen) { "Serial port must be open before starting the reader" }
         check(readerThread == null) { "Serial reader is already running" }
@@ -61,7 +60,7 @@ class SerialConnection(
         }
     }
 
-    fun setCarrierPresent(carrierPresent: Boolean) {
+    override fun setCarrierPresent(carrierPresent: Boolean) {
         if (carrierPresent) {
             port.setDTR()
         } else {

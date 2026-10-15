@@ -21,7 +21,7 @@ class HayesModemTest {
     @Test
     fun `AT returns OK`() {
         val output = ByteArrayOutputStream()
-        val modem = HayesModem(output, 115200, logger = {})
+        val modem = HayesModem(output, 115200, config = HayesModemConfig(), logger = {})
 
         modem.receive("AT\r".toByteArray())
 
@@ -33,7 +33,7 @@ class HayesModemTest {
     fun `garbage before AT command is ignored without ERROR response`() {
         val output = ByteArrayOutputStream()
         val logs = mutableListOf<String>()
-        val modem = HayesModem(output, 115200, logger = logs::add)
+        val modem = HayesModem(output, 115200, config = HayesModemConfig(), logger = logs::add)
 
         modem.receive("~~\rAT\r".toByteArray())
 
@@ -46,7 +46,7 @@ class HayesModemTest {
     fun `PPP-like garbage can be immediately followed by modem reset`() {
         val output = ByteArrayOutputStream()
         val logs = mutableListOf<String>()
-        val modem = HayesModem(output, 115200, logger = logs::add)
+        val modem = HayesModem(output, 115200, config = HayesModemConfig(), logger = logs::add)
         val pppLikeGarbage = byteArrayOf(
             0x7e,
             0x7e,
@@ -72,7 +72,7 @@ class HayesModemTest {
     fun `invalid framing discards a false AT candidate before the real command`() {
         val output = ByteArrayOutputStream()
         val logs = mutableListOf<String>()
-        val modem = HayesModem(output, 115200, logger = logs::add)
+        val modem = HayesModem(output, 115200, config = HayesModemConfig(), logger = logs::add)
 
         modem.receive("AT~".toByteArray())
         modem.receive("ATZ\r".toByteArray())
@@ -86,7 +86,7 @@ class HayesModemTest {
     fun `printable false AT candidate resynchronizes on later real command`() {
         val output = ByteArrayOutputStream()
         val logs = mutableListOf<String>()
-        val modem = HayesModem(output, 115200, logger = logs::add)
+        val modem = HayesModem(output, 115200, config = HayesModemConfig(), logger = logs::add)
 
         modem.receive("ATjunkATZ\r".toByteArray())
 
@@ -98,7 +98,7 @@ class HayesModemTest {
     fun `implausible ATD garbage resynchronizes on later real command`() {
         val output = ByteArrayOutputStream()
         val logs = mutableListOf<String>()
-        val modem = HayesModem(output, 115200, logger = logs::add)
+        val modem = HayesModem(output, 115200, config = HayesModemConfig(), logger = logs::add)
 
         modem.receive("ATDjunkATZ\r".toByteArray())
 
@@ -112,7 +112,7 @@ class HayesModemTest {
     fun `ATD candidate falls back to later AT when suffix makes dial invalid`() {
         val output = ByteArrayOutputStream()
         val logs = mutableListOf<String>()
-        val modem = HayesModem(output, 115200, logger = logs::add)
+        val modem = HayesModem(output, 115200, config = HayesModemConfig(), logger = logs::add)
 
         modem.receive("ATD123ATZ\r".toByteArray())
 
@@ -126,6 +126,7 @@ class HayesModemTest {
         val output = ByteArrayOutputStream()
         val dialed = mutableListOf<String>()
         val modem = HayesModem(
+            config = HayesModemConfig(),
             output = output,
             baudRate = 115200,
             tonePlayer = FakeTonePlayer { number, _, _, _, _ -> dialed += number },
@@ -144,6 +145,7 @@ class HayesModemTest {
         val output = ByteArrayOutputStream()
         val dialed = mutableListOf<String>()
         val modem = HayesModem(
+            config = HayesModemConfig(),
             output = output,
             baudRate = 115200,
             tonePlayer = FakeTonePlayer { number, _, _, _, _ -> dialed += number },
@@ -161,7 +163,7 @@ class HayesModemTest {
     fun `garbage without AT prefix produces no modem response`() {
         val output = ByteArrayOutputStream()
         val logs = mutableListOf<String>()
-        val modem = HayesModem(output, 115200, logger = logs::add)
+        val modem = HayesModem(output, 115200, config = HayesModemConfig(), logger = logs::add)
 
         modem.receive("~~ random garbage }#!\r".toByteArray())
 
@@ -210,6 +212,7 @@ class HayesModemTest {
         val carrierStates = mutableListOf<Boolean>()
 
         HayesModem(
+            config = HayesModemConfig(),
             baudRate = 115200,
             tonePlayer = FakeTonePlayer(),
             logger = {},
@@ -223,6 +226,7 @@ class HayesModemTest {
     fun `attaching carrier callback initializes carrier as absent`() {
         val carrierStates = mutableListOf<Boolean>()
         val modem = HayesModem(
+            config = HayesModemConfig(),
             baudRate = 115200,
             tonePlayer = FakeTonePlayer(),
             logger = {},
@@ -237,6 +241,7 @@ class HayesModemTest {
     fun `modem can attach serial output after construction`() {
         val output = ByteArrayOutputStream()
         val modem = HayesModem(
+            config = HayesModemConfig(),
             baudRate = 115200,
             tonePlayer = FakeTonePlayer(),
             logger = {},
@@ -252,6 +257,7 @@ class HayesModemTest {
     @Test
     fun `public dial works without attached serial output`() {
         val modem = HayesModem(
+            config = HayesModemConfig(),
             baudRate = 115200,
             tonePlayer = FakeTonePlayer(),
             logger = {},
@@ -265,6 +271,7 @@ class HayesModemTest {
     @Test
     fun `public dial does not propagate tone player failure`() {
         val modem = HayesModem(
+            config = HayesModemConfig(),
             baudRate = 115200,
             tonePlayer = FakeTonePlayer { _, _, _, _, _ -> error("no audio device") },
             logger = {},
@@ -316,6 +323,7 @@ class HayesModemTest {
         val output = ByteArrayOutputStream()
         val logs = mutableListOf<String>()
         val modem = HayesModem(
+            config = HayesModemConfig(),
             output = output,
             baudRate = 115200,
             tonePlayer = FakeTonePlayer { _, _, _, _, _ -> error("no audio device") },
@@ -334,6 +342,7 @@ class HayesModemTest {
         val output = ByteArrayOutputStream()
         val pppHandler = FakePppHandler()
         val modem = HayesModem(
+            config = HayesModemConfig(),
             output = output,
             baudRate = 115200,
             tonePlayer = FakeTonePlayer(),
@@ -360,6 +369,7 @@ class HayesModemTest {
             onConnected = { outputAtConnect = output.toString() },
         )
         val modem = HayesModem(
+            config = HayesModemConfig(),
             output = output,
             baudRate = 115200,
             tonePlayer = FakeTonePlayer(),
@@ -437,6 +447,7 @@ class HayesModemTest {
         val output = ByteArrayOutputStream()
         val pppHandler = FakePppHandler()
         val modem = HayesModem(
+            config = HayesModemConfig(),
             output = output,
             baudRate = 9600,
             tonePlayer = FakeTonePlayer(),
@@ -487,6 +498,7 @@ class HayesModemTest {
         val output = ByteArrayOutputStream()
         val pppHandler = FakePppHandler()
         val modem = HayesModem(
+            config = HayesModemConfig(),
             output = output,
             baudRate = 115200,
             tonePlayer = FakeTonePlayer(),
@@ -607,6 +619,7 @@ class HayesModemTest {
     fun `closing modem drops carrier`() {
         val carrierStates = mutableListOf<Boolean>()
         val modem = HayesModem(
+            config = HayesModemConfig(),
             output = ByteArrayOutputStream(),
             baudRate = 115200,
             tonePlayer = FakeTonePlayer(),
@@ -625,6 +638,7 @@ class HayesModemTest {
         val tonePlayer = FakeTonePlayer()
         val pppHandler = FakePppHandler()
         val modem = HayesModem(
+            config = HayesModemConfig(),
             output = ByteArrayOutputStream(),
             baudRate = 115200,
             tonePlayer = tonePlayer,

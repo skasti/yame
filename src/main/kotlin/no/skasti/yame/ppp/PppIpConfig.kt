@@ -1,11 +1,21 @@
 package no.skasti.yame.ppp
 
+import no.skasti.yame.config.ConfigStore
+import no.skasti.yame.config.ConfigChanges
 import no.skasti.yame.ppp.ip.Ipv4Address
 import no.skasti.yame.ppp.ip.Ipv4Cidr
 
 data class PppIpConfig(
     val configuredSubnet: Ipv4Cidr? = null,
 ) {
+    companion object {
+        fun fromConfigStore(): PppIpConfig = fromSnapshot(ConfigStore.current.snapshot())
+
+        internal fun fromSnapshot(snapshot: ConfigChanges): PppIpConfig {
+            return PppIpConfig(configuredSubnet = requireNotNull(snapshot[PppSettings.Subnet]).value)
+        }
+    }
+
     init {
         configuredSubnet?.let {
             require(it.prefixLength <= 30) {

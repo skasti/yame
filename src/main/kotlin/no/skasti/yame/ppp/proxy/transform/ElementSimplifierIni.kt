@@ -1,4 +1,4 @@
-package no.skasti.yame.config
+package no.skasti.yame.ppp.proxy.transform
 
 import java.io.InputStream
 import java.util.Locale

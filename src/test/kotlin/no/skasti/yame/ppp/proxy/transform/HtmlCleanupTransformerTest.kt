@@ -1,8 +1,8 @@
 package no.skasti.yame.ppp.proxy.transform
 
-import no.skasti.yame.config.ElementSimplifierConfiguration
-import no.skasti.yame.config.ElementSimplifierRule
-import no.skasti.yame.config.HtmlTransformerSettings
+import no.skasti.yame.ppp.proxy.transform.ElementSimplifierConfiguration
+import no.skasti.yame.ppp.proxy.transform.ElementSimplifierRule
+import no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings
 import org.junit.jupiter.api.Timeout
 
 import kotlin.test.Test
@@ -24,7 +24,7 @@ class HtmlCleanupTransformerTest {
     @Test @Timeout(5)
     fun longUnterminatedTagsPassThroughWithoutRecursiveMatching() {
         for (html in listOf("<aaaa".repeat(32_000), "<main title='" + "<aaaa".repeat(32_000))) {
-            for (transformer in listOf(ScriptRemover(), StyleRemover(), AttributeCleaner(), ElementSimplifier())) {
+            for (transformer in listOf(ScriptRemover(), StyleRemover(), AttributeCleaner(), ElementSimplifier(ElementSimplifierConfiguration.defaults()))) {
                 assertEquals(html, apply(transformer, html))
             }
         }
@@ -36,7 +36,7 @@ class HtmlCleanupTransformerTest {
         assertEquals("<$whitespace>", apply(AttributeCleaner(), "<$whitespace>"))
         assertEquals("<main$whitespace>", apply(AttributeCleaner(), "<main$whitespace>"))
         assertEquals("<p style=\"font-weight:bold;\"$whitespace>Title</p>",
-            apply(ElementSimplifier(), "<summary$whitespace>Title</summary>"))
+            apply(ElementSimplifier(ElementSimplifierConfiguration.defaults()), "<summary$whitespace>Title</summary>"))
     }
 
     @Test fun retainedScriptBodiesAreOpaqueToOtherEnabledStages() {
@@ -78,7 +78,7 @@ class HtmlCleanupTransformerTest {
         assertEquals("<a $retained>News</a>",
             apply(AttributeCleaner(), "<a $retained class='remove' data-id=2>News</a>"))
         assertEquals("""<p title='choose style=compact' x.note="style='unchanged'" style="font-weight:bold;">Title</p>""",
-            apply(ElementSimplifier(), """<summary title='choose style=compact' x.note="style='unchanged'" style="color:red">Title</summary>"""))
+            apply(ElementSimplifier(ElementSimplifierConfiguration.defaults()), """<summary title='choose style=compact' x.note="style='unchanged'" style="color:red">Title</summary>"""))
     }
 
     @Test fun stylesheetRemovalUsesOnlyActualRelAttributeTokens() {
@@ -147,7 +147,7 @@ class HtmlCleanupTransformerTest {
 
     @Test fun elementSimplifierKeepsAttributesAndMatchingClosingTags() {
         assertEquals("""<div class="news"><div>Text</div></div>""",
-            apply(ElementSimplifier(), """<main class="news"><article>Text</article></main>"""))
+            apply(ElementSimplifier(ElementSimplifierConfiguration.defaults()), """<main class="news"><article>Text</article></main>"""))
     }
 
     @Test fun attributeCleanerPreservesCriticalAttributes() {
@@ -160,7 +160,7 @@ class HtmlCleanupTransformerTest {
         val input = "<figure><figcaption>Caption</figcaption></figure><time>Today</time><mark>News</mark>" +
             "<h2>Heading</h2><p>Paragraph</p><custom-card>Unknown</custom-card>"
         assertEquals("<div><p>Caption</p></div><span>Today</span><span>News</span>" +
-            "<h2>Heading</h2><p>Paragraph</p><custom-card>Unknown</custom-card>", apply(ElementSimplifier(), input))
+            "<h2>Heading</h2><p>Paragraph</p><custom-card>Unknown</custom-card>", apply(ElementSimplifier(ElementSimplifierConfiguration.defaults()), input))
     }
 
     @Test fun configuredStyleSurvivesAttributeCleanupAndDetailsBecomeVisible() {
@@ -212,7 +212,7 @@ class HtmlCleanupTransformerTest {
         val html = """<main class="root"><script>bad()</script><style>p{display:none}</style><p style="color:red" onclick="go()">News</p></main>"""
         val source = ResourceRepresentation(200, mapOf("content-type" to listOf("text/html; charset=UTF-8"), "content-length" to listOf("999")), html.toByteArray())
         val resource = Resource(java.net.URI("http://example.com/"), source)
-        val result = ResourceTransformationPipeline(listOf(ScriptRemover(), StyleRemover(), ElementSimplifier(), AttributeCleaner())).transform(context(), resource)
+        val result = ResourceTransformationPipeline(listOf(ScriptRemover(), StyleRemover(), ElementSimplifier(ElementSimplifierConfiguration.defaults()), AttributeCleaner())).transform(context(), resource)
         assertEquals("""<div><p>News</p></div>""", result.resource.representation.body.toString(Charsets.UTF_8))
         assertEquals(html, source.body.toString(Charsets.UTF_8))
         assertFalse(result.resource.representation.headers.containsKey("content-length"))
