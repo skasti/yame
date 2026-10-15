@@ -29,12 +29,12 @@ jobs:
           persist-credentials: false
       - name: Validate source run and live PR
         id: source
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: await require('./scripts/ci/tui-previews.cjs').prepare({github, context, core})
       - name: Download bounded preview ZIP
         if: steps.source.outputs.publish == 'true'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts,
@@ -53,7 +53,7 @@ jobs:
         run: python3 scripts/ci/extract-tui-previews.py "$PREVIEW_ZIP" "$PREVIEW_DIRECTORY"
       - name: Commit previews, verify successor and update PR comment
         if: steps.source.outputs.publish == 'true'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           PREVIEW_PUSH_TOKEN: ${{ github.token }}
           PREVIEW_PR: ${{ steps.source.outputs.pr_number }}
