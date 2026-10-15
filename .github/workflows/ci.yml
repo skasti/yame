@@ -108,7 +108,7 @@ jobs:
       - name: Upload image transformation visual report
         id: image-gallery
         if: always() && needs.preview-gate.outputs.reuse != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: yame-image-transformations
           path: build/reports/image-transformations/
@@ -180,7 +180,7 @@ jobs:
 
       - name: Upload TUI screenshots
         if: needs.preview-gate.outputs.reuse != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: yame-tui-screenshots-v3
           path: build/reports/tui-screenshots/
