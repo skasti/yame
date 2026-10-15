@@ -1,6 +1,6 @@
 package no.skasti.yame.ui
 
-import no.skasti.yame.config.HtmlTransformer
+import no.skasti.yame.ppp.proxy.transform.HtmlTransformer
 
 internal fun registerTransformerCommands(store: no.skasti.yame.config.ConfigStore, registry: CommandPalette = CommandPalette.global): List<AutoCloseable> {
     val registrations = mutableListOf<AutoCloseable>()

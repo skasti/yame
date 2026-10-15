@@ -1,8 +1,7 @@
 package no.skasti.yame.modem
 
-import no.skasti.yame.ppp.dns.PppDnsConfig
-import no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig
-import no.skasti.yame.ppp.PppIpConfig
+import no.skasti.yame.config.ConfigChanges
+import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.tone.HandshakeProfile
 import no.skasti.yame.tone.TonePlayer
 import kotlin.time.Duration
@@ -16,9 +15,6 @@ data class HayesModemConfig(
     val toneSimulationEnabled: Boolean = true,
     val username: String? = null,
     val password: String? = null,
-    val pppIpConfig: PppIpConfig = PppIpConfig(),
-    val pppDnsConfig: PppDnsConfig = PppDnsConfig(),
-    val pppHttpCompatibilityConfig: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig(),
 ) {
     init {
         require(pickupTime.isFinite()) { "pickupTime must be finite" }
@@ -31,32 +27,13 @@ data class HayesModemConfig(
         require(dialToneTime <= TonePlayer.MAX_DURATION) {
             "dialToneTime must not exceed ${TonePlayer.MAX_DURATION}"
         }
-        require((username == null) == (password == null)) {
-            "username and password must either both be set or both be omitted"
-        }
-        require(username == null || username.isNotBlank()) {
-            "username must not be blank"
-        }
-        require(password == null || password.isNotEmpty()) {
-            "password must not be empty"
-        }
-        require(username == null || username.length <= MAX_LOGIN_USERNAME_LENGTH) {
-            "username must not exceed $MAX_LOGIN_USERNAME_LENGTH characters"
-        }
-        require(password == null || password.length <= MAX_LOGIN_PASSWORD_LENGTH) {
-            "password must not exceed $MAX_LOGIN_PASSWORD_LENGTH characters"
-        }
-        require(username == null || username.all { it.code in 0x20..0x7e }) {
-            "username must contain only printable ASCII characters"
-        }
-        require(password == null || password.all { it.code in 0x20..0x7e }) {
-            "password must contain only printable ASCII characters"
-        }
+        LoginCredentials(username, password)
     }
 
     companion object {
-        fun fromConfigStore(): HayesModemConfig {
-            val snapshot = no.skasti.yame.config.ConfigStore.current.snapshot()
+        fun fromConfigStore(): HayesModemConfig = fromSnapshot(ConfigStore.current.snapshot())
+
+        internal fun fromSnapshot(snapshot: ConfigChanges): HayesModemConfig {
             val login = requireNotNull(snapshot[ModemSettings.Login]).value
             return HayesModemConfig(
                 pickupTime = requireNotNull(snapshot[ModemSettings.PickupTime]).value,
@@ -64,9 +41,6 @@ data class HayesModemConfig(
                 handshakeProfile = requireNotNull(snapshot[ModemSettings.Handshake]).value,
                 toneSimulationEnabled = requireNotNull(snapshot[ModemSettings.Tone]).value,
                 username = login.username, password = login.password,
-                pppIpConfig = PppIpConfig(requireNotNull(snapshot[no.skasti.yame.ppp.PppSettings.Subnet]).value),
-                pppDnsConfig = PppDnsConfig(requireNotNull(snapshot[no.skasti.yame.ppp.dns.DnsSettings.Upstream]).value),
-                pppHttpCompatibilityConfig = PppHttpCompatibilityConfig.fromSnapshot(snapshot),
             )
         }
 

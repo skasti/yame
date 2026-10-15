@@ -1,7 +1,6 @@
 package no.skasti.yame.ppp.proxy.transform
 
 import java.util.Locale
-import no.skasti.yame.config.HtmlTransformer
 
 /**
  * The four independently registered stages deliberately operate on markup, not a reconstructed DOM:

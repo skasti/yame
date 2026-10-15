@@ -28,9 +28,6 @@ class HayesModem(
         transferLogger = transferLogger,
         proxyLogger = proxyLogger,
         eventSink = eventSink,
-        ipConfig = config.pppIpConfig,
-        dnsConfig = config.pppDnsConfig,
-        httpCompatibilityConfig = config.pppHttpCompatibilityConfig,
     ),
     private var setCarrierPresent: (Boolean) -> Unit = { /* no-op */ }
 ) : Closeable {

@@ -1,9 +1,8 @@
 package no.skasti.yame.ppp.proxy
 
 import com.sun.net.httpserver.HttpServer
-import no.skasti.yame.config.HtmlTransformer
-import no.skasti.yame.config.HtmlTransformerControl
-import no.skasti.yame.config.HtmlTransformerSettings
+import no.skasti.yame.ppp.proxy.transform.HtmlTransformer
+import no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings
 import no.skasti.yame.ppp.http.HttpConnection
 import no.skasti.yame.ppp.http.HttpRequest
 import no.skasti.yame.ppp.http.HttpResponse
@@ -30,22 +29,24 @@ class LiveHtmlTransformerTest {
         val server = server { exchange ->
             conditional.offer(exchange.requestHeaders.containsKey("If-None-Match") || exchange.requestHeaders.containsKey("If-Modified-Since"))
         }
-        HtmlTransformerControl(HtmlTransformerSettings()).use { control ->
-            val handler = SystemHttpCompatibilityHandler(config = PppHttpCompatibilityConfig(transformerControl = control))
+        run {
+            val store = no.skasti.yame.persistence.applicationConfigStore(no.skasti.yame.persistence.YameConfiguration())
+            val handler = SystemHttpCompatibilityHandler(config = PppHttpCompatibilityConfig(),
+                transformerSettings = { HtmlTransformerSettings.fromSnapshot(store.snapshot()) })
             try {
                 val request = request(server).copy(headers = request(server).headers + listOf(
                     "If-None-Match" to "\"source\"", "If-Modified-Since" to "Tue, 29 Sep 2026 12:00:00 GMT",
                 ))
                 val first = handler.handle(connection(), request)
                 assertEquals("<html><div>News</div></html>", first.body.toString(Charsets.UTF_8))
-                control.setEnabled(HtmlTransformer.STYLE_REMOVER, false)
+                store.set(no.skasti.yame.ppp.proxy.transform.TransformerSettings.Style to false)
                 val second = handler.handle(connection(), request)
                 assertEquals("<html><style>body{color:red}</style><div>News</div></html>", second.body.toString(Charsets.UTF_8))
                 assertFalse(second.body.toString(Charsets.UTF_8).contains("<script>"))
-                control.setEnabled(HtmlTransformer.STYLE_REMOVER, true)
+                store.set(no.skasti.yame.ppp.proxy.transform.TransformerSettings.Style to true)
                 val third = handler.handle(connection(), request)
                 assertEquals(first.body.toList(), third.body.toList())
-                HtmlTransformer.entries.forEach { control.setEnabled(it, false) }
+                HtmlTransformer.entries.forEach { store.set(no.skasti.yame.ppp.proxy.transform.TransformerSettings.key(it) to false) }
                 assertEquals(source, handler.handle(connection(), request).body.toString(Charsets.UTF_8))
                 repeat(4) { assertEquals(false, conditional.poll(2, TimeUnit.SECONDS)) }
                 for (response in listOf(first, second, third)) {
@@ -66,16 +67,34 @@ class LiveHtmlTransformerTest {
             entered.countDown()
             check(release.await(5, TimeUnit.SECONDS))
         }
-        HtmlTransformerControl(HtmlTransformerSettings()).use { control ->
-            val handler = SystemHttpCompatibilityHandler(config = PppHttpCompatibilityConfig(transformerControl = control))
+        run {
+            val store = no.skasti.yame.persistence.applicationConfigStore(no.skasti.yame.persistence.YameConfiguration())
+            val handler = SystemHttpCompatibilityHandler(config = PppHttpCompatibilityConfig(),
+                transformerSettings = { HtmlTransformerSettings.fromSnapshot(store.snapshot()) })
             try {
                 val response = CompletableFuture.supplyAsync { handler.handle(connection(), request(server)) }
                 assertTrue(entered.await(5, TimeUnit.SECONDS))
-                control.setEnabled(HtmlTransformer.SCRIPT_REMOVER, false)
+                store.set(no.skasti.yame.ppp.proxy.transform.TransformerSettings.Script to false)
                 release.countDown()
                 assertFalse(response.get(5, TimeUnit.SECONDS).body.toString(Charsets.UTF_8).contains("<script>"))
                 assertTrue(handler.handle(connection(), request(server)).body.toString(Charsets.UTF_8).contains("<script>run()</script>"))
             } finally { release.countDown(); handler.close(); server.stop(0) }
+        }
+    }
+
+    @Test
+    fun `fixed explicit settings stay independent of process store`() {
+        val store = no.skasti.yame.persistence.applicationConfigStore(no.skasti.yame.persistence.YameConfiguration())
+        val server = server {}
+        no.skasti.yame.config.ConfigStore.install(store).use {
+            val handler = SystemHttpCompatibilityHandler(config = PppHttpCompatibilityConfig(
+                htmlTransformers = HtmlTransformerSettings(false, false, false, false),
+            ))
+            try {
+                assertEquals(source, handler.handle(connection(), request(server)).body.toString(Charsets.UTF_8))
+                store.set(no.skasti.yame.ppp.proxy.transform.TransformerSettings.Style to false)
+                assertEquals(source, handler.handle(connection(), request(server)).body.toString(Charsets.UTF_8))
+            } finally { handler.close(); server.stop(0) }
         }
     }
 

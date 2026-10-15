@@ -1,5 +1,6 @@
-package no.skasti.yame.config
+package no.skasti.yame.persistence
 
+import no.skasti.yame.config.*
 /** File-schema adapter; stores remain independent of the application's configuration shape. */
 internal class ConfigurationBinding<T>(
     val key: SettingKey<T>,

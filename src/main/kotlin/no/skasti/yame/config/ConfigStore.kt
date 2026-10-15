@@ -9,13 +9,20 @@ class ConfigStore(
     private val onSubscriberFailure: (Throwable) -> Unit = { System.err.println("Configuration subscriber failed: ${it.javaClass.simpleName}") },
 ) {
     companion object {
-        /** Process configuration; standalone components start with application defaults. */
+        /** Installed explicitly by the application before using process-default factories. */
         @Volatile private var installed: ConfigStore? = null
-        private val defaults by lazy { applicationConfigStore(YameConfiguration()) }
-        val current: ConfigStore get() = installed ?: defaults
+        val current: ConfigStore get() = checkNotNull(installed) { "ConfigStore has not been installed" }
 
-        /** Called by the composition root before constructing runtime components. */
-        fun install(store: ConfigStore) { installed = store }
+        /** Reject a second process owner; closing the handle releases only this installation. */
+        @Synchronized
+        fun install(store: ConfigStore): AutoCloseable {
+            check(installed == null) { "ConfigStore is already installed" }
+            installed = store
+            var active = true
+            return AutoCloseable { synchronized(this) {
+                if (active) { installed = null; active = false }
+            } }
+        }
     }
 
     private val lock = Any()

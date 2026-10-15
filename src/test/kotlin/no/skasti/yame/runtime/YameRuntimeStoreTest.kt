@@ -1,5 +1,6 @@
 package no.skasti.yame.runtime
 
+import no.skasti.yame.persistence.*
 import no.skasti.yame.config.*
 import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.logging.*
@@ -16,7 +17,6 @@ class YameRuntimeStoreTest {
             val functions = FunctionStore()
             YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
                 val runtime = YameRuntime(
-                    null, configuration.baudRate, configuration.flowControl, configuration.modemConfig,
                     object : RuntimeObserver {}, store, functions, logManager = logs, portProvider = { emptyList() },
                 )
                 store.set(LogSettings.Levels.getValue(YameLogModule.MODEM) to YameLogLevel.DEBUG,

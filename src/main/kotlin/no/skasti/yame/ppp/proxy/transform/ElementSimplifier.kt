@@ -1,9 +1,5 @@
 package no.skasti.yame.ppp.proxy.transform
 
-import no.skasti.yame.config.ElementSimplifierConfiguration
-import no.skasti.yame.config.ElementSimplifierRule
-import no.skasti.yame.config.HtmlTransformer
-
 /** Apply explicit tag mappings; unknown elements and existing headings/paragraphs stay intact. */
 internal class ElementSimplifier(
     private val configuration: ElementSimplifierConfiguration = ElementSimplifierConfiguration.fromConfigStore(),

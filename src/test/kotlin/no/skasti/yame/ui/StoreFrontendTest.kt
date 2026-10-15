@@ -1,5 +1,6 @@
 package no.skasti.yame.ui
 
+import no.skasti.yame.persistence.*
 import com.github.ajalt.mordant.terminal.Terminal
 import no.skasti.yame.config.*
 import no.skasti.yame.function.FunctionStore
@@ -11,7 +12,6 @@ import kotlin.test.*
 
 class StoreFrontendTest {
     private fun observer(store: ConfigStore, functions: FunctionStore = FunctionStore()) = TuiYameObserver(
-        "COM1", 38400, SerialFlowControl.DISABLED, "8.8.8.8", true, true,
         terminal = Terminal(interactive = false), configStore = store, functions = functions,
     )
     private fun TuiYameObserver.command(value: String) {

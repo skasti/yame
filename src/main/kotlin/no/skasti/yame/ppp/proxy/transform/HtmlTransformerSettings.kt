@@ -1,5 +1,6 @@
-package no.skasti.yame.config
+package no.skasti.yame.ppp.proxy.transform
 
+import no.skasti.yame.config.*
 
 enum class HtmlTransformer(val command: String) {
     SCRIPT_REMOVER("script-remover"),
@@ -18,7 +19,7 @@ data class HtmlTransformerSettings(
         fun fromConfigStore(): HtmlTransformerSettings = fromSnapshot(ConfigStore.current.snapshot())
 
         internal fun fromSnapshot(changes: ConfigChanges): HtmlTransformerSettings {
-            val keys = no.skasti.yame.ppp.proxy.transform.TransformerSettings
+            val keys = TransformerSettings
             return HtmlTransformerSettings(
                 requireNotNull(changes[keys.Script]).value,
                 requireNotNull(changes[keys.Style]).value,
@@ -43,20 +44,4 @@ data class HtmlTransformerSettings(
     }
 
     val profileToken: String get() = HtmlTransformer.entries.joinToString("") { if (enabled(it)) "1" else "0" }
-}
-
-/** Read-through request snapshot adapter; authoritative state lives exclusively in ConfigStore. */
-class HtmlTransformerControl(
-    initial: HtmlTransformerSettings,
-    val configStore: ConfigStore = applicationConfigStore(YameConfiguration(
-        modemConfig = no.skasti.yame.modem.HayesModemConfig(
-            pppHttpCompatibilityConfig = no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig(htmlTransformers = initial),
-        ),
-    )),
-) : AutoCloseable {
-    fun snapshot(): HtmlTransformerSettings = HtmlTransformerSettings.fromSnapshot(configStore.snapshot())
-    fun setEnabled(transformer: HtmlTransformer, enabled: Boolean) {
-        configStore.set(no.skasti.yame.ppp.proxy.transform.TransformerSettings.key(transformer) to enabled)
-    }
-    override fun close() {}
 }

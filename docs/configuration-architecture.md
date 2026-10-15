@@ -20,9 +20,15 @@ Concrete keys and groups live in their owning serial, modem, PPP, DNS, proxy,
 transformer and logging packages. Baud belongs to serial, not modem. Credentials
 are one modem-owned `LoginCredentials` setting because username/password form one
 validated concept; the existing two INI properties remain compatible. Generic
-store contracts contain no feature imports. `ConfigurationBinding` and
-`applicationConfigStore` adapt feature definitions to the existing INI schema at
-the application composition boundary.
+store contracts contain no feature imports. The `persistence` package owns `YameConfiguration`, its file store,
+`ConfigurationBinding`, `YameConfigurationBindings`, and `applicationConfigStore`.
+All persistence mappings point from this application adapter toward feature keys;
+feature `*Settings` objects contain no bindings or application-schema imports.
+`YameConfiguration` is used only during startup/CLI parsing and file persistence.
+It reuses immutable feature values as sibling fields without putting PPP, DNS, or
+HTTP configuration inside the modem config. The existing `yame.ini` property names,
+version, defaults, CLI precedence, credential permissions, and safe replacement
+semantics remain unchanged.
 
 ## Transactions, persistence and CLI precedence
 
@@ -94,9 +100,15 @@ credential values.
 | Config/log paths, UI mode, tone-test mode | CLI startup policy, not runtime persistent settings |
 | Internal proxy bounds/timeouts and transformation implementation policy | Constructor policy; no new runtime configuration surface |
 
-All existing TUI settings use the store. The specialized transformer control is
-now only a read-through request snapshot adapter, with no second mutable state
-and no palette lifecycle. Leaf transformers never construct palette items.
+All existing TUI settings use the store. `HtmlTransformerControl` has been removed.
+The runtime injects a `() -> HtmlTransformerSettings` provider through the PPP/proxy
+composition into the HTTP handler. The handler invokes it once at request entry,
+retaining that immutable snapshot for redirects, resource work, and profile-specific
+cache identity. Live HTML responses disable browser validator reuse. Without a
+provider, explicitly supplied `PppHttpCompatibilityConfig.htmlTransformers` remains
+fixed and retains the ordinary conditional-request behavior. Providers never live
+inside config values and do not own mutable settings. Leaf transformers never
+construct palette items.
 Runtime observations (connections, transfers, logs and resource graphs) remain
 separate from settings and functions; their event unification is separate work.
 
@@ -120,6 +132,55 @@ config type exposes `fromConfigStore()`, and its component accepts that type as 
 non-null constructor argument defaulting to the factory call. Explicit arguments
 bypass global configuration entirely. A factory maps a single committed snapshot;
 it does not subscribe or introduce another mutable authority. `ConfigStore.current`
-is the process store installed by the composition root; standalone use starts with
-application defaults. Element-simplifier rules are a read-only startup setting
+fails fast until `Main` installs a process store. `install` returns an idempotent
+lifetime handle, rejects an existing owner, and releases the store on close.
+`Main` closes that handle after the runtime and frontend. Multiple frontends take
+shared store instances; they do not replace global state. Explicit constructor
+configurations never require installation, including the modem's standalone PPP
+child defaults. Element-simplifier rules are a read-only startup setting
 loaded from the existing separate INI file; runtime writes are rejected.
+
+## Ownership and composition boundaries
+
+| Package / component | Owns / depends on |
+| --- | --- |
+| `config`, `function` | Typed generic stores, changes, subscriptions and operations; no concrete features or persistence |
+| `serial`, `modem`, `ppp`, `ppp.dns`, `ppp.proxy`, `logging` | Their own keys, groups, value validation and immutable config snapshots |
+| `ppp.proxy.transform` | HTML switches, element rules/INI, transformation policy and implementation |
+| `persistence` | Legacy application file representation, all key bindings, autosave adapter and file IO |
+| `Main` | Load file, apply transient CLI precedence, create/install shared stores, choose frontend and startup retry policy |
+| `YameRuntime` | Compose component configs from a consistent snapshot, observe committed batches, own connections and registered functions |
+| TUI | Derive presentation caches from the store; display runtime observations separately; invoke core functions |
+
+Runtime and TUI initialization read one store snapshot and subscribe with initial
+delivery to close the read/subscribe race. Runtime accumulates ordered event values
+in a derived immutable snapshot, then uses each feature's `fromSnapshot` mapper to
+construct connection dependencies. No persistence bindings or legacy DTOs enter
+this path. A cross-feature batch restarts the connection once. Logging values and
+modem tones/credentials update incrementally. Runtime caches are derived views;
+configuration writes always go through ConfigStore.
+
+The intentional cross-feature dependencies are composition relationships:
+`YameRuntime` orchestrates independent features; `RetroPppHandler` composes addressing,
+DNS and TCP/HTTP services; `PppSession` consumes DNS config because it currently
+implements local DNS forwarding and DNS TCP routing; the HTTP proxy owns child
+transformation configuration;
+`HayesModem` depends on a `PppHandler`, whose standalone default uses ordinary child
+config defaults. `HayesModem` also receives the serial baud value explicitly to report the correct
+CONNECT rate. These do not make modem settings an application config tree.
+`PppHttpCompatibilityConfig` retains immutable transformation values because the
+HTTP handler owns their use in response preparation. Application persistence reuses
+feature value types rather than introducing duplicate file-only versions of them.
+There are no feature-to-persistence dependencies or obsolete compatibility wrappers.
+
+Plain mode propagates initial connection construction/open errors so scripts exit with a
+failure. TUI mode logs failed attempts and permits retry. Every core logger,
+including HTTP proxy diagnostics, reaches the runtime observer as well as the
+module file logger. Both modes share this routing and the same runtime functions.
+Reselecting unchanged port, baud, or flow-control settings commits normally and
+invokes `Reconnect` separately when the effective value is unchanged. This preserves
+ConfigStore's no-op save/event semantics and the existing selection interaction.
+
+`SerialTransport` is the serial IO boundary implemented by `SerialConnection`.
+The runtime owns and closes it, including after failed opens; tests can inject a
+port without requiring serial hardware or process-global configuration.

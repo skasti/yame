@@ -1,8 +1,9 @@
 package no.skasti.yame.ppp.proxy
 
-import no.skasti.yame.config.ElementSimplifierConfiguration
-import no.skasti.yame.config.HtmlTransformerControl
-import no.skasti.yame.config.HtmlTransformerSettings
+import no.skasti.yame.config.ConfigStore
+import no.skasti.yame.config.ConfigChanges
+import no.skasti.yame.ppp.proxy.transform.ElementSimplifierConfiguration
+import no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings
 
 data class PppHttpCompatibilityConfig(
     val enabled: Boolean = true,
@@ -19,13 +20,12 @@ data class PppHttpCompatibilityConfig(
     val maxRepresentationCacheBytes: Long = 64L * 1024 * 1024,
     val elementSimplifier: ElementSimplifierConfiguration = ElementSimplifierConfiguration.defaults(),
     val htmlTransformers: HtmlTransformerSettings = HtmlTransformerSettings(),
-    val transformerControl: HtmlTransformerControl? = null,
 ) {
     companion object {
         fun fromConfigStore(): PppHttpCompatibilityConfig =
-            fromSnapshot(no.skasti.yame.config.ConfigStore.current.snapshot())
+            fromSnapshot(ConfigStore.current.snapshot())
 
-        internal fun fromSnapshot(snapshot: no.skasti.yame.config.ConfigChanges): PppHttpCompatibilityConfig =
+        internal fun fromSnapshot(snapshot: ConfigChanges): PppHttpCompatibilityConfig =
             PppHttpCompatibilityConfig(
                 enabled = requireNotNull(snapshot[ProxySettings.Enabled]).value,
                 elementSimplifier = requireNotNull(snapshot[no.skasti.yame.ppp.proxy.transform.TransformerSettings.Rules]).value,

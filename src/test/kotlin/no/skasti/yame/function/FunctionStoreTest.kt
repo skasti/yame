@@ -1,7 +1,7 @@
 package no.skasti.yame.function
 
-import no.skasti.yame.config.applicationConfigStore
-import no.skasti.yame.config.YameConfiguration
+import no.skasti.yame.persistence.applicationConfigStore
+import no.skasti.yame.persistence.YameConfiguration
 import no.skasti.yame.serial.SerialSettings
 import no.skasti.yame.modem.ModemSettings
 import kotlin.test.*

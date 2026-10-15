@@ -1,9 +1,9 @@
 package no.skasti.yame
 
 import com.github.ajalt.mordant.terminal.Terminal
-import no.skasti.yame.config.YameConfiguration
-import no.skasti.yame.config.YameConfigurationStore
-import no.skasti.yame.config.ElementSimplifierConfigurationStore
+import no.skasti.yame.persistence.YameConfiguration
+import no.skasti.yame.persistence.YameConfigurationStore
+import no.skasti.yame.ppp.proxy.transform.ElementSimplifierConfigurationStore
 import no.skasti.yame.logging.PacketCaptureLimits
 import no.skasti.yame.logging.PacketCaptureLimitKind
 import no.skasti.yame.logging.YameLogLevel
@@ -52,115 +52,114 @@ fun main(args: Array<String>) {
 
     val logManager = YameLogManager(options.logLevels, options.logDirectory, captureLimits = options.captureLimits)
     try {
-
-    if (options.testNumber != null) {
-        val modemFileLogger = logManager.logger(YameLogModule.MODEM)
-        val modemConsoleLogger: (String) -> Unit = { message ->
-            println(message)
-            modemFileLogger(message)
+        if (options.testNumber != null) {
+            val modemFileLogger = logManager.logger(YameLogModule.MODEM)
+            val modemConsoleLogger: (String) -> Unit = { message ->
+                println(message)
+                modemFileLogger(message)
+            }
+            val modem = HayesModem(
+                baudRate = options.baudRate,
+                config = configurationForToneTest(options.modemConfig),
+                logger = modemConsoleLogger,
+                pppLogger = logManager.logger(YameLogModule.PPP),
+                dnsLogger = logManager.debugLogger(YameLogModule.DNS),
+                transferLogger = logManager.debugLogger(YameLogModule.TRANSFERS),
+                proxyLogger = logManager.debugLogger(YameLogModule.PROXY),
+                eventSink = logManager::eventSink,
+            )
+            println(
+                "Tone test. Dialing: ${options.testNumber} " +
+                    "(pickup: ${options.modemConfig.pickupTime}, " +
+                    "dial tone: ${options.modemConfig.dialToneTime}, " +
+                    "handshake: ${options.modemConfig.handshakeProfile})...",
+            )
+            modem.use {
+                it.dial(options.testNumber)
+            }
+            println("Tone test complete.")
+            return
         }
-        val modem = HayesModem(
-            baudRate = options.baudRate,
-            config = configurationForToneTest(options.modemConfig),
-            logger = modemConsoleLogger,
-            pppLogger = logManager.logger(YameLogModule.PPP),
-            dnsLogger = logManager.debugLogger(YameLogModule.DNS),
-            transferLogger = logManager.debugLogger(YameLogModule.TRANSFERS),
-            proxyLogger = logManager.debugLogger(YameLogModule.PROXY),
-            eventSink = logManager::eventSink,
-        )
-        println(
-            "Tone test. Dialing: ${options.testNumber} " +
-                "(pickup: ${options.modemConfig.pickupTime}, " +
-                "dial tone: ${options.modemConfig.dialToneTime}, " +
-                "handshake: ${options.modemConfig.handshakeProfile})...",
-        )
-        modem.use {
-            it.dial(options.testNumber)
-        }
-        println("Tone test complete.")
-        return
-    }
 
-    if (!Files.exists(options.configPath)) {
-        runCatching { configStore.save(savedConfiguration) }
+        if (!Files.exists(options.configPath)) {
+            runCatching { configStore.save(savedConfiguration) }
+                .onFailure { error ->
+                    System.err.println("YAME could not create ${options.configPath}: ${error.message}")
+                }
+        }
+        runCatching { ElementSimplifierConfigurationStore.alongside(options.configPath).createDefaultIfMissing() }
             .onFailure { error ->
-                System.err.println("YAME could not create ${options.configPath}: ${error.message}")
+                System.err.println("YAME could not create element-simplifier.ini: ${error.message}")
             }
-    }
-    runCatching { ElementSimplifierConfigurationStore.alongside(options.configPath).createDefaultIfMissing() }
-        .onFailure { error ->
-            System.err.println("YAME could not create element-simplifier.ini: ${error.message}")
+
+        val detectedTerminal = Terminal()
+        val useTui = when (options.uiMode) {
+            UiMode.AUTO ->
+                detectedTerminal.terminalInfo.outputInteractive &&
+                    detectedTerminal.terminalInfo.inputInteractive &&
+                    detectedTerminal.terminalInfo.supportsAnsiCursor
+
+            UiMode.TUI -> true
+            UiMode.PLAIN -> false
         }
 
-    val detectedTerminal = Terminal()
-    val useTui = when (options.uiMode) {
-        UiMode.AUTO ->
-            detectedTerminal.terminalInfo.outputInteractive &&
-                detectedTerminal.terminalInfo.inputInteractive &&
-                detectedTerminal.terminalInfo.supportsAnsiCursor
-
-        UiMode.TUI -> true
-        UiMode.PLAIN -> false
-    }
-
-    if (useTui) {
-        val application = InteractiveYameApplication(
-            initialPortName = options.portName,
-            initialBaud = options.baudRate,
-            initialFlowControl = options.flowControl,
-            initialModemConfig = options.modemConfig,
-            logManager = logManager,
-            initialLogLevels = options.logLevels,
-            onConfigurationChanged = configStore::save,
-            initialSavedConfiguration = savedConfiguration,
-            terminal = if (options.uiMode == UiMode.AUTO) {
-                detectedTerminal
-            } else {
-                Terminal(interactive = true)
-            },
+        val effectiveConfiguration = YameConfiguration(
+            portName = options.portName, baudRate = options.baudRate, flowControl = options.flowControl,
+            modemConfig = options.modemConfig, pppIpConfig = options.pppIpConfig,
+            pppDnsConfig = options.pppDnsConfig, pppHttpCompatibilityConfig = options.httpConfig,
+            captureLimits = options.captureLimits, logLevels = options.logLevels,
         )
-        val shutdownHook = Thread(
-            application::close,
-            "yame-tui-shutdown",
+        val runtimeConfigStore = no.skasti.yame.persistence.applicationConfigStore(
+            savedConfiguration, effectiveConfiguration, configStore::save,
         )
-        Runtime.getRuntime().addShutdownHook(shutdownHook)
-        try {
-            application.run()
-        } finally {
-            application.close()
-            runCatching {
-                Runtime.getRuntime().removeShutdownHook(shutdownHook)
+        no.skasti.yame.config.ConfigStore.install(runtimeConfigStore).use {
+            val functions = no.skasti.yame.function.FunctionStore()
+            if (useTui) {
+                val application = InteractiveYameApplication(
+                    configStore = runtimeConfigStore,
+                    functions = functions,
+                    logManager = logManager,
+                    terminal = if (options.uiMode == UiMode.AUTO) {
+                        detectedTerminal
+                    } else {
+                        Terminal(interactive = true)
+                    },
+                )
+                val shutdownHook = Thread(
+                    application::close,
+                    "yame-tui-shutdown",
+                )
+                Runtime.getRuntime().addShutdownHook(shutdownHook)
+                try {
+                    application.run()
+                } finally {
+                    application.close()
+                    runCatching {
+                        Runtime.getRuntime().removeShutdownHook(shutdownHook)
+                    }
+                }
+                return
+            }
+
+            if (options.portName == null) {
+                printUsage()
+                return
+            }
+
+            val runtime = no.skasti.yame.runtime.YameRuntime(
+                object : no.skasti.yame.runtime.RuntimeObserver {
+                    override fun onLog(message: String) { println(message) }
+                },
+                runtimeConfigStore, functions,
+                logManager = logManager, failFastStartup = true,
+            )
+            val hook = Thread(runtime::close, "yame-shutdown")
+            Runtime.getRuntime().addShutdownHook(hook)
+            try { runtime.run() } finally {
+                runtime.close()
+                runCatching { Runtime.getRuntime().removeShutdownHook(hook) }
             }
         }
-        return
-    }
-
-    val portName = options.portName ?: run {
-        printUsage()
-        return
-    }
-
-    val effectiveConfiguration = YameConfiguration(
-        portName, options.baudRate, options.flowControl, options.modemConfig, options.captureLimits, options.logLevels,
-    )
-    val runtimeConfigStore = no.skasti.yame.config.applicationConfigStore(savedConfiguration, effectiveConfiguration, configStore::save)
-    no.skasti.yame.config.ConfigStore.install(runtimeConfigStore)
-    val functions = no.skasti.yame.function.FunctionStore()
-    val runtime = no.skasti.yame.runtime.YameRuntime(
-        portName, options.baudRate, options.flowControl, options.modemConfig,
-        object : no.skasti.yame.runtime.RuntimeObserver {
-            override fun onLog(message: String) { println(message) }
-        },
-        runtimeConfigStore, functions,
-        logManager = logManager, initialLogLevels = options.logLevels,
-    )
-    val hook = Thread(runtime::close, "yame-shutdown")
-    Runtime.getRuntime().addShutdownHook(hook)
-    try { runtime.run() } finally {
-        runtime.close()
-        runCatching { Runtime.getRuntime().removeShutdownHook(hook) }
-    }
     } finally {
         logManager.close()
     }
@@ -183,6 +182,9 @@ private data class Options(
     val testNumber: String?,
     val uiMode: UiMode,
     val modemConfig: HayesModemConfig,
+    val pppIpConfig: PppIpConfig,
+    val pppDnsConfig: PppDnsConfig,
+    val httpConfig: no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig,
     val logLevels: Map<YameLogModule, YameLogLevel>,
     val configPath: Path,
     val logDirectory: Path,
@@ -222,9 +224,9 @@ private fun parseArgs(
     val toneSimulationEnabled = defaults.toneSimulationEnabled
     var usernameOverride: String? = null
     var passwordOverride: String? = null
-    var pppSubnet: Ipv4Cidr? = defaults.pppIpConfig.configuredSubnet
-    var dnsUpstream = defaults.pppDnsConfig.upstreamServer
-    var httpCompatibilityEnabled = defaults.pppHttpCompatibilityConfig.enabled
+    var pppSubnet: Ipv4Cidr? = savedConfiguration.pppIpConfig.configuredSubnet
+    var dnsUpstream = savedConfiguration.pppDnsConfig.upstreamServer
+    var httpCompatibilityEnabled = savedConfiguration.pppHttpCompatibilityConfig.enabled
     val logLevels = savedConfiguration.logLevels.toMutableMap()
     var uiMode = UiMode.AUTO
     var logDirectory = Path.of("logs")
@@ -347,12 +349,10 @@ private fun parseArgs(
             toneSimulationEnabled = toneSimulationEnabled,
             username = username,
             password = password,
-            pppIpConfig = PppIpConfig(configuredSubnet = pppSubnet),
-            pppDnsConfig = PppDnsConfig(upstreamServer = dnsUpstream),
-            pppHttpCompatibilityConfig = defaults.pppHttpCompatibilityConfig.copy(
-                enabled = httpCompatibilityEnabled,
-            ),
         ),
+        pppIpConfig = PppIpConfig(configuredSubnet = pppSubnet),
+        pppDnsConfig = PppDnsConfig(upstreamServer = dnsUpstream),
+        httpConfig = savedConfiguration.pppHttpCompatibilityConfig.copy(enabled = httpCompatibilityEnabled),
         logLevels = logLevels.toMap(),
         configPath = configPath,
         logDirectory = logDirectory,
@@ -446,7 +446,7 @@ private fun printUsage() {
               --password PASS         Terminal login password (requires --username)
               --config FILE           Config file (default: yame.ini in the working directory)
               --subnet CIDR           PPP address pool, e.g. 10.0.0.0/30 (default: automatic)
-              --dns-upstream IP       DNS server used by YAME's local DNS proxy (default: ${defaults.pppDnsConfig.upstreamServer})
+              --dns-upstream IP       DNS server used by YAME's local DNS proxy (default: ${PppDnsConfig.DEFAULT_UPSTREAM_SERVER})
               --http-https-proxy      Enable HTTP/HTTPS compatibility proxy (default)
               --no-http-https-proxy   Disable compatibility proxy and use normal TCP forwarding
               --capture-limit-per-type N Maximum captures per packet type (default: 10)

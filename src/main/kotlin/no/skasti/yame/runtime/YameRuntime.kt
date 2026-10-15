@@ -1,6 +1,7 @@
 package no.skasti.yame.runtime
 
-import no.skasti.yame.config.*
+import no.skasti.yame.config.ConfigStore
+import no.skasti.yame.config.ConfigChanges
 import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.serial.ConnectionFunctions
 import no.skasti.yame.serial.SerialSettings
@@ -10,8 +11,11 @@ import no.skasti.yame.ppp.PppSettings
 import no.skasti.yame.ppp.dns.DnsSettings
 import no.skasti.yame.ppp.proxy.ProxySettings
 import no.skasti.yame.lifecycle.ApplicationFunctions
-import no.skasti.yame.config.HtmlTransformerControl
-import no.skasti.yame.logging.YameLogLevel
+import no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings
+import no.skasti.yame.ppp.PppIpConfig
+import no.skasti.yame.ppp.dns.PppDnsConfig
+import no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig
+import no.skasti.yame.serial.SerialTransport
 import no.skasti.yame.logging.YameLogManager
 import no.skasti.yame.logging.YameLogModule
 import no.skasti.yame.modem.HayesModem
@@ -22,18 +26,15 @@ import no.skasti.yame.serial.SerialConnection
 import no.skasti.yame.serial.SerialFlowControl
 
 internal class YameRuntime(
-    initialPortName: String?,
-    initialBaud: Int,
-    initialFlowControl: SerialFlowControl,
-    initialModemConfig: HayesModemConfig,
     private val observer: RuntimeObserver,
     val configStore: ConfigStore,
     val functions: FunctionStore,
     private val resourceRegistryHooks: ResourceRegistryHooks = ResourceRegistryHooks(),
     private val logManager: YameLogManager,
-    initialLogLevels: Map<YameLogModule, YameLogLevel> = YameLogManager.defaultLevels(),
     private val portProvider: () -> List<no.skasti.yame.serial.SerialPortDescriptor> =
         SerialConnection::availablePortDescriptors,
+    private val failFastStartup: Boolean = false,
+    private val connectionFactory: (String, Int, SerialFlowControl, (String) -> Unit) -> SerialTransport = ::SerialConnection,
 ) : AutoCloseable {
     private val lock = Any()
 
@@ -47,16 +48,9 @@ internal class YameRuntime(
     private var autoConnectEnabled = true
 
     @Volatile
-    private var selectedPortName: String? = initialPortName
+    private var settings = configStore.snapshot()
 
-    @Volatile
-    private var selectedBaud: Int = initialBaud
-
-    @Volatile
-    private var selectedFlowControl: SerialFlowControl = initialFlowControl
-
-    @Volatile
-    private var modemConfig: HayesModemConfig = initialModemConfig
+    private val selectedPortName: String? get() = requireNotNull(settings[SerialSettings.Port]).value
 
     private val functionRegistrations = listOf(
         functions.register(ApplicationFunctions.Quit) { shutdown() },
@@ -64,27 +58,16 @@ internal class YameRuntime(
         functions.register(ConnectionFunctions.Reconnect) { reconnect() },
         functions.register(ConnectionFunctions.RefreshPorts) { refreshPorts() },
     )
-    private val transformerControl = HtmlTransformerControl(
-        initialModemConfig.pppHttpCompatibilityConfig.htmlTransformers,
-        configStore = configStore,
-    )
-
     private var generation = 0
     private var connectionAttemptGeneration: Int? = null
-    private var activeConnection: SerialConnection? = null
+    private var activeConnection: SerialTransport? = null
     private var activeModem: HayesModem? = null
     private var monitorThread: Thread? = null
-
-    init {
-        modemConfig = modemConfig.copy(pppHttpCompatibilityConfig = modemConfig.pppHttpCompatibilityConfig.copy(
-            transformerControl = transformerControl,
-        ))
-    }
 
     fun run() {
         started = true
         refreshPorts()
-        maybeAutoConnect()
+        maybeAutoConnect(failFast = failFastStartup)
         startMonitor()
         while (running) Thread.sleep(APP_POLL_MILLIS)
         monitorThread?.join(THREAD_JOIN_MILLIS)
@@ -119,7 +102,7 @@ internal class YameRuntime(
         )
     }
 
-    private fun maybeAutoConnect() {
+    private fun maybeAutoConnect(failFast: Boolean = false) {
         if (!running || !autoConnectEnabled || connectionIsActive()) return
 
         val ports = runCatching(portProvider).getOrDefault(emptyList())
@@ -146,17 +129,12 @@ internal class YameRuntime(
             observer.onLog("Auto-selected serial port $candidate")
         }
 
-        startConnection(candidate)
+        startConnection(candidate, failFast)
     }
 
     private val configurationSubscription = configStore.onChange.subscribe(initial = true) { changes ->
         synchronized(lock) {
-            changes[SerialSettings.Port]?.let { selectedPortName = it.value }
-            changes[SerialSettings.Baud]?.let { selectedBaud = it.value }
-            changes[SerialSettings.FlowControl]?.let { selectedFlowControl = it.value }
-            val current = YameConfiguration(selectedPortName, selectedBaud, selectedFlowControl, modemConfig,
-                logManager.captureLimits, initialLogLevels)
-            modemConfig = applyConfigurationChanges(current, changes).modemConfig
+            settings = ConfigChanges(settings + changes)
             changes[ModemSettings.Tone]?.let { activeModem?.updateToneSimulationEnabled(it.value) }
             changes[ModemSettings.Login]?.let { login ->
                 activeModem?.updateLoginCredentials(login.value.username, login.value.password)
@@ -189,13 +167,13 @@ internal class YameRuntime(
         observer.onLog("Serial connection closed")
     }
 
-    private fun startConnection(portName: String) {
+    private fun startConnection(portName: String, failFast: Boolean) {
         if (!running || !autoConnectEnabled) return
 
         val connectionGeneration: Int
         val baud: Int
         val flowControl: SerialFlowControl
-        val config: HayesModemConfig
+        val snapshot: ConfigChanges
         synchronized(lock) {
             if (
                 activeConnection != null ||
@@ -207,11 +185,12 @@ internal class YameRuntime(
             generation++
             connectionGeneration = generation
             connectionAttemptGeneration = connectionGeneration
-            baud = selectedBaud
-            flowControl = selectedFlowControl
-            config = modemConfig
+            snapshot = settings
+            baud = requireNotNull(snapshot[SerialSettings.Baud]).value
+            flowControl = requireNotNull(snapshot[SerialSettings.FlowControl]).value
         }
 
+        val config = HayesModemConfig.fromSnapshot(snapshot)
         val modemFileLogger = logManager.logger(YameLogModule.MODEM)
         val pppFileLogger = logManager.logger(YameLogModule.PPP)
         val dnsFileLogger = logManager.debugLogger(YameLogModule.DNS)
@@ -234,6 +213,10 @@ internal class YameRuntime(
             observer.onLog(message)
             transferFileLogger(message)
         }
+        val proxyLogger: (String) -> Unit = { message ->
+            observer.onLog(message)
+            proxyFileLogger(message)
+        }
         val eventSink: (no.skasti.yame.observer.YameEvent) -> Unit = { event ->
             logManager.eventSink(event)
             observer.onEvent(event)
@@ -242,12 +225,13 @@ internal class YameRuntime(
             logger = pppLogger,
             dnsLogger = dnsLogger,
             transferLogger = transferLogger,
-            proxyLogger = proxyFileLogger,
+            proxyLogger = proxyLogger,
             eventSink = eventSink,
             resourceRegistryHooks = resourceRegistryHooks,
-            ipConfig = config.pppIpConfig,
-            dnsConfig = config.pppDnsConfig,
-            httpCompatibilityConfig = config.pppHttpCompatibilityConfig,
+            ipConfig = PppIpConfig.fromSnapshot(snapshot),
+            dnsConfig = PppDnsConfig.fromSnapshot(snapshot),
+            httpCompatibilityConfig = PppHttpCompatibilityConfig.fromSnapshot(snapshot),
+            transformerSettings = { HtmlTransformerSettings.fromSnapshot(configStore.snapshot()) },
         )
         val modem = HayesModem(
             baudRate = baud,
@@ -256,24 +240,20 @@ internal class YameRuntime(
             pppLogger = pppLogger,
             dnsLogger = dnsLogger,
             transferLogger = transferLogger,
-            proxyLogger = proxyFileLogger,
+            proxyLogger = proxyLogger,
             eventSink = eventSink,
             pppHandler = pppHandler,
         )
-        val connection = SerialConnection(
-            portName = portName,
-            baudRate = baud,
-            flowControl = flowControl,
-            logger = { message ->
+        var connection: SerialTransport? = null
+        try {
+            val opened = connectionFactory(portName, baud, flowControl) { message ->
                 observer.onLog(message)
                 serialFileLogger(message)
-            },
-        )
-
-        try {
-            connection.open()
-            modem.attachOutput(connection.output)
-            modem.attachCarrierPresent(connection::setCarrierPresent)
+            }
+            connection = opened
+            opened.open()
+            modem.attachOutput(opened.output)
+            modem.attachCarrierPresent(opened::setCarrierPresent)
 
             val current = synchronized(lock) {
                 val isCurrent =
@@ -282,10 +262,11 @@ internal class YameRuntime(
                         connectionAttemptGeneration == connectionGeneration
 
                 if (isCurrent) {
-                    modem.updateLoginCredentials(modemConfig.username, modemConfig.password)
-                    modem.updateToneSimulationEnabled(modemConfig.toneSimulationEnabled)
+                    val latestConfig = HayesModemConfig.fromSnapshot(settings)
+                    modem.updateLoginCredentials(latestConfig.username, latestConfig.password)
+                    modem.updateToneSimulationEnabled(latestConfig.toneSimulationEnabled)
                     activeModem = modem
-                    activeConnection = connection
+                    activeConnection = opened
                     connectionAttemptGeneration = null
                 }
                 isCurrent
@@ -293,7 +274,7 @@ internal class YameRuntime(
 
             if (!current) {
                 runCatching { modem.close() }
-                runCatching { connection.close() }
+                runCatching { opened.close() }
                 synchronized(lock) {
                     if (connectionAttemptGeneration == connectionGeneration) {
                         connectionAttemptGeneration = null
@@ -305,12 +286,12 @@ internal class YameRuntime(
             observer.updateConnected(true)
             observer.onLog("YAME ready on $portName at $baud baud")
 
-            connection.startReading(
+            opened.startReading(
                 onBytes = modem::receive,
                 onStopped = { error ->
                     serialReaderStopped(
                         connectionGeneration = connectionGeneration,
-                        connection = connection,
+                        connection = opened,
                         modem = modem,
                         error = error,
                     )
@@ -318,7 +299,7 @@ internal class YameRuntime(
             )
         } catch (error: Exception) {
             runCatching { modem.close() }
-            runCatching { connection.close() }
+            runCatching { connection?.close() }
 
             val current = synchronized(lock) {
                 val ownsAttempt =
@@ -345,13 +326,14 @@ internal class YameRuntime(
                 observer.onLog(
                     "Could not open $portName: ${error.message ?: error.javaClass.simpleName}",
                 )
+                if (failFast) throw error
             }
         }
     }
 
     private fun serialReaderStopped(
         connectionGeneration: Int,
-        connection: SerialConnection,
+        connection: SerialTransport,
         modem: HayesModem,
         error: Throwable?,
     ) {
@@ -384,7 +366,7 @@ internal class YameRuntime(
     }
 
     private fun stopActiveConnection() {
-        val connection: SerialConnection?
+        val connection: SerialTransport?
         val modem: HayesModem?
         synchronized(lock) {
             generation++
@@ -417,7 +399,6 @@ internal class YameRuntime(
         shutdown()
         configurationSubscription.close()
         functionRegistrations.forEach(AutoCloseable::close)
-        transformerControl.close()
     }
 
     private companion object {

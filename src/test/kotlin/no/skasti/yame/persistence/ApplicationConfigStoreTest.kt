@@ -1,4 +1,6 @@
-package no.skasti.yame.config
+package no.skasti.yame.persistence
+
+import no.skasti.yame.config.*
 
 import no.skasti.yame.serial.SerialSettings
 import no.skasti.yame.modem.ModemSettings
@@ -40,7 +42,7 @@ class ApplicationConfigStoreTest {
             val loaded = file.load()
             assertEquals(9600, loaded.baudRate)
             assertEquals("secret", loaded.modemConfig.password)
-            assertFalse(loaded.modemConfig.pppHttpCompatibilityConfig.htmlTransformers.scriptRemover)
+            assertFalse(loaded.pppHttpCompatibilityConfig.htmlTransformers.scriptRemover)
             val bytes = Files.readAllBytes(path)
             assertFailsWith<IllegalArgumentException> {
                 store.set(SerialSettings.Baud to 19200, ModemSettings.Login to LoginCredentials("user", null))
@@ -49,4 +51,40 @@ class ApplicationConfigStoreTest {
             assertEquals(9600, store[SerialSettings.Baud])
         } finally { directory.toFile().deleteRecursively() }
     }
+
+    @Test fun `cross feature transaction persists all legacy bindings once`() {
+        val directory = Files.createTempDirectory("yame-bindings")
+        try {
+            val file = YameConfigurationStore(directory.resolve("yame.ini"))
+            var saves = 0
+            val store = applicationConfigStore(YameConfiguration(), save = { file.save(it); saves++ })
+            val changes = listOf(
+                SerialSettings.Port to "COM4",
+                SerialSettings.Baud to 19200,
+                SerialSettings.FlowControl to no.skasti.yame.serial.SerialFlowControl.HARDWARE,
+                ModemSettings.PickupTime to kotlin.time.Duration.ZERO,
+                ModemSettings.DialToneTime to kotlin.time.Duration.ZERO,
+                ModemSettings.Handshake to no.skasti.yame.tone.HandshakeProfile.NONE,
+                ModemSettings.Login to LoginCredentials("user", "secret"),
+                ModemSettings.Tone to false,
+                no.skasti.yame.ppp.PppSettings.Subnet to no.skasti.yame.ppp.ip.Ipv4Cidr.parse("10.99.0.0/30"),
+                no.skasti.yame.ppp.dns.DnsSettings.Upstream to no.skasti.yame.ppp.ip.Ipv4Address.parse("1.1.1.1"),
+                no.skasti.yame.ppp.proxy.ProxySettings.Enabled to false,
+                TransformerSettings.Script to false,
+                TransformerSettings.Style to false,
+                TransformerSettings.Attributes to false,
+                TransformerSettings.Elements to false,
+            ) + LogSettings.Levels.values.map { it to YameLogLevel.DEBUG } +
+                LogSettings.CaptureLimits.values.map { it to 20 }
+            store.set(*changes.toTypedArray())
+            assertEquals(1, saves)
+            val reloaded = applicationConfigStore(file.load()).snapshot()
+            assertEquals(store.snapshot().map { it.key.path to it.value }, reloaded.map { it.key.path to it.value })
+            val text = Files.readString(directory.resolve("yame.ini"))
+            for (name in listOf("version=1", "login.username=user", "serial.port=COM4", "ppp.subnet=10.99.0.0/30", "dns.upstream=1.1.1.1")) {
+                assertTrue(text.contains(name), name)
+            }
+        } finally { directory.toFile().deleteRecursively() }
+    }
+
 }

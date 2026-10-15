@@ -1,6 +1,7 @@
 package no.skasti.yame.ui
 
 import no.skasti.yame.config.ConfigStore
+import no.skasti.yame.config.SettingKey
 import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.serial.SerialSettings
 import no.skasti.yame.serial.ConnectionFunctions
@@ -41,31 +42,14 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
 class TuiYameObserver(
-    initialPortName: String?,
-    initialBaud: Int,
-    initialFlowControl: SerialFlowControl,
-    initialDnsUpstream: String,
-    initialHttpProxyEnabled: Boolean,
-    initialToneSimulationEnabled: Boolean,
-    initialCaptureLimits: PacketCaptureLimits = PacketCaptureLimits(),
-    initialLogLevels: Map<YameLogModule, YameLogLevel> = emptyMap(),
+    private val configStore: ConfigStore,
+    private val functions: FunctionStore,
     private val terminal: Terminal = Terminal(interactive = true),
-    configStore: ConfigStore = no.skasti.yame.config.applicationConfigStore(no.skasti.yame.config.YameConfiguration(
-        portName = initialPortName, baudRate = initialBaud, flowControl = initialFlowControl,
-        modemConfig = no.skasti.yame.modem.HayesModemConfig(
-            pppDnsConfig = no.skasti.yame.ppp.dns.PppDnsConfig(no.skasti.yame.ppp.ip.Ipv4Address.parse(initialDnsUpstream)),
-            pppHttpCompatibilityConfig = no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig(enabled = initialHttpProxyEnabled),
-            toneSimulationEnabled = initialToneSimulationEnabled,
-        ),
-        captureLimits = initialCaptureLimits,
-        logLevels = no.skasti.yame.logging.YameLogManager.defaultLevels() + initialLogLevels,
-    )),
-    functions: FunctionStore = FunctionStore(),
 ) : AutoCloseable, no.skasti.yame.runtime.RuntimeObserver {
     private val paletteRegistry = CommandPalette()
-    private val onPortSelected: (String) -> Unit = { value -> configStore.set(SerialSettings.Port to value) }
-    private val onBaudSelected: (Int) -> Unit = { value -> configStore.set(SerialSettings.Baud to value) }
-    private val onFlowControlSelected: (SerialFlowControl) -> Unit = { value -> configStore.set(SerialSettings.FlowControl to value) }
+    private val onPortSelected: (String) -> Unit = { value -> selectConnectionSetting(SerialSettings.Port, value) }
+    private val onBaudSelected: (Int) -> Unit = { value -> selectConnectionSetting(SerialSettings.Baud, value) }
+    private val onFlowControlSelected: (SerialFlowControl) -> Unit = { value -> selectConnectionSetting(SerialSettings.FlowControl, value) }
     private val onDnsUpstreamSelected: (String) -> Unit = { value -> configStore.set(DnsSettings.Upstream to no.skasti.yame.ppp.ip.Ipv4Address.parse(value)) }
     private val onHttpProxySelected: (Boolean) -> Unit = { value -> configStore.set(ProxySettings.Enabled to value) }
     private val onToneSimulationSelected: (Boolean) -> Unit = { value -> configStore.set(ModemSettings.Tone to value) }
@@ -77,19 +61,20 @@ class TuiYameObserver(
     private val onLogLevelSelected: (YameLogModule, YameLogLevel) -> Unit = { module, level -> configStore.set(LogSettings.Levels.getValue(module) to level) }
     private val onLoginAdded: (String, String) -> Unit = { username, password -> configStore.set(ModemSettings.Login to LoginCredentials(username, password)) }
 
-    private var captureLimits = initialCaptureLimits
-
-    @Synchronized
-    fun updateCaptureLimits(value: PacketCaptureLimits) { captureLimits = value }
-
-    private var portName = initialPortName
-    private var baud = initialBaud
-    private var flowControl = initialFlowControl
-    private var dnsUpstream = initialDnsUpstream
-    private var httpProxyEnabled = initialHttpProxyEnabled
-    private var toneSimulationEnabled = initialToneSimulationEnabled
+    // Presentation cache initialized from one consistent snapshot. The initial subscription
+    // below closes the snapshot/subscribe race and applies subsequent event values in order.
+    private val initial = configStore.snapshot()
+    private var captureLimits = PacketCaptureLimitKind.entries.fold(PacketCaptureLimits()) { limits, kind ->
+        kind.apply(limits, requireNotNull(initial[LogSettings.CaptureLimits.getValue(kind)]).value)
+    }
+    private var portName = requireNotNull(initial[SerialSettings.Port]).value
+    private var baud = requireNotNull(initial[SerialSettings.Baud]).value
+    private var flowControl = requireNotNull(initial[SerialSettings.FlowControl]).value
+    private var dnsUpstream = requireNotNull(initial[DnsSettings.Upstream]).value.toString()
+    private var httpProxyEnabled = requireNotNull(initial[ProxySettings.Enabled]).value
+    private var toneSimulationEnabled = requireNotNull(initial[ModemSettings.Tone]).value
     private val logLevels = YameLogModule.entries.associateWith {
-        initialLogLevels[it] ?: YameLogLevel.INFO
+        requireNotNull(initial[LogSettings.Levels.getValue(it)]).value
     }.toMutableMap()
     private var connected = false
     private var availablePorts: List<SerialPortDescriptor> = emptyList()
@@ -147,6 +132,14 @@ class TuiYameObserver(
         }
     }
 
+    private fun <T> selectConnectionSetting(key: SettingKey<T>, value: T) {
+        val unchanged = configStore[key] == value
+        configStore.set(key to value)
+        // A selection is also a connection intent. Keep that action separate from
+        // configuration events, whose no-op semantics apply to all consumers.
+        if (unchanged) functions.invoke(ConnectionFunctions.Reconnect)
+    }
+
     @Synchronized
     internal fun paletteSnapshot(): TuiCommandPalette? = commandPalette
 
@@ -176,30 +169,6 @@ class TuiYameObserver(
         enterScreen()
         render()
         startInputLoop()
-    }
-
-    @Synchronized
-    fun updateSettings(
-        portName: String?,
-        baud: Int,
-        flowControl: SerialFlowControl,
-        dnsUpstream: String,
-        httpProxyEnabled: Boolean,
-        toneSimulationEnabled: Boolean,
-    ) {
-        this.portName = portName
-        this.baud = baud
-        this.flowControl = flowControl
-        this.dnsUpstream = dnsUpstream
-        this.httpProxyEnabled = httpProxyEnabled
-        this.toneSimulationEnabled = toneSimulationEnabled
-        render()
-    }
-
-    @Synchronized
-    fun updateLogLevel(module: YameLogModule, level: YameLogLevel) {
-        logLevels[module] = level
-        render()
     }
 
     @Synchronized

@@ -26,7 +26,7 @@ import no.skasti.yame.ppp.proxy.transform.sourceFingerprint
 import no.skasti.yame.ppp.proxy.transform.ResourceTransformationContext
 import no.skasti.yame.ppp.proxy.transform.ResourceTransformationPipeline
 import no.skasti.yame.ppp.proxy.transform.defaultResourceTransformationPipeline
-import no.skasti.yame.config.HtmlTransformerSettings
+import no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings
 import no.skasti.yame.ppp.tcp.TcpProxyFlow
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
@@ -48,6 +48,7 @@ internal class SystemHttpCompatibilityHandler(
     private val config: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig.fromConfigStore(),
     private val logger: (String) -> Unit = {},
     private val eventSink: (YameEvent) -> Unit = {},
+    private val transformerSettings: (() -> no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings)? = null,
     private val resourceRegistryHooks: ResourceRegistryHooks = ResourceRegistryHooks(),
     private val resourceGraphs: NavigationResourceRegistry =
         NavigationResourceRegistry(
@@ -61,7 +62,7 @@ internal class SystemHttpCompatibilityHandler(
         .followRedirects(HttpClient.Redirect.NEVER)
         .build(),
     private val resourceTransformations: ResourceTransformationPipeline =
-        defaultResourceTransformationPipeline(config.maxResponseBytes, config.elementSimplifier, config.transformerControl),
+        defaultResourceTransformationPipeline(config.maxResponseBytes, config.elementSimplifier),
 ) : HttpRequestHandler {
     private data class ClientCookie(val name: String, val value: String)
     private data class SessionKey(val generation: Long, val peerAddress: String)
@@ -122,7 +123,7 @@ internal class SystemHttpCompatibilityHandler(
                         SessionState()
                     },
                 active = { connection.isActive },
-                htmlTransformers = config.transformerControl?.snapshot() ?: config.htmlTransformers,
+                htmlTransformers = transformerSettings?.invoke() ?: config.htmlTransformers,
             )
         return processRequest(state, request)
     }
@@ -278,7 +279,7 @@ internal class SystemHttpCompatibilityHandler(
             request.headers.forEach { (name, value) ->
                 val normalizedName = name.lowercase(Locale.ROOT)
                 if (normalizedName !in REQUEST_HEADERS_TO_STRIP && normalizedName !in requestConnectionHeadersToStrip &&
-                    (config.transformerControl == null || normalizedName !in setOf("if-none-match", "if-modified-since")) &&
+                    (transformerSettings == null || normalizedName !in setOf("if-none-match", "if-modified-since")) &&
                     (forwardSensitiveHeaders || normalizedName !in SENSITIVE_REQUEST_HEADERS)) {
                     builder.header(name, value)
                 }
@@ -513,7 +514,7 @@ internal class SystemHttpCompatibilityHandler(
                     clientRepresentation.headers,
                     response.locationAlreadyLegacy,
                 )
-            if (config.transformerControl != null &&
+            if (transformerSettings != null &&
                 firstHeader(legacyHeaders, "content-type")?.substringBefore(';')?.trim()?.equals("text/html", true) == true) {
                 // The browser must fetch again after a live profile change instead of reusing old HTML.
                 legacyHeaders = legacyHeaders.filterKeys {
