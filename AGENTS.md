@@ -60,26 +60,31 @@ absolute `https://` URL in a supported text body is intentional.
 
 ## Architecture documentation
 
-Architecture documentation must describe the actual implemented system. Proposed
-functionality and future architectural changes must be clearly identified and
-kept separate from documentation of existing behavior.
+Documentation must distinguish verified implemented behavior, decided design and
+open work. [ADR 0002](docs/adrs/0002-architecture-decision-records.md) defines
+decision records; [ADR 0003](docs/adrs/0003-document-decided-design.md) defines
+the documentation convention.
 
-- Treat regular architecture documentation as a description of the current
-  implementation, verified against the code.
 - Record architectural decisions in `docs/adrs/<sequence>-<topic>.md`, using the
   next repository-wide four-digit sequence and a lowercase hyphenated topic.
   Include status, date, context, decision, alternatives and consequences. Never
-  reuse or renumber an ADR; superseding decisions get a new ADR and links both ways.
-- Keep `docs/design/` limited to decided design. State implementation status
-  separately and link to ADRs for rationale and history. Discuss unresolved proposals
-  in issues or PRs; do not embed open questions or rejected alternatives in the design.
-- Keep historical implementation inventories under `docs/.history/`, labeled
-  with the exact revision. They are neither current architecture nor selected design.
-- When a design is implemented, update the corresponding architecture
-  documentation from the verified implementation, including deviations from the
-  proposal. Update the design's status and link to the current documentation.
-- Historical design documents may be retained for context, but must be labeled
-  so they cannot be mistaken for authoritative documentation of current behavior.
+  reuse or renumber a published ADR; superseding decisions get a new ADR and links
+  both ways.
+- Across project documentation, descriptions of intended behavior must reflect
+  decided design, including `docs/**/*.md` outside `docs/design/` and relevant
+  root documents. State implementation
+  status separately; a decision can be documented before it is implemented.
+- Clearly mark relevant unresolved or ongoing work as such. A concise mention may
+  link to one specific issue or an appropriate issue label. Keep extended discussion
+  of open alternatives in issues or PRs.
+- Verify descriptions of current architecture against the code. Link to ADRs for
+  rationale rather than repeating decision history or rejected alternatives.
+- Keep revision-specific historical implementation inventories under
+  `docs/.history/`, labeled with the exact revision. They are neither current
+  architecture nor selected design.
+- When a design is implemented, update current architecture documentation from
+  the verified implementation, including deviations from the design. Update
+  implementation status and links in the affected documents.
 
 ## Development workflow
 

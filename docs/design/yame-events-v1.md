@@ -10,8 +10,9 @@ Decided design does not imply implemented behavior: the
 Decision rationale, alternatives and consequences belong in
 [ADR 0001: fatal event-queue saturation](../adrs/0001-fatal-event-queue-saturation.md).
 The [historical inventory at a37ac65](../.history/yame-events-a37ac65.md) is
-maintained separately from this design. Documentation responsibilities are defined
-in [ADR 0002](../adrs/0002-architecture-documentation.md).
+maintained separately from this design. Documentation responsibilities are defined in
+[ADR 0003](../adrs/0003-document-decided-design.md); ADR numbering and lifecycle
+are defined in [ADR 0002](../adrs/0002-architecture-decision-records.md).
 
 ## v1 contract
 

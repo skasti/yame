@@ -17,11 +17,14 @@ It documents the project's compatibility scope, development workflow, design
 principles, and explicit non-goals. These guidelines apply to human and
 AI-assisted contributions alike. Follow its
 [architecture documentation principle](AGENTS.md#architecture-documentation):
-document verified implementation as current architecture, decided design under
-`docs/design/`, and decision records in `docs/adrs/<sequence>-<topic>.md`. Discuss
-unresolved proposals in issues or PRs. Keep revision-specific historical inventories
-under `docs/.history/`. See [ADR 0002](docs/adrs/0002-architecture-documentation.md)
-for the documentation roles and numbering convention.
+document verified implementation as current architecture and decided design
+throughout project documentation, including `docs/**/*.md` outside
+`docs/design/`. Clearly
+mark relevant open work and link to a specific issue or useful issue label; keep
+its detailed discussion in issues or PRs. Record decisions under `docs/adrs/`
+and revision-specific inventories under `docs/.history/`. See
+[ADR 0002](docs/adrs/0002-architecture-decision-records.md) for ADR conventions
+and [ADR 0003](docs/adrs/0003-document-decided-design.md) for documentation scope.
 
 Security vulnerabilities should be reported according to
 [SECURITY.md](SECURITY.md), not as public issues.

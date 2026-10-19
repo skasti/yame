@@ -579,8 +579,9 @@ The [v1 migration design](docs/design/yame-events-v1.md) describes the decided d
 for [#92](https://github.com/skasti/yame/issues/92). The
 [historical inventory](docs/.history/yame-events-a37ac65.md) describes `a37ac65`.
 [ADR 0001](docs/adrs/0001-fatal-event-queue-saturation.md) records the fatal-overload
-decision; [ADR 0002](docs/adrs/0002-architecture-documentation.md) defines where
-decisions, design and implemented architecture are documented.
+decision; [ADR 0002](docs/adrs/0002-architecture-decision-records.md) defines decision
+records; [ADR 0003](docs/adrs/0003-document-decided-design.md) explains how
+documentation reflects decided design and verified implementation.
 
 Please report potential security vulnerabilities according to
 [SECURITY.md](SECURITY.md) rather than opening a public issue.
