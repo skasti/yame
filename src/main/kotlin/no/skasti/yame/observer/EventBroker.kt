@@ -90,7 +90,7 @@ class EventBroker(val config: EventBrokerConfig = EventBrokerConfig()) : AutoClo
         check(registrations.none { it.name == name }) { "Duplicate subscriber name: $name" }
         val registration = Registration(name, accepted + 1, filter, handler)
         registrations.add(registration)
-        AutoCloseable { lock.withLock { registrations.remove(registration); Unit } }
+        AutoCloseable { lock.withLock { registrations.remove(registration) } }
     }
 
     inline fun <reified T : YameEvent> subscribeTyped(name: String, crossinline handler: (T) -> Unit): AutoCloseable =

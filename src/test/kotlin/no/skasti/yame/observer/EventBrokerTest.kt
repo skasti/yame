@@ -262,7 +262,7 @@ class EventBrokerTest {
             YameEvent.DnsQuery("key", DnsTransport.UDP, 1, "name", "A", "upstream", 4) to
                 listOf("key", "name", "A", "upstream"),
             YameEvent.DnsResponse("key", DnsTransport.TCP, 2, null, 0, 1, false, 3) to listOf("key", null),
-            YameEvent.DnsFailure("key", "message") to listOf("key", "message"),
+            YameEvent.DnsFailure("key", DnsTransport.UDP, "message") to listOf("key", "message"),
             YameEvent.TransferStarted("flow", "destination", "via", TransferKind.TCP) to listOf("flow", "destination", "via"),
             YameEvent.TransferStateChanged("flow", TransferState.CLOSED, "detail") to listOf("flow", "detail"),
             YameEvent.TransferBytes("flow", TransferDirection.TO_PEER, 3) to listOf("flow"),
