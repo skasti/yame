@@ -571,15 +571,14 @@ Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the build,
 testing, compatibility, and pull-request guidelines. The project's more detailed
 architecture and review constraints are documented in [AGENTS.md](AGENTS.md).
 
-The [YameEvents v1 design proposal](docs/design/yame-events-v1.md) supports the core
-event and proxy dashboard migration tracked by
-[#92](https://github.com/skasti/yame/issues/92). It retains an implementation
-inventory at revision `a37ac65` and separately proposes ownership, delivery,
-bounded overload, startup and shutdown semantics. The contract is not implemented;
-the terminal overload policy remains an open decision requiring approval before
-[#98](https://github.com/skasti/yame/issues/98). Merging the documentation does not
-approve that policy. Once implemented, `docs/yame-events.md` will describe the
-verified event-system behavior, including deviations from the proposal.
+The [YameEvents broker architecture](docs/yame-events.md) documents the bounded
+asynchronous broker, subscriptions, fatal overload signal and lifecycle API.
+Production runtime wiring and fatal process termination remain part of
+[#102](https://github.com/skasti/yame/issues/102).
+The [v1 migration design](docs/design/yame-events-v1.md) retains the historical
+inventory at `a37ac65` and the broader migration tracked by
+[#92](https://github.com/skasti/yame/issues/92). Fail-fast application termination
+on saturation was explicitly approved on 2026-10-19.
 
 Please report potential security vulnerabilities according to
 [SECURITY.md](SECURITY.md) rather than opening a public issue.

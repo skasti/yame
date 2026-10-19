@@ -39,6 +39,7 @@ sealed interface YameEvent {
         bytes: ByteArray,
     ) : YameEvent {
         private val snapshot = bytes.copyOf()
+        val byteCount: Int get() = snapshot.size
         fun bytes(): ByteArray = snapshot.copyOf()
     }
 
