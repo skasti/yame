@@ -4,7 +4,7 @@ Implemented by #98 in `no.skasti.yame.observer`. This documents the broker API a
 its tests. **Production runtime still uses the existing event sinks**; installation,
 fatal process termination and runtime/frontend migration belong to #102/#101.
 The [decided design](design/yame-events-v1.md) describes that wider migration;
-the [historical inventory](inventories/yame-events-a37ac65.md) records its starting
+the [historical inventory](.history/yame-events-a37ac65.md) records its starting
 point. [ADR 0001](adrs/0001-fatal-event-queue-saturation.md) records the overload
 decision and rationale. No complete-state bootstrap, replay or global state store is implemented.
 

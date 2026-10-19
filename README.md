@@ -577,7 +577,7 @@ Production runtime wiring and fatal process termination remain part of
 [#102](https://github.com/skasti/yame/issues/102).
 The [v1 migration design](docs/design/yame-events-v1.md) describes the decided design
 for [#92](https://github.com/skasti/yame/issues/92). The
-[historical inventory](docs/inventories/yame-events-a37ac65.md) describes `a37ac65`.
+[historical inventory](docs/.history/yame-events-a37ac65.md) describes `a37ac65`.
 [ADR 0001](docs/adrs/0001-fatal-event-queue-saturation.md) records the fatal-overload
 decision; [ADR 0002](docs/adrs/0002-architecture-documentation.md) defines where
 decisions, design and implemented architecture are documented.

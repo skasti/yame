@@ -9,7 +9,7 @@ Decided design does not imply implemented behavior: the
 
 Decision rationale, alternatives and consequences belong in
 [ADR 0001: fatal event-queue saturation](../adrs/0001-fatal-event-queue-saturation.md).
-The [historical inventory at a37ac65](../inventories/yame-events-a37ac65.md) is
+The [historical inventory at a37ac65](../.history/yame-events-a37ac65.md) is
 maintained separately from this design. Documentation responsibilities are defined
 in [ADR 0002](../adrs/0002-architecture-documentation.md).
 
@@ -75,7 +75,7 @@ bounded ordered hand-off, but must not create an unbounded pending-batch queue.
 
 Registry publication must preserve root-before-resource and mutation order.
 Regression tests in #100 cover both invariants; the
-[historical inventory](../inventories/yame-events-a37ac65.md) records the migration
+[historical inventory](../.history/yame-events-a37ac65.md) records the migration
 starting point.
 
 No update may resurrect an evicted graph. Stale fetch attempts must not overwrite

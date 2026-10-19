@@ -20,7 +20,7 @@ AI-assisted contributions alike. Follow its
 document verified implementation as current architecture, decided design under
 `docs/design/`, and decision records in `docs/adrs/<sequence>-<topic>.md`. Discuss
 unresolved proposals in issues or PRs. Keep revision-specific historical inventories
-under `docs/inventories/`. See [ADR 0002](docs/adrs/0002-architecture-documentation.md)
+under `docs/.history/`. See [ADR 0002](docs/adrs/0002-architecture-documentation.md)
 for the documentation roles and numbering convention.
 
 Security vulnerabilities should be reported according to

@@ -73,7 +73,7 @@ kept separate from documentation of existing behavior.
 - Keep `docs/design/` limited to decided design. State implementation status
   separately and link to ADRs for rationale and history. Discuss unresolved proposals
   in issues or PRs; do not embed open questions or rejected alternatives in the design.
-- Keep historical implementation inventories under `docs/inventories/`, labeled
+- Keep historical implementation inventories under `docs/.history/`, labeled
   with the exact revision. They are neither current architecture nor selected design.
 - When a design is implemented, update the corresponding architecture
   documentation from the verified implementation, including deviations from the

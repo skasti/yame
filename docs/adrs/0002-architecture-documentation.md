@@ -26,7 +26,7 @@ only decided design.
 - Discuss unresolved proposals in issues or PRs until decided. Do not present them as
   part of the selected design.
 - Regular architecture documents describe verified implemented behavior. Put historical
-  inventories under `docs/inventories/`, with the exact revision and a historical label.
+  inventories under `docs/.history/`, with the exact revision and a historical label.
 - If a decision changes, add a new ADR and mark the prior record superseded with a
   link. Update the design to reflect the new decision; retain the historical rationale.
 
