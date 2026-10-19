@@ -571,6 +571,11 @@ Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the build,
 testing, compatibility, and pull-request guidelines. The project's more detailed
 architecture and review constraints are documented in [AGENTS.md](AGENTS.md).
 
+The [outbound event inventory and proposed YameEvents contract](docs/yame-events.md)
+document the incremental core event and proxy dashboard migration tracked by
+[#92](https://github.com/skasti/yame/issues/92), including ownership, delivery,
+bounded overload, startup and shutdown semantics.
+
 Please report potential security vulnerabilities according to
 [SECURITY.md](SECURITY.md) rather than opening a public issue.
 
