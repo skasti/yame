@@ -66,12 +66,15 @@ kept separate from documentation of existing behavior.
 
 - Treat regular architecture documentation as a description of the current
   implementation, verified against the code.
-- Put proposed designs under `docs/design/`, or in GitHub issues for smaller
-  proposals. Design documents must explicitly state their status, link to relevant
-  issues, and distinguish accepted decisions from questions requiring approval.
-  Merging a design document does not implicitly approve decisions marked as open.
-- Identify the revision described by an implementation inventory retained in a
-  design document; distinguish that historical snapshot from proposed behavior.
+- Record architectural decisions in `docs/adrs/<sequence>-<topic>.md`, using the
+  next repository-wide four-digit sequence and a lowercase hyphenated topic.
+  Include status, date, context, decision, alternatives and consequences. Never
+  reuse or renumber an ADR; superseding decisions get a new ADR and links both ways.
+- Keep `docs/design/` limited to decided design. State implementation status
+  separately and link to ADRs for rationale and history. Discuss unresolved proposals
+  in issues or PRs; do not embed open questions or rejected alternatives in the design.
+- Keep historical implementation inventories under `docs/inventories/`, labeled
+  with the exact revision. They are neither current architecture nor selected design.
 - When a design is implemented, update the corresponding architecture
   documentation from the verified implementation, including deviations from the
   proposal. Update the design's status and link to the current documentation.
