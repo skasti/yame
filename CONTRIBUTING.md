@@ -15,7 +15,10 @@ behavior and scope can be discussed before a large implementation is built.
 Read [AGENTS.md](AGENTS.md) before making architectural or behavioral changes.
 It documents the project's compatibility scope, development workflow, design
 principles, and explicit non-goals. These guidelines apply to human and
-AI-assisted contributions alike.
+AI-assisted contributions alike. Follow its
+[architecture documentation principle](AGENTS.md#architecture-documentation):
+document implemented behavior as current architecture and keep explicitly labeled
+proposals under `docs/design/` (or in issues for smaller proposals).
 
 Security vulnerabilities should be reported according to
 [SECURITY.md](SECURITY.md), not as public issues.
