@@ -111,3 +111,52 @@ of the HTTP-to-HTTPS routing and URL-rewrite feature.
 Security review is still in scope: never weaken TLS toward the modern upstream,
 leak credentials or cookies across origins, corrupt HTTP framing, or permit
 unbounded buffering.
+
+## Component configuration pattern
+
+- Keep a component's immutable configuration type beside its owning component.
+- Provide `ConfigType.fromConfigStore()` on its companion object. Read a single
+  snapshot from `ConfigStore.current` when mapping multiple setting keys.
+- Accept explicit configuration with a non-null constructor default, for example
+  `config: ConfigType = ConfigType.fromConfigStore()`. Do not pass the store into
+  that factory or use a nullable config argument merely to implement a fallback.
+- Explicit config must allow isolated tests without installing or modifying a
+  global store. Config data-class defaults remain ordinary standalone defaults.
+- Factories produce snapshots. Live updates require a separately owned subscription;
+  never silently overwrite explicit constructor configuration.
+- `ConfigStore.current` fails fast until `Main` explicitly installs the process store.
+  Hold the returned installation handle for the application's lifetime and close it
+  after runtime/frontends stop. A second installation is rejected. Multiple
+  frontends share the existing store; they never install a replacement.
+- Runtime and presentation constructors receive the shared stores, not duplicate
+  initial setting values or the persistent application configuration tree.
+- Runtime composition maps each component config from the same committed snapshot.
+  Apply notification values in delivery order rather than rereading a newer store
+  snapshot inside a change callback. Live request settings may read a fresh snapshot
+  once at the start of each request through an explicitly injected provider.
+- Immutable configs contain values only; subscriptions, providers, IO, registries,
+  and other runtime dependencies belong in component constructors.
+- Local config types do not require a nested application-wide config tree.
+
+## Configuration ownership and dependency direction
+
+- `no.skasti.yame.config` and `.function` contain generic infrastructure only.
+  They must not import concrete features, persistence adapters, or frontends.
+- Each feature owns its keys, groups, immutable values, validation, and snapshot
+  factories. Modem config contains modem behavior/credentials only; PPP addressing,
+  DNS, and HTTP compatibility are independent component configs.
+- HTML transformation settings, rules, and their separate startup INI reader live
+  in `ppp.proxy.transform`, alongside the transformation implementation.
+- Only `Main` and `persistence` understand `YameConfiguration`. It is a legacy file
+  representation, never a runtime settings API. `YameConfigurationBindings` owns
+  all key-to-file mappings; feature `*Settings` objects must not import it.
+- Application persistence may reuse immutable feature config values. This does not
+  authorize a feature to import the application schema or nest unrelated configs.
+- `YameRuntime` composes serial, modem, PPP, DNS, proxy, and logging behavior. TUI
+  and plain mode use that same runtime, ConfigStore, and FunctionStore.
+- A user selecting unchanged serial settings expresses a reconnect action through
+  FunctionStore; do not manufacture a configuration event for a no-op write.
+- Protocol aggregators (`HayesModem`'s default PPP handler and `RetroPppHandler`)
+  have ordinary standalone child defaults. Application composition explicitly
+  injects each configured dependency. Supplying an explicit modem config must not
+  indirectly consult a process store for unrelated PPP configuration.

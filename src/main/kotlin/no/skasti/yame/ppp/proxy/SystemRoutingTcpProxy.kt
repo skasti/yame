@@ -12,6 +12,7 @@ internal class SystemRoutingTcpProxy(
     private val httpConfig: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig(),
     private val logger: (String) -> Unit = {},
     private val eventSink: (YameEvent) -> Unit = {},
+    private val transformerSettings: (() -> no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings)? = null,
     private val resourceRegistryHooks: ResourceRegistryHooks = ResourceRegistryHooks(),
     private val resourceGraphs: NavigationResourceRegistry =
         NavigationResourceRegistry(
@@ -25,6 +26,7 @@ internal class SystemRoutingTcpProxy(
         httpConfig,
         logger,
         eventSink = eventSink,
+        transformerSettings = transformerSettings,
         resourceRegistryHooks = resourceRegistryHooks,
         resourceGraphs = resourceGraphs,
     ),

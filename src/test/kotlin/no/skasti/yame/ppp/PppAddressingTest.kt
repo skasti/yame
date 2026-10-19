@@ -35,6 +35,7 @@ class PppAddressingTest {
     @Test
     fun `automatic subnet skips local interface ranges`() {
         val resolver = PppAddressResolver(
+            config = PppIpConfig(),
             localNetworksProvider = {
                 listOf(LocalIpv4Network("vpn0", Ipv4Cidr.parse("10.0.0.0/8")))
             },
@@ -51,6 +52,7 @@ class PppAddressingTest {
     @Test
     fun `unconfigured policy accepts a safe peer requested address`() {
         val resolver = PppAddressResolver(
+            config = PppIpConfig(),
             localNetworksProvider = {
                 listOf(LocalIpv4Network("eth0", Ipv4Cidr.parse("192.168.1.0/24")))
             },
@@ -66,6 +68,7 @@ class PppAddressingTest {
     @Test
     fun `unconfigured policy does not accept a peer address on a local subnet`() {
         val resolver = PppAddressResolver(
+            config = PppIpConfig(),
             localNetworksProvider = {
                 listOf(LocalIpv4Network("eth0", Ipv4Cidr.parse("192.168.1.0/24")))
             },
@@ -120,6 +123,7 @@ class PppAddressingTest {
     @Test
     fun `unconfigured policy rejects unusable peer requested addresses`() {
         val resolver = PppAddressResolver(
+            config = PppIpConfig(),
             localNetworksProvider = { emptyList() },
             logger = {},
         )

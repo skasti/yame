@@ -1,23 +1,19 @@
 package no.skasti.yame.ui
 
-import no.skasti.yame.config.HtmlTransformer
-import no.skasti.yame.config.HtmlTransformerControl
+import no.skasti.yame.ppp.proxy.transform.HtmlTransformer
 
-/** Called by each transformer, without passing a palette or TUI observer through the proxy. */
-internal fun registerTransformerCommand(transformer: HtmlTransformer, control: HtmlTransformerControl) {
-    control.registerOnce(transformer) {
-        val path = "/transformers/${transformer.command}"
-        val on = CommandPalette.add("$path/on", { if (control.snapshot().enabled(transformer)) "current" else "" }) {
-            control.setEnabled(transformer, true)
+internal fun registerTransformerCommands(store: no.skasti.yame.config.ConfigStore, registry: CommandPalette = CommandPalette.global): List<AutoCloseable> {
+    val registrations = mutableListOf<AutoCloseable>()
+    try {
+        HtmlTransformer.entries.forEach { transformer ->
+            val key = no.skasti.yame.ppp.proxy.transform.TransformerSettings.key(transformer)
+            val path = "/transformers/${transformer.command}"
+            registrations += registry.add("$path/on", { if (store[key]) "current" else "" }) { store.set(key to true) }
+            registrations += registry.add("$path/off", { if (!store[key]) "current" else "" }) { store.set(key to false) }
         }
-        val off = try {
-            CommandPalette.add("$path/off", { if (!control.snapshot().enabled(transformer)) "current" else "" }) {
-                control.setEnabled(transformer, false)
-            }
-        } catch (error: Exception) {
-            on.close()
-            throw error
-        }
-        AutoCloseable { on.close(); off.close() }
+        return registrations
+    } catch (error: Exception) {
+        registrations.forEach(AutoCloseable::close)
+        throw error
     }
 }

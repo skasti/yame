@@ -1,8 +1,9 @@
-package no.skasti.yame.config
+package no.skasti.yame.persistence
 
 import no.skasti.yame.logging.PacketCaptureLimitKind
 import no.skasti.yame.logging.YameLogLevel
 import no.skasti.yame.logging.YameLogModule
+import no.skasti.yame.ppp.proxy.transform.*
 import no.skasti.yame.modem.HayesModemConfig
 import no.skasti.yame.ppp.PppIpConfig
 import no.skasti.yame.ppp.dns.PppDnsConfig
@@ -29,11 +30,11 @@ import kotlin.time.Duration.Companion.nanoseconds
 
 class YameConfigurationStore(private val path: Path) {
     fun load(defaults: YameConfiguration = YameConfiguration()): YameConfiguration {
-        val httpDefaults = defaults.modemConfig.pppHttpCompatibilityConfig
+        val httpDefaults = defaults.pppHttpCompatibilityConfig
         val elementSimplifier = ElementSimplifierConfigurationStore.alongside(path).load(httpDefaults.elementSimplifier)
-        val loadedDefaults = defaults.copy(modemConfig = defaults.modemConfig.copy(
+        val loadedDefaults = defaults.copy(
             pppHttpCompatibilityConfig = httpDefaults.copy(elementSimplifier = elementSimplifier),
-        ))
+        )
         if (!Files.exists(path)) return loadedDefaults
         require(Files.isRegularFile(path)) {
             "Configuration path must be a regular file: $path"
@@ -79,27 +80,6 @@ class YameConfigurationStore(private val path: Path) {
             ),
             username = properties.getProperty("login.username", modemDefaults.username),
             password = properties.getProperty("login.password", modemDefaults.password),
-            pppIpConfig = PppIpConfig(
-                configuredSubnet = properties.getProperty("ppp.subnet")
-                    ?.takeIf(String::isNotBlank)
-                    ?.let(Ipv4Cidr::parse)
-                    ?: modemDefaults.pppIpConfig.configuredSubnet,
-            ),
-            pppDnsConfig = PppDnsConfig(
-                upstreamServer = properties.getProperty("dns.upstream")
-                    ?.let(Ipv4Address::parse)
-                    ?: modemDefaults.pppDnsConfig.upstreamServer,
-            ),
-            pppHttpCompatibilityConfig = modemDefaults.pppHttpCompatibilityConfig.copy(
-                enabled = boolean(
-                    properties,
-                    "http-https-proxy.enabled",
-                    modemDefaults.pppHttpCompatibilityConfig.enabled,
-                ),
-                htmlTransformers = HtmlTransformer.entries.fold(modemDefaults.pppHttpCompatibilityConfig.htmlTransformers) { settings, transformer ->
-                    settings.withEnabled(transformer, boolean(properties, "transformers.${transformer.command}.enabled", settings.enabled(transformer)))
-                },
-            ),
         )
 
         val logLevels = YameLogModule.entries.associateWith { module ->
@@ -131,6 +111,27 @@ class YameConfigurationStore(private val path: Path) {
                 ?.let(SerialFlowControl::parse)
                 ?: defaults.flowControl,
             modemConfig = modemConfig,
+            pppIpConfig = PppIpConfig(
+                configuredSubnet = properties.getProperty("ppp.subnet")
+                    ?.takeIf(String::isNotBlank)
+                    ?.let(Ipv4Cidr::parse)
+                    ?: loadedDefaults.pppIpConfig.configuredSubnet,
+            ),
+            pppDnsConfig = PppDnsConfig(
+                upstreamServer = properties.getProperty("dns.upstream")
+                    ?.let(Ipv4Address::parse)
+                    ?: loadedDefaults.pppDnsConfig.upstreamServer,
+            ),
+            pppHttpCompatibilityConfig = loadedDefaults.pppHttpCompatibilityConfig.copy(
+                enabled = boolean(
+                    properties,
+                    "http-https-proxy.enabled",
+                    loadedDefaults.pppHttpCompatibilityConfig.enabled,
+                ),
+                htmlTransformers = HtmlTransformer.entries.fold(loadedDefaults.pppHttpCompatibilityConfig.htmlTransformers) { settings, transformer ->
+                    settings.withEnabled(transformer, boolean(properties, "transformers.${transformer.command}.enabled", settings.enabled(transformer)))
+                },
+            ),
             logLevels = logLevels,
             captureLimits = captureLimits,
         )
@@ -151,23 +152,23 @@ class YameConfigurationStore(private val path: Path) {
             )
             configuration.modemConfig.username?.let { setProperty("login.username", it) }
             configuration.modemConfig.password?.let { setProperty("login.password", it) }
-            configuration.modemConfig.pppIpConfig.configuredSubnet?.let {
+            configuration.pppIpConfig.configuredSubnet?.let {
                 setProperty("ppp.subnet", it.toString())
             }
             setProperty(
                 "dns.upstream",
-                configuration.modemConfig.pppDnsConfig.upstreamServer.toString(),
+                configuration.pppDnsConfig.upstreamServer.toString(),
             )
             setProperty(
                 "http-https-proxy.enabled",
-                configuration.modemConfig.pppHttpCompatibilityConfig.enabled.toString(),
+                configuration.pppHttpCompatibilityConfig.enabled.toString(),
             )
             PacketCaptureLimitKind.entries.forEach { kind ->
                 setProperty(kind.configKey, kind.value(configuration.captureLimits).toString())
             }
             HtmlTransformer.entries.forEach { transformer ->
                 setProperty("transformers.${transformer.command}.enabled",
-                    configuration.modemConfig.pppHttpCompatibilityConfig.htmlTransformers.enabled(transformer).toString())
+                    configuration.pppHttpCompatibilityConfig.htmlTransformers.enabled(transformer).toString())
             }
             configuration.logLevels.forEach { (module, level) ->
                 setProperty("loglevel.${module.fileName}", level.name.lowercase())
@@ -200,7 +201,6 @@ class YameConfigurationStore(private val path: Path) {
             } catch (_: AtomicMoveNotSupportedException) {
                 Files.move(temporary, destination, StandardCopyOption.REPLACE_EXISTING)
             }
-            restrictPermissions(destination)
         } finally {
             Files.deleteIfExists(temporary)
         }

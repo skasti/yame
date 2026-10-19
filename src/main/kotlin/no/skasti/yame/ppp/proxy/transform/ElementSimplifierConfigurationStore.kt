@@ -1,4 +1,4 @@
-package no.skasti.yame.config
+package no.skasti.yame.ppp.proxy.transform
 
 import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files

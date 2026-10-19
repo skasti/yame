@@ -28,6 +28,7 @@ internal class RetroPppHandler(
     private val resourceRegistryHooks: ResourceRegistryHooks = ResourceRegistryHooks(),
     private val ipConfig: PppIpConfig = PppIpConfig(),
     private val dnsConfig: PppDnsConfig = PppDnsConfig(),
+    private val transformerSettings: (() -> no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings)? = null,
     private val httpCompatibilityConfig: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig(),
     private val resourceGraphs: NavigationResourceRegistry =
         NavigationResourceRegistry(
@@ -72,6 +73,7 @@ internal class RetroPppHandler(
             dnsConfig = dnsConfig,
             tcpProxy = SystemRoutingTcpProxy(
                 httpConfig = httpCompatibilityConfig,
+                transformerSettings = transformerSettings,
                 logger = proxyLogger,
                 eventSink = eventSink,
                 resourceRegistryHooks = resourceRegistryHooks,

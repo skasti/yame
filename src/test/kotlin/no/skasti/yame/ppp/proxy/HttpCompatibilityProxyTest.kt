@@ -1,7 +1,7 @@
 package no.skasti.yame.ppp.proxy
 import no.skasti.yame.ppp.ip.Ipv4Address
-import no.skasti.yame.config.ElementSimplifierConfiguration
-import no.skasti.yame.config.ElementSimplifierRule
+import no.skasti.yame.ppp.proxy.transform.ElementSimplifierConfiguration
+import no.skasti.yame.ppp.proxy.transform.ElementSimplifierRule
 import no.skasti.yame.ppp.proxy.transform.LegacyTextResourceTransformer
 import no.skasti.yame.ppp.proxy.transform.ResourceTransformationPipeline
 import no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig

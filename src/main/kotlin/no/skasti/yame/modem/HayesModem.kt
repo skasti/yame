@@ -14,7 +14,7 @@ import java.nio.charset.StandardCharsets
 class HayesModem(
     private var output: OutputStream? = null,
     private val baudRate: Int,
-    private val config: HayesModemConfig = HayesModemConfig(),
+    private val config: HayesModemConfig = HayesModemConfig.fromConfigStore(),
     private val tonePlayer: TonePlayer = JavaSoundTonePlayer(),
     private val logger: (String) -> Unit = ::println,
     private val pppLogger: (String) -> Unit = logger,
@@ -28,9 +28,6 @@ class HayesModem(
         transferLogger = transferLogger,
         proxyLogger = proxyLogger,
         eventSink = eventSink,
-        ipConfig = config.pppIpConfig,
-        dnsConfig = config.pppDnsConfig,
-        httpCompatibilityConfig = config.pppHttpCompatibilityConfig,
     ),
     private var setCarrierPresent: (Boolean) -> Unit = { /* no-op */ }
 ) : Closeable {
@@ -83,7 +80,7 @@ class HayesModem(
         }
     }
 
-    fun updateLoginCredentials(username: String, password: String) {
+    fun updateLoginCredentials(username: String?, password: String?) {
         val validated = config.copy(username = username, password = password)
         loginCredentials = LoginCredentials(validated.username, validated.password)
     }

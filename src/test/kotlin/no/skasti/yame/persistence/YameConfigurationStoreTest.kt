@@ -1,4 +1,6 @@
-package no.skasti.yame.config
+package no.skasti.yame.persistence
+
+import no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings
 
 import no.skasti.yame.logging.PacketCaptureLimits
 import no.skasti.yame.logging.YameLogLevel
@@ -53,10 +55,10 @@ class YameConfigurationStoreTest {
                 toneSimulationEnabled = false,
                 username = "modem-user",
                 password = "s:e=cret\\value",
-                pppIpConfig = PppIpConfig(Ipv4Cidr.parse("10.10.0.0/30")),
-                pppDnsConfig = PppDnsConfig(Ipv4Address.parse("1.1.1.1")),
-                pppHttpCompatibilityConfig = PppHttpCompatibilityConfig(enabled = false),
             ),
+            pppIpConfig = PppIpConfig(Ipv4Cidr.parse("10.10.0.0/30")),
+            pppDnsConfig = PppDnsConfig(Ipv4Address.parse("1.1.1.1")),
+            pppHttpCompatibilityConfig = PppHttpCompatibilityConfig(enabled = false),
             logLevels = YameLogModule.entries.associateWith { YameLogLevel.DEBUG },
             captureLimits = PacketCaptureLimits(maxPerType = 20, maxTotal = 500),
         )
@@ -70,7 +72,7 @@ class YameConfigurationStoreTest {
     fun `accepts maximum string lengths and saves a readable configuration`() {
         val path = tempDirectory.resolve("maximum.ini")
         val configuration = YameConfiguration(
-            portName = "p".repeat(YameConfiguration.MAX_PORT_NAME_LENGTH),
+            portName = "p".repeat(no.skasti.yame.serial.SerialSettings.MAX_PORT_NAME_LENGTH),
             modemConfig = HayesModemConfig(
                 username = "u".repeat(HayesModemConfig.MAX_LOGIN_USERNAME_LENGTH),
                 password = "p".repeat(HayesModemConfig.MAX_LOGIN_PASSWORD_LENGTH),
@@ -88,7 +90,7 @@ class YameConfigurationStoreTest {
     fun `rejects string values longer than their supported limits`() {
         assertFailsWith<IllegalArgumentException> {
             YameConfiguration(
-                portName = "p".repeat(YameConfiguration.MAX_PORT_NAME_LENGTH + 1),
+                portName = "p".repeat(no.skasti.yame.serial.SerialSettings.MAX_PORT_NAME_LENGTH + 1),
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -168,11 +170,11 @@ class YameConfigurationStoreTest {
     fun `HTML transformer switches persist independently of element mapping file`() {
         val path = tempDirectory.resolve("switches.ini")
         val store = YameConfigurationStore(path)
-        val configuration = YameConfiguration(modemConfig = HayesModemConfig(
+        val configuration = YameConfiguration(
             pppHttpCompatibilityConfig = PppHttpCompatibilityConfig(
                 htmlTransformers = HtmlTransformerSettings(scriptRemover = false, elementSimplifier = false),
             ),
-        ))
+        )
         store.save(configuration)
         assertEquals(configuration, store.load())
         assertTrue(Files.readString(path).contains("transformers.script-remover.enabled=false"))

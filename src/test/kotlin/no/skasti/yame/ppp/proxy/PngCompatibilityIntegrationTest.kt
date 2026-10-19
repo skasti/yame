@@ -50,7 +50,7 @@ class PngCompatibilityIntegrationTest {
             }
         }
         server.start()
-        val handler = SystemHttpCompatibilityHandler()
+        val handler = SystemHttpCompatibilityHandler(config = PppHttpCompatibilityConfig())
         val flow = TcpProxyFlow(TcpFlowKey(Ipv4Address.parse("10.0.0.2"), 2401, Ipv4Address.parse("127.0.0.1"), 80), 1)
         val request = HttpRequest("GET", "/image.png", "HTTP/1.0", listOf("Host" to "127.0.0.1:${server.address.port}"), byteArrayOf())
         try {
