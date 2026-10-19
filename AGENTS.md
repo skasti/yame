@@ -58,6 +58,26 @@ redirect expectations when the two differ. Do not add semantic HTML/CSS/JavaScri
 parsing merely to avoid changing visible URL text. Rewriting every literal
 absolute `https://` URL in a supported text body is intentional.
 
+## Architecture documentation
+
+Architecture documentation must describe the actual implemented system. Proposed
+functionality and future architectural changes must be clearly identified and
+kept separate from documentation of existing behavior.
+
+- Treat regular architecture documentation as a description of the current
+  implementation, verified against the code.
+- Put proposed designs under `docs/design/`, or in GitHub issues for smaller
+  proposals. Design documents must explicitly state their status, link to relevant
+  issues, and distinguish accepted decisions from questions requiring approval.
+  Merging a design document does not implicitly approve decisions marked as open.
+- Identify the revision described by an implementation inventory retained in a
+  design document; distinguish that historical snapshot from proposed behavior.
+- When a design is implemented, update the corresponding architecture
+  documentation from the verified implementation, including deviations from the
+  proposal. Update the design's status and link to the current documentation.
+- Historical design documents may be retained for context, but must be labeled
+  so they cannot be mistaken for authoritative documentation of current behavior.
+
 ## Development workflow
 
 Before pushing implementation changes or declaring a task complete:

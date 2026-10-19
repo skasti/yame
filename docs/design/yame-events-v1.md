@@ -1,13 +1,75 @@
-# Outbound events and the YameEvents delivery contract
+# YameEvents v1 design proposal and implementation inventory
 
-Status: proposed v1 contract for [#97](https://github.com/skasti/yame/issues/97),
-part of [#92](https://github.com/skasti/yame/issues/92). The inventory describes
-`main` at `a37ac65`; the contract below is a design proposal, not implemented
-behavior. In particular, the explicit stream-failure policy on overload requires
-review before broker implementation. Merging this document accepts that policy
-and its stated limits; it does not claim lossless delivery under sustained overload.
+Status: **design proposal; not implemented**, for
+[#97](https://github.com/skasti/yame/issues/97), part of
+[#92](https://github.com/skasti/yame/issues/92). The implementation inventory below
+describes `main` at
+[`a37ac65`](https://github.com/skasti/yame/commit/a37ac65afa851fe0fca8f4a179b680d6c3b6bb19).
+It is a historical snapshot, not authoritative documentation of later revisions.
+The proposed v1 contract is separate from that inventory; normative wording within
+the proposal describes intended behavior, not existing implementation.
 
-## Responsibility and ownership
+**Open decision requiring approval:** terminal `FAULTED` behavior on saturation
+or oversize payload, including restart-only recovery, must be explicitly approved
+before implementation in [#98](https://github.com/skasti/yame/issues/98). Merging
+this documentation does not approve that policy. The overload section retains it
+as one candidate alongside alternatives for review.
+
+Once the event system is implemented, introduce `docs/yame-events.md` based on
+the verified implementation, including deviations from this proposal. Update this
+document's status and link to that current architecture documentation; retain the
+design only as historical context.
+
+## Implementation inventory at revision a37ac65
+
+The current-behavior column describes the existing codebase at the revision linked
+above. The final column explicitly separates proposed migration changes. Source
+links in this inventory are pinned to that revision; other repository links are
+relative to this document. Class and method names identify the relevant boundary
+without depending on shifting line numbers.
+
+| Current path | Owner and current behavior at `a37ac65` | Proposed v1 change (not implemented) |
+| --- | --- | --- |
+| `eventSink: (YameEvent) -> Unit` | [PppSession](https://github.com/skasti/yame/blob/a37ac65afa851fe0fca8f4a179b680d6c3b6bb19/src/main/kotlin/no/skasti/yame/ppp/session/PppSession.kt) emits DNS, transfer and unhandled-packet observations. [SystemRoutingTcpProxy](https://github.com/skasti/yame/blob/a37ac65afa851fe0fca8f4a179b680d6c3b6bb19/src/main/kotlin/no/skasti/yame/ppp/proxy/SystemRoutingTcpProxy.kt) and [SystemHttpCompatibilityHandler](https://github.com/skasti/yame/blob/a37ac65afa851fe0fca8f4a179b680d6c3b6bb19/src/main/kotlin/no/skasti/yame/ppp/proxy/CompatibilityHttpHandler.kt) emit `HttpProxyAction`. HayesModem and RetroPppHandler pass the sink to children. | Keep the existing observation types, publish through the broker, and add a connection/session identity where needed to prevent ID reuse across reconnect. |
+| Runtime event fan-out | [YameRuntime.startConnection](https://github.com/skasti/yame/blob/a37ac65afa851fe0fca8f4a179b680d6c3b6bb19/src/main/kotlin/no/skasti/yame/runtime/YameRuntime.kt) synchronously calls `logManager.eventSink(event)` and then `observer.onEvent(event)`. Producer wrappers commonly use `runCatching`, so throwing from a sink is not a reliable failure signal. | Replace observer fan-out with broker subscriptions. Preserve the independent diagnostic route described below; admission failure is an explicit result and sticky status, not an exception hidden by `runCatching`. |
+| `ResourceRegistryHooks` | [NavigationResourceRegistry](https://github.com/skasti/yame/blob/a37ac65afa851fe0fca8f4a179b680d6c3b6bb19/src/main/kotlin/no/skasti/yame/ppp/proxy/ResourceGraph.kt) reports root add/use/remove and resource add/update/remove. Hook parameters pass through runtime, PPP, routing proxy, HTTP proxy and handler. [InteractiveYameApplication](https://github.com/skasti/yame/blob/a37ac65afa851fe0fca8f4a179b680d6c3b6bb19/src/main/kotlin/no/skasti/yame/ui/InteractiveYameApplication.kt) dispatches them through `yame-resource-ui`. | Replace outbound hooks with immutable public proxy events. Retain hooks only during the incremental migration. |
+| `RuntimeObserver.updateConnected` | Runtime reports connection state directly to the frontend. | Emit connection-state observations with runtime connection identity. Emit the initial disconnected state before starting connection attempts. |
+| `RuntimeObserver.updateAvailablePorts` | Runtime reports enumeration results on refresh and monitor activity. | Emit an immutable port-list observation, including the initial list; suppress unchanged later lists. Enumeration and selection remain runtime operations. |
+| `RuntimeObserver.closeActiveTransfers` | Runtime directly instructs the frontend to close projected transfers when a serial session stops. | Replace the UI instruction with a session-ended observation. The TUI decides how it projects affected transfers. |
+| `RuntimeObserver.onLog`, module logger lambdas | Runtime sends text to the frontend and module loggers. Serial, modem, PPP and proxy components also produce diagnostic text. | Keep feature diagnostic callbacks. Replace their outbound frontend branch with a typed diagnostic-message observation carrying module/level/text. Logging adapters own severity mapping and file policy. Do not derive protocol state by parsing log strings. |
+| Log files and packet captures | [YameLogManager](https://github.com/skasti/yame/blob/a37ac65afa851fe0fca8f4a179b680d6c3b6bb19/src/main/kotlin/no/skasti/yame/logging/YameLogging.kt) writes and flushes module logs synchronously. [UnhandledPacketRecorder](https://github.com/skasti/yame/blob/a37ac65afa851fe0fca8f4a179b680d6c3b6bb19/src/main/kotlin/no/skasti/yame/logging/UnhandledPacketRecorder.kt) already owns bounded asynchronous capture I/O (64 pending tasks), size/retention limits and a failure path outside event publication. | Preserve existing diagnostic/capture behavior independently of observation-stream overload. Do not put synchronous file I/O on the broker worker. |
+| Modem tone progress | [HayesModem.logToneProgress](https://github.com/skasti/yame/blob/a37ac65afa851fe0fca8f4a179b680d6c3b6bb19/src/main/kotlin/no/skasti/yame/modem/HayesModem.kt) formats a local audio progress callback into diagnostic text. | Keep the audio callback local; its frontend diagnostic text follows the same outbound diagnostic-message path. No separate tone-event hierarchy is required by #92. |
+
+The [YameEvent definition](https://github.com/skasti/yame/blob/a37ac65afa851fe0fca8f4a179b680d6c3b6bb19/src/main/kotlin/no/skasti/yame/observer/YameEvent.kt)
+currently has no graph/resource variants. `HttpProxyAction` is request-oriented
+diagnostic activity; it cannot reconstruct the registry. The
+[TUI observer](https://github.com/skasti/yame/blob/a37ac65afa851fe0fca8f4a179b680d6c3b6bb19/src/main/kotlin/no/skasti/yame/ui/TuiYameObserver.kt) ignores that
+event and renders directly inside other `onEvent` branches. Its hook handlers
+maintain `httpGraphs`, aggregate unique URLs by host, and calculate recency and
+usage on delivery. The proposal moves those delivery-time calculations to
+authoritative event data so consumers agree even when their queues run at
+different speeds.
+
+### Existing local callbacks and proposed scope
+
+| Boundary | Why it stays local |
+| --- | --- |
+| [SerialTransport.startReading](https://github.com/skasti/yame/blob/a37ac65afa851fe0fca8f4a179b680d6c3b6bb19/src/main/kotlin/no/skasti/yame/serial/SerialTransport.kt): `onBytes` / `onStopped` | Transfers serial input into the modem and tells runtime that its reader stopped. Runtime may then publish a connection/session observation, but the callback itself is transport control. |
+| HayesModem `attachOutput` / `attachCarrierPresent`; [PppFramer](https://github.com/skasti/yame/blob/a37ac65afa851fe0fca8f4a179b680d6c3b6bb19/src/main/kotlin/no/skasti/yame/ppp/PppFramer.kt) `onFrame` / `onInvalidFrame`; PppSession `sendFrame` | These callbacks perform protocol processing and carrier/output control, with local ordering requirements. Broadcasting them would change protocol semantics. |
+| [TcpProxy](https://github.com/skasti/yame/blob/a37ac65afa851fe0fca8f4a179b680d6c3b6bb19/src/main/kotlin/no/skasti/yame/ppp/tcp/TcpProxy.kt) `onEvent: (TcpProxyEvent) -> Unit`; [TcpFlowTable](https://github.com/skasti/yame/blob/a37ac65afa851fe0fca8f4a179b680d6c3b6bb19/src/main/kotlin/no/skasti/yame/ppp/tcp/TcpFlowTable.kt) results | Connected/data/write-ready/failure/closed notifications drive TCP state and backpressure. PppSession converts relevant outcomes into public transfer observations. |
+| [UdpProxy.send](https://github.com/skasti/yame/blob/a37ac65afa851fe0fca8f4a179b680d6c3b6bb19/src/main/kotlin/no/skasti/yame/ppp/udp/UdpProxy.kt) `onReply` and ICMP completion | These return request results to the owning protocol session. DNS observations are emitted by that owner, not by globally broadcasting payload callbacks. |
+| [HttpRequestHandler](https://github.com/skasti/yame/blob/a37ac65afa851fe0fca8f4a179b680d6c3b6bb19/src/main/kotlin/no/skasti/yame/ppp/http/HttpTcpProxy.kt) request/response calls, `connectionClosed` and activity checks | HTTP acquisition, cancellation and response delivery belong to HTTP/TCP coordination. Registry owners emit resource observations at their actual transitions. |
+| Transformation providers, rewrite functions, cache/in-flight-work producers | These compute values or coordinate shared work. The owner emits the resulting summary; the functions are not consumer subscriptions. |
+| ConfigStore change subscriptions and FunctionStore registrations | Configuration transactions and commands have separate established contracts. They do not become a second set of YameEvent notifications. |
+| Packet recorder `onReceived` / `onCaptured`, injected file writers and socket operations | These coordinate diagnostic work or provide test seams. They remain owned by their adapter. |
+
+## Proposed v1 contract (not implemented)
+
+The following sections specify the proposed design. The overload policy remains
+an open decision requiring explicit approval before #98. Existing implementation
+facts mentioned for context do not imply that the proposed contract is in place.
+
+### Responsibility and ownership
 
 `YameEvent` describes an observation. An instantiable broker delivers observations
 to trusted in-process consumers, and `YameEvents` exposes the installed production
@@ -21,50 +83,12 @@ changes and serial reconnect; bounded registry retention controls eviction.
 
 Configuration changes continue through `ConfigStore`; requests such as reconnect
 continue through `FunctionStore`. Their transaction, command and notification
-contracts are documented in [configuration architecture](configuration-architecture.md).
+contracts are documented in [configuration architecture](../configuration-architecture.md).
 This proposal introduces no global state store, durable event log, IPC transport,
-subscriber watchdog or broker-managed per-subscriber queue.
+subscriber watchdog or broker-managed per-subscriber queue in its baseline
+candidate; bounded isolation is an alternative still under discussion below.
 
-## Current outbound paths
-
-All source links in this document are relative to the repository. Class and method
-names identify the relevant boundary without depending on shifting line numbers.
-
-| Current path | Owner and current behavior | v1 decision |
-| --- | --- | --- |
-| `eventSink: (YameEvent) -> Unit` | [PppSession](../src/main/kotlin/no/skasti/yame/ppp/session/PppSession.kt) emits DNS, transfer and unhandled-packet observations. [SystemRoutingTcpProxy](../src/main/kotlin/no/skasti/yame/ppp/proxy/SystemRoutingTcpProxy.kt) and [SystemHttpCompatibilityHandler](../src/main/kotlin/no/skasti/yame/ppp/proxy/CompatibilityHttpHandler.kt) emit `HttpProxyAction`. HayesModem and RetroPppHandler pass the sink to children. | Keep the existing observation types, publish through the broker, and add a connection/session identity where needed to prevent ID reuse across reconnect. |
-| Runtime event fan-out | [YameRuntime.startConnection](../src/main/kotlin/no/skasti/yame/runtime/YameRuntime.kt) synchronously calls `logManager.eventSink(event)` and then `observer.onEvent(event)`. Producer wrappers commonly use `runCatching`, so throwing from a sink is not a reliable failure signal. | Replace observer fan-out with broker subscriptions. Preserve the independent diagnostic route described below; admission failure is an explicit result and sticky status, not an exception hidden by `runCatching`. |
-| `ResourceRegistryHooks` | [NavigationResourceRegistry](../src/main/kotlin/no/skasti/yame/ppp/proxy/ResourceGraph.kt) reports root add/use/remove and resource add/update/remove. Hook parameters pass through runtime, PPP, routing proxy, HTTP proxy and handler. [InteractiveYameApplication](../src/main/kotlin/no/skasti/yame/ui/InteractiveYameApplication.kt) dispatches them through `yame-resource-ui`. | Replace outbound hooks with immutable public proxy events. Retain hooks only during the incremental migration. |
-| `RuntimeObserver.updateConnected` | Runtime reports connection state directly to the frontend. | Emit connection-state observations with runtime connection identity. Emit the initial disconnected state before starting connection attempts. |
-| `RuntimeObserver.updateAvailablePorts` | Runtime reports enumeration results on refresh and monitor activity. | Emit an immutable port-list observation, including the initial list; suppress unchanged later lists. Enumeration and selection remain runtime operations. |
-| `RuntimeObserver.closeActiveTransfers` | Runtime directly instructs the frontend to close projected transfers when a serial session stops. | Replace the UI instruction with a session-ended observation. The TUI decides how it projects affected transfers. |
-| `RuntimeObserver.onLog`, module logger lambdas | Runtime sends text to the frontend and module loggers. Serial, modem, PPP and proxy components also produce diagnostic text. | Keep feature diagnostic callbacks. Replace their outbound frontend branch with a typed diagnostic-message observation carrying module/level/text. Logging adapters own severity mapping and file policy. Do not derive protocol state by parsing log strings. |
-| Log files and packet captures | [YameLogManager](../src/main/kotlin/no/skasti/yame/logging/YameLogging.kt) writes and flushes module logs synchronously. [UnhandledPacketRecorder](../src/main/kotlin/no/skasti/yame/logging/UnhandledPacketRecorder.kt) already owns bounded asynchronous capture I/O (64 pending tasks), size/retention limits and a failure path outside event publication. | Preserve existing diagnostic/capture behavior independently of observation-stream overload. Do not put synchronous file I/O on the broker worker. |
-| Modem tone progress | [HayesModem.logToneProgress](../src/main/kotlin/no/skasti/yame/modem/HayesModem.kt) formats a local audio progress callback into diagnostic text. | Keep the audio callback local; its frontend diagnostic text follows the same outbound diagnostic-message path. No separate tone-event hierarchy is required by #92. |
-
-The [YameEvent definition](../src/main/kotlin/no/skasti/yame/observer/YameEvent.kt)
-currently has no graph/resource variants. `HttpProxyAction` is request-oriented
-diagnostic activity; it cannot reconstruct the registry. The
-[TUI observer](../src/main/kotlin/no/skasti/yame/ui/TuiYameObserver.kt) ignores that
-event and renders directly inside other `onEvent` branches. Its hook handlers
-maintain `httpGraphs`, aggregate unique URLs by host, and calculate recency and
-usage on delivery. Those delivery-time calculations must move to authoritative
-event data so consumers agree even when their queues run at different speeds.
-
-### Callbacks that remain implementation details
-
-| Boundary | Why it stays local |
-| --- | --- |
-| [SerialTransport.startReading](../src/main/kotlin/no/skasti/yame/serial/SerialTransport.kt): `onBytes` / `onStopped` | Transfers serial input into the modem and tells runtime that its reader stopped. Runtime may then publish a connection/session observation, but the callback itself is transport control. |
-| HayesModem `attachOutput` / `attachCarrierPresent`; [PppFramer](../src/main/kotlin/no/skasti/yame/ppp/PppFramer.kt) `onFrame` / `onInvalidFrame`; PppSession `sendFrame` | These callbacks perform protocol processing and carrier/output control, with local ordering requirements. Broadcasting them would change protocol semantics. |
-| [TcpProxy](../src/main/kotlin/no/skasti/yame/ppp/tcp/TcpProxy.kt) `onEvent: (TcpProxyEvent) -> Unit`; [TcpFlowTable](../src/main/kotlin/no/skasti/yame/ppp/tcp/TcpFlowTable.kt) results | Connected/data/write-ready/failure/closed notifications drive TCP state and backpressure. PppSession converts relevant outcomes into public transfer observations. |
-| [UdpProxy.send](../src/main/kotlin/no/skasti/yame/ppp/udp/UdpProxy.kt) `onReply` and ICMP completion | These return request results to the owning protocol session. DNS observations are emitted by that owner, not by globally broadcasting payload callbacks. |
-| [HttpRequestHandler](../src/main/kotlin/no/skasti/yame/ppp/http/HttpTcpProxy.kt) request/response calls, `connectionClosed` and activity checks | HTTP acquisition, cancellation and response delivery belong to HTTP/TCP coordination. Registry owners emit resource observations at their actual transitions. |
-| Transformation providers, rewrite functions, cache/in-flight-work producers | These compute values or coordinate shared work. The owner emits the resulting summary; the functions are not consumer subscriptions. |
-| ConfigStore change subscriptions and FunctionStore registrations | Configuration transactions and commands have separate established contracts. They do not become a second set of YameEvent notifications. |
-| Packet recorder `onReceived` / `onCaptured`, injected file writers and socket operations | These coordinate diagnostic work or provide test seams. They remain owned by their adapter. |
-
-## Event values and producer ordering
+### Event values and producer ordering
 
 Event payloads must be usable without TUI imports or mutable/internal registry
 objects. Define the externally visible resource enums and transformation summary
@@ -85,7 +109,7 @@ the concrete event types.
 | Graph/root removed | Graph ID and revision. Treat it as removal of all remaining resource associations in that graph. If resource removals are also emitted, place them before root removal and define them as idempotent. |
 
 Use the observable URL identity already defined by
-[LegacyHttpUrl.requestObservableKey](../src/main/kotlin/no/skasti/yame/ppp/proxy/LegacyHttpUrl.kt):
+[LegacyHttpUrl.requestObservableKey](../../src/main/kotlin/no/skasti/yame/ppp/proxy/LegacyHttpUrl.kt):
 normalized scheme/host/default port, observable path/query and no fragment. Preserve
 the legacy URL needed for display. Graph IDs are not TCP flow IDs. Connection and
 PPP session identities must qualify transfer/DNS keys that can otherwise repeat.
@@ -116,7 +140,7 @@ No update may resurrect an evicted graph. Stale fetch attempts must not overwrit
 a newer attempt. Full resource snapshots make updates unambiguous; they do not
 permit arbitrary lifecycle-event loss.
 
-## Broker admission, delivery and subscriptions
+### Broker admission, delivery and subscriptions
 
 `publish` performs bounded validation/copying and short queue coordination, then
 returns an explicit result. It never invokes subscribers, renders, performs I/O,
@@ -147,12 +171,39 @@ A consumer whose own projection fails must expose that local failure rather than
 claim its state is still complete. Exception isolation does not disable or
 unsubscribe the handler automatically.
 
-## Proposed bounded overload policy
+### Proposed bounded overload policy — approval required
+
+**Decision status: open, not accepted.** The terminal-fault policy below is a
+candidate for review before #98, not an implementation requirement accepted by
+merging this document. References to `FAULTED`, restart-only recovery, fault-aware
+drain/close, and related verification elsewhere in this proposal are conditional
+on this decision. If another policy is approved, update those sections and the
+implementation checks accordingly.
+
+The requirements remain bounded memory usage, non-blocking publishers, and no
+silent loss of lifecycle-critical events. One slow or blocked consumer on the
+shared worker can fill the queue; under this candidate, that indirectly makes the
+shared event stream unavailable to every consumer until application restart.
+Protocol progress and independent diagnostics continue, but live observations do
+not. This availability cost needs explicit approval.
+
+Reasonable alternatives to evaluate in #98 include:
+
+| Candidate | Trade-off and design work required |
+| --- | --- |
+| Terminal shared-stream fault (detailed below) | Simple bounded failure semantics and a valid accepted prefix, but one overloaded consumer can stop observations for all consumers until restart. |
+| Bounded per-consumer isolation | Isolate an overflowing consumer and explicitly mark its view incomplete while healthy consumers continue. Requires bounded dispatch/queues, consumer lifecycle rules, and an explicit recovery or resubscription contract; isolation alone cannot guarantee that the shared ingress never saturates. |
+| Bounded resynchronization | Mark an affected view incomplete, then recover through an authoritative snapshot plus revision-aligned stream attachment. Requires a proven bounded snapshot/buffering boundary and explicit behavior if recovery cannot keep up. |
+| Separate critical delivery from coalescible observations | Reserve bounded capacity for lifecycle-critical events and coalesce only values proven safe to replace. Requires event classification and ordering semantics; reserved capacity can still fill, so an explicit exhaustion/recovery policy remains necessary. |
+
+None of these alternatives is selected here. Blocking publishers, unbounded
+queues, or silently dropping lifecycle-critical transitions do not satisfy the
+requirements.
 
 Finite memory, non-blocking publishers and lossless delivery cannot all be
 guaranteed under sustained overload or an indefinitely blocked subscriber. The
-v1 proposal prioritizes finite backlog and protocol progress, and makes loss of
-stream completeness an explicit terminal fault. This is a deliberate limit of
+terminal-fault candidate prioritizes finite backlog and protocol progress, and
+makes loss of stream completeness an explicit terminal fault. This is a deliberate limit of
 #92's lifecycle correctness guarantee: a healthy uninterrupted stream is complete;
 a faulted stream supplies only a valid accepted prefix and must not be presented
 as a complete current view. No recovery of the missing transitions is promised.
@@ -175,11 +226,12 @@ collection/registration limits must also bound object counts. Never truncate an
 identity or lifecycle payload to fit. A packet fits within the existing 65,535-byte
 capture bound; HTTP bodies and mutable transport objects do not enter this queue.
 
-Use one queue and no coalescing in v1. In particular, `TransferBytes` is currently a
-delta, and dropping it would corrupt totals. Graph usage, add/remove and intermediate
-resource states are likewise not silently replaceable telemetry.
+This candidate uses one queue and no coalescing. In particular, `TransferBytes`
+is currently a delta, and dropping it would corrupt totals. Graph usage, add/remove
+and intermediate resource states are likewise not silently replaceable telemetry.
 
-At the first count/byte saturation or oversize payload:
+Under the terminal-fault candidate, at the first count/byte saturation or oversize
+payload:
 
 1. Atomically reject that publication, preserve the already accepted FIFO prefix,
    and latch `FAULTED` status with reason and last accepted sequence. Later
@@ -197,13 +249,13 @@ At the first count/byte saturation or oversize payload:
    must retain/label their last view as stale or clear it with an explicit failure
    indication. They must not apply later observations to a hidden gap.
 
-A full application restart is the v1 recovery path for a faulted stream. Serial
-reconnect alone does not repair it. There is no live broker replacement, automatic
+A full application restart is this candidate's recovery path for a faulted stream.
+Serial reconnect alone does not repair it. There is no live broker replacement, automatic
 consumer cancellation, slow-subscriber timing/watchdog, or silent reset of graph
 state. This capacity-triggered broker fault is distinct from automatically disabling
-a slow subscriber, which remains out of scope. If terminal loss of live observation
-is unacceptable, review must change a guarantee or design a separately bounded
-resynchronization mechanism before #98; an unbounded queue is not the fallback.
+a slow subscriber. Consumer isolation and bounded resynchronization are alternatives
+for the overload decision, not part of this candidate. Review must explicitly
+select a policy before implementing it in #98; an unbounded queue is not the fallback.
 
 TUI processing uses its own bounded queue with the same proposed count/byte limits
 and a sticky *local* failure indicator. Its admission must never take the lock used
@@ -215,7 +267,7 @@ separate documented bounds. Moving the backlog to an unbounded executor is unsaf
 The TUI may apply an ordered batch of events and coalesce render requests; this
 avoids a full terminal redraw per event without discarding observation values.
 
-## Startup, reconnect and late consumers
+### Startup, reconnect and late consumers
 
 Composition creates the broker and required consumers before starting runtime
 enumeration, serial reads, connection attempts or other event-producing work.
@@ -247,7 +299,7 @@ buffering. Calling today's `snapshots()` and then subscribing has a race and is
 not a supported bootstrap. This restriction satisfies #92's conditional bootstrap
 scope without prescribing a generic state store or durable replay.
 
-## Diagnostics and logging
+### Diagnostics and logging
 
 Keep the existing module log and capture paths independent of observation admission.
 The runtime-owned diagnostic tee sends each existing YameEvent to
@@ -272,7 +324,7 @@ debug route; the broker worker never writes files. Broker/consumer failure repor
 use bounded counters/status and an independent reporting path, without event
 recursion or printing full event payloads/credentials.
 
-## Drain and shutdown
+### Drain and shutdown
 
 `drain()` captures the highest accepted sequence and returns an awaitable boundary.
 Completion means all matching callbacks for that prefix returned (including isolated
@@ -308,15 +360,17 @@ Report a timeout as incomplete shutdown; do not advertise successful drain or cl
 resources still in use. Shutdown orchestration must not wait for a queue/worker
 while holding a lock that its callbacks or consumers need.
 
-## Implementation and verification map
+### Implementation and verification map
 
 All rows below are future implementation checks. This documentation PR changes no
-runtime behavior and does not claim these tests already exist.
+runtime behavior and does not claim these tests already exist. Overload-specific
+checks are conditional on the policy explicitly approved before #98; terminal
+fault behavior and restart-only recovery are not accepted by this map.
 
 | Issue / independently reviewable PR | Dependencies | Required evidence |
 | --- | --- | --- |
 | [#97: inventory and contract](https://github.com/skasti/yame/issues/97) | None | Source-grounded inventory; explicit overload trade-off, startup/bootstrap restriction and diagnostic independence; valid documentation links. |
-| [#98: broker and facade](https://github.com/skasti/yame/issues/98) | #97 | FIFO with multiple producers, blocked subscriber and full byte/count capacity, oversize payload, fault notification without a queue slot, safe status reads, filtering/failure/reentrant publication, concurrent subscribe/remove, idle wakeup, drain high-water mark, publish/close race and close from worker. |
+| [#98: broker and facade](https://github.com/skasti/yame/issues/98) | #97; explicit overload-policy approval | Record the selected policy and trade-offs before implementing overload behavior. Verify bounded memory, non-blocking publishers and no silent loss of lifecycle-critical events; adapt overload/recovery tests to that decision. Remaining checks: FIFO with multiple producers, blocked subscriber and full byte/count capacity, oversize payload, safe status reads, filtering/failure/reentrant publication, concurrent subscribe/remove, idle wakeup, drain high-water mark, publish/close race and close from worker. If the terminal-fault candidate is approved, also verify fault notification without a queue slot and restart-only recovery. |
 | [#99: registry lifetime](https://github.com/skasti/yame/issues/99) | None | Runtime-level serial/handler replacement retains graph identity and LRU limits; stale fetch attempts remain fenced. Define limit changes without session-teardown eviction. |
 | [#100: proxy event contract and publication](https://github.com/skasti/yame/issues/100) | #97 | Immutable snapshots, root-before-resource, mutation/publication order, full add/update/remove/reuse/eviction coverage, shared resources, fetch attempts, prefetch and transformations. Reconstruct retained state from a healthy stream. Hooks remain temporarily usable. |
 | [#101: TUI processing boundary](https://github.com/skasti/yame/issues/101) | #97 | Blocking terminal/render work cannot hold up admission; bounded local backlog, local/broker fault display, consistent observation order, drain and close behavior. Works with existing events/hooks before broker wiring. |
@@ -328,7 +382,7 @@ timeouts only as failure guards. Do not use arbitrary sleeps or reset shared glo
 state between tests. FIFO/causality checks assert event values and order, not
 elapsed-time coincidences. Test count and byte limits with small injected capacities.
 Run the relevant JVM build/integration checks for implementation changes, following
-[AGENTS.md](../AGENTS.md).
+[AGENTS.md](../../AGENTS.md).
 
 The broader component reuse/reset design is
 [#104](https://github.com/skasti/yame/issues/104). It classifies process-, connection-
