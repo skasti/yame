@@ -6,6 +6,7 @@ import no.skasti.yame.ppp.proxy.NavigationResourceRegistry
 import no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig
 import no.skasti.yame.ppp.proxy.ResourceRegistryHooks
 import no.skasti.yame.ppp.proxy.SystemRoutingTcpProxy
+import no.skasti.yame.ppp.proxy.YameRegistries
 import no.skasti.yame.ppp.session.PppSession
 import java.io.Closeable
 import java.io.OutputStream
