@@ -5,7 +5,6 @@ import no.skasti.yame.ppp.PppAddresses
 import no.skasti.yame.ppp.PppControlOption
 import no.skasti.yame.ppp.PppControlPacket
 import no.skasti.yame.ppp.PppFrame
-import no.skasti.yame.observer.TransferState
 import no.skasti.yame.observer.YameEvent
 import no.skasti.yame.ppp.dns.PppDnsConfig
 import no.skasti.yame.ppp.http.HttpConnection
@@ -66,13 +65,13 @@ class PppIpv4SessionTest {
             for ((type, packet) in cases) {
                 val raw = packet.copy(options = byteArrayOf(1, 1, 0, 0)).encode() + byteArrayOf(0, 0)
                 session.receive(PppFrame(PppSession.IPV4_PROTOCOL, raw))
-                val event = observed.filterIsInstance<YameEvent.UnhandledPacket>().last()
+                val event = observed.filterIsInstance<UnhandledPacket>().last()
                 assertEquals(type, event.packetType)
                 assertEquals(PppSession.IPV4_PROTOCOL, event.pppProtocol)
                 assertContentEquals(raw, event.bytes())
                 assertEquals(packet.protocol, requireNotNull(Ipv4Packet.parse(event.bytes())).protocol)
             }
-            assertEquals(cases.size, observed.filterIsInstance<YameEvent.UnhandledPacket>().size)
+            assertEquals(cases.size, observed.filterIsInstance<UnhandledPacket>().size)
         }
     }
 
@@ -83,7 +82,7 @@ class PppIpv4SessionTest {
             eventSink = observed::add).use { session ->
             val bytes = byteArrayOf(1, 2, 3)
             session.receive(PppFrame(0x8057, bytes))
-            val event = observed.filterIsInstance<YameEvent.UnhandledPacket>().single()
+            val event = observed.filterIsInstance<UnhandledPacket>().single()
             assertEquals("ppp-protocol-32855", event.packetType)
             assertEquals(0x8057, event.pppProtocol)
             assertContentEquals(bytes, event.bytes())
@@ -176,10 +175,10 @@ class PppIpv4SessionTest {
             assertEquals(peerSequence + 1u, finalAck.acknowledgmentNumber)
             assertEquals(hostEnd, finalAck.sequenceNumber)
             assertTrue(finalAck.payload.isEmpty())
-            assertTrue(observed.filterIsInstance<YameEvent.TransferStateChanged>().none {
+            assertTrue(observed.filterIsInstance<TransferStateChanged>().none {
                 it.state == TransferState.FAILED
             }, observed.toString())
-            assertTrue(observed.filterIsInstance<YameEvent.TransferStateChanged>().any {
+            assertTrue(observed.filterIsInstance<TransferStateChanged>().any {
                 it.state == TransferState.CLOSED
             }, observed.toString())
             assertTrue(logs.none { it.contains("failed:") }, logs.toString())
@@ -1105,7 +1104,7 @@ class PppIpv4SessionTest {
         )
 
         val closed = events
-            .filterIsInstance<YameEvent.TransferStateChanged>()
+            .filterIsInstance<TransferStateChanged>()
             .single { it.state == TransferState.CLOSED }
         assertEquals("10.0.0.2:2060->203.0.113.20:80", closed.flowId)
         assertEquals("IPCP renegotiated", closed.detail)

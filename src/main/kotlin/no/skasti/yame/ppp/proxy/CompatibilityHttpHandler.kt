@@ -1,6 +1,5 @@
 package no.skasti.yame.ppp.proxy
 
-import no.skasti.yame.observer.HttpProxyActionKind
 import no.skasti.yame.observer.YameEvent
 import no.skasti.yame.ppp.http.HttpConnection
 import no.skasti.yame.ppp.http.HttpRequest as LegacyHttpRequest
@@ -1439,7 +1438,7 @@ internal class SystemHttpCompatibilityHandler(
     ) {
         runCatching {
             eventSink(
-                YameEvent.HttpProxyAction(
+                HttpProxyAction(
                     flowId = "${state.flow.key.peerAddress}:${state.flow.key.peerPort}->${state.flow.key.remoteAddress}:${state.flow.key.remotePort}",
                     kind = kind,
                     message = message,

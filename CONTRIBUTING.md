@@ -17,8 +17,19 @@ It documents the project's compatibility scope, development workflow, design
 principles, and explicit non-goals. These guidelines apply to human and
 AI-assisted contributions alike. Follow its
 [architecture documentation principle](AGENTS.md#architecture-documentation):
-document implemented behavior as current architecture and keep explicitly labeled
-proposals under `docs/design/` (or in issues for smaller proposals).
+document verified implementation as current architecture and decided design
+throughout project documentation, including `docs/**/*.md` outside
+`docs/design/`. Clearly
+mark relevant open work and link to a specific issue or useful issue label; keep
+its detailed discussion in issues or PRs. Record decisions under `docs/adrs/`
+and revision-specific inventories under `docs/.history/`. See
+[ADR 0002](docs/adrs/0002-architecture-decision-records.md) for ADR conventions
+and [ADR 0003](docs/adrs/0003-document-decided-design.md) for documentation scope.
+For new observations, follow [ADR 0004](docs/adrs/0004-extensible-event-contract.md):
+define producer-owned immutable event types with stable identity and schema version;
+do not add concrete event matching to the shared broker.
+Subscribers that publish events should follow the
+[feedback-loop guidance](docs/yame-events.md#event-publication-from-subscribers).
 
 Security vulnerabilities should be reported according to
 [SECURITY.md](SECURITY.md), not as public issues.

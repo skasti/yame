@@ -1,7 +1,16 @@
 package no.skasti.yame.logging
 
-import no.skasti.yame.observer.HttpProxyActionKind
-import no.skasti.yame.observer.TransferState
+import no.skasti.yame.ppp.session.UnhandledPacket
+import no.skasti.yame.ppp.session.DnsQuery
+import no.skasti.yame.ppp.session.DnsResponse
+import no.skasti.yame.ppp.session.DnsFailure
+import no.skasti.yame.ppp.session.TransferStarted
+import no.skasti.yame.ppp.session.TransferStateChanged
+import no.skasti.yame.ppp.session.TransferBytes
+import no.skasti.yame.ppp.session.TransferState
+import no.skasti.yame.ppp.proxy.HttpProxyAction
+import no.skasti.yame.ppp.proxy.HttpProxyActionKind
+
 import no.skasti.yame.observer.YameEvent
 import java.io.BufferedWriter
 import java.nio.charset.StandardCharsets
@@ -114,7 +123,7 @@ class YameLogManager(
 
     fun eventSink(event: YameEvent) {
         when (event) {
-            is YameEvent.UnhandledPacket -> {
+            is UnhandledPacket -> {
                 captures.record(event, onReceived = {
                     log(YameLogModule.UNHANDLED, YameLogLevel.WARN, event.reason)
                 }) { path ->
@@ -122,7 +131,7 @@ class YameLogManager(
                 }
             }
 
-            is YameEvent.DnsQuery ->
+            is DnsQuery ->
                 log(
                     YameLogModule.DNS,
                     YameLogLevel.INFO,
@@ -130,7 +139,7 @@ class YameLogManager(
                         "type=${event.type ?: "?"} upstream=${event.upstream} bytes=${event.bytes}",
                 )
 
-            is YameEvent.DnsResponse ->
+            is DnsResponse ->
                 log(
                     YameLogModule.DNS,
                     YameLogLevel.INFO,
@@ -139,21 +148,21 @@ class YameLogManager(
                         "truncated=${event.truncated} bytes=${event.bytes}",
                 )
 
-            is YameEvent.DnsFailure ->
+            is DnsFailure ->
                 log(
                     YameLogModule.DNS,
                     YameLogLevel.ERROR,
                     "${event.transport} failure flow=${event.key}: ${event.message}",
                 )
 
-            is YameEvent.TransferStarted ->
+            is TransferStarted ->
                 log(
                     YameLogModule.TRANSFERS,
                     YameLogLevel.INFO,
                     "started flow=${event.flowId} kind=${event.kind} destination=${event.destination} via=${event.via}",
                 )
 
-            is YameEvent.TransferStateChanged ->
+            is TransferStateChanged ->
                 log(
                     YameLogModule.TRANSFERS,
                     if (event.state == TransferState.FAILED) YameLogLevel.ERROR else YameLogLevel.INFO,
@@ -161,14 +170,14 @@ class YameLogManager(
                         (event.detail?.let { " detail=$it" } ?: ""),
                 )
 
-            is YameEvent.TransferBytes ->
+            is TransferBytes ->
                 log(
                     YameLogModule.TRANSFERS,
                     YameLogLevel.DEBUG,
                     "bytes flow=${event.flowId} direction=${event.direction} bytes=${event.bytes}",
                 )
 
-            is YameEvent.HttpProxyAction ->
+            is HttpProxyAction ->
                 log(
                     YameLogModule.PROXY,
                     when (event.kind) {
@@ -178,6 +187,7 @@ class YameLogManager(
                     },
                     "${event.kind} flow=${event.flowId} ${event.message}",
                 )
+            else -> Unit // New producer-owned events need no central logging branch.
         }
     }
 

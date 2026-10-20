@@ -1,7 +1,8 @@
 package no.skasti.yame.ui
 
-import no.skasti.yame.observer.TransferKind
-import no.skasti.yame.observer.TransferState
+import no.skasti.yame.ppp.session.TransferKind
+import no.skasti.yame.ppp.session.TransferState
+
 import no.skasti.yame.ppp.proxy.ResourceKind
 import no.skasti.yame.ppp.proxy.ResourceState
 import no.skasti.yame.ppp.proxy.transform.ResourceTransformationSummary

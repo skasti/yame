@@ -60,23 +60,34 @@ absolute `https://` URL in a supported text body is intentional.
 
 ## Architecture documentation
 
-Architecture documentation must describe the actual implemented system. Proposed
-functionality and future architectural changes must be clearly identified and
-kept separate from documentation of existing behavior.
+Documentation must distinguish verified implemented behavior, decided design and
+open work. [ADR 0002](docs/adrs/0002-architecture-decision-records.md) defines
+decision records; [ADR 0003](docs/adrs/0003-document-decided-design.md) defines
+the documentation convention.
+Event ownership and generic access follow
+[ADR 0004](docs/adrs/0004-extensible-event-contract.md); overload handling follows
+[ADR 0001](docs/adrs/0001-fatal-event-queue-saturation.md).
 
-- Treat regular architecture documentation as a description of the current
-  implementation, verified against the code.
-- Put proposed designs under `docs/design/`, or in GitHub issues for smaller
-  proposals. Design documents must explicitly state their status, link to relevant
-  issues, and distinguish accepted decisions from questions requiring approval.
-  Merging a design document does not implicitly approve decisions marked as open.
-- Identify the revision described by an implementation inventory retained in a
-  design document; distinguish that historical snapshot from proposed behavior.
-- When a design is implemented, update the corresponding architecture
-  documentation from the verified implementation, including deviations from the
-  proposal. Update the design's status and link to the current documentation.
-- Historical design documents may be retained for context, but must be labeled
-  so they cannot be mistaken for authoritative documentation of current behavior.
+- Record architectural decisions in `docs/adrs/<sequence>-<topic>.md`, using the
+  next repository-wide four-digit sequence and a lowercase hyphenated topic.
+  Include status, date, context, decision, alternatives and consequences. Never
+  reuse or renumber a published ADR; superseding decisions get a new ADR and links
+  both ways.
+- Across project documentation, descriptions of intended behavior must reflect
+  decided design, including `docs/**/*.md` outside `docs/design/` and relevant
+  root documents. State implementation
+  status separately; a decision can be documented before it is implemented.
+- Clearly mark relevant unresolved or ongoing work as such. A concise mention may
+  link to one specific issue or an appropriate issue label. Keep extended discussion
+  of open alternatives in issues or PRs.
+- Verify descriptions of current architecture against the code. Link to ADRs for
+  rationale rather than repeating decision history or rejected alternatives.
+- Keep revision-specific historical implementation inventories under
+  `docs/.history/`, labeled with the exact revision. They are neither current
+  architecture nor selected design.
+- When a design is implemented, update current architecture documentation from
+  the verified implementation, including deviations from the design. Update
+  implementation status and links in the affected documents.
 
 ## Development workflow
 
@@ -103,6 +114,7 @@ Prefer code that is easy to reason about, test, review, and extend.
 - treat shared/cached state as immutable from the caller's perspective and use defensive copies or immutable structures at ownership boundaries when needed;
 - use deterministic, canonical representations for identifiers, fingerprints, protocol/header normalization, ordering, and other values that participate in equality or caching;
 - keep concurrency boundaries explicit: publish state before signalling completion, avoid races between shared work and caches, and do not let observers/hooks block critical request or protocol paths;
+- when an event subscriber publishes another event, check for direct or indirect feedback loops; publish only meaningful changes and use deduplication or state-change detection where necessary. The dispatcher can time out and fail fatally if it publishes into its own full queue. See [event publication from subscribers](docs/yame-events.md#event-publication-from-subscribers);
 - treat external input as untrusted: bound memory, CPU, decoded sizes, recursion/depth, queues, and IO; avoid unnecessary parsing or implicit filesystem/network side effects;
 - prefer fail-safe behavior and explicit fallback paths over partially mutated state;
 - design new behavior so important success, boundary, failure, passthrough, and concurrency paths can be tested deterministically;

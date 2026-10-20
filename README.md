@@ -571,15 +571,19 @@ Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the build,
 testing, compatibility, and pull-request guidelines. The project's more detailed
 architecture and review constraints are documented in [AGENTS.md](AGENTS.md).
 
-The [YameEvents v1 design proposal](docs/design/yame-events-v1.md) supports the core
-event and proxy dashboard migration tracked by
-[#92](https://github.com/skasti/yame/issues/92). It retains an implementation
-inventory at revision `a37ac65` and separately proposes ownership, delivery,
-bounded overload, startup and shutdown semantics. The contract is not implemented;
-the terminal overload policy remains an open decision requiring approval before
-[#98](https://github.com/skasti/yame/issues/98). Merging the documentation does not
-approve that policy. Once implemented, `docs/yame-events.md` will describe the
-verified event-system behavior, including deviations from the proposal.
+The [YameEvents broker architecture](docs/yame-events.md) documents the
+asynchronous count-bounded broker, 10 ms queue-full wait, subscriptions, fatal
+overload signal and lifecycle API. [ADR 0004](docs/adrs/0004-extensible-event-contract.md)
+records the open, producer-owned event contract and lazy generic map access.
+Production runtime wiring and fatal process termination remain part of
+[#102](https://github.com/skasti/yame/issues/102).
+The [v1 migration design](docs/design/yame-events-v1.md) describes the decided design
+for [#92](https://github.com/skasti/yame/issues/92). The
+[historical inventory](docs/.history/yame-events-a37ac65.md) describes `a37ac65`.
+[ADR 0001](docs/adrs/0001-fatal-event-queue-saturation.md) records the fatal-overload
+decision; [ADR 0002](docs/adrs/0002-architecture-decision-records.md) defines decision
+records; [ADR 0003](docs/adrs/0003-document-decided-design.md) explains how
+documentation reflects decided design and verified implementation.
 
 Please report potential security vulnerabilities according to
 [SECURITY.md](SECURITY.md) rather than opening a public issue.

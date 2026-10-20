@@ -54,7 +54,7 @@ class PppIcmpControlTest {
                 }
             }
             assertTrue(link.frames.isEmpty(), "Control packets must not produce replies")
-            assertTrue(link.events.filterIsInstance<YameEvent.UnhandledPacket>().isEmpty())
+            assertTrue(link.events.filterIsInstance<UnhandledPacket>().isEmpty())
             assertTrue(link.logs.any { it.contains("port unreachable") })
             assertEquals(3, link.logs.count { it.contains("Router Solicitation") })
         }
@@ -93,7 +93,7 @@ class PppIcmpControlTest {
             }
             assertTrue(link.udp.closed.isEmpty())
             assertTrue(link.frames.isEmpty())
-            assertTrue(link.events.filterIsInstance<YameEvent.UnhandledPacket>().isEmpty())
+            assertTrue(link.events.filterIsInstance<UnhandledPacket>().isEmpty())
         }
     }
 
@@ -110,7 +110,7 @@ class PppIcmpControlTest {
             assertEquals(2, link.logs.count { it.contains("malformed Router Solicitation") })
             assertTrue(link.frames.isEmpty())
             assertTrue(link.udp.closed.isEmpty())
-            assertTrue(link.events.filterIsInstance<YameEvent.UnhandledPacket>().isEmpty())
+            assertTrue(link.events.filterIsInstance<UnhandledPacket>().isEmpty())
         }
     }
 

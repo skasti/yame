@@ -1,5 +1,7 @@
 package no.skasti.yame.logging
 
+import no.skasti.yame.ppp.session.UnhandledPacket
+
 import no.skasti.yame.observer.YameEvent
 import java.nio.file.Files
 import java.nio.file.LinkOption.NOFOLLOW_LINKS
@@ -36,7 +38,7 @@ internal class UnhandledPacketRecorder(
     }
 
     fun record(
-        event: YameEvent.UnhandledPacket,
+        event: UnhandledPacket,
         onReceived: () -> Unit = {},
         onCaptured: (String) -> Unit,
     ) {

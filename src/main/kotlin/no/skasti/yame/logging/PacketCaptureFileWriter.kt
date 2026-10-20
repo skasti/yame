@@ -1,6 +1,7 @@
 package no.skasti.yame.logging
 
-import no.skasti.yame.observer.YameEvent
+import no.skasti.yame.ppp.session.UnhandledPacket
+
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption.ATOMIC_MOVE
@@ -12,7 +13,7 @@ import java.util.UUID
 internal class PacketCaptureFileWriter(
     private val writeText: (Path, String) -> Unit = { path, text -> Files.writeString(path, text) },
 ) {
-    fun write(directory: Path, event: YameEvent.UnhandledPacket, timestamp: Instant, bytes: ByteArray): Path {
+    fun write(directory: Path, event: UnhandledPacket, timestamp: Instant, bytes: ByteArray): Path {
         val temporary = if (Files.getFileStore(directory).supportsFileAttributeView("posix")) {
             Files.createTempFile(directory, ".capture-", ".tmp",
                 PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")))
