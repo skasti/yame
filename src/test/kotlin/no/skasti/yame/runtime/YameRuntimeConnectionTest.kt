@@ -118,21 +118,28 @@ class YameRuntimeConnectionTest {
     @Test
     fun `serial reconnect keeps resource graph created through HTTP compatibility handling`() {
         val directory = Files.createTempDirectory("yame-registry-reconnect")
-        val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val server = ServerSocket(0, 2, InetAddress.getLoopbackAddress())
         val page = "<html><img src=\"/image.gif\"></html>"
         val serverThread = Thread {
             server.use { listening ->
-                listening.accept().use { socket ->
-                    readRequest(socket)
-                    val body = page.toByteArray(StandardCharsets.UTF_8)
-                    val headers =
-                        "HTTP/1.1 200 OK\r\n" +
-                            "Content-Type: text/html; charset=utf-8\r\n" +
-                            "Content-Length: ${body.size}\r\n" +
-                            "Connection: close\r\n\r\n"
-                    socket.getOutputStream().write(headers.toByteArray(StandardCharsets.US_ASCII))
-                    socket.getOutputStream().write(body)
-                    socket.getOutputStream().flush()
+                repeat(2) {
+                    listening.accept().use { socket ->
+                        val request = readRequest(socket)
+                        val (contentType, bodyText) = if (request.startsWith("GET /page ")) {
+                            "text/html; charset=utf-8" to page
+                        } else {
+                            "image/gif" to "GIF89a"
+                        }
+                        val body = bodyText.toByteArray(StandardCharsets.UTF_8)
+                        val headers =
+                            "HTTP/1.1 200 OK\r\n" +
+                                "Content-Type: $contentType\r\n" +
+                                "Content-Length: ${body.size}\r\n" +
+                                "Connection: close\r\n\r\n"
+                        socket.getOutputStream().write(headers.toByteArray(StandardCharsets.US_ASCII))
+                        socket.getOutputStream().write(body)
+                        socket.getOutputStream().flush()
+                    }
                 }
             }
         }.apply {
@@ -143,10 +150,11 @@ class YameRuntimeConnectionTest {
             val functions = FunctionStore()
             val store = applicationConfigStore(YameConfiguration(portName = "COM1"))
             val registry = NavigationResourceRegistry(maxContexts = 4)
+            val httpConfig = PppHttpCompatibilityConfig(enabled = true, requestTimeoutMillis = 2_000)
 
             // Create graph state through the same HTTP routing path used by PPP sessions.
             val httpHandler = SystemRoutingTcpProxy(
-                httpConfig = PppHttpCompatibilityConfig(enabled = true, requestTimeoutMillis = 2_000),
+                httpConfig = httpConfig,
                 resourceGraphs = registry,
             )
             val httpEvents = LinkedBlockingQueue<TcpProxyEvent>()
@@ -166,15 +174,17 @@ class YameRuntimeConnectionTest {
 
             val root = URI("http://127.0.0.1:${server.localPort}/page")
             val graph = registry.startNavigation(root)
-            val graphSnapshot = registry.snapshots().single()
+            val initialGraphSnapshot = registry.snapshots().single()
             val image = URI("http://127.0.0.1:${server.localPort}/image.gif")
-            assertTrue(graphSnapshot.edges.any {
+            assertTrue(initialGraphSnapshot.edges.any {
                 it.childLegacyUri == image && it.relation == ResourceRelation.IMG_SRC
             })
             assertEquals(
                 ResourceState.READY,
-                graphSnapshot.nodes.single { it.legacyUri.path == "/page" }.state,
+                initialGraphSnapshot.nodes.single { it.legacyUri.path == "/page" }.state,
             )
+            val oldImageAttempt = requireNotNull(registry.beginFetch(graph, image, image, image))
+            val graphSnapshot = registry.snapshots().single()
             var readingStarted = 0
             var attempts = 0
             val ports = listOf(SerialPortDescriptor("COM1", "test port"))
@@ -203,6 +213,51 @@ class YameRuntimeConnectionTest {
                         graphSnapshot,
                         registry.snapshots().single(),
                         "reconnect should preserve every graph node and edge",
+                    )
+
+                    // A fresh HTTP proxy generation after the serial reconnect continues the
+                    // discovered image request in the same graph and supersedes its old fetch.
+                    val replacementHttpHandler = SystemRoutingTcpProxy(
+                        httpConfig = httpConfig,
+                        resourceGraphs = registry,
+                    )
+                    val replacementEvents = LinkedBlockingQueue<TcpProxyEvent>()
+                    val imageFlow = httpFlow(peerPort = 2393).copy(generation = 2)
+                    try {
+                        replacementHttpHandler.connect(imageFlow, replacementEvents::offer)
+                        assertIs<TcpProxyEvent.Connected>(
+                            requireNotNull(replacementEvents.poll(2, TimeUnit.SECONDS)),
+                        )
+                        replacementHttpHandler.send(
+                            imageFlow,
+                            ("GET /image.gif HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\n\r\n")
+                                .toByteArray(StandardCharsets.US_ASCII),
+                        ).getOrThrow()
+                        assertTrue(collectResponse(replacementEvents).endsWith("GIF89a"))
+                    } finally {
+                        replacementHttpHandler.close()
+                    }
+
+                    val afterReplacement = registry.snapshots().single()
+                    assertEquals(graphSnapshot.id, afterReplacement.id)
+                    assertEquals(graphSnapshot.edges, afterReplacement.edges)
+                    assertEquals(
+                        ResourceState.READY,
+                        afterReplacement.nodes.single { it.legacyUri == image }.state,
+                    )
+                    assertFalse(
+                        registry.markFetchState(
+                            graph,
+                            oldImageAttempt,
+                            image,
+                            image,
+                            image,
+                            ResourceState.FAILED,
+                        ),
+                    )
+                    assertEquals(
+                        ResourceState.READY,
+                        registry.snapshots().single().nodes.single { it.legacyUri == image }.state,
                     )
                 } finally {
                     runtime.close()
