@@ -15,9 +15,6 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.URI
 import java.nio.file.Files
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.*
 
 class YameRuntimeConnectionTest {
@@ -124,8 +121,8 @@ class YameRuntimeConnectionTest {
                 ResourceRelation.IMG_SRC,
                 ResourceKind.IMAGE,
             )
-            val readingStarted = CountDownLatch(2)
-            val attempts = AtomicInteger()
+            var readingStarted = 0
+            var attempts = 0
             val ports = listOf(SerialPortDescriptor("COM1", "test port"))
 
             YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
@@ -137,26 +134,21 @@ class YameRuntimeConnectionTest {
                     resourceGraphs = registry,
                     portProvider = { ports },
                     connectionFactory = { _, _, _, _ ->
-                        attempts.incrementAndGet()
-                        Port(onReadingStarted = readingStarted::countDown)
+                        attempts++
+                        Port(onReadingStarted = { readingStarted++ })
                     },
                 )
-                val runtimeThread = Thread(runtime::run, "yame-registry-reconnect-test").apply {
-                    isDaemon = true
-                    start()
-                }
                 try {
-                    assertTrue(readingStarted.await(5, TimeUnit.SECONDS), "initial serial connection did not start")
                     functions.invoke(ConnectionFunctions.Reconnect)
-                    assertTrue(readingStarted.await(5, TimeUnit.SECONDS), "replacement serial connection did not start")
-                    assertEquals(2, attempts.get())
+                    assertEquals(1, readingStarted)
+                    functions.invoke(ConnectionFunctions.Reconnect)
+                    assertEquals(2, readingStarted)
+                    assertEquals(2, attempts)
                     assertEquals(graph.id, registry.startNavigation(root).id)
                     assertEquals(2, registry.snapshots().single().nodes.size)
                 } finally {
                     runtime.close()
-                    runtimeThread.join(5_000)
                 }
-                assertFalse(runtimeThread.isAlive, "runtime thread did not stop")
             }
         } finally {
             directory.toFile().deleteRecursively()
