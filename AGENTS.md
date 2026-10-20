@@ -114,6 +114,7 @@ Prefer code that is easy to reason about, test, review, and extend.
 - treat shared/cached state as immutable from the caller's perspective and use defensive copies or immutable structures at ownership boundaries when needed;
 - use deterministic, canonical representations for identifiers, fingerprints, protocol/header normalization, ordering, and other values that participate in equality or caching;
 - keep concurrency boundaries explicit: publish state before signalling completion, avoid races between shared work and caches, and do not let observers/hooks block critical request or protocol paths;
+- when an event subscriber publishes another event, check for direct or indirect feedback loops; publish only meaningful changes and use deduplication or state-change detection where necessary. The dispatcher can time out and fail fatally if it publishes into its own full queue. See [event publication from subscribers](docs/yame-events.md#event-publication-from-subscribers);
 - treat external input as untrusted: bound memory, CPU, decoded sizes, recursion/depth, queues, and IO; avoid unnecessary parsing or implicit filesystem/network side effects;
 - prefer fail-safe behavior and explicit fallback paths over partially mutated state;
 - design new behavior so important success, boundary, failure, passthrough, and concurrency paths can be tested deterministically;

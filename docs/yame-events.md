@@ -49,6 +49,26 @@ snapshots, while an already-snapshotted callback may still run once. Names are
 unique diagnostic identifiers of at most 80 characters. Subscriber exceptions
 are isolated, with a bounded status counter and latest subscriber/phase summary.
 
+### Event publication from subscribers
+
+Subscribers may publish events in response to received events. Those events join
+the queue for later delivery; they are never dispatched recursively. Take care
+to avoid direct or indirect feedback loops. For example, a subscriber handling A
+could publish B, whose subscriber publishes A again. Such a loop can keep the
+queue occupied and eventually cause fatal overload.
+
+- Publish only meaningful new state changes or observations. Do not republish an
+  event simply because it was received.
+- Check whether this subscriber or another subscriber could feed an emitted event
+  back into the same chain. Use state-change detection, deduplication or another
+  suitable guard when feedback is possible.
+- Publishing on the broker's own dispatcher thread needs particular care: if the
+  queue is full, the dispatcher cannot dequeue another event while its own
+  `publish()` waits. The wait can time out and latch fatal broker failure.
+
+The broker deliberately does not detect or suppress event loops. Producers and
+subscribers own loop prevention.
+
 ## Fatal overload and shutdown
 
 If the queue remains full at the deadline, `publish` latches one `BrokerFailure`,

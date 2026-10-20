@@ -103,6 +103,13 @@ while idle. For each event it snapshots eligible registrations in registration
 order, releases broker synchronization, evaluates their filters and calls matching
 handlers sequentially. Reentrant publication appends through ordinary admission;
 it never dispatches recursively. Filters and handlers must return quickly.
+Subscribers that publish new observations must guard against direct or indirect
+feedback loops, including A → B → A chains. Publish only meaningful state changes,
+with deduplication or state-change detection where needed. A full queue cannot be
+drained while the dispatcher itself waits in `publish()`, so a reentrant publication
+may time out and trigger fatal overload. The broker does not detect event loops;
+the [current broker guidance](../yame-events.md#event-publication-from-subscribers)
+explains the producer/subscriber responsibility.
 
 Registration is atomic with admission: a new subscription starts at the next
 accepted sequence after registration and receives no older queued events. This
