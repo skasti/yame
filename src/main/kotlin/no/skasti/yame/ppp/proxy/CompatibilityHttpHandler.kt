@@ -23,9 +23,9 @@ import no.skasti.yame.ppp.proxy.transform.cachePolicyFrom
 import no.skasti.yame.ppp.proxy.transform.validatorsFrom
 import no.skasti.yame.ppp.proxy.transform.sourceFingerprint
 import no.skasti.yame.ppp.proxy.transform.ResourceTransformationContext
+import no.skasti.yame.ppp.proxy.transform.ResourceTransformationSettings
 import no.skasti.yame.ppp.proxy.transform.ResourceTransformationPipeline
 import no.skasti.yame.ppp.proxy.transform.defaultResourceTransformationPipeline
-import no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings
 import no.skasti.yame.ppp.tcp.TcpProxyFlow
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
@@ -47,7 +47,7 @@ internal class SystemHttpCompatibilityHandler(
     private val config: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig.fromConfigStore(),
     private val logger: (String) -> Unit = {},
     private val eventSink: (YameEvent) -> Unit = {},
-    private val transformerSettings: (() -> no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings)? = null,
+    private val transformerSettings: (() -> ResourceTransformationSettings)? = null,
     private val resourceRegistryHooks: ResourceRegistryHooks = ResourceRegistryHooks(),
     private val resourceGraphs: NavigationResourceRegistry =
         NavigationResourceRegistry(
@@ -61,7 +61,9 @@ internal class SystemHttpCompatibilityHandler(
         .followRedirects(HttpClient.Redirect.NEVER)
         .build(),
     private val resourceTransformations: ResourceTransformationPipeline =
-        defaultResourceTransformationPipeline(config.maxResponseBytes, config.elementSimplifier),
+        defaultResourceTransformationPipeline(config.maxResponseBytes, config.elementSimplifier) { message ->
+            logger(message)
+        },
 ) : HttpRequestHandler {
     private data class ClientCookie(val name: String, val value: String)
     private data class SessionKey(val generation: Long, val peerAddress: String)
@@ -73,7 +75,7 @@ internal class SystemHttpCompatibilityHandler(
         val flow: TcpProxyFlow,
         val session: SessionState,
         val active: () -> Boolean,
-        val htmlTransformers: HtmlTransformerSettings,
+        val transformationSettings: ResourceTransformationSettings,
         val clientCookies: MutableList<ClientCookie> = mutableListOf(),
     )
 
@@ -122,7 +124,9 @@ internal class SystemHttpCompatibilityHandler(
                         SessionState()
                     },
                 active = { connection.isActive },
-                htmlTransformers = transformerSettings?.invoke() ?: config.htmlTransformers,
+                transformationSettings =
+                    transformerSettings?.invoke()
+                        ?: ResourceTransformationSettings(config.htmlTransformers, config.pngCompatibilityMode),
             )
         return processRequest(state, request)
     }
@@ -499,7 +503,7 @@ internal class SystemHttpCompatibilityHandler(
                     forceAbsoluteRelativeReferences = response.effectiveBaseUri != null,
                     referenceRole = response.referenceRole,
                     requestMethod = response.requestMethod,
-                    htmlTransformers = state.htmlTransformers,
+                    transformationSettings = state.transformationSettings,
                 )
             resourceGraphs.recordTransformations(
                 response.legacyUri,
@@ -630,7 +634,7 @@ internal class SystemHttpCompatibilityHandler(
         forceAbsoluteRelativeReferences: Boolean,
         referenceRole: ReferenceRole,
         requestMethod: String,
-        htmlTransformers: HtmlTransformerSettings,
+        transformationSettings: ResourceTransformationSettings,
     ): Resource {
         val source =
             Resource(
@@ -658,8 +662,9 @@ internal class SystemHttpCompatibilityHandler(
                     ?: referenceRole,
                 requestHeaders = requestHeaders,
                 requestMethod = requestMethod,
-                transformationProfile = "${config.transformationProfile}:html=${htmlTransformers.profileToken}",
-                htmlTransformers = htmlTransformers,
+                transformationProfile = "${config.transformationProfile}:${transformationSettings.profileToken}",
+                htmlTransformers = transformationSettings.htmlTransformers,
+                pngCompatibilityMode = transformationSettings.pngCompatibilityMode,
                 rewriteText = { sourceText ->
                     rewriteBodyUrlsWithBase(
                         flow = flow,

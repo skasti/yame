@@ -393,15 +393,16 @@ YAME keeps the required exact URL and origin mappings for the active PPP generat
 JPEG/PNG image optimization and literal HTML image-tag sizing use the same
 proportional `600x400` default policy. `<img>` tags are resized only when both
 `width` and `height` are numeric pixel values; no image is fetched solely to
-rewrite its tag. PNG artwork with at most 256 colors becomes an exact-palette
-GIF (255 opaque colors plus one transparent entry when needed). Opaque
-high-color images may become baseline JPEG after a conservative quality check.
-PNG partial alpha, excessive transparent-image palette sizes, and animation
-pass through unchanged. Every replacement must be smaller than its source.
-See the [PNG transparency policy](docs/resource-transformation.md#png-output-and-transparency)
-for the fallback limitations.
+rewrite its tag. PNG handling defaults to the existing size-first `optimize`
+policy. Set `transformers.png-compatibility.mode=require-legacy-format` in
+`yame.ini` to request GIF or baseline JPEG for safely decodable static PNGs,
+even when the replacement is larger. The compatibility mode may matte partial
+alpha onto white or quantize colors; unsupported, animated, malformed, or
+over-limit images stay PNG and produce a diagnostic. See the
+[PNG output and transparency policy](docs/resource-transformation.md#png-output-and-transparency)
+for details.
 
-Resource transformations preserve upstream `ETag` and `Last-Modified` validators by design: within a running YAME process the transformation pipeline is deterministic, so unchanged upstream source state implies unchanged legacy output. Byte-specific metadata such as `Content-Length` and content digests is removed or regenerated when the body changes. See [resource transformation invariants](docs/resource-transformation.md) for the full contract.
+Resource transformations preserve upstream `ETag` and `Last-Modified` validators by design: within a running YAME process the transformation pipeline is deterministic for a given profile, so unchanged upstream source state and profile imply unchanged legacy output. Cache identity includes live transformation settings, including the PNG mode, so switching modes cannot reuse a representation made for another mode. Byte-specific metadata such as `Content-Length` and content digests is removed or regenerated when the body changes. See [resource transformation invariants](docs/resource-transformation.md) for the full contract.
 
 This does **not** make a directly entered `https://...` URL compatible. A browser that opens TCP port 443 expects a TLS handshake before any HTTP redirect can be exchanged. Supporting that case would require YAME to terminate the legacy browser's TLS itself, including certificate and legacy-cipher handling.
 

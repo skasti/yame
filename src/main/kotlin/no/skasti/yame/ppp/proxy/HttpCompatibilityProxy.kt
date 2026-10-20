@@ -14,7 +14,7 @@ internal class SystemHttpCompatibilityProxy(
     config: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig.fromConfigStore(),
     logger: (String) -> Unit = {},
     eventSink: (YameEvent) -> Unit = {},
-    transformerSettings: (() -> no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings)? = null,
+    transformerSettings: (() -> no.skasti.yame.ppp.proxy.transform.ResourceTransformationSettings)? = null,
     resourceRegistryHooks: ResourceRegistryHooks = ResourceRegistryHooks(),
     resourceGraphs: NavigationResourceRegistry =
         NavigationResourceRegistry(
@@ -29,7 +29,9 @@ internal class SystemHttpCompatibilityProxy(
             .followRedirects(HttpClient.Redirect.NEVER)
             .build(),
     resourceTransformations: ResourceTransformationPipeline =
-        defaultResourceTransformationPipeline(config.maxResponseBytes, config.elementSimplifier),
+        defaultResourceTransformationPipeline(config.maxResponseBytes, config.elementSimplifier) { message ->
+            logger(message)
+        },
 ) : TcpProxy {
     private val handler =
         SystemHttpCompatibilityHandler(

@@ -131,6 +131,13 @@ class YameConfigurationStore(private val path: Path) {
                 htmlTransformers = HtmlTransformer.entries.fold(loadedDefaults.pppHttpCompatibilityConfig.htmlTransformers) { settings, transformer ->
                     settings.withEnabled(transformer, boolean(properties, "transformers.${transformer.command}.enabled", settings.enabled(transformer)))
                 },
+                pngCompatibilityMode = properties.getProperty(PngImageSettings.CompatibilityMode.path)
+                    ?.let { value ->
+                        runCatching { PngCompatibilityMode.parse(value) }.getOrElse {
+                            error("Invalid ${PngImageSettings.CompatibilityMode.path} in $path; expected optimize or require-legacy-format")
+                        }
+                    }
+                    ?: loadedDefaults.pppHttpCompatibilityConfig.pngCompatibilityMode,
             ),
             logLevels = logLevels,
             captureLimits = captureLimits,
@@ -170,6 +177,10 @@ class YameConfigurationStore(private val path: Path) {
                 setProperty("transformers.${transformer.command}.enabled",
                     configuration.pppHttpCompatibilityConfig.htmlTransformers.enabled(transformer).toString())
             }
+            setProperty(
+                PngImageSettings.CompatibilityMode.path,
+                configuration.pppHttpCompatibilityConfig.pngCompatibilityMode.configValue,
+            )
             configuration.logLevels.forEach { (module, level) ->
                 setProperty("loglevel.${module.fileName}", level.name.lowercase())
             }

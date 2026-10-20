@@ -25,6 +25,7 @@ internal data class ResourceTransformationContext(
     val transformationProfile: String,
     val rewriteText: (String) -> String,
     val htmlTransformers: HtmlTransformerSettings = HtmlTransformerSettings(),
+    val pngCompatibilityMode: PngCompatibilityMode = PngCompatibilityMode.OPTIMIZE,
 )
 
 internal data class ResourceRepresentation(

@@ -3,6 +3,7 @@ package no.skasti.yame.ppp.proxy
 import com.sun.net.httpserver.HttpServer
 import no.skasti.yame.ppp.proxy.transform.HtmlTransformer
 import no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings
+import no.skasti.yame.ppp.proxy.transform.ResourceTransformationSettings
 import no.skasti.yame.ppp.http.HttpConnection
 import no.skasti.yame.ppp.http.HttpRequest
 import no.skasti.yame.ppp.http.HttpResponse
@@ -32,7 +33,7 @@ class LiveHtmlTransformerTest {
         run {
             val store = no.skasti.yame.persistence.applicationConfigStore(no.skasti.yame.persistence.YameConfiguration())
             val handler = SystemHttpCompatibilityHandler(config = PppHttpCompatibilityConfig(),
-                transformerSettings = { HtmlTransformerSettings.fromSnapshot(store.snapshot()) })
+                transformerSettings = { ResourceTransformationSettings.fromSnapshot(store.snapshot()) })
             try {
                 val request = request(server).copy(headers = request(server).headers + listOf(
                     "If-None-Match" to "\"source\"", "If-Modified-Since" to "Tue, 29 Sep 2026 12:00:00 GMT",
@@ -70,7 +71,7 @@ class LiveHtmlTransformerTest {
         run {
             val store = no.skasti.yame.persistence.applicationConfigStore(no.skasti.yame.persistence.YameConfiguration())
             val handler = SystemHttpCompatibilityHandler(config = PppHttpCompatibilityConfig(),
-                transformerSettings = { HtmlTransformerSettings.fromSnapshot(store.snapshot()) })
+                transformerSettings = { ResourceTransformationSettings.fromSnapshot(store.snapshot()) })
             try {
                 val response = CompletableFuture.supplyAsync { handler.handle(connection(), request(server)) }
                 assertTrue(entered.await(5, TimeUnit.SECONDS))

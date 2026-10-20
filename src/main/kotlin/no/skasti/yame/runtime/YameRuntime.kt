@@ -11,7 +11,7 @@ import no.skasti.yame.ppp.PppSettings
 import no.skasti.yame.ppp.dns.DnsSettings
 import no.skasti.yame.ppp.proxy.ProxySettings
 import no.skasti.yame.lifecycle.ApplicationFunctions
-import no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings
+import no.skasti.yame.ppp.proxy.transform.ResourceTransformationSettings
 import no.skasti.yame.ppp.PppIpConfig
 import no.skasti.yame.ppp.dns.PppDnsConfig
 import no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig
@@ -231,7 +231,7 @@ internal class YameRuntime(
             ipConfig = PppIpConfig.fromSnapshot(snapshot),
             dnsConfig = PppDnsConfig.fromSnapshot(snapshot),
             httpCompatibilityConfig = PppHttpCompatibilityConfig.fromSnapshot(snapshot),
-            transformerSettings = { HtmlTransformerSettings.fromSnapshot(configStore.snapshot()) },
+            transformerSettings = { ResourceTransformationSettings.fromSnapshot(configStore.snapshot()) },
         )
         val modem = HayesModem(
             baudRate = baud,
