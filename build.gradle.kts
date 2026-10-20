@@ -14,7 +14,7 @@ dependencies {
     implementation(kotlin("reflect"))
     implementation("com.fazecast:jSerialComm:2.11.4")
     implementation("com.github.ajalt.mordant:mordant:3.1.0")
-    implementation("org.jline:jline-terminal-jni:4.4.7")
+    implementation("org.jline:jline-terminal-jni:4.4.8")
     testImplementation(kotlin("test"))
 }
 
