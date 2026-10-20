@@ -39,6 +39,7 @@ class ImageTransformationVisualReportTest {
         val expectedMime: String,
         val alpha: Boolean = false,
         val black: Boolean = false,
+        val pngMode: PngCompatibilityMode = PngCompatibilityMode.OPTIMIZE,
     )
 
     private data class Result(
@@ -83,6 +84,17 @@ class ImageTransformationVisualReportTest {
                 "Partial alpha cannot be faithfully represented as GIF, so the original is retained.",
                 softAlphaLogo(), "png", "image/png", alpha = true,
             ),
+            Example(
+                "partial-alpha-compatibility", "Soft transparency: PNG → GIF on white matte",
+                "Compatibility mode composites partial alpha onto white and emits a legacy GIF.",
+                softAlphaLogo(), "png", "image/gif", pngMode = PngCompatibilityMode.REQUIRE_LEGACY_FORMAT,
+            ),
+            Example(
+                "overfull-transparent-compatibility", "Overfull transparent artwork: PNG → quantized GIF",
+                "A 256-color illustration plus transparency uses a fixed palette and keeps the transparent region.",
+                overfullTransparentArtwork(), "png", "image/gif", alpha = true,
+                pngMode = PngCompatibilityMode.REQUIRE_LEGACY_FORMAT,
+            ),
         )
         val pipeline = ResourceTransformationPipeline(listOf(JpegResourceTransformer(), PngResourceTransformer()))
         val results = examples.map { example ->
@@ -101,6 +113,7 @@ class ImageTransformationVisualReportTest {
                 requestMethod = "GET",
                 transformationProfile = "netscape-4.08-v1",
                 rewriteText = { it },
+                pngCompatibilityMode = example.pngMode,
             )
             val representation = ResourceRepresentation(
                 200, mapOf("Content-Type" to listOf(inputMime)), sourceBytes,
@@ -110,18 +123,26 @@ class ImageTransformationVisualReportTest {
             val mime = output.headers.entries
                 .first { it.key.equals("Content-Type", ignoreCase = true) }.value.single()
             assertEquals(example.expectedMime, mime, example.id)
-            val shouldTransform = example.id != "partial-alpha"
+            val shouldTransform = example.expectedMime != inputMime
             if (shouldTransform) {
                 assertNotNull(state.resource.transformed, example.id)
-                assertTrue(output.body.size < sourceBytes.size, example.id)
+                if (example.pngMode == PngCompatibilityMode.OPTIMIZE) {
+                    assertTrue(output.body.size < sourceBytes.size, example.id)
+                }
             } else {
                 assertNull(state.resource.transformed)
                 assertContentEquals(sourceBytes, output.body)
             }
             val image = assertNotNull(ImageIO.read(ByteArrayInputStream(output.body)), example.id)
             if (shouldTransform) assertTrue(image.width <= 600 && image.height <= 400)
-            if (example.alpha) assertTrue(anyPixel(image) { it ushr 24 == 0 }, example.id)
+            if (example.alpha) {
+                assertTrue(anyPixel(image) { it ushr 24 == 0 }, example.id)
+            }
             if (example.black) assertTrue(anyPixel(image) { it == Color.BLACK.rgb }, example.id)
+            if (example.id == "partial-alpha-compatibility") {
+                assertEquals(Color.WHITE.rgb, image.getRGB(5, 5))
+                assertTrue((image.getRGB(100, 100) ushr 24) == 255)
+            }
             if (example.id == "palette-art") {
                 assertEquals(example.original.width, image.width)
                 assertEquals(example.original.height, image.height)
@@ -186,6 +207,23 @@ class ImageTransformationVisualReportTest {
             g.drawString("YAME", 138, 178)
         } finally {
             g.dispose()
+        }
+    }
+
+    private fun overfullTransparentArtwork() = BufferedImage(320, 170, BufferedImage.TYPE_INT_ARGB).apply {
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                val tile = (y / 10) * 16 + x / 20
+                if (tile == 0) {
+                    setRGB(x, y, 0x00000000)
+                } else {
+                    val color = (tile - 1).coerceIn(0, 255)
+                    val red = color
+                    val green = (color * 73 + 19) and 255
+                    val blue = (color * 151 + 41) and 255
+                    setRGB(x, y, (0xff shl 24) or (red shl 16) or (green shl 8) or blue)
+                }
+            }
         }
     }
 
@@ -281,13 +319,18 @@ display:flex;justify-content:center;align-items:center;overflow:hidden}
 <p class="intro">Deterministic examples run through the production resource transformers. Images are shown against checkerboard and dark backgrounds to make transparency visible. All assets are local; open this file from the CI artifact.</p>""")
         for (result in results) {
             val e = result.example
-            val saving = String.format(Locale.ROOT, "%.1f", 100.0 * (result.sourceSize - result.outputSize) / result.sourceSize)
+            val sizeChange = 100.0 * (result.outputSize - result.sourceSize) / result.sourceSize
+            val sizeLabel = if (sizeChange <= 0) {
+                String.format(Locale.ROOT, "%.1f%% smaller", -sizeChange)
+            } else {
+                String.format(Locale.ROOT, "%.1f%% larger", sizeChange)
+            }
             appendLine("<article><h2>" + e.title + "</h2><p class=\"desc\">" + e.description + "</p>")
             appendLine("<div class=\"meta\"><span>" + (if (result.transformed) "Transformed" else "Passthrough") +
                 "</span><span>" + e.format.uppercase(Locale.ROOT) + " " + e.original.width + "×" + e.original.height +
                 ": " + kib(result.sourceSize) + "</span><span>" + result.outputFormat.uppercase(Locale.ROOT) +
                 " " + result.outputWidth + "×" + result.outputHeight + ": " + kib(result.outputSize) +
-                "</span><span>" + saving + "% saved</span></div>")
+                "</span><span>PNG mode: " + e.pngMode.configValue + "</span><span>" + sizeLabel + "</span></div>")
             appendLine("<div class=\"compare\">")
             for ((label, name) in listOf("Original" to result.sourceName, "Result" to result.outputName)) {
                 appendLine("<section><h3>" + label + "</h3><div class=\"samples\">")

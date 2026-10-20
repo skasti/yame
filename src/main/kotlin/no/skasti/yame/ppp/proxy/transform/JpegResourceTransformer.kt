@@ -22,7 +22,7 @@ internal class JpegResourceTransformer(
         val dimensions = policy.targetDimensions(decoded.width, decoded.height)
         val resized = codec.resize(decoded, dimensions)
         val encoded = codec.encodeJpeg(resized) ?: return state
-        return state.withOptimizedImage(
+        return state.withImageOutput(
             context,
             id,
             ImageDimensions(decoded.width, decoded.height),

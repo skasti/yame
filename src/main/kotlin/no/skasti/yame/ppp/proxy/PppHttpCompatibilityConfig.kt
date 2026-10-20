@@ -4,6 +4,8 @@ import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.config.ConfigChanges
 import no.skasti.yame.ppp.proxy.transform.ElementSimplifierConfiguration
 import no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings
+import no.skasti.yame.ppp.proxy.transform.PngCompatibilityMode
+import no.skasti.yame.ppp.proxy.transform.ResourceTransformationSettings
 
 data class PppHttpCompatibilityConfig(
     val enabled: Boolean = true,
@@ -20,17 +22,21 @@ data class PppHttpCompatibilityConfig(
     val maxRepresentationCacheBytes: Long = 64L * 1024 * 1024,
     val elementSimplifier: ElementSimplifierConfiguration = ElementSimplifierConfiguration.defaults(),
     val htmlTransformers: HtmlTransformerSettings = HtmlTransformerSettings(),
+    val pngCompatibilityMode: PngCompatibilityMode = PngCompatibilityMode.OPTIMIZE,
 ) {
     companion object {
         fun fromConfigStore(): PppHttpCompatibilityConfig =
             fromSnapshot(ConfigStore.current.snapshot())
 
         internal fun fromSnapshot(snapshot: ConfigChanges): PppHttpCompatibilityConfig =
-            PppHttpCompatibilityConfig(
-                enabled = requireNotNull(snapshot[ProxySettings.Enabled]).value,
-                elementSimplifier = requireNotNull(snapshot[no.skasti.yame.ppp.proxy.transform.TransformerSettings.Rules]).value,
-                htmlTransformers = HtmlTransformerSettings.fromSnapshot(snapshot),
-            )
+            ResourceTransformationSettings.fromSnapshot(snapshot).let { transformSettings ->
+                PppHttpCompatibilityConfig(
+                    enabled = requireNotNull(snapshot[ProxySettings.Enabled]).value,
+                    elementSimplifier = requireNotNull(snapshot[no.skasti.yame.ppp.proxy.transform.TransformerSettings.Rules]).value,
+                    htmlTransformers = transformSettings.htmlTransformers,
+                    pngCompatibilityMode = transformSettings.pngCompatibilityMode,
+                )
+            }
     }
 
     init {

@@ -105,10 +105,11 @@ for the format and editing behavior.
 Live on/off settings are separate from the immutable INI rules. A shared
 runtime control survives PPP/TCP proxy creation, and each HTTP request captures
 one immutable settings snapshot before fetching upstream. Its transformation
-profile and transformed-cache/in-flight-work keys include the four switch
-values; the same source bytes under different settings never share transformed
-output. Source acquisition may still be coalesced because it is independent of
-the transformation profile. Already-running requests retain their snapshot.
+profile and transformed-cache/in-flight-work keys include the HTML switch
+values and PNG compatibility mode; the same source bytes under different
+settings never share transformed output. Source acquisition may still be
+coalesced because it is independent of the transformation profile. Already-running
+requests retain their snapshot.
 
 Mappings affect only explicitly configured tags, including matching closing
 tags. Generated style values are escaped as attributes. Expansion is limited
@@ -143,53 +144,65 @@ Tests should cover the boundary/negative paths explicitly, not only the happy pa
 
 `PngResourceTransformer` handles `image/png`, independently of
 `JpegResourceTransformer`, which handles JPEG. Both are registered as separate
-optimization stages in the resource pipeline and share `LegacyImageCodec` for
-in-memory ImageIO decoding and resizing. They use the same `600x400` canvas,
-no upscaling, a 16-million decoded-pixel limit, and a 48 MiB estimated decoded-raster limit.
-Before full decode, the image reader's default output sample layout (element size and elements
-per pixel) is used to estimate raster memory; images exceeding either limit pass through.
-This bounds the expected main raster allocation, not every temporary decoder buffer or
-aggregate memory use across simultaneous requests. An encoded-input limit is checked before
-parsing/decoding: the proxy supplies its existing `maxResponseBytes` budget
-(default 16 MiB); standalone image policies default to 32 MiB. Output uses the
-existing source/transformed representation cache and preserves source validators.
-JPEG optimization runs before PNG optimization so PNG-to-JPEG candidates are
-not recompressed by the JPEG stage.
+image transformation stages and share `LegacyImageCodec` for in-memory ImageIO decoding
+and resizing. They use the same `600x400` canvas, never upscale, and enforce a
+16-million decoded-pixel limit and a 48 MiB estimated decoded-raster limit.
+Before full decode, the image reader's default output sample layout (element
+size and elements per pixel) estimates raster memory; images exceeding either
+limit pass through. This bounds the expected main raster allocation, not every
+temporary decoder buffer or aggregate memory across simultaneous requests. The
+encoded-input limit is `maxResponseBytes` (16 MiB by default for the proxy and
+32 MiB for standalone image policies); compatibility mode applies the same
+limit to encoded output. Output uses the source/transformed representation
+cache and preserves upstream source validators. JPEG optimization runs before
+PNG conversion so PNG-to-JPEG candidates are not recompressed.
 
-Changing format updates `Content-Type` and removes source byte lengths/digests;
-the HTTP boundary calculates the final `Content-Length`.
+Changing format updates `Content-Type` and removes source byte lengths and
+digests. The HTTP boundary calculates `Content-Length` from the client-visible
+body and sends finite HTTP/1.0 framing.
 
-Netscape Navigator 4.08 can display PNG, but ignores PNG transparency
-([PNG: The Definitive Guide, browser support table](https://www.libpng.org/pub/png/book/chapter02.html)).
-The deterministic policy is:
+PNG mode is a live setting persisted in `yame.ini` as
+`transformers.png-compatibility.mode`. Its values are `optimize` (the default)
+and `require-legacy-format`. Every request takes one settings snapshot, and the
+transformation profile includes the PNG mode so cached output from one mode is
+not reused in the other.
 
-- Images fitting an exact 256-entry palette become a non-interlaced GIF. No
-  color quantization is applied. Binary alpha uses one palette entry, allowing
-  up to 255 opaque colors. RGB values of fully transparent pixels are ignored;
-  an opaque black pixel stays distinct from a transparent black pixel.
-- Palette artwork and binary-transparent images use nearest-neighbor reduction,
-  preserving colors and binary alpha. Opaque high-color images use bilinear
-  reduction. All resizing preserves aspect ratio within the shared canvas.
-- Opaque high-color PNGs may become non-progressive baseline JPEG at the shared
-  JPEG quality (default 0.55). A round-trip comparison against the resized RGB
-  image requires channel RMS error at most 12 on the 0–255 scale and at most
-  1% of pixels with any channel error above 48. This is a conservative numeric
-  guard against compression damage, not a guarantee of perceptual equivalence.
-- Partial alpha and binary-transparent images exceeding GIF palette capacity
-  pass through unchanged. There is no alpha threshold, lossy palette reduction
-  or guessed page-background matte. APNG also passes through; the stock PNG
-  decoder would otherwise silently discard its animation.
-- Malformed data, a mismatch between declared format and decoder format,
-  encoded bodies and images exceeding the resource limits remain unchanged.
-- Every candidate must be strictly smaller than the current representation.
-  The original headers and bytes remain intact on all fallback paths.
+In `optimize` mode, every replacement must be strictly smaller than its source.
+Exact palettes become non-interlaced GIF without quantization. Binary alpha
+uses a transparent palette slot, allowing up to 255 opaque colors. Palette and
+binary-transparent images use nearest-neighbor reduction; opaque high-color
+images use bilinear reduction. Opaque high-color PNGs may become non-progressive
+baseline JPEG at quality 0.55 only when a round-trip check passes: channel RMS
+error at most 12 and at most 1% of pixels with any channel error over 48.
+Partial alpha and images with overfull transparent palettes remain PNG in this
+mode. It never guesses an arbitrary page background.
 
-Passthrough is deliberate: partial-alpha images and other unsupported cases
-retain Netscape's original PNG transparency limitation. Full-alpha rendering on
-an arbitrary page background is outside this policy. Even an exact transparent
-GIF is declined if it would increase transfer size. Tests generate deterministic
-fixtures and verify format, pixels/alpha, size, limits, HTTP framing and cached
-identical-source reuse without relying on external image downloads.
+`require-legacy-format` prioritizes the client's supported formats over output
+size and the optimizer's JPEG fidelity guard. Static, safely decoded PNGs use
+these deterministic choices:
+
+- An exact palette fitting GIF becomes GIF. Binary transparency is preserved
+  exactly when the colors fit.
+- Binary-transparent images that exceed GIF's 256-entry palette are quantized
+  to a fixed 6x7x6 (252-color) RGB palette plus one transparent entry. Fully
+  transparent pixels do not consume a color slot.
+- Partial-alpha images are composited against white. The result becomes an
+  exact GIF if it has at most 256 colors; otherwise it uses the same fixed GIF
+  palette. Alpha is not retained after compositing.
+- Opaque high-color images become baseline JPEG at quality 0.55. Unlike optimize
+  mode, a failed fidelity guard does not send the source PNG back to a client
+  that cannot decode it.
+- Resizing preserves aspect ratio within the shared canvas and never enlarges.
+
+Malformed or truncated PNGs, APNG, non-identity content encodings, decoder
+failures, and inputs or outputs beyond byte, pixel or raster limits remain
+unchanged. YAME logs a reason when the requested compatibility conversion cannot
+be performed, so passthrough is visible rather than reported as success. The
+stock PNG decoder would otherwise silently discard APNG animation. Upstream
+`ETag` and `Last-Modified` remain source validators; byte-specific digests and
+lengths do not survive a changed body. Tests generate deterministic fixtures
+and verify output format, pixels/alpha, limits, headers, HTTP framing and cache
+separation without external image downloads.
 
 ## Visual image transformation examples
 

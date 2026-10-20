@@ -6,6 +6,8 @@ import no.skasti.yame.serial.SerialSettings
 import no.skasti.yame.modem.ModemSettings
 import no.skasti.yame.modem.LoginCredentials
 import no.skasti.yame.ppp.proxy.transform.TransformerSettings
+import no.skasti.yame.ppp.proxy.transform.PngCompatibilityMode
+import no.skasti.yame.ppp.proxy.transform.PngImageSettings
 import no.skasti.yame.logging.LogSettings
 import no.skasti.yame.logging.YameLogModule
 import no.skasti.yame.logging.YameLogLevel
@@ -74,6 +76,7 @@ class ApplicationConfigStoreTest {
                 TransformerSettings.Style to false,
                 TransformerSettings.Attributes to false,
                 TransformerSettings.Elements to false,
+                PngImageSettings.CompatibilityMode to PngCompatibilityMode.REQUIRE_LEGACY_FORMAT,
             ) + LogSettings.Levels.values.map { it to YameLogLevel.DEBUG } +
                 LogSettings.CaptureLimits.values.map { it to 20 }
             store.set(*changes.toTypedArray())
@@ -81,7 +84,7 @@ class ApplicationConfigStoreTest {
             val reloaded = applicationConfigStore(file.load()).snapshot()
             assertEquals(store.snapshot().map { it.key.path to it.value }, reloaded.map { it.key.path to it.value })
             val text = Files.readString(directory.resolve("yame.ini"))
-            for (name in listOf("version=1", "login.username=user", "serial.port=COM4", "ppp.subnet=10.99.0.0/30", "dns.upstream=1.1.1.1")) {
+            for (name in listOf("version=1", "login.username=user", "serial.port=COM4", "ppp.subnet=10.99.0.0/30", "dns.upstream=1.1.1.1", "transformers.png-compatibility.mode=require-legacy-format")) {
                 assertTrue(text.contains(name), name)
             }
         } finally { directory.toFile().deleteRecursively() }

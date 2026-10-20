@@ -3,6 +3,7 @@ package no.skasti.yame.ppp.proxy.transform
 internal fun defaultResourceTransformationPipeline(
     maxResponseBytes: Int,
     elementSimplifier: ElementSimplifierConfiguration = ElementSimplifierConfiguration.defaults(),
+    onPngConversionSkipped: (String) -> Unit = {},
 ): ResourceTransformationPipeline {
     val imagePolicy = ImageOptimizationPolicy(maxEncodedBytes = maxResponseBytes)
     return ResourceTransformationPipeline(
@@ -14,7 +15,7 @@ internal fun defaultResourceTransformationPipeline(
             LegacyTextResourceTransformer(),
             ImageTagTransformer(imagePolicy),
             JpegResourceTransformer(imagePolicy),
-            PngResourceTransformer(imagePolicy),
+            PngResourceTransformer(imagePolicy, onPngConversionSkipped),
         ),
     )
 }
