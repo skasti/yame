@@ -2,6 +2,8 @@ package no.skasti.yame.ppp
 
 import no.skasti.yame.ppp.lcp.LcpPacket
 import no.skasti.yame.ppp.proxy.NavigationResourceRegistry
+import no.skasti.yame.ppp.proxy.ResourceState
+import no.skasti.yame.ppp.proxy.YameRegistries
 
 import no.skasti.yame.ppp.session.PppSession
 import java.io.ByteArrayOutputStream
@@ -9,12 +11,15 @@ import java.net.URI
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertSame
+import kotlin.test.assertTrue
 
 class RetroPppHandlerTest {
     @Test
     fun `connected waits for peer PPP traffic before starting LCP`() {
         val output = ByteArrayOutputStream()
-        val handler = RetroPppHandler(logger = {})
+        val handler = isolatedHandler()
         handler.attachOutput(output)
 
         handler.connected()
@@ -56,7 +61,7 @@ class RetroPppHandlerTest {
     @Test
     fun `each modem connection creates a fresh PPP session that waits for peer traffic`() {
         val output = ByteArrayOutputStream()
-        val handler = RetroPppHandler(logger = {})
+        val handler = isolatedHandler()
         handler.attachOutput(output)
 
         handler.connected()
@@ -103,9 +108,53 @@ class RetroPppHandlerTest {
     }
 
     @Test
+    fun `replacement handlers share process registry and retain graph and fetch fencing`() {
+        val firstHandler = RetroPppHandler(logger = {})
+        val registry = firstHandler.resourceGraphs
+        val root = URI("http://handler-replacement-99.test/page")
+        val graph = registry.startNavigation(root)
+        val resource = URI("http://cdn-handler-replacement-99.test/image.gif")
+        val upstream = URI("https://cdn-handler-replacement-99.test/image.gif")
+        val oldAttempt = requireNotNull(registry.beginFetch(graph, resource, upstream, upstream))
+
+        val replacementHandler = RetroPppHandler(logger = {})
+        val replacementRegistry = replacementHandler.resourceGraphs
+
+        assertSame(YameRegistries.navigationResources(), registry)
+        assertSame(registry, replacementRegistry)
+        assertEquals(graph.id, replacementRegistry.startNavigation(root).id)
+
+        val newGraph = replacementRegistry.startNavigation(root)
+        val currentAttempt = requireNotNull(
+            replacementRegistry.beginFetch(newGraph, resource, upstream, upstream),
+        )
+        assertFalse(
+            replacementRegistry.markFetchState(
+                newGraph,
+                oldAttempt,
+                resource,
+                upstream,
+                upstream,
+                ResourceState.FAILED,
+            ),
+        )
+        assertTrue(
+            replacementRegistry.markFetchState(
+                newGraph,
+                currentAttempt,
+                resource,
+                upstream,
+                upstream,
+                ResourceState.READY,
+            ),
+        )
+        assertEquals(ResourceState.READY, newGraph.snapshot().nodes.single { it.legacyUri == resource }.state)
+    }
+
+    @Test
     fun `invalid PPP traffic does not start LCP`() {
         val output = ByteArrayOutputStream()
-        val handler = RetroPppHandler(logger = {})
+        val handler = isolatedHandler()
         handler.attachOutput(output)
         handler.connected()
 
@@ -140,4 +189,10 @@ class RetroPppHandlerTest {
         ).receive(wire)
         return frames
     }
+
+    private fun isolatedHandler() =
+        RetroPppHandler(
+            logger = {},
+            resourceGraphs = NavigationResourceRegistry(),
+        )
 }

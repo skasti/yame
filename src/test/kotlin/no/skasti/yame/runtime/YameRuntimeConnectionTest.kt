@@ -4,22 +4,32 @@ import com.github.ajalt.mordant.terminal.Terminal
 import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.logging.YameLogManager
+import no.skasti.yame.ppp.proxy.NavigationResourceRegistry
+import no.skasti.yame.ppp.proxy.ResourceKind
+import no.skasti.yame.ppp.proxy.ResourceRelation
 import no.skasti.yame.persistence.YameConfiguration
 import no.skasti.yame.persistence.applicationConfigStore
 import no.skasti.yame.serial.*
 import no.skasti.yame.ui.TuiYameObserver
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.net.URI
 import java.nio.file.Files
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.*
 
 class YameRuntimeConnectionTest {
-    private class Port(private val failure: Exception? = null) : SerialTransport {
+    private class Port(
+        private val failure: Exception? = null,
+        private val onReadingStarted: () -> Unit = {},
+    ) : SerialTransport {
         override val output = ByteArrayOutputStream()
         var closed = false
         override fun open() { failure?.let { throw it } }
         override fun setCarrierPresent(carrierPresent: Boolean) = Unit
-        override fun startReading(onBytes: (ByteArray) -> Unit, onStopped: (Throwable?) -> Unit) = Unit
+        override fun startReading(onBytes: (ByteArray) -> Unit, onStopped: (Throwable?) -> Unit) = onReadingStarted()
         override fun close() { closed = true }
     }
 
@@ -38,6 +48,7 @@ class YameRuntimeConnectionTest {
                     YameRuntime(
                         observer = object : RuntimeObserver { override fun onLog(message: String) { messages += message } },
                         configStore = store, functions = functions, logManager = logs,
+                        resourceGraphs = NavigationResourceRegistry(),
                         portProvider = { emptyList() }, failFastStartup = true,
                         connectionFactory = { _, _, _, _ ->
                             attempts++
@@ -70,7 +81,8 @@ class YameRuntimeConnectionTest {
                 YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
                     YameRuntime(
                         observer = object : RuntimeObserver {}, configStore = store,
-                        functions = functions, logManager = logs, portProvider = { ports },
+                        functions = functions, logManager = logs,
+                        resourceGraphs = NavigationResourceRegistry(), portProvider = { ports },
                         connectionFactory = { port, baud, flow, _ ->
                             opened += Triple(port, baud, flow)
                             Port()
@@ -93,5 +105,61 @@ class YameRuntimeConnectionTest {
             }
             assertFailsWith<IllegalStateException> { ConfigStore.current }
         } finally { directory.toFile().deleteRecursively() }
+    }
+
+    @Test
+    fun `serial reconnect keeps resource graph state in the injected process registry`() {
+        val directory = Files.createTempDirectory("yame-registry-reconnect")
+        try {
+            val functions = FunctionStore()
+            val store = applicationConfigStore(YameConfiguration(portName = "COM1"))
+            val registry = NavigationResourceRegistry(maxContexts = 4)
+            val root = URI("http://runtime-reconnect-99.test/page")
+            val graph = registry.startNavigation(root)
+            registry.discover(
+                graph,
+                graph.rootLegacyUri,
+                URI("http://runtime-reconnect-cdn-99.test/image.gif"),
+                URI("https://runtime-reconnect-cdn-99.test/image.gif"),
+                ResourceRelation.IMG_SRC,
+                ResourceKind.IMAGE,
+            )
+            val readingStarted = CountDownLatch(2)
+            val attempts = AtomicInteger()
+            val ports = listOf(SerialPortDescriptor("COM1", "test port"))
+
+            YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
+                val runtime = YameRuntime(
+                    observer = object : RuntimeObserver {},
+                    configStore = store,
+                    functions = functions,
+                    logManager = logs,
+                    resourceGraphs = registry,
+                    portProvider = { ports },
+                    connectionFactory = { _, _, _, _ ->
+                        attempts.incrementAndGet()
+                        Port(onReadingStarted = readingStarted::countDown)
+                    },
+                )
+                val runtimeThread = Thread(runtime::run, "yame-registry-reconnect-test").apply {
+                    isDaemon = true
+                    start()
+                }
+                try {
+                    assertTrue(readingStarted.await(5, TimeUnit.SECONDS), "initial serial connection did not start")
+                    functions.invoke(ConnectionFunctions.Reconnect)
+                    assertTrue(readingStarted.await(5, TimeUnit.SECONDS), "replacement serial connection did not start")
+                    assertEquals(2, attempts.get())
+                    assertEquals(graph.id, registry.startNavigation(root).id)
+                    assertEquals(2, registry.snapshots().single().nodes.size)
+                } finally {
+                    runtime.close()
+                    runtimeThread.join(5_000)
+                }
+                assertFalse(runtimeThread.isAlive, "runtime thread did not stop")
+            }
+        } finally {
+            directory.toFile().deleteRecursively()
+        }
     }
 }

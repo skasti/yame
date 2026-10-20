@@ -25,18 +25,13 @@ internal class RetroPppHandler(
     private val transferLogger: (String) -> Unit = logger,
     private val proxyLogger: (String) -> Unit = logger,
     private val eventSink: (YameEvent) -> Unit = {},
-    private val resourceRegistryHooks: ResourceRegistryHooks = ResourceRegistryHooks(),
     private val ipConfig: PppIpConfig = PppIpConfig(),
     private val dnsConfig: PppDnsConfig = PppDnsConfig(),
     private val transformerSettings: (() -> no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings)? = null,
     private val httpCompatibilityConfig: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig(),
-    private val resourceGraphs: NavigationResourceRegistry =
-        NavigationResourceRegistry(
-            maxContexts = httpCompatibilityConfig.maxResourceContexts,
-            maxNodesPerHost = httpCompatibilityConfig.maxResourceNodesPerContext,
-            maxEdgesPerContext = httpCompatibilityConfig.maxResourceEdgesPerContext,
-            hooks = resourceRegistryHooks,
-        ),
+    internal val resourceGraphs: NavigationResourceRegistry =
+        YameRegistries.navigationResources(httpCompatibilityConfig),
+    private val resourceRegistryHooks: ResourceRegistryHooks = resourceGraphs.hooks,
 ) : PppHandler {
     private var output: OutputStream? = null
     private var encoder = PppEncoder()
