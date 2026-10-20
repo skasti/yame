@@ -1,20 +1,40 @@
 package no.skasti.yame.observer
 
+import no.skasti.yame.ppp.session.UnhandledPacket
+import no.skasti.yame.ppp.session.DnsQuery
+import no.skasti.yame.ppp.session.DnsResponse
+import no.skasti.yame.ppp.session.DnsFailure
+import no.skasti.yame.ppp.session.TransferStarted
+import no.skasti.yame.ppp.session.TransferStateChanged
+import no.skasti.yame.ppp.session.TransferBytes
+import no.skasti.yame.ppp.session.DnsTransport
+import no.skasti.yame.ppp.session.TransferDirection
+import no.skasti.yame.ppp.session.TransferKind
+import no.skasti.yame.ppp.session.TransferState
+import no.skasti.yame.ppp.proxy.HttpProxyAction
+import no.skasti.yame.ppp.proxy.HttpProxyActionKind
+
 import java.time.Duration
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CyclicBarrier
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import kotlin.test.*
 
 class EventBrokerTest {
     private val timeout = Duration.ofSeconds(5)
-    private fun event(id: Int) = YameEvent.TransferBytes(id.toString(), TransferDirection.TO_HOST, id)
+    private fun event(id: Int) = TransferBytes(id.toString(), TransferDirection.TO_HOST, id)
     private fun CountDownLatch.reached() = assertTrue(await(5, TimeUnit.SECONDS), "Latch did not complete")
     private fun EventBroker.finish() {
         close()
         assertEquals(BrokerWaitResult.COMPLETED, awaitClosed(timeout))
+    }
+
+    @Test fun `default publish timeout is ten milliseconds`() {
+        assertEquals(Duration.ofMillis(10), EventBrokerConfig().publishTimeout)
+        assertFailsWith<IllegalArgumentException> { EventBrokerConfig(publishTimeout = Duration.ofNanos(-1)) }
     }
 
     @Test fun `reentrant publication is queued after all current handlers`() {
@@ -24,11 +44,11 @@ class EventBrokerTest {
         try {
             broker.subscribe("bad-filter", { error("secret") }) {}
             broker.subscribe("bad-handler") { error("secret") }
-            broker.subscribeTyped<YameEvent.TransferBytes>("first") {
+            broker.subscribeTyped<TransferBytes>("first") {
                 seen.add("a${it.bytes}")
                 if (it.bytes == 1) { broker.publish(event(2)); published.countDown() }
             }
-            broker.subscribeTyped<YameEvent.TransferBytes>("second") { seen.add("b${it.bytes}") }
+            broker.subscribeTyped<TransferBytes>("second") { seen.add("b${it.bytes}") }
             broker.subscribe("excluded", { false }) { fail("filtered") }
             broker.publish(event(1))
             published.reached()
@@ -46,7 +66,7 @@ class EventBrokerTest {
         val seen = mutableListOf<Int>()
         val gate = CyclicBarrier(4)
         try {
-            broker.subscribeTyped<YameEvent.TransferBytes>("record") { seen.add(it.bytes) }
+            broker.subscribeTyped<TransferBytes>("record") { seen.add(it.bytes) }
             val producers = (0..3).map { p -> pool.submit {
                 gate.await(5, TimeUnit.SECONDS)
                 repeat(100) { i -> val id = p * 100 + i; admitted.add(broker.publish(event(id)) to id) }
@@ -66,11 +86,11 @@ class EventBrokerTest {
         val fresh = mutableListOf<Int>()
         try {
             broker.subscribe("block") { entered.countDown(); release.reached() }
-            val handle = broker.subscribeTyped<YameEvent.TransferBytes>("old") { old.add(it.bytes) }
+            val handle = broker.subscribeTyped<TransferBytes>("old") { old.add(it.bytes) }
             broker.publish(event(1)); entered.reached()
             broker.publish(event(2))
             handle.close(); handle.close()
-            broker.subscribeTyped<YameEvent.TransferBytes>("new") { fresh.add(it.bytes) }
+            broker.subscribeTyped<TransferBytes>("new") { fresh.add(it.bytes) }
             broker.publish(event(3)); release.countDown()
             assertEquals(BrokerWaitResult.COMPLETED, broker.drain().await(timeout))
             assertEquals(listOf(1), old)
@@ -79,7 +99,7 @@ class EventBrokerTest {
     }
 
     @Test fun `count saturation signals fatal independently of blocked worker and caught exception`() {
-        val broker = EventBroker(EventBrokerConfig(capacity = 1))
+        val broker = EventBroker(EventBrokerConfig(capacity = 1, publishTimeout = Duration.ZERO))
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
         val supervisor = Executors.newSingleThreadExecutor()
@@ -103,33 +123,94 @@ class EventBrokerTest {
         } finally { release.countDown(); supervisor.shutdownNow(); broker.finish() }
     }
 
-    @Test fun `payload budget counts immutable packets without copying and enforces byte capacity`() {
-        val packet = YameEvent.UnhandledPacket("IP", "unknown", 33, ByteArray(32))
-        val size = 128L + (40 + 4) + (40 + 14) + 24 + 32
-        assertEquals(size, EventPayloadBudget.bytes(packet))
-        val exposed = packet.bytes(); exposed[0] = 9
-        assertEquals(0.toByte(), packet.bytes()[0])
-        val broker = EventBroker(EventBrokerConfig(capacity = 10, payloadCapacity = size, maxEventBytes = size))
+    @Test fun `pending slot is freed when worker dequeues regardless of payload size`() {
+        val broker = EventBroker(EventBrokerConfig(capacity = 1))
         val entered = CountDownLatch(1); val release = CountDownLatch(1)
         try {
             broker.subscribe("block") { entered.countDown(); release.reached() }
-            broker.publish(packet); entered.reached(); broker.publish(packet)
-            val failure = assertFailsWith<QueueFullException> { broker.publish(packet) }.failure
-            assertEquals(size, failure.queuedBytes)
-            assertEquals(size, failure.eventBytes)
-            assertEquals(1, failure.queuedEvents)
+            val large = UnhandledPacket("IP", "unknown", 33, ByteArray(1_000_000))
+            broker.publish(large); entered.reached()
+            assertEquals(0, broker.status.queuedEvents)
+            broker.publish(event(2))
+            assertEquals(1, broker.status.queuedEvents)
+            assertNull(broker.status.failure)
         } finally { release.countDown(); broker.finish() }
     }
 
-    @Test fun `oversize is fatal and wakes an idle worker`() {
-        val broker = EventBroker(EventBrokerConfig(payloadCapacity = 512, maxEventBytes = 128))
+    @Test fun `full queue waits for space then admits in sequence`() {
+        val broker = EventBroker(EventBrokerConfig(capacity = 1, publishTimeout = Duration.ofSeconds(2)))
+        val pool = Executors.newSingleThreadExecutor()
+        val entered = CountDownLatch(1); val release = CountDownLatch(1)
+        val started = CountDownLatch(1)
+        val seen = mutableListOf<Int>()
         try {
-            assertEquals(BrokerWaitResult.COMPLETED, broker.awaitIdle(timeout))
-            val failure = assertFailsWith<EventTooLargeException> { broker.publish(event(1)) }.failure
-            assertEquals(BrokerFailure.Reason.EVENT_TOO_LARGE, failure.reason)
-            assertEquals(failure, broker.awaitFatal(Duration.ZERO))
-            assertEquals(0L, broker.status.lastAcceptedSequence)
-        } finally { broker.finish() }
+            broker.subscribeTyped<TransferBytes>("block") {
+                if (it.bytes == 1) { entered.countDown(); release.reached() }
+                seen.add(it.bytes)
+            }
+            broker.publish(event(1)); entered.reached()
+            broker.publish(event(2))
+            val waiting = pool.submit<Long> { started.countDown(); broker.publish(event(3)) }
+            started.reached()
+            assertFailsWith<TimeoutException> { waiting.get(50, TimeUnit.MILLISECONDS) }
+            release.countDown()
+            assertEquals(3L, waiting.get(5, TimeUnit.SECONDS))
+            assertEquals(BrokerWaitResult.COMPLETED, broker.drain().await(timeout))
+            assertEquals(listOf(1, 2, 3), seen)
+        } finally { release.countDown(); pool.shutdownNow(); broker.finish() }
+    }
+
+    @Test fun `full queue times out and signals fatal after bounded wait`() {
+        val broker = EventBroker(EventBrokerConfig(capacity = 1, publishTimeout = Duration.ofMillis(40)))
+        val entered = CountDownLatch(1); val release = CountDownLatch(1)
+        try {
+            broker.subscribe("block") { entered.countDown(); release.reached() }
+            broker.publish(event(1)); entered.reached(); broker.publish(event(2))
+            val failure = assertFailsWith<QueueFullException> { broker.publish(event(3)) }.failure
+            assertEquals(2L, failure.lastAcceptedSequence)
+            assertSame(failure, broker.awaitFatal(Duration.ZERO))
+        } finally { release.countDown(); broker.finish() }
+    }
+
+    @Test fun `closing broker wakes publishers waiting for capacity`() {
+        val broker = EventBroker(EventBrokerConfig(capacity = 1, publishTimeout = Duration.ofSeconds(5)))
+        val pool = Executors.newSingleThreadExecutor()
+        val entered = CountDownLatch(1); val release = CountDownLatch(1); val started = CountDownLatch(1)
+        try {
+            broker.subscribe("block") { entered.countDown(); release.reached() }
+            broker.publish(event(1)); entered.reached(); broker.publish(event(2))
+            val waiting = pool.submit<Exception?> {
+                started.countDown()
+                try { broker.publish(event(3)); null } catch (e: BrokerClosedException) { e }
+            }
+            started.reached()
+            assertFailsWith<TimeoutException> { waiting.get(50, TimeUnit.MILLISECONDS) }
+            broker.close()
+            assertIs<BrokerClosedException>(waiting.get(5, TimeUnit.SECONDS))
+            assertNull(broker.status.failure)
+        } finally { release.countDown(); pool.shutdownNow(); broker.finish() }
+    }
+
+    @Test fun `fatal overload wakes other waiting publishers`() {
+        val broker = EventBroker(EventBrokerConfig(capacity = 1, publishTimeout = Duration.ofMillis(300)))
+        val pool = Executors.newFixedThreadPool(2)
+        val entered = CountDownLatch(1); val release = CountDownLatch(1)
+        val started = CountDownLatch(2)
+        try {
+            broker.subscribe("block") { entered.countDown(); release.reached() }
+            broker.publish(event(1)); entered.reached(); broker.publish(event(2))
+            val waiting = (1..2).map { pool.submit<Exception> {
+                started.countDown()
+                try { broker.publish(event(3)); error("Unexpected acceptance") }
+                catch (e: QueueFullException) { e }
+                catch (e: BrokerFailedException) { e }
+            } }
+            started.reached()
+            val failures = waiting.map { it.get(5, TimeUnit.SECONDS) }
+            assertEquals(1, failures.count { it is QueueFullException })
+            assertEquals(1, failures.count { it is BrokerFailedException })
+            assertSame(broker.status.failure, broker.awaitFatal(Duration.ZERO))
+        } finally { release.countDown(); pool.shutdownNow(); broker.finish() }
     }
 
     @Test fun `drain captures a fixed boundary and does not wait for later callbacks`() {
@@ -137,7 +218,7 @@ class EventBrokerTest {
         val first = CountDownLatch(1); val releaseFirst = CountDownLatch(1)
         val second = CountDownLatch(1); val releaseSecond = CountDownLatch(1)
         try {
-            broker.subscribeTyped<YameEvent.TransferBytes>("block") {
+            broker.subscribeTyped<TransferBytes>("block") {
                 if (it.bytes == 1) { first.countDown(); releaseFirst.reached() }
                 else { second.countDown(); releaseSecond.reached() }
             }
@@ -185,7 +266,7 @@ class EventBrokerTest {
             val gate = CyclicBarrier(2)
             val seen = mutableListOf<Int>()
             try {
-                broker.subscribeTyped<YameEvent.TransferBytes>("record") { seen.add(it.bytes) }
+                broker.subscribeTyped<TransferBytes>("record") { seen.add(it.bytes) }
                 val publish = pool.submit<Boolean> {
                     gate.await(5, TimeUnit.SECONDS)
                     try { broker.publish(event(1)); true } catch (_: BrokerClosedException) { false }
@@ -218,7 +299,7 @@ class EventBrokerTest {
         } finally { first.finish(); second.finish() }
     }
     @Test fun `concurrent saturation latches exactly one failure`() {
-        val broker = EventBroker(EventBrokerConfig(capacity = 1))
+        val broker = EventBroker(EventBrokerConfig(capacity = 1, publishTimeout = Duration.ZERO))
         val entered = CountDownLatch(1); val release = CountDownLatch(1)
         val pool = Executors.newFixedThreadPool(4); val gate = CyclicBarrier(4)
         try {
@@ -247,8 +328,8 @@ class EventBrokerTest {
         val a = EventBroker(); val b = EventBroker()
         val seenA = mutableListOf<Int>(); val seenB = mutableListOf<Int>()
         try {
-            a.subscribeTyped<YameEvent.TransferBytes>("same-name") { seenA.add(it.bytes) }
-            b.subscribeTyped<YameEvent.TransferBytes>("same-name") { seenB.add(it.bytes) }
+            a.subscribeTyped<TransferBytes>("same-name") { seenA.add(it.bytes) }
+            b.subscribeTyped<TransferBytes>("same-name") { seenB.add(it.bytes) }
             a.publish(event(1)); a.finish()
             b.publish(event(2)); b.drain().await(timeout)
             assertEquals(listOf(1), seenA); assertEquals(listOf(2), seenB)
@@ -256,23 +337,8 @@ class EventBrokerTest {
         } finally { a.finish(); b.finish() }
     }
 
-    @Test fun `all current event shapes account every string field`() {
-        fun str(value: String?) = if (value == null) 0L else 40L + 2L * value.length
-        val events = listOf(
-            YameEvent.DnsQuery("key", DnsTransport.UDP, 1, "name", "A", "upstream", 4) to
-                listOf("key", "name", "A", "upstream"),
-            YameEvent.DnsResponse("key", DnsTransport.TCP, 2, null, 0, 1, false, 3) to listOf("key", null),
-            YameEvent.DnsFailure("key", DnsTransport.UDP, "message") to listOf("key", "message"),
-            YameEvent.TransferStarted("flow", "destination", "via", TransferKind.TCP) to listOf("flow", "destination", "via"),
-            YameEvent.TransferStateChanged("flow", TransferState.CLOSED, "detail") to listOf("flow", "detail"),
-            YameEvent.TransferBytes("flow", TransferDirection.TO_PEER, 3) to listOf("flow"),
-            YameEvent.HttpProxyAction("flow", HttpProxyActionKind.ERROR, "message") to listOf("flow", "message"),
-        )
-        events.forEach { (event, strings) -> assertEquals(128L + strings.sumOf { str(it) }, EventPayloadBudget.bytes(event)) }
-    }
-
     @Test fun `reentrant overflow remains fatal despite handler exception isolation`() {
-        val broker = EventBroker(EventBrokerConfig(capacity = 1))
+        val broker = EventBroker(EventBrokerConfig(capacity = 1, publishTimeout = Duration.ZERO))
         val entered = CountDownLatch(1); val release = CountDownLatch(1)
         try {
             broker.subscribe("reentrant") {

@@ -5,22 +5,14 @@ data class BrokerFailure(
     val reason: Reason,
     val capacity: Int,
     val queuedEvents: Int,
-    val payloadCapacity: Long,
-    val queuedBytes: Long,
-    val maxEventBytes: Long,
-    val eventBytes: Long,
     val activeSubscriber: String?,
     val lastAcceptedSequence: Long,
 ) {
-    enum class Reason { QUEUE_FULL, EVENT_TOO_LARGE }
+    enum class Reason { QUEUE_FULL }
 }
 
 class QueueFullException(val failure: BrokerFailure) : IllegalStateException(
-    "Event queue full: ${failure.queuedEvents}/${failure.capacity} events, " +
-        "${failure.queuedBytes}/${failure.payloadCapacity} bytes; active=${failure.activeSubscriber}"
-)
-class EventTooLargeException(val failure: BrokerFailure) : IllegalArgumentException(
-    "Event payload ${failure.eventBytes} exceeds ${failure.maxEventBytes} accounted bytes"
+    "Event queue full: ${failure.queuedEvents}/${failure.capacity} events; active=${failure.activeSubscriber}"
 )
 class BrokerFailedException(val failure: BrokerFailure) : IllegalStateException("Event broker has failed: ${failure.reason}")
 class BrokerClosedException : IllegalStateException("Event broker is closed for publication")

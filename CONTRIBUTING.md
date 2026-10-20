@@ -25,6 +25,9 @@ its detailed discussion in issues or PRs. Record decisions under `docs/adrs/`
 and revision-specific inventories under `docs/.history/`. See
 [ADR 0002](docs/adrs/0002-architecture-decision-records.md) for ADR conventions
 and [ADR 0003](docs/adrs/0003-document-decided-design.md) for documentation scope.
+For new observations, follow [ADR 0004](docs/adrs/0004-extensible-event-contract.md):
+define producer-owned immutable event types with stable identity and schema version;
+do not add concrete event matching to the shared broker.
 
 Security vulnerabilities should be reported according to
 [SECURITY.md](SECURITY.md), not as public issues.

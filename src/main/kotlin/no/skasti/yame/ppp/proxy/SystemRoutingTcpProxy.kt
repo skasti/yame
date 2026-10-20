@@ -1,6 +1,5 @@
 package no.skasti.yame.ppp.proxy
 
-import no.skasti.yame.observer.HttpProxyActionKind
 import no.skasti.yame.observer.YameEvent
 import no.skasti.yame.ppp.tcp.SystemTcpProxy
 import no.skasti.yame.ppp.tcp.TcpProxy
@@ -37,7 +36,7 @@ internal class SystemRoutingTcpProxy(
         val proxy = if (httpConfig.enabled && flow.key.remotePort == HTTP_PORT) {
             logger("HTTP compatibility <= ${flow.key.peerAddress}:${flow.key.peerPort} -> ${flow.key.remoteAddress}:${flow.key.remotePort}")
             emitEvent(
-                YameEvent.HttpProxyAction(
+                HttpProxyAction(
                     flowId = flowId(flow),
                     kind = HttpProxyActionKind.ROUTED,
                     message = "${flow.key.peerAddress}:${flow.key.peerPort} -> ${flow.key.remoteAddress}:${flow.key.remotePort}",

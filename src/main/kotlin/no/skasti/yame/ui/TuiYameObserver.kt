@@ -1,5 +1,17 @@
 package no.skasti.yame.ui
 
+import no.skasti.yame.ppp.session.UnhandledPacket
+import no.skasti.yame.ppp.session.DnsQuery
+import no.skasti.yame.ppp.session.DnsResponse
+import no.skasti.yame.ppp.session.DnsFailure
+import no.skasti.yame.ppp.session.TransferStarted
+import no.skasti.yame.ppp.session.TransferStateChanged
+import no.skasti.yame.ppp.session.TransferBytes
+import no.skasti.yame.ppp.session.TransferDirection
+import no.skasti.yame.ppp.session.TransferKind
+import no.skasti.yame.ppp.session.TransferState
+import no.skasti.yame.ppp.proxy.HttpProxyAction
+
 import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.config.SettingKey
 import no.skasti.yame.function.FunctionStore
@@ -25,9 +37,6 @@ import no.skasti.yame.logging.PacketCaptureLimits
 import no.skasti.yame.logging.PacketCaptureLimitKind
 import no.skasti.yame.logging.YameLogLevel
 import no.skasti.yame.logging.YameLogModule
-import no.skasti.yame.observer.TransferDirection
-import no.skasti.yame.observer.TransferKind
-import no.skasti.yame.observer.TransferState
 import no.skasti.yame.observer.YameEvent
 import no.skasti.yame.ppp.dns.dnsResponseCodeName
 import no.skasti.yame.ppp.proxy.ResourceKind
@@ -248,8 +257,8 @@ class TuiYameObserver(
     @Synchronized
     override fun onEvent(event: YameEvent) {
         when (event) {
-            is YameEvent.UnhandledPacket -> appendLog(event.reason)
-            is YameEvent.DnsQuery -> {
+            is UnhandledPacket -> appendLog(event.reason)
+            is DnsQuery -> {
                 val existing = dnsLookups.indexOfFirst { it.key == event.key }
                 val lookup = DashboardDnsLookup(
                     key = event.key,
@@ -269,7 +278,7 @@ class TuiYameObserver(
                 trimDnsLookups()
             }
 
-            is YameEvent.DnsResponse -> {
+            is DnsResponse -> {
                 val index = dnsLookups.indexOfFirst { it.key == event.key }
                 val status = event.responseCode
                     ?.let(::dnsResponseCodeName)
@@ -294,7 +303,7 @@ class TuiYameObserver(
                 trimDnsLookups()
             }
 
-            is YameEvent.DnsFailure -> {
+            is DnsFailure -> {
                 val index = dnsLookups.indexOfFirst { it.key == event.key }
                 if (index >= 0) {
                     dnsLookups[index] = dnsLookups[index].copy(status = "FAILED")
@@ -313,7 +322,7 @@ class TuiYameObserver(
                 trimDnsLookups()
             }
 
-            is YameEvent.TransferStarted -> {
+            is TransferStarted -> {
                 transfers.remove(event.flowId)
                 transfers[event.flowId] = DashboardTransfer(
                     flowId = event.flowId,
@@ -330,7 +339,7 @@ class TuiYameObserver(
                 trimTransfers()
             }
 
-            is YameEvent.TransferStateChanged -> {
+            is TransferStateChanged -> {
                 val transfer = transfers[event.flowId] ?: return
                 transfers[event.flowId] = transfer.copy(
                     state = event.state,
@@ -340,7 +349,7 @@ class TuiYameObserver(
                 trimTransfers()
             }
 
-            is YameEvent.TransferBytes -> {
+            is TransferBytes -> {
                 val transfer = transfers[event.flowId] ?: return
                 transfers[event.flowId] = transfer.copy(
                     toHostBytes = transfer.toHostBytes +
@@ -351,7 +360,8 @@ class TuiYameObserver(
                 )
             }
 
-            is YameEvent.HttpProxyAction -> return
+            is HttpProxyAction -> return
+            else -> return // Unknown observations do not change this projection.
         }
         render()
     }

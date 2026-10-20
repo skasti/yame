@@ -64,6 +64,9 @@ Documentation must distinguish verified implemented behavior, decided design and
 open work. [ADR 0002](docs/adrs/0002-architecture-decision-records.md) defines
 decision records; [ADR 0003](docs/adrs/0003-document-decided-design.md) defines
 the documentation convention.
+Event ownership and generic access follow
+[ADR 0004](docs/adrs/0004-extensible-event-contract.md); overload handling follows
+[ADR 0001](docs/adrs/0001-fatal-event-queue-saturation.md).
 
 - Record architectural decisions in `docs/adrs/<sequence>-<topic>.md`, using the
   next repository-wide four-digit sequence and a lowercase hyphenated topic.

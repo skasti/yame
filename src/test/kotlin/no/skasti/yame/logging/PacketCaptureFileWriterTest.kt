@@ -1,5 +1,7 @@
 package no.skasti.yame.logging
 
+import no.skasti.yame.ppp.session.UnhandledPacket
+
 import no.skasti.yame.observer.YameEvent
 import java.io.IOException
 import java.nio.file.Files
@@ -13,7 +15,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class PacketCaptureFileWriterTest {
-    private val event = YameEvent.UnhandledPacket("ppp-protocol-49187", "PAP unsupported", 49187, byteArrayOf(1, 2))
+    private val event = UnhandledPacket("ppp-protocol-49187", "PAP unsupported", 49187, byteArrayOf(1, 2))
     private val ownerOnly = setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE)
 
     @Test

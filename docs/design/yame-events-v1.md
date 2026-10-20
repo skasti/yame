@@ -8,7 +8,8 @@ Decided design does not imply implemented behavior: the
 [current broker architecture](../yame-events.md) documents verified code.
 
 Decision rationale, alternatives and consequences belong in
-[ADR 0001: fatal event-queue saturation](../adrs/0001-fatal-event-queue-saturation.md).
+[ADR 0001: fatal event-queue saturation](../adrs/0001-fatal-event-queue-saturation.md)
+and [ADR 0004: extensible event contract](../adrs/0004-extensible-event-contract.md).
 The [historical inventory at a37ac65](../.history/yame-events-a37ac65.md) is
 maintained separately from this design. Documentation responsibilities are defined in
 [ADR 0003](../adrs/0003-document-decided-design.md); ADR numbering and lifecycle
@@ -18,9 +19,14 @@ are defined in [ADR 0002](../adrs/0002-architecture-decision-records.md).
 
 ### Responsibility and ownership
 
-`YameEvent` describes an observation. An instantiable broker delivers observations
-to trusted in-process consumers, and `YameEvents` exposes the installed production
-broker. Each consumer owns its state, subscriptions and execution context.
+`YameEvent` is an open event interface with stable `typeName`, semantic schema
+`VersionNumber(major, minor, patch)` and a read-only payload map. Concrete types
+belong near their producers. `AbstractYameEvent` offers lazy, cached Kotlin-property
+reflection for generic map access; typed access and publication stay reflection-free.
+Event payloads are immutable snapshots, with defensive copies for mutable values.
+An instantiable broker delivers observations to trusted in-process consumers, and
+`YameEvents` exposes the installed production broker. Each consumer owns its state,
+subscriptions and execution context. See [ADR 0004](../adrs/0004-extensible-event-contract.md).
 
 The proxy's `NavigationResourceRegistry` owns actual resource knowledge. Runtime
 composition must retain and inject it across serial reconnects. The TUI's
@@ -70,7 +76,7 @@ time as host activity time. They retain responsibility for the existing aggregat
 and selection/expansion rules, including stable host-name tie-breaking.
 
 The registry must enqueue causally dependent observations in mutation order under
-its own synchronization, using only the broker's short admission operation. No
+its own synchronization, using only the broker's bounded admission operation. No
 subscriber executes under that lock. The implementation may use an equivalent
 bounded ordered hand-off, but must not create an unbounded pending-batch queue.
 
@@ -85,11 +91,11 @@ permit arbitrary lifecycle-event loss.
 
 ### Broker admission, delivery and subscriptions
 
-`publish` performs bounded validation/copying and short queue coordination, then
-returns the accepted sequence or throws an explicit rejection. It never invokes subscribers, renders, performs I/O,
-waits for capacity, or runs a rejected task on the caller. It is not an absolute
-wait-free guarantee. Successful publication returns its sequence. Rejections throw explicit closed,
-queue-full, oversize or previously-failed exceptions.
+`publish` coordinates admission without inspecting event payloads. It returns the
+accepted sequence or throws an explicit rejection. It never invokes subscribers,
+renders or performs I/O. If the queue is full, it waits for space for at most the
+configured publication timeout (10 ms by default). Successful publication returns
+its sequence; rejection reports closed, queue-full or previously-failed state.
 Only acceptance promises delivery under the healthy lifecycle contract below.
 
 One worker takes accepted events in FIFO order and blocks on a condition/queue
@@ -120,18 +126,21 @@ Queue saturation is a fatal application error. YAME must terminate with a nonzer
 exit code. The decision record is [ADR 0001](../adrs/0001-fatal-event-queue-saturation.md).
 
 Production defaults (constructor-overridable in isolated tests): 4,096 pending
-events, 16 MiB accounted pending payload, 128 KiB per event, and 64 registrations.
-One additional event may be in flight. Account fixed envelopes, UTF-16 strings,
-and packet bytes before queue admission; the accounting is a conservative budget,
-not an exact JVM heap measurement. Never truncate identities to fit.
+queue elements, a 10 ms publication timeout and 64 registrations. An event in
+flight after dequeue does not occupy a pending slot. Every event counts equally;
+there is no payload-size accounting. This deliberately does not place a strict
+bound on retained payload memory. Producers own unusual payload-size concerns.
 
-On count or byte saturation, `publish` atomically rejects the event, latches a
-bounded fatal record, wakes independent fatal waiters, and throws
-`QueueFullException`. Its fields identify limits, occupancy, requested bytes,
-last accepted sequence and active subscriber. The active subscriber is diagnostic
-context, not proof of which subscriber is slowest. No timers or watchdogs are added.
-An oversize event likewise causes fatal rejection with `EventTooLargeException`.
-Further publication throws `BrokerFailedException`; there is no recovery or retry.
+A full queue causes bounded condition-based waiting. If space opens, the event is
+admitted in sequence order. If the deadline passes, `publish` atomically latches
+a bounded fatal record, wakes independent fatal waiters and throws
+`QueueFullException`. Its metadata identifies count capacity, occupancy, last
+accepted sequence and active subscriber. The active subscriber is diagnostic
+context, not proof of which subscriber is slowest. Zero timeout rejects immediately.
+Close or fatal failure wakes waiting publishers. Interruption rejects the attempt
+and restores the interrupt flag without poisoning the broker. Further publication
+after fatal failure throws `BrokerFailedException`; there is no recovery or retry.
+No subscriber watchdog is added.
 
 The fatal signal is not a domain event, callback, or queue entry. It is independently
 awaitable even when a subscriber is blocked and remains observable if producer code
@@ -247,7 +256,7 @@ fatal application termination; runtime wiring remains #102.
 | Issue / independently reviewable PR | Dependencies | Required evidence |
 | --- | --- | --- |
 | [#97: inventory and contract](https://github.com/skasti/yame/issues/97) | None | Source-grounded historical inventory; startup/bootstrap restriction and diagnostic independence; valid documentation links. |
-| [#98: broker and facade](https://github.com/skasti/yame/issues/98) | #97; [ADR 0001](../adrs/0001-fatal-event-queue-saturation.md) | Verify bounded memory, non-blocking publishers and explicit fatal termination on overload. Checks: FIFO with multiple producers, blocked subscriber and full byte/count capacity, oversize payload, safe status reads, filtering/failure/reentrant publication, concurrent subscribe/remove, idle wakeup, drain high-water mark, publish/close race and close from worker. Verify fatal signalling independent of worker progress and caught exceptions, with no recovery. |
+| [#98: broker and facade](https://github.com/skasti/yame/issues/98) | #97; [ADR 0001](../adrs/0001-fatal-event-queue-saturation.md) | Verify count-bounded queue admission, a 10 ms default timeout and independent fatal supervision. Checks: FIFO with multiple producers, blocked subscriber and full queue, bounded waiting and wakeup, safe status reads, filtering/failure/reentrant publication, concurrent subscribe/remove, idle wakeup, drain high-water mark, publish/close race and close from worker. Verify fatal signalling independent of worker progress and caught exceptions, with no recovery. |
 | [#99: registry lifetime](https://github.com/skasti/yame/issues/99) | None | Runtime-level serial/handler replacement retains graph identity and LRU limits; stale fetch attempts remain fenced. Define limit changes without session-teardown eviction. |
 | [#100: proxy event contract and publication](https://github.com/skasti/yame/issues/100) | #97 | Immutable snapshots, root-before-resource, mutation/publication order, full add/update/remove/reuse/eviction coverage, shared resources, fetch attempts, prefetch and transformations. Reconstruct retained state from a healthy stream. Hooks remain temporarily usable. |
 | [#101: TUI processing boundary](https://github.com/skasti/yame/issues/101) | #97 | Blocking terminal/render work cannot hold up admission; bounded local backlog, independent fatal escalation on overflow, consistent observation order, drain and close behavior. Works with existing events/hooks before broker wiring. |
@@ -257,7 +266,7 @@ fatal application termination; runtime wiring remains #102.
 Use latches, barriers, controllable executors and explicit drain boundaries, with
 timeouts only as failure guards. Do not use arbitrary sleeps or reset shared global
 state between tests. FIFO/causality checks assert event values and order, not
-elapsed-time coincidences. Test count and byte limits with small injected capacities.
+elapsed-time coincidences. Test count limits and publication deadlines with small injected capacities.
 Run the relevant JVM build/integration checks for implementation changes, following
 [AGENTS.md](../../AGENTS.md).
 

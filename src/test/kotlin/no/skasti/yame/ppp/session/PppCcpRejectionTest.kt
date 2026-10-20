@@ -42,7 +42,7 @@ class PppCcpRejectionTest {
             }
             assertEquals(captures.size, sent.size)
             assertEquals(captures.size, sent.map { it.payload[1] }.distinct().size)
-            assertTrue(events.filterIsInstance<YameEvent.UnhandledPacket>().isEmpty())
+            assertTrue(events.filterIsInstance<UnhandledPacket>().isEmpty())
 
             openIpcp(session, ipcpRequest)
             assertTrue(session.ipcpOpen)

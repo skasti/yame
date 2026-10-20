@@ -8,7 +8,7 @@ import kotlin.concurrent.withLock
 class EventBroker(val config: EventBrokerConfig = EventBrokerConfig()) : AutoCloseable {
     private val lock = ReentrantLock()
     private val changed = lock.newCondition()
-    private data class Envelope(val sequence: Long, val event: YameEvent, val bytes: Long)
+    private data class Envelope(val sequence: Long, val event: YameEvent)
     private class Registration(
         val name: String,
         val firstSequence: Long,
@@ -17,7 +17,6 @@ class EventBroker(val config: EventBrokerConfig = EventBrokerConfig()) : AutoClo
     )
     private val queue = ArrayDeque<Envelope>()
     private val registrations = mutableListOf<Registration>()
-    private var queuedBytes = 0L
     private var accepted = 0L
     private var delivered = 0L
     private var closing = false
@@ -31,7 +30,6 @@ class EventBroker(val config: EventBrokerConfig = EventBrokerConfig()) : AutoClo
 
     data class Status(
         val queuedEvents: Int,
-        val queuedBytes: Long,
         val lastAcceptedSequence: Long,
         val lastDeliveredSequence: Long,
         val activeSubscriber: String?,
@@ -43,34 +41,35 @@ class EventBroker(val config: EventBrokerConfig = EventBrokerConfig()) : AutoClo
         val idle: Boolean,
     )
     val status: Status get() = lock.withLock {
-        Status(queue.size, queuedBytes, accepted, delivered, active, fatal,
+        Status(queue.size, accepted, delivered, active, fatal,
             failures, lastFailure, closing, terminated, idle)
     }
 
-    /** Never waits for capacity or calls user code. The returned sequence defines FIFO order. */
+    /** Waits at most publishTimeout for queue space; never invokes subscribers. */
     fun publish(event: YameEvent): Long = lock.withLock {
-        fatal?.let { throw BrokerFailedException(it) }
-        if (closing) throw BrokerClosedException()
-        val bytes = EventPayloadBudget.bytes(event)
-        val reason = when {
-            bytes > config.maxEventBytes -> BrokerFailure.Reason.EVENT_TOO_LARGE
-            queue.size >= config.capacity || bytes > config.payloadCapacity - queuedBytes -> BrokerFailure.Reason.QUEUE_FULL
-            else -> null
-        }
-        if (reason != null) {
-            val failure = BrokerFailure(reason, config.capacity, queue.size, config.payloadCapacity,
-                queuedBytes, config.maxEventBytes, bytes, active, accepted)
-            fatal = failure
-            closing = true
-            queue.clear()
-            queuedBytes = 0
-            changed.signalAll() // fatal supervision never uses the dispatcher or a user callback
-            if (reason == BrokerFailure.Reason.QUEUE_FULL) throw QueueFullException(failure)
-            throw EventTooLargeException(failure)
+        var remaining = try { config.publishTimeout.toNanos() } catch (_: ArithmeticException) { Long.MAX_VALUE }
+        while (true) {
+            fatal?.let { throw BrokerFailedException(it) }
+            if (closing) throw BrokerClosedException()
+            if (queue.size < config.capacity) break
+            if (remaining <= 0) {
+                val failure = BrokerFailure(BrokerFailure.Reason.QUEUE_FULL, config.capacity, queue.size, active, accepted)
+                fatal = failure
+                closing = true
+                queue.clear()
+                changed.signalAll() // fatal supervision never uses the dispatcher or a user callback
+                throw QueueFullException(failure)
+            }
+            // Condition.awaitNanos releases the lock; interruption rejects this attempt
+            // without poisoning the broker and preserves the thread's interrupt status.
+            try { remaining = changed.awaitNanos(remaining) }
+            catch (interrupted: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw interrupted
+            }
         }
         val sequence = ++accepted
-        queue.addLast(Envelope(sequence, event, bytes))
-        queuedBytes += bytes
+        queue.addLast(Envelope(sequence, event))
         changed.signalAll()
         sequence
     }
@@ -149,7 +148,7 @@ class EventBroker(val config: EventBrokerConfig = EventBrokerConfig()) : AutoClo
                     idle = false
                     if (fatal != null || (queue.isEmpty() && closing)) return
                     val next = queue.removeFirst()
-                    queuedBytes -= next.bytes
+                    changed.signalAll() // publishers wait for a pending slot, not delivery
                     next to registrations.filter { it.firstSequence <= next.sequence }
                 }
                 for (listener in listeners) {

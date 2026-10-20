@@ -1,9 +1,5 @@
 package no.skasti.yame.ppp.session
 
-import no.skasti.yame.observer.DnsTransport
-import no.skasti.yame.observer.TransferDirection
-import no.skasti.yame.observer.TransferKind
-import no.skasti.yame.observer.TransferState
 import no.skasti.yame.observer.YameEvent
 import no.skasti.yame.ppp.ip.Ipv4Address
 import no.skasti.yame.ppp.ip.Ipv4Cidr
@@ -432,7 +428,7 @@ class PppSession(
         }
     }
     private fun unhandledPacket(type: String, reason: String, protocol: Int, bytes: ByteArray) {
-        emitEvent(YameEvent.UnhandledPacket(type, reason, protocol, bytes))
+        emitEvent(UnhandledPacket(type, reason, protocol, bytes))
     }
 
     private fun receiveIpv4(payload: ByteArray) {
@@ -567,7 +563,7 @@ class PppSession(
         val dnsSummary = summarizeDnsMessage(udp.payload)
         val dnsKey = dnsEventKey("udp", udp.sourcePort, dnsSummary?.id)
         emitEvent(
-            YameEvent.DnsQuery(
+            DnsQuery(
                 key = dnsKey,
                 transport = DnsTransport.UDP,
                 id = dnsSummary?.id,
@@ -583,7 +579,7 @@ class PppSession(
                 onSuccess = { payload ->
                     val responseSummary = summarizeDnsMessage(payload)
                     emitEvent(
-                        YameEvent.DnsResponse(
+                        DnsResponse(
                             key = dnsKey,
                             transport = DnsTransport.UDP,
                             id = responseSummary?.id ?: dnsSummary?.id,
@@ -603,7 +599,7 @@ class PppSession(
                 onFailure = { error ->
                     val reason = error.message ?: error.javaClass.simpleName
                     emitEvent(
-                        YameEvent.DnsFailure(
+                        DnsFailure(
                             key = dnsKey,
                             transport = DnsTransport.UDP,
                             message = reason,
@@ -914,7 +910,7 @@ class PppSession(
             )
             tcpContexts[key] = context
             emitEvent(
-                YameEvent.TransferStarted(
+                TransferStarted(
                     flowId = flowId(key),
                     destination = "${key.remoteAddress}:${key.remotePort}",
                     via = "$connectAddress:$connectPort",
@@ -958,7 +954,7 @@ class PppSession(
                     context.established = true
                     cancelTcpHandshakeTimeout(context)
                     emitEvent(
-                        YameEvent.TransferStateChanged(
+                        TransferStateChanged(
                             flowId = flowId(key),
                             state = TransferState.OPEN,
                         ),
@@ -972,7 +968,7 @@ class PppSession(
                 is TcpFlowEvent.PayloadReceived -> {
                     val context = tcpContexts[key] ?: continue
                     emitEvent(
-                        YameEvent.TransferBytes(
+                        TransferBytes(
                             flowId = flowId(key),
                             direction = TransferDirection.TO_HOST,
                             bytes = event.payload.size,
@@ -997,7 +993,7 @@ class PppSession(
                     tcpContexts.remove(key)?.let { context ->
                         cancelTcpHandshakeTimeout(context)
                         emitEvent(
-                            YameEvent.TransferStateChanged(
+                            TransferStateChanged(
                                 flowId = flowId(key),
                                 state = TransferState.CLOSED,
                             ),
@@ -1048,7 +1044,7 @@ class PppSession(
 
             is TcpProxyEvent.Payload -> {
                 emitEvent(
-                    YameEvent.TransferBytes(
+                    TransferBytes(
                         flowId = flowId(flow.key),
                         direction = TransferDirection.TO_PEER,
                         bytes = event.bytes.size,
@@ -1270,7 +1266,7 @@ class PppSession(
                 "${context.proxyFlow.key.remotePort} failed: $reason",
         )
         emitEvent(
-            YameEvent.TransferStateChanged(
+            TransferStateChanged(
                 flowId = flowId(context.proxyFlow.key),
                 state = TransferState.FAILED,
                 detail = reason,
@@ -1799,7 +1795,7 @@ class PppSession(
 
             if (fromPeer) {
                 emitEvent(
-                    YameEvent.DnsQuery(
+                    DnsQuery(
                         key = key,
                         transport = DnsTransport.TCP,
                         id = summary?.id,
@@ -1811,7 +1807,7 @@ class PppSession(
                 )
             } else {
                 emitEvent(
-                    YameEvent.DnsResponse(
+                    DnsResponse(
                         key = key,
                         transport = DnsTransport.TCP,
                         id = summary?.id,
@@ -1861,7 +1857,7 @@ class PppSession(
         tcpContexts.forEach { (key, context) ->
             cancelTcpHandshakeTimeout(context)
             emitEvent(
-                YameEvent.TransferStateChanged(
+                TransferStateChanged(
                     flowId = flowId(key),
                     state = TransferState.CLOSED,
                     detail = "IPCP renegotiated",

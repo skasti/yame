@@ -1,5 +1,7 @@
 package no.skasti.yame.logging
 
+import no.skasti.yame.ppp.session.UnhandledPacket
+
 import no.skasti.yame.observer.YameEvent
 import java.nio.file.Files
 import java.io.OutputStream
@@ -26,14 +28,14 @@ class UnhandledPacketRecorderTest {
         val captured = AtomicInteger()
         val recorder = UnhandledPacketRecorder(root)
         try {
-            recorder.record(YameEvent.UnhandledPacket("udp", "unsupported", 33, byteArrayOf(1)), onReceived = {
+            recorder.record(UnhandledPacket("udp", "unsupported", 33, byteArrayOf(1)), onReceived = {
                 assertTrue(Thread.currentThread() !== submitter)
                 workerEntered.countDown()
                 releaseWorker.await(5, TimeUnit.SECONDS)
             }) { captured.incrementAndGet() }
             assertTrue(workerEntered.await(5, TimeUnit.SECONDS))
             // The first worker is still blocked, yet a second submission returns immediately.
-            recorder.record(YameEvent.UnhandledPacket("tcp", "unsupported", 33, byteArrayOf(2))) {
+            recorder.record(UnhandledPacket("tcp", "unsupported", 33, byteArrayOf(2))) {
                 captured.incrementAndGet()
             }
         } finally {
@@ -52,7 +54,7 @@ class UnhandledPacketRecorderTest {
         UnhandledPacketRecorder(root, PacketCaptureLimits(maxPerType = 2, maxTotal = 3)).use { recorder ->
             repeat(4) { index ->
                 val saved = CountDownLatch(1)
-                recorder.record(YameEvent.UnhandledPacket("udp", "udp-$index", 33, byteArrayOf(1))) {
+                recorder.record(UnhandledPacket("udp", "udp-$index", 33, byteArrayOf(1))) {
                     saved.countDown()
                 }
                 assertTrue(saved.await(5, TimeUnit.SECONDS))
@@ -61,7 +63,7 @@ class UnhandledPacketRecorderTest {
             assertTrue(captures().none { "reason=udp-0" in it.readText() || "reason=udp-1" in it.readText() })
             repeat(2) { index ->
                 val saved = CountDownLatch(1)
-                recorder.record(YameEvent.UnhandledPacket("tcp", "tcp-$index", 33, byteArrayOf(1))) {
+                recorder.record(UnhandledPacket("tcp", "tcp-$index", 33, byteArrayOf(1))) {
                     saved.countDown()
                 }
                 assertTrue(saved.await(5, TimeUnit.SECONDS))
@@ -82,7 +84,7 @@ class UnhandledPacketRecorderTest {
         val workerEntered = CountDownLatch(1)
         val releaseWorker = CountDownLatch(1)
         val captured = AtomicInteger()
-        val event = YameEvent.UnhandledPacket("udp", "unsupported", 33, byteArrayOf(1))
+        val event = UnhandledPacket("udp", "unsupported", 33, byteArrayOf(1))
         val recorder = UnhandledPacketRecorder(root)
         val caller = Thread.currentThread()
         val errorOnCaller = AtomicBoolean()
@@ -112,7 +114,7 @@ class UnhandledPacketRecorderTest {
     fun `default levels retain summary and original bytes independent of caller mutation`() {
         val root = Files.createTempDirectory("yame-capture")
         val bytes = byteArrayOf(0, 1, 127, -1)
-        val event = YameEvent.UnhandledPacket("icmp-type-3", "egress type=3 code=1 not handled", 33, bytes)
+        val event = UnhandledPacket("icmp-type-3", "egress type=3 code=1 not handled", 33, bytes)
         bytes.fill(42)
         event.bytes().fill(43)
         YameLogManager(YameLogManager.defaultLevels(), root).use { it.eventSink(event) }
@@ -135,7 +137,7 @@ class UnhandledPacketRecorderTest {
         val root = Files.createTempDirectory("yame-capture-retention")
         fun record(index: Int, type: String) {
             UnhandledPacketRecorder(root, initialLimits = PacketCaptureLimits(maxTotal = 2)).use {
-                it.record(YameEvent.UnhandledPacket(type, "packet-$index", 33, byteArrayOf(index.toByte()))) {}
+                it.record(UnhandledPacket(type, "packet-$index", 33, byteArrayOf(index.toByte()))) {}
             }
         }
         record(0, "icmp-type-3")
@@ -155,14 +157,14 @@ class UnhandledPacketRecorderTest {
     fun `invalid types and IO failures do not escape to packet handling`() {
         val root = Files.createTempDirectory("yame-capture-failure")
         UnhandledPacketRecorder(root).use {
-            it.record(YameEvent.UnhandledPacket("../escape", "unsupported", 33, byteArrayOf(1))) {
+            it.record(UnhandledPacket("../escape", "unsupported", 33, byteArrayOf(1))) {
                 error("must not capture invalid type")
             }
         }
         var captured = false
         val blockedRoot = Files.createTempFile("yame-capture-blocked", ".tmp")
         UnhandledPacketRecorder(blockedRoot).use {
-            it.record(YameEvent.UnhandledPacket("udp", "unsupported", 33, byteArrayOf(1))) {
+            it.record(UnhandledPacket("udp", "unsupported", 33, byteArrayOf(1))) {
                 captured = true
             }
         }
