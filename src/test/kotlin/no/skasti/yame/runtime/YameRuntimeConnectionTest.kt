@@ -146,7 +146,11 @@ class YameRuntimeConnectionTest {
                     assertEquals(2, readingStarted)
                     assertEquals(2, attempts)
                     assertEquals(graph.id, registry.startNavigation(root).id)
-                    assertEquals(graphSnapshot, registry.snapshots().single())
+                    assertEquals(
+                        graphSnapshot,
+                        registry.snapshots().single(),
+                        "reconnect should preserve every graph node and edge",
+                    )
                 } finally {
                     runtime.close()
                 }
