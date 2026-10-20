@@ -11,6 +11,7 @@ import no.skasti.yame.ppp.session.TransferDirection
 import no.skasti.yame.ppp.session.TransferKind
 import no.skasti.yame.ppp.session.TransferState
 import no.skasti.yame.ppp.proxy.HttpProxyAction
+import no.skasti.yame.ppp.proxy.NavigationResourceGraphSnapshot
 
 import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.config.SettingKey
@@ -40,8 +41,6 @@ import no.skasti.yame.logging.YameLogModule
 import no.skasti.yame.observer.YameEvent
 import no.skasti.yame.ppp.dns.dnsResponseCodeName
 import no.skasti.yame.ppp.proxy.ResourceKind
-import no.skasti.yame.ppp.proxy.ResourceRegistryResource
-import no.skasti.yame.ppp.proxy.ResourceRegistryRoot
 import no.skasti.yame.ppp.proxy.ResourceState
 import no.skasti.yame.ppp.proxy.transform.ResourceTransformationSummary
 import no.skasti.yame.serial.SerialPortDescriptor
@@ -367,73 +366,51 @@ class TuiYameObserver(
     }
 
     @Synchronized
-    internal fun handleResourceRootAdded(root: ResourceRegistryRoot) {
-        httpGraphs[root.graphId] =
-            HttpGraphState(
-                rootLegacyUri = root.rootLegacyUri,
-                resources =
-                    linkedMapOf(
-                        root.rootLegacyUri to
-                            DashboardHttpResource(
-                                url = root.rootLegacyUri.toString(),
-                                state = ResourceState.DISCOVERED,
-                                kind = ResourceKind.DOCUMENT,
-                            ),
-                    ),
-            )
+    internal fun synchronizeResourceGraphs(snapshots: List<NavigationResourceGraphSnapshot>) {
+        val retainedIds = snapshots.mapTo(mutableSetOf()) { it.id }
+        httpGraphs.keys.retainAll(retainedIds)
+        snapshots.forEach(::synchronizeResourceGraph)
         normalizeHttpHostSelection()
         render()
     }
 
     @Synchronized
-    internal fun handleResourceRootRemoved(root: ResourceRegistryRoot) {
-        if (httpGraphs.remove(root.graphId) == null) return
+    internal fun synchronizeResourceGraph(
+        graphId: Long,
+        snapshot: NavigationResourceGraphSnapshot?,
+        rootUsed: Boolean = false,
+    ) {
+        if (snapshot == null) {
+            httpGraphs.remove(graphId)
+        } else {
+            synchronizeResourceGraph(snapshot)
+            if (rootUsed) touchHttpGraph(graphId)
+        }
         normalizeHttpHostSelection()
         render()
+    }
+
+    private fun synchronizeResourceGraph(snapshot: NavigationResourceGraphSnapshot) {
+        val graph =
+            httpGraphs.getOrPut(snapshot.id) {
+                HttpGraphState(rootLegacyUri = snapshot.rootLegacyUri)
+            }
+        graph.resources.clear()
+        snapshot.nodes.forEach { node ->
+            graph.resources[node.legacyUri] =
+                DashboardHttpResource(
+                    url = node.legacyUri.toString(),
+                    state = node.state,
+                    kind = node.kind,
+                    prefetched = node.prefetched,
+                    transformations = node.transformations,
+                )
+        }
     }
 
     @Synchronized
-    internal fun handleResourceRootUsed(root: ResourceRegistryRoot) {
-        if (!touchHttpGraph(root.graphId)) return
-        normalizeHttpHostSelection()
-        render()
-    }
-
-    @Synchronized
-    internal fun handleResourceAdded(resource: ResourceRegistryResource) {
-        val resources = httpGraphs[resource.graphId]?.resources ?: return
-        val changed = resource.resourceLegacyUri !in resources
-        resources[resource.resourceLegacyUri] = resource.toDashboardResource()
-        if (!changed) return
-        normalizeHttpHostSelection()
-        render()
-    }
-
-    @Synchronized
-    internal fun handleResourceUpdated(resource: ResourceRegistryResource) {
-        val graph = httpGraphs[resource.graphId] ?: return
-        graph.resources[resource.resourceLegacyUri] = resource.toDashboardResource()
-        normalizeHttpHostSelection()
-        render()
-    }
-
-    @Synchronized
-    internal fun handleResourceRemoved(resource: ResourceRegistryResource) {
-        val resources = httpGraphs[resource.graphId]?.resources ?: return
-        val changed = resources.remove(resource.resourceLegacyUri) != null
-        if (!changed) return
-        normalizeHttpHostSelection()
-        render()
-    }
-
-    private fun ResourceRegistryResource.toDashboardResource() =
-        DashboardHttpResource(
-            url = resourceLegacyUri.toString(),
-            state = state,
-            kind = kind,
-            prefetched = prefetched,
-            transformations = transformations,
-        )
+    internal fun resourceGraphProjectionSnapshot(): Map<Long, Map<URI, DashboardHttpResource>> =
+        httpGraphs.mapValues { (_, graph) -> graph.resources.toMap() }
 
     private fun touchHttpGraph(graphId: Long): Boolean {
         val graph = httpGraphs[graphId] ?: return false

@@ -4,7 +4,6 @@ import no.skasti.yame.observer.YameEvent
 import no.skasti.yame.ppp.dns.PppDnsConfig
 import no.skasti.yame.ppp.proxy.NavigationResourceRegistry
 import no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig
-import no.skasti.yame.ppp.proxy.ResourceRegistryHooks
 import no.skasti.yame.ppp.proxy.SystemRoutingTcpProxy
 import no.skasti.yame.ppp.proxy.YameRegistries
 import no.skasti.yame.ppp.session.PppSession
@@ -32,7 +31,6 @@ internal class RetroPppHandler(
     private val httpCompatibilityConfig: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig(),
     internal val resourceGraphs: NavigationResourceRegistry =
         YameRegistries.navigationResources(httpCompatibilityConfig),
-    private val resourceRegistryHooks: ResourceRegistryHooks = resourceGraphs.hooks,
 ) : PppHandler {
     private var output: OutputStream? = null
     private var encoder = PppEncoder()
@@ -72,7 +70,6 @@ internal class RetroPppHandler(
                 transformerSettings = transformerSettings,
                 logger = proxyLogger,
                 eventSink = eventSink,
-                resourceRegistryHooks = resourceRegistryHooks,
                 resourceGraphs = resourceGraphs,
             ),
         )

@@ -22,7 +22,6 @@ import no.skasti.yame.logging.YameLogModule
 import no.skasti.yame.modem.HayesModem
 import no.skasti.yame.modem.HayesModemConfig
 import no.skasti.yame.ppp.RetroPppHandler
-import no.skasti.yame.ppp.proxy.ResourceRegistryHooks
 import no.skasti.yame.ppp.proxy.YameRegistries
 import no.skasti.yame.serial.SerialConnection
 import no.skasti.yame.serial.SerialFlowControl
@@ -36,7 +35,6 @@ internal class YameRuntime(
         YameRegistries.navigationResources(
             PppHttpCompatibilityConfig.fromSnapshot(configStore.snapshot()),
         ),
-    private val resourceRegistryHooks: ResourceRegistryHooks = resourceGraphs.hooks,
     private val portProvider: () -> List<no.skasti.yame.serial.SerialPortDescriptor> =
         SerialConnection::availablePortDescriptors,
     private val failFastStartup: Boolean = false,
@@ -233,7 +231,6 @@ internal class YameRuntime(
             transferLogger = transferLogger,
             proxyLogger = proxyLogger,
             eventSink = eventSink,
-            resourceRegistryHooks = resourceRegistryHooks,
             resourceGraphs = resourceGraphs,
             ipConfig = PppIpConfig.fromSnapshot(snapshot),
             dnsConfig = PppDnsConfig.fromSnapshot(snapshot),

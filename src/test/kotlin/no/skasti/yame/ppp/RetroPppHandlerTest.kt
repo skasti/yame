@@ -108,19 +108,18 @@ class RetroPppHandlerTest {
     }
 
     @Test
-    fun `replacement handlers share process registry and retain graph and fetch fencing`() {
-        val firstHandler = RetroPppHandler(logger = {})
-        val registry = firstHandler.resourceGraphs
+    fun `replacement handlers share injected registry and retain graph and fetch fencing`() {
+        val registry = NavigationResourceRegistry()
+        val firstHandler = RetroPppHandler(logger = {}, resourceGraphs = registry)
         val root = URI("http://handler-replacement-99.test/page")
         val graph = registry.startNavigation(root)
         val resource = URI("http://cdn-handler-replacement-99.test/image.gif")
         val upstream = URI("https://cdn-handler-replacement-99.test/image.gif")
         val oldAttempt = requireNotNull(registry.beginFetch(graph, resource, upstream, upstream))
 
-        val replacementHandler = RetroPppHandler(logger = {})
+        val replacementHandler = RetroPppHandler(logger = {}, resourceGraphs = registry)
         val replacementRegistry = replacementHandler.resourceGraphs
 
-        assertSame(YameRegistries.navigationResources(), registry)
         assertSame(registry, replacementRegistry)
         assertEquals(graph.id, replacementRegistry.startNavigation(root).id)
 
@@ -149,6 +148,21 @@ class RetroPppHandlerTest {
             ),
         )
         assertEquals(ResourceState.READY, newGraph.snapshot().nodes.single { it.legacyUri == resource }.state)
+        firstHandler.close()
+        replacementHandler.close()
+    }
+
+    @Test
+    fun `default PPP handlers share the lazy process registry`() {
+        val firstHandler = RetroPppHandler(logger = {})
+        val replacementHandler = RetroPppHandler(logger = {})
+        try {
+            assertSame(YameRegistries.navigationResources(), firstHandler.resourceGraphs)
+            assertSame(firstHandler.resourceGraphs, replacementHandler.resourceGraphs)
+        } finally {
+            firstHandler.close()
+            replacementHandler.close()
+        }
     }
 
     @Test

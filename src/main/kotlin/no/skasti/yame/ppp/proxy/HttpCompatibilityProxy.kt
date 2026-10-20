@@ -15,13 +15,11 @@ internal class SystemHttpCompatibilityProxy(
     logger: (String) -> Unit = {},
     eventSink: (YameEvent) -> Unit = {},
     transformerSettings: (() -> no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings)? = null,
-    resourceRegistryHooks: ResourceRegistryHooks = ResourceRegistryHooks(),
     resourceGraphs: NavigationResourceRegistry =
         NavigationResourceRegistry(
             maxContexts = config.maxResourceContexts,
             maxNodesPerHost = config.maxResourceNodesPerContext,
             maxEdgesPerContext = config.maxResourceEdgesPerContext,
-            hooks = resourceRegistryHooks,
         ),
     httpClient: HttpClient =
         HttpClient.newBuilder()
@@ -37,7 +35,6 @@ internal class SystemHttpCompatibilityProxy(
             logger = logger,
             eventSink = eventSink,
             transformerSettings = transformerSettings,
-            resourceRegistryHooks = resourceRegistryHooks,
             resourceGraphs = resourceGraphs,
             httpClient = httpClient,
             resourceTransformations = resourceTransformations,
