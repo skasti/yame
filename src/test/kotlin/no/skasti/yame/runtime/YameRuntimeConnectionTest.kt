@@ -121,6 +121,7 @@ class YameRuntimeConnectionTest {
                 ResourceRelation.IMG_SRC,
                 ResourceKind.IMAGE,
             )
+            val graphSnapshot = registry.snapshots().single()
             var readingStarted = 0
             var attempts = 0
             val ports = listOf(SerialPortDescriptor("COM1", "test port"))
@@ -145,7 +146,7 @@ class YameRuntimeConnectionTest {
                     assertEquals(2, readingStarted)
                     assertEquals(2, attempts)
                     assertEquals(graph.id, registry.startNavigation(root).id)
-                    assertEquals(2, registry.snapshots().single().nodes.size)
+                    assertEquals(graphSnapshot, registry.snapshots().single())
                 } finally {
                     runtime.close()
                 }
