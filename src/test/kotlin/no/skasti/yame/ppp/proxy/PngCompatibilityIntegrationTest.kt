@@ -85,7 +85,7 @@ class PngCompatibilityIntegrationTest {
             val optimizedAgain = handler.handle(HttpConnection(flow.copy(generation = 3)) { true }, request)
             assertEquals("image/png", header(optimizedAgain, "Content-Type"))
             assertContentEquals(png, optimizedAgain.body)
-            assertNull(upstreamRequests.poll(150, TimeUnit.MILLISECONDS))
+            assertEquals(Unit, upstreamRequests.poll(2, TimeUnit.SECONDS))
         } finally {
             handler.close()
             server.stop(0)

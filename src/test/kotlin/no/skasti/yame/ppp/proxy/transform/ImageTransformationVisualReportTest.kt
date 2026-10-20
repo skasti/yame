@@ -40,6 +40,7 @@ class ImageTransformationVisualReportTest {
         val alpha: Boolean = false,
         val black: Boolean = false,
         val pngMode: PngCompatibilityMode = PngCompatibilityMode.OPTIMIZE,
+        val expectTransformation: Boolean = true,
     )
 
     private data class Result(
@@ -82,7 +83,7 @@ class ImageTransformationVisualReportTest {
             Example(
                 "partial-alpha", "Soft transparency: PNG passthrough",
                 "Partial alpha cannot be faithfully represented as GIF, so the original is retained.",
-                softAlphaLogo(), "png", "image/png", alpha = true,
+                softAlphaLogo(), "png", "image/png", alpha = true, expectTransformation = false,
             ),
             Example(
                 "partial-alpha-compatibility", "Soft transparency: PNG → GIF on white matte",
@@ -123,7 +124,7 @@ class ImageTransformationVisualReportTest {
             val mime = output.headers.entries
                 .first { it.key.equals("Content-Type", ignoreCase = true) }.value.single()
             assertEquals(example.expectedMime, mime, example.id)
-            val shouldTransform = example.expectedMime != inputMime
+            val shouldTransform = example.expectTransformation
             if (shouldTransform) {
                 assertNotNull(state.resource.transformed, example.id)
                 if (example.pngMode == PngCompatibilityMode.OPTIMIZE) {
