@@ -22,6 +22,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
@@ -1371,6 +1372,105 @@ class HttpCompatibilityProxyTest {
             proxy.close()
             runCatching { server.close() }
             thread.join(2_000)
+        }
+    }
+
+    @Test
+    fun `replacement HTTP handlers reuse fetched graph and fence stale attempts`() {
+        val server = ServerSocket(0, 2, InetAddress.getLoopbackAddress())
+        val page = "<html><img src=\"/image.gif\"></html>"
+        val serverThread = Thread {
+            server.use { listening ->
+                repeat(2) {
+                    listening.accept().use { accepted ->
+                        val request = readRequest(accepted)
+                        val (contentType, body) = if (request.startsWith("GET /page ")) {
+                            "text/html; charset=utf-8" to page
+                        } else {
+                            "image/gif" to "GIF89a"
+                        }
+                        val bytes = body.toByteArray(StandardCharsets.UTF_8)
+                        val response =
+                            "HTTP/1.1 200 OK\r\n" +
+                                "Content-Type: $contentType\r\n" +
+                                "Content-Length: ${bytes.size}\r\n" +
+                                "Connection: close\r\n\r\n"
+                        accepted.getOutputStream().write(response.toByteArray(StandardCharsets.US_ASCII))
+                        accepted.getOutputStream().write(bytes)
+                        accepted.getOutputStream().flush()
+                    }
+                }
+            }
+        }.apply {
+            isDaemon = true
+            start()
+        }
+
+        val registry = NavigationResourceRegistry()
+        val config = PppHttpCompatibilityConfig(enabled = true, requestTimeoutMillis = 2_000)
+        val firstHandler = SystemRoutingTcpProxy(httpConfig = config, resourceGraphs = registry)
+        var replacementHandler: SystemRoutingTcpProxy? = null
+        val events = LinkedBlockingQueue<TcpProxyEvent>()
+        val pageFlow = httpFlow(peerPort = 2391)
+
+        try {
+            firstHandler.connect(pageFlow, events::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(events.poll(2, TimeUnit.SECONDS)))
+            firstHandler.send(
+                pageFlow,
+                ("GET /page HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\n\r\n")
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+            assertTrue(collectResponse(events).startsWith("HTTP/1.0 200 OK\r\n"))
+
+            val root = URI("http://127.0.0.1:${server.localPort}/page")
+            val image = URI("http://127.0.0.1:${server.localPort}/image.gif")
+            val graph = registry.startNavigation(root)
+            val firstSnapshot = registry.snapshots().single()
+            assertEquals(graph.id, firstSnapshot.id)
+            assertTrue(firstSnapshot.edges.any {
+                it.parentLegacyUri.path == "/page" &&
+                    it.childLegacyUri == image &&
+                    it.relation == ResourceRelation.IMG_SRC
+            })
+
+            // Simulate an older fetch still completing after serial reconnect. The new HTTP
+            // handler must advance the attempt while reusing the same graph and edge.
+            val oldAttempt = requireNotNull(
+                registry.beginFetch(graph, image, image, image),
+            )
+            val replacement = SystemRoutingTcpProxy(httpConfig = config, resourceGraphs = registry)
+            replacementHandler = replacement
+            val imageFlow = httpFlow(peerPort = 2392).copy(generation = 2)
+            replacement.connect(imageFlow, events::offer)
+            assertIs<TcpProxyEvent.Connected>(requireNotNull(events.poll(2, TimeUnit.SECONDS)))
+            replacement.send(
+                imageFlow,
+                ("GET /image.gif HTTP/1.0\r\nHost: 127.0.0.1:${server.localPort}\r\n\r\n")
+                    .toByteArray(StandardCharsets.US_ASCII),
+            ).getOrThrow()
+            assertTrue(collectResponse(events).endsWith("GIF89a"))
+
+            val afterReplacement = registry.snapshots().single()
+            assertEquals(firstSnapshot.id, afterReplacement.id)
+            assertEquals(firstSnapshot.edges, afterReplacement.edges)
+            assertEquals(
+                ResourceState.READY,
+                afterReplacement.nodes.single { it.legacyUri == image }.state,
+            )
+            assertFalse(
+                registry.markFetchState(graph, oldAttempt, image, image, image, ResourceState.FAILED),
+                "the old fetch attempt must not overwrite the newer READY result",
+            )
+            assertEquals(
+                ResourceState.READY,
+                registry.snapshots().single().nodes.single { it.legacyUri == image }.state,
+            )
+        } finally {
+            firstHandler.close()
+            replacementHandler?.close()
+            runCatching { server.close() }
+            serverThread.join(2_000)
         }
     }
 

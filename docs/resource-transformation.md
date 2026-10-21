@@ -30,9 +30,13 @@ When a conditional fetch returns `304`, the source cache entry supplies the prev
 ## Resource graph lifetime and ownership
 
 Resource graph knowledge is owned above the PPP session boundary and injected
-into each HTTP compatibility proxy instance. It therefore lives for the lifetime
-of the YAME process, not for the lifetime of a TCP connection, PPP generation,
-browser process, cookie session, or individual HTTP transaction.
+into each HTTP compatibility proxy instance. Production components obtain it
+from the lazy `YameRegistries.navigationResources(...)` access point. The
+registry is created on first use and remains the same instance across serial
+reconnects, PPP handler replacement, PPP generations, browser processes, cookie
+sessions, and individual HTTP transactions. `NavigationResourceRegistry`
+remains an ordinary instantiable class; isolated consumers and tests can create
+and inject independent instances.
 
 Resources are grouped under a graph rooted at their legacy host and effective
 port. The graph is created on the first request for that host and port, and
@@ -40,18 +44,25 @@ revisiting any resource there reuses it while preserving the relationships YAME
 has already discovered. Opening or closing Netscape, creating new TCP
 connections, or reconnecting PPP must therefore not discard resource knowledge.
 
-Resource graph knowledge is process-scoped but bounded. The registry retains a
-large working set of host resource graphs (512 by default) and uses least-recently-used
-eviction when that global limit is reached. Reusing a root or one of its known
-resources refreshes its recency. Each host graph has a separate hard node bound
-(`maxNodesPerHost`, 4096 by default) so observability/history can retain ordinary
+Resource graph knowledge is process-scoped but bounded. The production registry
+uses the retention limits from the configuration supplied on its first access
+(512 contexts, 1,024 nodes per context and 2,048 edges per context by default).
+It uses least-recently-used eviction when the context limit is reached. Reusing
+a root or one of its known resources refreshes its recency. Each context has a
+separate hard node and edge bound so resource history can include ordinary
 direct requests as well as discovered dependencies without allowing unbounded
 growth. Prefetch scheduling and other speculative work should use their own,
-stricter resource/concurrency/byte budgets rather than relying on this history
-bound. Edge limits remain independently bounded per graph.
+stricter resource/concurrency/byte budgets rather than relying on these history
+bounds.
 
 Eviction is a capacity policy, not a browser/TCP/PPP lifetime boundary: closing
 Netscape, opening new TCP flows, or reconnecting PPP never clears the registry.
+
+Reconnect never resets or replaces the process registry. If an explicit reset is
+needed, its contract is to clear retained data in place, preserve registry
+identity, and invalidate outstanding fetch attempts so obsolete work cannot
+restore cleared state. Implementing that reset remains tracked by
+[#104](https://github.com/skasti/yame/issues/104).
 
 ## Upstream acquisition and legacy delivery are separate phases
 

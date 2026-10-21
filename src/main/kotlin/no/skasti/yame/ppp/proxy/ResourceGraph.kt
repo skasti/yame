@@ -634,6 +634,9 @@ internal class NavigationResourceRegistry(
     fun snapshots(): List<NavigationResourceGraphSnapshot> =
         synchronized(lock) { graphs.values.map { it.snapshot() } }
 
+    fun snapshot(graphId: Long): NavigationResourceGraphSnapshot? =
+        synchronized(lock) { graphs[graphId]?.snapshot() }
+
     private fun touchLocked(graphId: Long) {
         val graph = graphs.remove(graphId) ?: return
         graphs[graphId] = graph

@@ -4,6 +4,7 @@ import no.skasti.yame.persistence.*
 import no.skasti.yame.config.*
 import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.logging.*
+import no.skasti.yame.ppp.proxy.NavigationResourceRegistry
 import no.skasti.yame.serial.ConnectionFunctions
 import java.nio.file.Files
 import kotlin.test.*
@@ -17,7 +18,8 @@ class YameRuntimeStoreTest {
             val functions = FunctionStore()
             YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
                 val runtime = YameRuntime(
-                    object : RuntimeObserver {}, store, functions, logManager = logs, portProvider = { emptyList() },
+                    object : RuntimeObserver {}, store, functions, logManager = logs,
+                    resourceGraphs = NavigationResourceRegistry(), portProvider = { emptyList() },
                 )
                 store.set(LogSettings.Levels.getValue(YameLogModule.MODEM) to YameLogLevel.DEBUG,
                     LogSettings.CaptureLimits.getValue(PacketCaptureLimitKind.TOTAL) to 42)

@@ -11,6 +11,18 @@ import kotlin.test.assertTrue
 
 class ResourceGraphTest {
     @Test
+    fun `resource registry instances remain independent`() {
+        val first = NavigationResourceRegistry()
+        val second = NavigationResourceRegistry()
+
+        first.startNavigation(URI("http://independent-registry.test/page"))
+
+        assertTrue(first !== second)
+        assertEquals(1, first.snapshots().size)
+        assertTrue(second.snapshots().isEmpty())
+    }
+
+    @Test
     fun `resource contexts use the resource host and port as the graph root`() {
         val registry = NavigationResourceRegistry()
         val first = URI("http://legacy.test:8080/first.gif")

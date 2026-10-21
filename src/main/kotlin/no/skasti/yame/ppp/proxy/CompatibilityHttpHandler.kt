@@ -48,13 +48,11 @@ internal class SystemHttpCompatibilityHandler(
     private val logger: (String) -> Unit = {},
     private val eventSink: (YameEvent) -> Unit = {},
     private val transformerSettings: (() -> no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings)? = null,
-    private val resourceRegistryHooks: ResourceRegistryHooks = ResourceRegistryHooks(),
     private val resourceGraphs: NavigationResourceRegistry =
         NavigationResourceRegistry(
             maxContexts = config.maxResourceContexts,
             maxNodesPerHost = config.maxResourceNodesPerContext,
             maxEdgesPerContext = config.maxResourceEdgesPerContext,
-            hooks = resourceRegistryHooks,
         ),
     private val httpClient: HttpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofMillis(config.requestTimeoutMillis))

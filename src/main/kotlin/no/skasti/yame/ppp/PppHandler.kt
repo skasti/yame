@@ -4,8 +4,8 @@ import no.skasti.yame.observer.YameEvent
 import no.skasti.yame.ppp.dns.PppDnsConfig
 import no.skasti.yame.ppp.proxy.NavigationResourceRegistry
 import no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig
-import no.skasti.yame.ppp.proxy.ResourceRegistryHooks
 import no.skasti.yame.ppp.proxy.SystemRoutingTcpProxy
+import no.skasti.yame.ppp.proxy.YameRegistries
 import no.skasti.yame.ppp.session.PppSession
 import java.io.Closeable
 import java.io.OutputStream
@@ -25,18 +25,12 @@ internal class RetroPppHandler(
     private val transferLogger: (String) -> Unit = logger,
     private val proxyLogger: (String) -> Unit = logger,
     private val eventSink: (YameEvent) -> Unit = {},
-    private val resourceRegistryHooks: ResourceRegistryHooks = ResourceRegistryHooks(),
     private val ipConfig: PppIpConfig = PppIpConfig(),
     private val dnsConfig: PppDnsConfig = PppDnsConfig(),
     private val transformerSettings: (() -> no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings)? = null,
     private val httpCompatibilityConfig: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig(),
-    private val resourceGraphs: NavigationResourceRegistry =
-        NavigationResourceRegistry(
-            maxContexts = httpCompatibilityConfig.maxResourceContexts,
-            maxNodesPerHost = httpCompatibilityConfig.maxResourceNodesPerContext,
-            maxEdgesPerContext = httpCompatibilityConfig.maxResourceEdgesPerContext,
-            hooks = resourceRegistryHooks,
-        ),
+    internal val resourceGraphs: NavigationResourceRegistry =
+        YameRegistries.navigationResources(httpCompatibilityConfig),
 ) : PppHandler {
     private var output: OutputStream? = null
     private var encoder = PppEncoder()
@@ -76,7 +70,6 @@ internal class RetroPppHandler(
                 transformerSettings = transformerSettings,
                 logger = proxyLogger,
                 eventSink = eventSink,
-                resourceRegistryHooks = resourceRegistryHooks,
                 resourceGraphs = resourceGraphs,
             ),
         )
