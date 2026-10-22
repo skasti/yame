@@ -21,7 +21,8 @@ from pathlib import Path
 args = sys.argv[1:]
 with open(os.environ['CURL_CALLS'], 'a') as log:
     log.write(json.dumps(args) + '\\n')
-name = args[-1].rsplit('/', 1)[-1]
+source_file = json.loads(os.environ['SOURCE_FILES'])[args[-1]]
+name = Path(source_file).name
 output = Path(args[args.index('--output') + 1])
 failure = json.loads(os.environ.get('SOURCE_FAILURES', '{}')).get(args[-1])
 if os.environ.get('FAIL_DOWNLOAD') == name or failure in ('http', 'timeout'):
@@ -34,7 +35,7 @@ if os.environ.get('FAIL_DOWNLOAD') == name or failure in ('http', 'timeout'):
 if os.environ.get('BAD_DOWNLOAD') == name or failure == 'checksum':
     output.write_bytes(b'wrong archive')
 else:
-    shutil.copyfile(Path(os.environ['UPSTREAM_DIR']) / name, output)
+    shutil.copyfile(Path(os.environ['UPSTREAM_DIR']) / source_file, output)
 '''
 
 
@@ -49,17 +50,25 @@ class DosboxDownloadsTest(unittest.TestCase):
         source = SCRIPT.read_text()
         self.pins = {}
         self.urls = {}
+        self.source_files = {}
         for variable, name, executables in (
-                ('LS_PPP_SHA1', 'lsppp.zip', ('LSPPP.EXE',)),
-                ('MTCP_SHA1', 'mtcp.zip', ('DNSTEST.EXE', 'HTGET.EXE'))):
-            urls = re.search(fr'{variable.removesuffix("_SHA1")}_URLS=\((.*?)\)', source, re.S)[1]
-            self.urls[name] = re.findall(r'"([^"]+)"', urls)
-            with zipfile.ZipFile(self.upstream / name, 'w') as archive:
-                for executable in executables:
-                    archive.writestr('fixture/' + executable, b'non-executable test fixture')
-            self.pins[name] = hashlib.sha1((self.upstream / name).read_bytes()).hexdigest()
-            source = re.sub(fr'{variable}="[a-f0-9]+"',
-                            f'{variable}="{self.pins[name]}"', source)
+                ('LS_PPP', 'lsppp.zip', ('LSPPP.EXE',)),
+                ('MTCP', 'mtcp.zip', ('DNSTEST.EXE', 'HTGET.EXE'))):
+            records = re.search(fr'{variable}_SOURCES=\((.*?)\)', source, re.S)[1]
+            sources = re.findall(r'"([a-f0-9]{40}) (https://[^"]+)"', records)
+            self.urls[name] = [url for digest, url in sources]
+            for index, (digest, url) in enumerate(sources):
+                relative = name if index == 0 else 'gitlab/' + name
+                path = self.upstream / relative
+                path.parent.mkdir(exist_ok=True)
+                with zipfile.ZipFile(path, 'w') as archive:
+                    for executable in executables:
+                        archive.writestr(f'fixture-{index}/' + executable, b'non-executable test fixture')
+                fixture_digest = hashlib.sha1(path.read_bytes()).hexdigest()
+                source = source.replace(digest, fixture_digest)
+                self.source_files[url] = relative
+                if index == 0:
+                    self.pins[name] = fixture_digest
         self.script = self.root / 'downloads.sh'
         self.script.write_text(source)
         self.bin = self.root / 'bin'
@@ -69,7 +78,8 @@ class DosboxDownloadsTest(unittest.TestCase):
         curl.chmod(0o755)
         self.calls_file = self.root / 'curl-calls.jsonl'
         self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}",
-                        CURL_CALLS=str(self.calls_file), UPSTREAM_DIR=str(self.upstream))
+                        CURL_CALLS=str(self.calls_file), UPSTREAM_DIR=str(self.upstream),
+                        SOURCE_FILES=json.dumps(self.source_files))
 
     def run_downloads(self, **env):
         return subprocess.run(['bash', str(self.script), str(self.cache)],
@@ -105,7 +115,7 @@ class DosboxDownloadsTest(unittest.TestCase):
         result = self.run_downloads()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(self.calls()), 1)
-        self.assertTrue(self.calls()[0][-1].endswith('/mtcp.zip'))
+        self.assertEqual(self.calls()[0][-1], self.urls['mtcp.zip'][0])
 
     def test_corruption_is_rejected_and_only_invalid_archive_is_replaced(self):
         for name in self.pins:
@@ -156,8 +166,12 @@ class DosboxDownloadsTest(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual([call[-1] for call in self.calls()], urls[:2])
                     self.assertIn(f'source: {urls[1]}', result.stdout)
-                    self.assertEqual((self.cache / name).read_bytes(), (self.upstream / name).read_bytes())
+                    self.assertEqual((self.cache / name).read_bytes(),
+                                     (self.upstream / self.source_files[urls[1]]).read_bytes())
                     self.assertEqual({path.name for path in self.cache.iterdir()}, set(self.pins))
+                    cached = self.run_downloads(FAIL_DOWNLOAD=name)
+                    self.assertEqual(cached.returncode, 0, cached.stderr)
+                    self.assertEqual(len(self.calls()), 2)
 
     def test_corrupt_cache_recovers_from_mirror_when_primary_is_unavailable(self):
         for name in self.pins:
@@ -167,7 +181,7 @@ class DosboxDownloadsTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('Rejecting invalid cached archive:', result.stderr)
         self.assertEqual([call[-1] for call in self.calls()], self.urls['lsppp.zip'][:2])
-        self.assertEqual((self.cache / 'lsppp.zip').read_bytes(), (self.upstream / 'lsppp.zip').read_bytes())
+        self.assertEqual((self.cache / 'lsppp.zip').read_bytes(), (self.upstream / 'gitlab/lsppp.zip').read_bytes())
 
     def test_http_failure_followed_by_bad_mirror_checksum_fails_safely(self):
         urls = self.urls['lsppp.zip']
@@ -219,6 +233,14 @@ class DosboxDownloadsTest(unittest.TestCase):
         for call in self.calls():
             self.assertFalse(Path(call[call.index('--output') + 1]).parent.exists())
 
+    def test_local_suite_extracts_gitlab_packaging_when_both_primary_sources_fail(self):
+        failures = {urls[0]: 'http' for urls in self.urls.values()}
+        result = self.run_suite(SOURCE_FAILURES=json.dumps(failures))
+        self.assertEqual(result.returncode, 73, result.stderr)
+        self.assertTrue((self.root / 'build-reached').exists())
+        self.assertEqual([call[-1] for call in self.calls()],
+                         self.urls['lsppp.zip'] + self.urls['mtcp.zip'])
+
     def test_suite_cleanup_preserves_supplied_verified_cache(self):
         for name in self.pins:
             self.seed(name)
@@ -252,10 +274,8 @@ class DosboxCacheWorkflowTest(unittest.TestCase):
         source = (ROOT / hashed_path).read_text()
         self.assertEqual(ROOT / hashed_path, SCRIPT)
         original_hash = hashlib.sha256(source.encode()).hexdigest()
-        pins = [re.search(fr'{name}="([^"]+)"', source)[1]
-                for name in ('LS_PPP_SHA1', 'MTCP_SHA1')]
-        urls = re.findall(r'"(https://[^"]+)"', source)
-        for pin in pins + urls:
+        sources = re.findall(r'"([a-f0-9]{40}) (https://[^"]+)"', source)
+        for pin in [value for pair in sources for value in pair]:
             changed = source.replace(pin, pin + '-changed')
             self.assertNotEqual(hashlib.sha256(changed.encode()).hexdigest(), original_hash)
         prepare = next(step for step in steps if step.get('run', '').startswith('bash scripts/' + SCRIPT.name))
@@ -270,9 +290,13 @@ class DosboxCacheWorkflowTest(unittest.TestCase):
     def test_each_archive_has_independent_https_sources(self):
         source = SCRIPT.read_text()
         for name in ('LS_PPP', 'MTCP'):
-            urls = re.findall(r'"([^"]+)"', re.search(fr'{name}_URLS=\((.*?)\)', source, re.S)[1])
+            records = re.search(fr'{name}_SOURCES=\((.*?)\)', source, re.S)[1]
+            urls = re.findall(r'"[a-f0-9]{40} (https://[^"]+)"', records)
             self.assertGreaterEqual(len({urlsplit(url).hostname for url in urls}), 2)
             self.assertTrue(all(urlsplit(url).scheme == 'https' for url in urls))
+            for url in urls:
+                if urlsplit(url).hostname == 'gitlab.com':
+                    self.assertRegex(url, r'\?sha=[a-f0-9]{40}$')
 
 
 if __name__ == '__main__':

@@ -526,8 +526,10 @@ CI caches the test-only LSppp and mTCP archives outside the suite's temporary
 working directory. Every use checks the pinned SHA-1 digest, including cache
 hits; missing or invalid archives are downloaded again with bounded retries
 and connection/transfer timeouts. Each archive has an ibiblio URL and a separate
-ICM mirror URL. A network error or digest mismatch advances to the next source;
-all sources must match the same pinned digest before an archive can be used.
+FreeDOS GitLab URL pinned to a full commit ID. A network error or digest mismatch
+advances to the next source. GitLab uses different ZIP packaging for the same
+program versions, so each source has its own expected digest. Cache hits must
+match one of those explicitly pinned digests before an archive can be used.
 Download failures appear in the dependency preparation step before the
 DOSBox/YAME suite starts. The binaries are not redistributed with YAME.
 
