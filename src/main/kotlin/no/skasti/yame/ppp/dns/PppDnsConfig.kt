@@ -18,7 +18,10 @@ data class PppDnsConfig(
     }
 
     companion object {
-        fun fromConfigStore(): PppDnsConfig = fromSnapshot(ConfigStore.current.snapshot())
+        fun fromConfigStore(store: ConfigStore = ConfigStore.current): PppDnsConfig {
+            store.ensureLoaded(DnsSettings);
+            return fromSnapshot(store.snapshot())
+        }
 
         internal fun fromSnapshot(snapshot: ConfigChanges): PppDnsConfig {
             return PppDnsConfig(upstreamServer = requireNotNull(snapshot[DnsSettings.Upstream]).value)

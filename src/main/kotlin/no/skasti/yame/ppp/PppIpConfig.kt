@@ -9,7 +9,10 @@ data class PppIpConfig(
     val configuredSubnet: Ipv4Cidr? = null,
 ) {
     companion object {
-        fun fromConfigStore(): PppIpConfig = fromSnapshot(ConfigStore.current.snapshot())
+        fun fromConfigStore(store: ConfigStore = ConfigStore.current): PppIpConfig {
+            store.ensureLoaded(PppSettings);
+            return fromSnapshot(store.snapshot())
+        }
 
         internal fun fromSnapshot(snapshot: ConfigChanges): PppIpConfig {
             return PppIpConfig(configuredSubnet = requireNotNull(snapshot[PppSettings.Subnet]).value)

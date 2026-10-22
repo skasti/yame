@@ -20,10 +20,13 @@ Concrete keys and groups live in their owning serial, modem, PPP, DNS, proxy,
 transformer and logging packages. Baud belongs to serial, not modem. Credentials
 are one modem-owned `LoginCredentials` setting because username/password form one
 validated concept; the existing two INI properties remain compatible. Generic
-store contracts contain no feature imports. The `persistence` package owns `YameConfiguration`, its file store,
-`ConfigurationBinding`, `YameConfigurationBindings`, and `applicationConfigStore`.
-All persistence mappings point from this application adapter toward feature keys;
-feature `*Settings` objects contain no bindings or application-schema imports.
+store contracts contain no feature imports. Each feature's `ConfigBase` owns its file name, static sections, typed bindings,
+and optional custom mapping. The generic store contains no central list of keys.
+A direct `store[key]` read requests the definition attached to the key's group,
+loading that definition on first use. Component `fromConfigStore()` factories
+request their own definitions before taking a snapshot of multiple values.
+The `persistence` package retains compatibility adapters for existing callers and
+CLI composition. They do not register features or supply the runtime's settings.
 `YameConfiguration` is used only during startup/CLI parsing and file persistence.
 It reuses immutable feature values as sibling fields without putting PPP, DNS, or
 HTTP configuration inside the modem config. The existing `yame.ini` property names,
@@ -32,10 +35,9 @@ semantics remain unchanged.
 
 ## Transactions, persistence and CLI precedence
 
-`set(vararg changes)` validates all registered keys and the complete candidate
-configuration, then saves the persistent candidate once using
-`YameConfigurationStore`'s prepared, permission-restricted temporary file and safe
-replacement. Only after a successful save are both snapshots published. Validation
+`set(vararg changes)` validates registered keys and the candidate snapshot,
+then persists changed keys through the repository's prepared, permission-restricted
+temporary file and safe replacement. Only after a successful save are both snapshots published. Validation
 or persistence exceptions reach the caller; neither in-memory state nor observers
 are updated on rejection. The TUI reports the failure without displaying input
 values. No-op batches skip both saving and notifications.
@@ -96,7 +98,7 @@ credential values.
 | Modem login credentials | Apply to the next call; an established call keeps its credentials |
 | HTML transformer switches | Read one consistent snapshot per request; reload the page, keep PPP connected |
 | Log levels and capture limits | Apply immediately |
-| `element-simplifier.ini` rules | Existing separate startup file; edit file and restart |
+| `element-simplifier.ini` rules | Can be saved through the store; external file edits take effect after restart |
 | Config/log paths, UI mode, tone-test mode | CLI startup policy, not runtime persistent settings |
 | Internal proxy bounds/timeouts and transformation implementation policy | Constructor policy; no new runtime configuration surface |
 
@@ -137,7 +139,7 @@ lifetime handle, rejects an existing owner, and releases the store on close.
 `Main` closes that handle after the runtime and frontend. Multiple frontends take
 shared store instances; they do not replace global state. Explicit constructor
 configurations never require installation, including the modem's standalone PPP
-child defaults. Element-simplifier rules are a read-only startup setting
+child defaults. Element-simplifier rules are a typed setting in a separate INI file
 loaded from the existing separate INI file; runtime writes are rejected.
 
 ## Ownership and composition boundaries
@@ -152,6 +154,10 @@ loaded from the existing separate INI file; runtime writes are rejected.
 | `YameRuntime` | Compose component configs from a consistent snapshot, observe committed batches, own connections and registered functions |
 | TUI | Derive presentation caches from the store; display runtime observations separately; invoke core functions |
 
+The CLI reads serial, modem, PPP, DNS, proxy enabled, and logging defaults for
+normal startup; tone test uses serial, modem, and logging. Neither mode requests
+HTML transformer or element rule definitions merely to parse options. The runtime
+requests its HTTP configuration and child definitions before its first snapshot.
 Runtime and TUI initialization read one store snapshot and subscribe with initial
 delivery to close the read/subscribe race. Runtime accumulates ordered event values
 in a derived immutable snapshot, then uses each feature's `fromSnapshot` mapper to
@@ -184,3 +190,75 @@ ConfigStore's no-op save/event semantics and the existing selection interaction.
 `SerialTransport` is the serial IO boundary implemented by `SerialConnection`.
 The runtime owns and closes it, including after failed opens; tests can inject a
 port without requiring serial hardware or process-global configuration.
+
+## Lazy configuration definitions (issue #96)
+
+The runtime now uses `IniConfigurationRepository` and `ConfigStore.ensureLoaded`.
+Feature-owned `ConfigBase` definitions declare their file, groups and typed INI
+bindings. `fromConfigStore(store)` requests the owner's definition before taking a
+snapshot. A new feature can supply its own definition without editing the generic
+store or a registry of all available modules. CLI option reads request the
+features whose values it exposes as command-line defaults; unrelated files are
+never scanned. The legacy `applicationConfigStore` and `YameConfigurationStore`
+remain as compatibility adapters for existing callers and startup default-file
+creation. Their INI reads/writes now use the same syntax parser/writer as the lazy
+repository. The former central `YameConfigurationBindings` is used for CLI override
+translation and compatibility calls, not registration in the lazy store.
+
+### Legacy adapter boundary
+
+| API | Remaining responsibility | Intended lifetime |
+| --- | --- | --- |
+| `YameConfiguration` | Value object for existing callers, CLI argument defaults, and first-run file creation. Its component values are ordinary feature config types. | Retain while these callers need the aggregate shape; remove from startup when CLI composition can use typed settings directly. |
+| `YameConfigurationBindings` and `ConfigurationBinding` | Project fields that already exist in that aggregate onto feature-owned keys, so `applicationConfigStore` and CLI override translation can use `ConfigStore`. | Internal compatibility bridge; removable when aggregate callers migrate. It is not extended for settings that the aggregate does not expose. |
+| `applicationConfigStore` | Construct an explicitly populated store for legacy embedders and existing tests, preserving its save callback contract. | Compatibility API; normal `Main` uses the lazy repository-backed store. |
+| `YameConfigurationStore` | Preserve its public `load(defaults)` behavior, including caller-supplied defaults and historic validation errors; create the initial `yame.ini` through `save`. | Compatibility API. `save` now delegates physical property names, codecs, and optional property removal to the feature definitions. The older `load(defaults)` decoder remains for its contract and can be removed when those callers migrate. |
+
+Feature-owned definitions are the source of truth for runtime defaults, validation,
+and persistence. A new setting is added to its owning feature; it needs no entry in
+the legacy aggregate or binding list unless an existing compatibility API or CLI
+option explicitly exposes it. The old loader still mirrors decoding for historical
+callers, so parity tests compare its values with the repository-backed store.
+
+`SettingGroup` carries a definition owner and physical section. Existing `yame.ini`
+settings retain their established flat dotted property names (the empty/root INI
+section) and their public logical key paths. New definitions may use ordinary
+`[section]` groups. `ElementSimplifierSettings` owns the separate
+`element-simplifier.ini` file and interprets its existing tag-named sections as
+an ordered collection. A missing file uses bundled defaults; an existing empty
+file means no rules. Dynamic rule edits can now be persisted through the store.
+
+A first request loads and validates all of a definition's keys under the store
+lock, then installs them together without a save or notification. Concurrent
+requests share the completed load; failure installs nothing and the next call
+retries. Previously loaded values are never reset by a later definition in the
+same file. Only registered keys appear in snapshots and frontend enumeration.
+Registration claims individual properties, including absent declared properties;
+an overlapping registration fails rather than silently replacing an owner.
+
+Every save reads the affected file afresh, updates only changed properties or
+dynamic sections, preserves unowned entries and untouched comments,
+and replaces the file using a temporary file. Rewritten property lines use
+canonical `key=value` formatting. Rewritten dynamic sections can lose comments
+within those sections; untouched sections and lines retain their original text.
+An external edit to an already loaded key is not imported into memory; restarting
+reloads it. External edits to unowned entries are retained on the next save.
+Root `yame.ini` properties retain Java `Properties` decoding: `=`/`:`/whitespace
+separators, escapes, `\\u` escapes, continuation lines, `#` and `!` comments,
+and last-declaration-wins for duplicate root keys. The writer updates the last
+declaration and keeps earlier declarations and unrelated physical records intact.
+Unchanged comments and properties retain their spelling; uniform CRLF or LF
+line endings and the presence of a final newline are preserved on a save.
+The shared format also treats full-line `;` as a comment and `[name]` as a section
+header; these lines were ordinary (usually unused) Java properties in old
+`yame.ini` files. A section header changes how following entries are parsed.
+Named sections retain the stricter rules already used by
+`element-simplifier.ini`: duplicate sections or properties, unknown rule fields,
+and rules without a `target` are errors. `[general]` is a valid rule tag, and
+an existing empty rules file means no rules. Syntax errors identify the file
+and physical line; invalid rule fields identify the file, section, and field.
+Transactions serialize file IO and memory publication under one store lock. If a
+transaction spans files, each replacement is individually atomic. On failure after
+an earlier file was replaced, `PartialIniWriteException` identifies replaced
+files, memory remains unchanged, and the application should restart to reconcile
+its state with disk. This is not a cross-file filesystem transaction.

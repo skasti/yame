@@ -66,6 +66,84 @@ class YameConfigurationStoreTest {
         store.save(expected)
 
         assertEquals(expected, store.load())
+        val featureStore = lazyApplicationConfigStore(path)
+        YameConfigurationBindings.all.forEach { binding ->
+            assertEquals(binding.change(expected).value, featureStore[binding.key], binding.key.path)
+        }
+    }
+
+    @Test
+    fun `legacy and feature stores agree on absent optional values`() {
+        val path = tempDirectory.resolve("optional.ini")
+        val legacy = YameConfigurationStore(path)
+        val withValues = YameConfiguration(
+            portName = "COM1",
+            modemConfig = HayesModemConfig(username = "user", password = "secret"),
+            pppIpConfig = PppIpConfig(Ipv4Cidr.parse("10.0.0.0/30")),
+        )
+        legacy.save(withValues)
+        legacy.save(YameConfiguration())
+
+        val text = Files.readString(path)
+        for (property in listOf("serial.port", "login.username", "login.password", "ppp.subnet")) {
+            assertTrue(!text.contains("$property="), property)
+        }
+        assertEquals(YameConfiguration(), legacy.load())
+        val featureStore = lazyApplicationConfigStore(path)
+        assertEquals(null, featureStore[no.skasti.yame.serial.SerialSettings.Port])
+        assertEquals(null, featureStore[no.skasti.yame.ppp.PppSettings.Subnet])
+        assertEquals(null, featureStore[no.skasti.yame.modem.ModemSettings.Login].username)
+
+        // The same optional-property semantics apply to runtime writes.
+        featureStore.set(no.skasti.yame.serial.SerialSettings.Port to "COM2",
+            no.skasti.yame.ppp.PppSettings.Subnet to Ipv4Cidr.parse("10.1.0.0/30"))
+        featureStore.set(no.skasti.yame.serial.SerialSettings.Port to null,
+            no.skasti.yame.ppp.PppSettings.Subnet to null)
+        assertEquals(YameConfiguration(), legacy.load())
+        assertTrue(!Files.readString(path).contains("serial.port="))
+        assertTrue(!Files.readString(path).contains("ppp.subnet="))
+    }
+
+    @Test
+    fun `legacy defaults match feature owned defaults`() {
+        val path = tempDirectory.resolve("missing.ini")
+        val legacy = YameConfigurationStore(path).load()
+        val featureStore = lazyApplicationConfigStore(path)
+        YameConfigurationBindings.all.forEach { binding ->
+            assertEquals(binding.change(legacy).value, featureStore[binding.key], binding.key.path)
+        }
+    }
+
+    @Test
+    fun `legacy save preserves settings owned by future features`() {
+        val path = tempDirectory.resolve("yame.ini")
+        Files.writeString(path, "# keep\nfuture.setting=42\n[future]\nenabled=yes\n")
+        YameConfigurationStore(path).save(YameConfiguration(baudRate = 57_600))
+
+        val text = Files.readString(path)
+        assertTrue(text.contains("# keep\nfuture.setting=42"))
+        assertTrue(text.contains("[future]\nenabled=yes"))
+        assertTrue(text.contains("serial.baud=57600"))
+    }
+
+    @Test
+    fun `legacy save leaves omitted log levels untouched`() {
+        val path = tempDirectory.resolve("yame.ini")
+        Files.writeString(path, "loglevel.ppp=warn\nloglevel.modem=debug\n")
+        YameConfigurationStore(path).save(YameConfiguration(logLevels = mapOf(YameLogModule.MODEM to YameLogLevel.INFO)))
+
+        val text = Files.readString(path)
+        assertTrue(text.contains("loglevel.ppp=warn"))
+        assertTrue(text.contains("loglevel.modem=info"))
+    }
+
+    @Test
+    fun `legacy load retains caller supplied defaults for absent properties`() {
+        val path = tempDirectory.resolve("yame.ini")
+        Files.writeString(path, "serial.flow-control=hardware\n")
+        val defaults = YameConfiguration(baudRate = 57_600, pppDnsConfig = PppDnsConfig(Ipv4Address.parse("1.1.1.1")))
+
+        assertEquals(defaults.copy(flowControl = SerialFlowControl.HARDWARE), YameConfigurationStore(path).load(defaults))
     }
 
     @Test

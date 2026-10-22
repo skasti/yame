@@ -20,32 +20,10 @@ internal object ElementSimplifierIni {
     }
 
     fun parse(text: String): ElementSimplifierConfiguration {
-        val sections = linkedMapOf<String, MutableMap<String, String>>()
-        var section: MutableMap<String, String>? = null
-        text.removePrefix("\uFEFF").lineSequence().forEachIndexed { index, raw ->
-            val line = raw.trim()
-            if (line.isEmpty() || line.startsWith(';') || line.startsWith('#')) return@forEachIndexed
-            fun invalid(reason: String): Nothing =
-                throw IllegalArgumentException("element-simplifier.ini line ${index + 1}: $reason")
-            if (line.startsWith('[') && line.endsWith(']')) {
-                val name = line.substring(1, line.lastIndex).trim().lowercase(Locale.ROOT)
-                if (!TAG_NAME.matches(name)) invalid("invalid tag section '$name'")
-                if (name in sections) invalid("duplicate section [$name]")
-                if (sections.size >= 256) invalid("at most 256 sections are supported")
-                section = linkedMapOf<String, String>().also { sections[name] = it }
-            } else {
-                val values = section ?: invalid("setting must follow a tag section")
-                val separator = line.indexOf('=')
-                if (separator < 1) invalid("expected key=value")
-                val key = line.substring(0, separator).trim().lowercase(Locale.ROOT)
-                if (key !in setOf("target", "style")) invalid("unknown setting '$key'")
-                if (key in values) invalid("duplicate setting '$key'")
-                values[key] = line.substring(separator + 1).trim()
-            }
-        }
-        return ElementSimplifierConfiguration(sections.mapValues { (name, settings) ->
-            val target = requireNotNull(settings["target"]) { "element-simplifier.ini [$name] requires target" }
-            ElementSimplifierRule(target, settings["style"]?.takeIf(String::isNotEmpty))
-        })
+        val document = no.skasti.yame.config.ini.IniParser.parse(text, "element-simplifier.ini")
+        val changes = no.skasti.yame.config.ConfigChanges(ElementSimplifierSettings.loadFromIni(
+            no.skasti.yame.config.IniReadContext("element-simplifier.ini", document, true),
+        ))
+        return requireNotNull(changes[ElementSimplifierSettings.Rules]).value
     }
 }

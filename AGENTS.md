@@ -179,9 +179,11 @@ unbounded buffering.
   DNS, and HTTP compatibility are independent component configs.
 - HTML transformation settings, rules, and their separate startup INI reader live
   in `ppp.proxy.transform`, alongside the transformation implementation.
-- Only `Main` and `persistence` understand `YameConfiguration`. It is a legacy file
-  representation, never a runtime settings API. `YameConfigurationBindings` owns
-  all key-to-file mappings; feature `*Settings` objects must not import it.
+- Feature-owned `ConfigBase` definitions own their INI file, static groups, typed
+  mappings and optional dynamic-section mapping. The generic ConfigStore registers
+  only definitions requested by components; it never enumerates all features.
+- `YameConfiguration` and `YameConfigurationBindings` remain compatibility and CLI
+  adapters. New persistence mappings live in their owning feature definitions.
 - Application persistence may reuse immutable feature config values. This does not
   authorize a feature to import the application schema or nest unrelated configs.
 - `YameRuntime` composes serial, modem, PPP, DNS, proxy, and logging behavior. TUI

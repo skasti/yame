@@ -33,7 +33,7 @@ internal class YameRuntime(
     private val logManager: YameLogManager,
     private val resourceGraphs: NavigationResourceRegistry =
         YameRegistries.navigationResources(
-            PppHttpCompatibilityConfig.fromSnapshot(configStore.snapshot()),
+            PppHttpCompatibilityConfig.fromConfigStore(configStore),
         ),
     private val portProvider: () -> List<no.skasti.yame.serial.SerialPortDescriptor> =
         SerialConnection::availablePortDescriptors,
@@ -50,6 +50,10 @@ internal class YameRuntime(
 
     @Volatile
     private var autoConnectEnabled = true
+
+    // A runtime connection uses the proxy and its child transformation settings.
+    // Request them through their owner before taking the initial committed snapshot.
+    init { PppHttpCompatibilityConfig.fromConfigStore(configStore) }
 
     @Volatile
     private var settings = configStore.snapshot()

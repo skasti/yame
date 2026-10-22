@@ -16,7 +16,10 @@ data class HtmlTransformerSettings(
     val elementSimplifier: Boolean = true,
 ) {
     companion object {
-        fun fromConfigStore(): HtmlTransformerSettings = fromSnapshot(ConfigStore.current.snapshot())
+        fun fromConfigStore(store: ConfigStore = ConfigStore.current): HtmlTransformerSettings {
+            store.ensureLoaded(TransformerSettings);
+            return fromSnapshot(store.snapshot())
+        }
 
         internal fun fromSnapshot(changes: ConfigChanges): HtmlTransformerSettings {
             val keys = TransformerSettings

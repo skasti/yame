@@ -31,7 +31,10 @@ data class HayesModemConfig(
     }
 
     companion object {
-        fun fromConfigStore(): HayesModemConfig = fromSnapshot(ConfigStore.current.snapshot())
+        fun fromConfigStore(store: ConfigStore = ConfigStore.current): HayesModemConfig {
+            store.ensureLoaded(ModemSettings);
+            return fromSnapshot(store.snapshot())
+        }
 
         internal fun fromSnapshot(snapshot: ConfigChanges): HayesModemConfig {
             val login = requireNotNull(snapshot[ModemSettings.Login]).value

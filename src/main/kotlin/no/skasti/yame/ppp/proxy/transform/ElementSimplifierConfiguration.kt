@@ -34,8 +34,9 @@ class ElementSimplifierConfiguration(rules: Map<String, ElementSimplifierRule>) 
     override fun hashCode(): Int = rules.hashCode()
 
     companion object {
-        fun fromConfigStore(): ElementSimplifierConfiguration =
-            ConfigStore.current[TransformerSettings.Rules]
+        fun fromConfigStore(store: ConfigStore = ConfigStore.current): ElementSimplifierConfiguration {
+            return store[TransformerSettings.Rules]
+        }
 
         fun defaults(): ElementSimplifierConfiguration = ElementSimplifierIni.defaults
     }

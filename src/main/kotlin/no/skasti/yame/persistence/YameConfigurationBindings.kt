@@ -10,7 +10,7 @@ import no.skasti.yame.ppp.proxy.ProxySettings
 import no.skasti.yame.ppp.proxy.transform.TransformerSettings
 import no.skasti.yame.logging.LogSettings
 
-/** The only adapter from feature-owned keys to the legacy yame.ini representation. */
+/** Projection of the legacy DTO's existing fields onto feature-owned keys; not a feature registry. */
 internal object YameConfigurationBindings {
     val serialSettings: List<ConfigurationBinding<*>> = listOf(
         ConfigurationBinding(SerialSettings.Port,

@@ -22,8 +22,10 @@ data class PppHttpCompatibilityConfig(
     val htmlTransformers: HtmlTransformerSettings = HtmlTransformerSettings(),
 ) {
     companion object {
-        fun fromConfigStore(): PppHttpCompatibilityConfig =
-            fromSnapshot(ConfigStore.current.snapshot())
+        fun fromConfigStore(store: ConfigStore = ConfigStore.current): PppHttpCompatibilityConfig {
+            store.ensureLoaded(ProxySettings); store.ensureLoaded(no.skasti.yame.ppp.proxy.transform.TransformerSettings); store.ensureLoaded(no.skasti.yame.ppp.proxy.transform.ElementSimplifierSettings);
+            return fromSnapshot(store.snapshot())
+        }
 
         internal fun fromSnapshot(snapshot: ConfigChanges): PppHttpCompatibilityConfig =
             PppHttpCompatibilityConfig(

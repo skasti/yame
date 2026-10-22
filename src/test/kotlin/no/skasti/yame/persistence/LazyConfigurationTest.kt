@@ -1,0 +1,258 @@
+package no.skasti.yame.persistence
+
+import no.skasti.yame.config.*
+import no.skasti.yame.modem.HayesModemConfig
+import no.skasti.yame.modem.ModemSettings
+import no.skasti.yame.ppp.PppSettings
+import no.skasti.yame.ppp.proxy.transform.ElementSimplifierSettings
+import no.skasti.yame.ppp.proxy.transform.TransformerSettings
+import no.skasti.yame.serial.SerialSettings
+import java.nio.file.Files
+import java.nio.file.Path
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.concurrent.thread
+import kotlin.test.*
+import org.junit.jupiter.api.io.TempDir
+
+class LazyConfigurationTest {
+    @TempDir lateinit var directory: Path
+
+    @Test fun `reading an owned key loads only its definition and only once`() {
+        val path = directory.resolve("yame.ini")
+        Files.writeString(path, "[used]\nvalue=7\n[unused]\nvalue=9\n")
+        class Definition(id: String) : ConfigBase(id) {
+            val group = SettingGroup(id, this)
+            val key = SettingKey<Int>("$id.value", group)
+            override val bindings by lazy { listOf(IniBinding(key, "value", { 0 }, String::toInt, Int::toString)) }
+        }
+        val used = Definition("used")
+        val unused = Definition("unused")
+        val delegate = IniConfigurationRepository(path)
+        val loads = AtomicInteger()
+        val repository = object : ConfigurationRepository by delegate {
+            override fun load(definition: ConfigBase): Pair<List<ConfigChange<*>>, Set<Pair<String, String>>> {
+                loads.incrementAndGet()
+                return delegate.load(definition)
+            }
+        }
+        val store = ConfigStore(emptyList(), repository = repository)
+        assertNull(store.snapshot()[used.key])
+        assertNull(store.snapshot()[unused.key])
+        assertEquals(7, store[used.key])
+        assertEquals(7, store[used.key])
+        assertEquals(1, loads.get())
+        assertNull(store.snapshot()[unused.key])
+        assertEquals(9, store[unused.key])
+        assertEquals(2, loads.get())
+    }
+
+    @Test fun `an explicitly populated store can read an owned key without a repository`() {
+        val store = ConfigStore(listOf(ModemSettings.Tone to false))
+        assertFalse(store[ModemSettings.Tone])
+    }
+
+    @Test fun `concurrent first reads load one definition once`() {
+        val path = directory.resolve("yame.ini")
+        Files.writeString(path, "modem.tone-simulation-enabled=false\n")
+        val delegate = IniConfigurationRepository(path)
+        val loads = AtomicInteger()
+        val repository = object : ConfigurationRepository by delegate {
+            override fun load(definition: ConfigBase): Pair<List<ConfigChange<*>>, Set<Pair<String, String>>> {
+                loads.incrementAndGet()
+                return delegate.load(definition)
+            }
+        }
+        val store = ConfigStore(emptyList(), repository = repository)
+        val start = CountDownLatch(1)
+        val failures = java.util.Collections.synchronizedList(mutableListOf<Throwable>())
+        val workers = List(8) { thread {
+            try {
+                start.await()
+                assertFalse(store[ModemSettings.Tone])
+            } catch (error: Throwable) { failures.add(error) }
+        } }
+        start.countDown()
+        workers.forEach { it.join(5_000); assertFalse(it.isAlive) }
+        assertTrue(failures.isEmpty(), failures.toString())
+        assertEquals(1, loads.get())
+    }
+
+    @Test fun `CLI leaves HTTP transformations unloaded until the HTTP owner requests them`() {
+        val path = directory.resolve("yame.ini")
+        Files.writeString(path, "serial.baud=57600\ntransformers.script-remover.enabled=false\n")
+        Files.writeString(directory.resolve("element-simplifier.ini"), "[heading]\ntarget=h2\n")
+        val store = lazyApplicationConfigStore(path)
+        assertEquals(57600, cliConfiguration(store).baudRate)
+        assertNull(store.snapshot()[TransformerSettings.Script])
+        assertNull(store.snapshot()[ElementSimplifierSettings.Rules])
+
+        val http = no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig.fromConfigStore(store)
+        assertFalse(http.htmlTransformers.scriptRemover)
+        assertEquals("h2", http.elementSimplifier.rules.getValue("heading").target)
+    }
+
+    @Test fun `CLI overrides keep precedence while later feature reads retain saved values`() {
+        val path = directory.resolve("yame.ini")
+        Files.writeString(path, "serial.baud=57600\ntransformers.script-remover.enabled=false\n")
+        val store = lazyApplicationConfigStore(path)
+        val saved = cliConfiguration(store)
+        applyCliOverrides(store, saved, saved.copy(baudRate = 9600))
+        assertEquals(9600, store[SerialSettings.Baud])
+        assertNull(store.snapshot()[TransformerSettings.Script])
+        assertFalse(store[TransformerSettings.Script])
+        assertTrue(Files.readString(path).contains("serial.baud=57600"))
+    }
+
+    @Test fun `tone test reads no PPP DNS or proxy definitions`() {
+        val path = directory.resolve("yame.ini")
+        Files.writeString(path, "serial.baud=57600\nmodem.tone-simulation-enabled=false\nppp.subnet=invalid\n")
+        val store = lazyApplicationConfigStore(path)
+        val options = cliConfiguration(store, toneTest = true)
+        assertEquals(57600, options.baudRate)
+        assertFalse(options.modemConfig.toneSimulationEnabled)
+        assertNull(store.snapshot()[PppSettings.Subnet])
+        assertNull(store.snapshot()[TransformerSettings.Script])
+    }
+
+    @Test fun `only requested definitions load and late load preserves saved changes`() {
+        val path = directory.resolve("yame.ini")
+        Files.writeString(path, "# original\nmodem.tone-simulation-enabled=false\nppp.subnet=10.1.1.0/30\nunknown.keep=value\n")
+        val store = lazyApplicationConfigStore(path)
+        store.ensureLoaded(ModemSettings)
+        assertNull(store.snapshot()[PppSettings.Subnet])
+        assertFalse(HayesModemConfig.fromConfigStore(store).toneSimulationEnabled)
+        store.set(ModemSettings.Tone to true)
+        assertTrue(Files.readString(path).contains("ppp.subnet=10.1.1.0/30"))
+        assertTrue(Files.readString(path).contains("# original"))
+        store.ensureLoaded(PppSettings)
+        assertEquals("10.1.1.0/30", store[PppSettings.Subnet].toString())
+        store.set(PppSettings.Subnet to null)
+        assertEquals(true, store[ModemSettings.Tone])
+        assertTrue(Files.readString(path).contains("unknown.keep=value"))
+    }
+
+    @Test fun `saving one key leaves external edits to another key in the same definition alone`() {
+        val path = directory.resolve("yame.ini")
+        Files.writeString(path, "serial.baud=38400\nserial.port=COM1\n")
+        val store = lazyApplicationConfigStore(path)
+        store.ensureLoaded(SerialSettings)
+        Files.writeString(path, "serial.baud=38400\nserial.port=COM2\n")
+        store.set(SerialSettings.Baud to 57600)
+        assertEquals("COM1", store[SerialSettings.Port]) // In-memory values refresh on restart only.
+        assertTrue(Files.readString(path).contains("serial.port=COM2"))
+    }
+
+    @Test fun `missing module is untouched and malformed load retries without partial state`() {
+        val path = directory.resolve("yame.ini")
+        val stray = directory.resolve("stray.ini")
+        Files.writeString(stray, "[general]\nenabled=maybe\n")
+        Files.writeString(path, "serial.baud=bad\n")
+        val store = lazyApplicationConfigStore(path)
+        assertFailsWith<IllegalArgumentException> { store[SerialSettings.Baud] }
+        assertNull(store.snapshot()[SerialSettings.Baud])
+        Files.writeString(path, "serial.baud=57600\n")
+        assertEquals(57600, store[SerialSettings.Baud])
+        Files.writeString(path, "serial.baud=9600\n")
+        store.ensureLoaded(SerialSettings)
+        assertEquals(57600, store[SerialSettings.Baud])
+    }
+
+    @Test fun `dynamic legacy rule sections round trip with static root file`() {
+        val path = directory.resolve("element-simplifier.ini")
+        Files.writeString(path, "; keep\n[heading]\ntarget=h1\nstyle=color:red;\n")
+        val store = lazyApplicationConfigStore(directory.resolve("yame.ini"))
+        store.ensureLoaded(ElementSimplifierSettings)
+        val rules = store[ElementSimplifierSettings.Rules]
+        assertEquals("h1", rules.rules.getValue("heading").target)
+        store.set(ElementSimplifierSettings.Rules to no.skasti.yame.ppp.proxy.transform.ElementSimplifierConfiguration(mapOf("heading" to no.skasti.yame.ppp.proxy.transform.ElementSimplifierRule("h2"))))
+        assertTrue(Files.readString(path).contains("; keep"))
+        assertEquals("h2", store[ElementSimplifierSettings.Rules].rules.getValue("heading").target)
+    }
+
+    @Test fun `concurrent first use installs one consistent definition`() {
+        val path = directory.resolve("yame.ini")
+        Files.writeString(path, "modem.tone-simulation-enabled=false\n")
+        val store = lazyApplicationConfigStore(path)
+        val start = CountDownLatch(1)
+        val workers = List(8) { thread { start.await(); store.ensureLoaded(ModemSettings) } }
+        start.countDown()
+        workers.forEach(Thread::join)
+        assertFalse(store[ModemSettings.Tone])
+        assertEquals(5, store.snapshot().count())
+    }
+
+    @Test fun `new definitions share an INI without central registration`() {
+        val path = directory.resolve("yame.ini")
+        Files.writeString(path, "[first]\nvalue=7\n[second]\nvalue=9\n")
+        class TestDefinition(id: String) : ConfigBase(id) {
+            val group = SettingGroup(id, this)
+            val key = SettingKey<Int>("$id.value", group)
+            override val bindings by lazy { listOf(IniBinding(key, "value", { 0 }, String::toInt, Int::toString)) }
+        }
+        val first = TestDefinition("first")
+        val second = TestDefinition("second")
+        val store = lazyApplicationConfigStore(path)
+        store.ensureLoaded(first)
+        assertNull(store.snapshot()[second.key])
+        store.set(first.key to 8)
+        store.ensureLoaded(second)
+        assertEquals(9, store[second.key])
+        assertTrue(Files.readString(path).contains("[second]\nvalue=9"))
+        val overlap = TestDefinition("first")
+        assertFailsWith<IllegalArgumentException> { store.ensureLoaded(overlap) }
+    }
+
+    @Test fun `invalid dynamic rule does not partially register`() {
+        val path = directory.resolve("element-simplifier.ini")
+        Files.writeString(path, "[heading]\nstyle=color:red\n")
+        val store = lazyApplicationConfigStore(directory.resolve("yame.ini"))
+        assertFailsWith<IllegalArgumentException> { store.ensureLoaded(ElementSimplifierSettings) }
+        assertNull(store.snapshot()[ElementSimplifierSettings.Rules])
+    }
+
+    @Test fun `legacy files load the same effective values through the lazy store`() {
+        val path = directory.resolve("yame.ini")
+        val expected = YameConfiguration(
+            baudRate = 57600,
+            modemConfig = HayesModemConfig(username = "user", password = "s:e=cret\\value", toneSimulationEnabled = false),
+            pppHttpCompatibilityConfig = no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig(enabled = false),
+        )
+        YameConfigurationStore(path).save(expected)
+        assertEquals(YameConfigurationStore(path).load(), cliConfiguration(lazyApplicationConfigStore(path)))
+    }
+
+    @Test fun `a later file failure reports partial disk replacement without memory publication`() {
+        val first = object : ConfigBase("first") {
+            val group = SettingGroup("first", this, "first")
+            val key = SettingKey<Int>("first.value", group)
+            override val bindings by lazy { listOf(IniBinding(key, "value", { 1 }, String::toInt, Int::toString)) }
+        }
+        val second = object : ConfigBase("second", "second.ini") {
+            val group = SettingGroup("second", this, "second")
+            val key = SettingKey<Int>("second.value", group)
+            override val bindings by lazy { listOf(IniBinding(key, "value", { 2 }, String::toInt, Int::toString)) }
+        }
+        val primary = directory.resolve("yame.ini")
+        val store = lazyApplicationConfigStore(primary)
+        store.ensureLoaded(first)
+        store.ensureLoaded(second)
+        Files.createDirectory(directory.resolve("second.ini"))
+        val error = assertFailsWith<PartialIniWriteException> {
+            store.set(first.key to 3, second.key to 4)
+        }
+        assertEquals(listOf(primary), error.replacedFiles)
+        assertEquals(1, store[first.key])
+        assertEquals(2, store[second.key])
+        assertTrue(Files.readString(primary).contains("value=3"))
+    }
+
+    @Test fun `failed save does not publish changes`() {
+        val path = directory.resolve("yame.ini")
+        val store = lazyApplicationConfigStore(path)
+        store.ensureLoaded(SerialSettings)
+        Files.createDirectory(path)
+        assertFails { store.set(SerialSettings.Baud to 9600) }
+        assertEquals(38_400, store[SerialSettings.Baud])
+    }
+}

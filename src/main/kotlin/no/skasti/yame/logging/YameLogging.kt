@@ -306,7 +306,7 @@ class YameLogManager(
 
     companion object {
         fun defaultLevels(): Map<YameLogModule, YameLogLevel> =
-            YameLogModule.entries.associateWith { YameLogLevel.INFO }
+            YameLogModule.entries.associateWith { LogSettings.DEFAULT_LEVEL }
 
         private val LOG_TIME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS")
         private val ARCHIVE_TIME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd-HH-mm")
