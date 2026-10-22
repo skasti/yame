@@ -63,6 +63,7 @@ jobs:
           python3 -m pip install PyYAML
           python3 -m unittest discover -s tests -p 'test_release_workflow.py'
           python3 -m unittest discover -s tests -p 'test_tui_previews.py'
+          python3 -m unittest discover -s tests -p 'test_dosbox_downloads.py'
           node --test tests/tui-previews.test.cjs tests/render-tui-previews.test.cjs tests/font-metrics.test.cjs
 
   build-and-test:
@@ -70,6 +71,8 @@ jobs:
     # Keep the required check present, and fail if the gate itself failed.
     if: always()
     runs-on: ubuntu-latest
+    env:
+      YAME_DOSBOX_DOWNLOAD_CACHE: ${{ github.workspace }}/.cache/dosbox-network
 
     steps:
       - name: Require successful gate
@@ -186,6 +189,19 @@ jobs:
           path: build/reports/tui-screenshots/
           if-no-files-found: error
           retention-days: 30
+
+      # The script owns the pinned URLs/versions and SHA-1 digests. Updating any
+      # pin changes this exact key; do not add restore-keys for older pins.
+      - name: Cache DOSBox dependency archives
+        if: needs.preview-gate.outputs.reuse != 'true'
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.YAME_DOSBOX_DOWNLOAD_CACHE }}
+          key: ${{ runner.os }}-dosbox-archives-v1-${{ hashFiles('scripts/dosbox-network-downloads.sh') }}
+
+      - name: Prepare checksum-verified DOSBox dependency archives
+        if: needs.preview-gate.outputs.reuse != 'true'
+        run: bash scripts/dosbox-network-downloads.sh "$YAME_DOSBOX_DOWNLOAD_CACHE"
 
       - name: Install DOSBox integration-test dependencies
         if: needs.preview-gate.outputs.reuse != 'true'
