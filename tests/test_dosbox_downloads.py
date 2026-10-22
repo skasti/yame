@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from urllib.parse import urlsplit
 import re
 import shutil
 import subprocess
@@ -22,11 +23,15 @@ with open(os.environ['CURL_CALLS'], 'a') as log:
     log.write(json.dumps(args) + '\\n')
 name = args[-1].rsplit('/', 1)[-1]
 output = Path(args[args.index('--output') + 1])
-if os.environ.get('FAIL_DOWNLOAD') == name:
+failure = json.loads(os.environ.get('SOURCE_FAILURES', '{}')).get(args[-1])
+if os.environ.get('FAIL_DOWNLOAD') == name or failure in ('http', 'timeout'):
     output.write_bytes(b'partial download')
+    if failure == 'timeout':
+        print('curl: (28) Operation timed out', file=sys.stderr)
+        sys.exit(28)
     print('curl: (22) The requested URL returned error: 503', file=sys.stderr)
     sys.exit(22)
-if os.environ.get('BAD_DOWNLOAD') == name:
+if os.environ.get('BAD_DOWNLOAD') == name or failure == 'checksum':
     output.write_bytes(b'wrong archive')
 else:
     shutil.copyfile(Path(os.environ['UPSTREAM_DIR']) / name, output)
@@ -43,9 +48,12 @@ class DosboxDownloadsTest(unittest.TestCase):
         self.upstream.mkdir()
         source = SCRIPT.read_text()
         self.pins = {}
+        self.urls = {}
         for variable, name, executables in (
                 ('LS_PPP_SHA1', 'lsppp.zip', ('LSPPP.EXE',)),
                 ('MTCP_SHA1', 'mtcp.zip', ('DNSTEST.EXE', 'HTGET.EXE'))):
+            urls = re.search(fr'{variable.removesuffix("_SHA1")}_URLS=\((.*?)\)', source, re.S)[1]
+            self.urls[name] = re.findall(r'"([^"]+)"', urls)
             with zipfile.ZipFile(self.upstream / name, 'w') as archive:
                 for executable in executables:
                     archive.writestr('fixture/' + executable, b'non-executable test fixture')
@@ -82,6 +90,9 @@ class DosboxDownloadsTest(unittest.TestCase):
             self.assertEqual(call[call.index('--retry') + 1], '3')
             self.assertIn('--fail', call)
             self.assertIn('--show-error', call)
+            for option, seconds in (('--connect-timeout', '10'), ('--max-time', '60'),
+                                    ('--retry-max-time', '90')):
+                self.assertEqual(call[call.index(option) + 1], seconds)
         second = self.run_downloads()
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertEqual(len(self.calls()), 2)
@@ -114,7 +125,8 @@ class DosboxDownloadsTest(unittest.TestCase):
         result = self.run_downloads(FAIL_DOWNLOAD='lsppp.zip')
         self.assertEqual(result.returncode, 2)
         self.assertIn('503', result.stderr)
-        self.assertIn('cache miss and upstream download failed', result.stderr)
+        self.assertIn('cache miss and all download sources failed', result.stderr)
+        self.assertEqual([call[-1] for call in self.calls()], self.urls['lsppp.zip'])
         self.assertEqual(list(self.cache.iterdir()), [])
 
     def test_corrupt_cache_and_http_failure_leave_no_usable_archive(self):
@@ -122,13 +134,49 @@ class DosboxDownloadsTest(unittest.TestCase):
         (self.cache / 'lsppp.zip').write_bytes(b'corrupt cache')
         result = self.run_downloads(FAIL_DOWNLOAD='lsppp.zip')
         self.assertEqual(result.returncode, 2)
-        self.assertIn('invalid cached archive and upstream download failed', result.stderr)
+        self.assertIn('invalid cached archive and all download sources failed', result.stderr)
         self.assertEqual(list(self.cache.iterdir()), [])
 
     def test_download_with_wrong_digest_is_never_published(self):
         result = self.run_downloads(BAD_DOWNLOAD='lsppp.zip')
         self.assertEqual(result.returncode, 2)
         self.assertIn('SHA-1 mismatch', result.stderr)
+        self.assertEqual(list(self.cache.iterdir()), [])
+
+    def test_each_archive_falls_back_on_http_errors_timeouts_and_wrong_checksums(self):
+        for name, urls in self.urls.items():
+            for failure in ('http', 'timeout', 'checksum'):
+                with self.subTest(name=name, failure=failure):
+                    shutil.rmtree(self.cache, ignore_errors=True)
+                    self.calls_file.write_text('')
+                    for other in self.pins:
+                        if other != name:
+                            self.seed(other)
+                    result = self.run_downloads(SOURCE_FAILURES=json.dumps({urls[0]: failure}))
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual([call[-1] for call in self.calls()], urls[:2])
+                    self.assertIn(f'source: {urls[1]}', result.stdout)
+                    self.assertEqual((self.cache / name).read_bytes(), (self.upstream / name).read_bytes())
+                    self.assertEqual({path.name for path in self.cache.iterdir()}, set(self.pins))
+
+    def test_corrupt_cache_recovers_from_mirror_when_primary_is_unavailable(self):
+        for name in self.pins:
+            self.seed(name)
+        (self.cache / 'lsppp.zip').write_bytes(b'corrupt cache')
+        result = self.run_downloads(SOURCE_FAILURES=json.dumps({self.urls['lsppp.zip'][0]: 'http'}))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('Rejecting invalid cached archive:', result.stderr)
+        self.assertEqual([call[-1] for call in self.calls()], self.urls['lsppp.zip'][:2])
+        self.assertEqual((self.cache / 'lsppp.zip').read_bytes(), (self.upstream / 'lsppp.zip').read_bytes())
+
+    def test_http_failure_followed_by_bad_mirror_checksum_fails_safely(self):
+        urls = self.urls['lsppp.zip']
+        result = self.run_downloads(SOURCE_FAILURES=json.dumps({urls[0]: 'http', urls[1]: 'checksum'}))
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('503', result.stderr)
+        self.assertIn('SHA-1 mismatch', result.stderr)
+        self.assertIn('all download sources failed', result.stderr)
+        self.assertEqual([call[-1] for call in self.calls()], urls)
         self.assertEqual(list(self.cache.iterdir()), [])
 
     def test_changed_digest_invalidates_existing_archive(self):
@@ -204,8 +252,10 @@ class DosboxCacheWorkflowTest(unittest.TestCase):
         source = (ROOT / hashed_path).read_text()
         self.assertEqual(ROOT / hashed_path, SCRIPT)
         original_hash = hashlib.sha256(source.encode()).hexdigest()
-        for name in ('LS_PPP_SHA1', 'MTCP_SHA1', 'LS_PPP_URL', 'MTCP_URL'):
-            pin = re.search(fr'{name}="([^"]+)"', source)[1]
+        pins = [re.search(fr'{name}="([^"]+)"', source)[1]
+                for name in ('LS_PPP_SHA1', 'MTCP_SHA1')]
+        urls = re.findall(r'"(https://[^"]+)"', source)
+        for pin in pins + urls:
             changed = source.replace(pin, pin + '-changed')
             self.assertNotEqual(hashlib.sha256(changed.encode()).hexdigest(), original_hash)
         prepare = next(step for step in steps if step.get('run', '').startswith('bash scripts/' + SCRIPT.name))
@@ -216,6 +266,13 @@ class DosboxCacheWorkflowTest(unittest.TestCase):
         self.assertEqual(cache['if'], suite['if'])
         self.assertIn('"$YAME_DOSBOX_DOWNLOAD_CACHE"', prepare['run'])
         self.assertNotIn('cache-hit', prepare['if'])
+
+    def test_each_archive_has_independent_https_sources(self):
+        source = SCRIPT.read_text()
+        for name in ('LS_PPP', 'MTCP'):
+            urls = re.findall(r'"([^"]+)"', re.search(fr'{name}_URLS=\((.*?)\)', source, re.S)[1])
+            self.assertGreaterEqual(len({urlsplit(url).hostname for url in urls}), 2)
+            self.assertTrue(all(urlsplit(url).scheme == 'https' for url in urls))
 
 
 if __name__ == '__main__':
