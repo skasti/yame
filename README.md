@@ -513,6 +513,33 @@ Run the automated tests with:
 ./gradlew test
 ```
 
+The Linux DOSBox PPP/DNS/TCP integration suite also requires `curl`, `sha1sum`,
+Python 3, DOSBox, `socat`, Xvfb and `xauth`:
+
+```shell
+bash scripts/dosbox-network-integration-test.sh
+# Optionally reuse downloaded archives between local runs:
+YAME_DOSBOX_DOWNLOAD_CACHE="$HOME/.cache/yame/dosbox-network" bash scripts/dosbox-network-integration-test.sh
+```
+
+CI caches the test-only LSppp and mTCP archives outside the suite's temporary
+working directory. Every use checks the pinned SHA-1 digest, including cache
+hits; missing or invalid archives are downloaded again with bounded retries
+and connection/transfer timeouts. Each archive has an ibiblio URL and a separate
+FreeDOS GitLab URL pinned to a full commit ID. A network error or digest mismatch
+advances to the next source. GitLab uses different ZIP packaging for the same
+program versions, so each source has its own expected digest. Cache hits must
+match one of those explicitly pinned digests before an archive can be used.
+Download failures appear in the dependency preparation step before the
+DOSBox/YAME suite starts. The binaries are not redistributed with YAME.
+
+Update dependency URLs/versions and expected digests in
+`scripts/dosbox-network-downloads.sh` together. CI hashes that file for the exact
+cache key, so changing either automatically invalidates the cache. Caches may be
+evicted or unavailable across branches/PRs; a cache miss still requires upstream
+access. Run the offline cache regression tests with
+`python3 -m unittest discover -s tests -p 'test_dosbox_downloads.py'`.
+
 ## Expected first test
 
 Configure the old laptop's modem/dial-up connection to use its serial port and dial any number, for example `5551234`.

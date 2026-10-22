@@ -11,16 +11,13 @@ DOSBOX_LOG="$WORK_DIR/dosbox.log"
 DNS_FIXTURE_LOG="$WORK_DIR/dns-fixture.log"
 HTTP_FIXTURE_LOG="$WORK_DIR/http-fixture.log"
 DOSBOX_CONF="$WORK_DIR/dosbox.conf"
-LS_PPP_ZIP="$WORK_DIR/lsppp.zip"
-MTCP_ZIP="$WORK_DIR/mtcp.zip"
+DOWNLOAD_DIR="${YAME_DOSBOX_DOWNLOAD_CACHE:-$WORK_DIR/downloads}"
+LS_PPP_ZIP="$DOWNLOAD_DIR/lsppp.zip"
+MTCP_ZIP="$DOWNLOAD_DIR/mtcp.zip"
+DEPENDENCIES_READY=false
 PORT=50453
 HTTP_PORT=18080
 BAUD=19200
-
-LS_PPP_URL="https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.4/net/lsppp.zip"
-LS_PPP_SHA1="5a6a1430aad2616b266be7d149bb3752beea319e"
-MTCP_URL="https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/repositories/1.4/net/mtcp/20250604.0/mtcp.zip"
-MTCP_SHA1="c6a319ae44ef49d03616968bd330b9c64cfab167"
 
 DNS_FIXTURE_PID=""
 HTTP_FIXTURE_PID=""
@@ -44,7 +41,7 @@ cleanup() {
             >/dev/null || true
     fi
 
-    if [[ $status -ne 0 ]]; then
+    if [[ $status -ne 0 && "$DEPENDENCIES_READY" == true ]]; then
         echo
         echo "=== YAME log ==="
         cat "$YAME_LOG" 2>/dev/null || true
@@ -90,19 +87,11 @@ mkdir -p "$DOS_DRIVE"
 cp "$ROOT/scripts/dos/YAMETEST.BAT" "$DOS_DRIVE/YAMETEST.BAT"
 cp "$ROOT/scripts/dos/MTCP.CFG" "$DOS_DRIVE/MTCP.CFG"
 
-download_and_verify() {
-    local url=$1
-    local expected_sha1=$2
-    local destination=$3
-
-    curl --fail --location --silent --show-error --retry 3 --output "$destination" "$url"
-    echo "$expected_sha1  $destination" | sha1sum --check --status
-}
-
-# These are test-time dependencies only; the binaries are not redistributed with YAME.
-# LSppp 1.0 is GPL-2.0-or-later, and mTCP 2025-01-10 is GPL-3.0.
-download_and_verify "$LS_PPP_URL" "$LS_PPP_SHA1" "$LS_PPP_ZIP"
-download_and_verify "$MTCP_URL" "$MTCP_SHA1" "$MTCP_ZIP"
+if ! bash "$ROOT/scripts/dosbox-network-downloads.sh" "$DOWNLOAD_DIR"; then
+    echo "DOSBox dependency setup failed; the DOSBox/YAME integration suite has not started." >&2
+    exit 2
+fi
+DEPENDENCIES_READY=true
 
 extract_executable() {
     local archive=$1
