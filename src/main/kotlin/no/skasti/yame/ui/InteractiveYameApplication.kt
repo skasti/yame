@@ -38,7 +38,7 @@ class InteractiveYameApplication internal constructor(
         terminal = terminal,
         logManager = logManager,
         resourceGraphs = YameRegistries.navigationResources(
-            PppHttpCompatibilityConfig.fromSnapshot(configStore.snapshot()),
+            PppHttpCompatibilityConfig.fromConfigStore(configStore),
         ),
         portProvider = portProvider,
     )
