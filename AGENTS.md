@@ -147,14 +147,21 @@ unbounded buffering.
 ## Component configuration pattern
 
 - Keep a component's immutable configuration type beside its owning component.
-- Provide `ConfigType.fromConfigStore()` on its companion object. Read owned
-  settings directly through typed keys on the supplied `ConfigStore`.
-- Accept explicit configuration with a non-null constructor default, for example
-  `config: ConfigType = ConfigType.fromConfigStore()`. Do not pass the store into
-  that factory or use a nullable config argument merely to implement a fallback.
+- Provide `ConfigType.fromConfigStore(store: ConfigStore = ConfigStore.current)`
+  on its companion object. Read owned `SettingKey` values directly through
+  `store[key]`; these reads trigger lazy loading. Pass an available store
+  explicitly to `fromConfigStore(store)`. The `ConfigStore.current` default is
+  convenient when constructing a component without an explicit store.
+- Accept an explicitly constructed immutable config independently of any store.
+  A non-null constructor default such as
+  `config: ConfigType = ConfigType.fromConfigStore()` is useful when appropriate,
+  but is not the only construction pattern. Composition with an explicit store
+  can inject `ConfigType.fromConfigStore(store)` instead. Do not use a nullable
+  config argument merely to implement a fallback.
 - Explicit config must allow isolated tests without installing or modifying a
   global store. Config data-class defaults remain ordinary standalone defaults.
-- Factories produce immutable component configuration values. Live updates require a separately owned subscription;
+- Factories produce immutable component configuration values without retaining
+  a `ConfigStore` reference. Live updates require a separately owned subscription;
   never silently overwrite explicit constructor configuration.
 - `ConfigStore.current` fails fast until `Main` explicitly installs the process store.
   Hold the returned installation handle for the application's lifetime and close it
@@ -168,7 +175,8 @@ unbounded buffering.
   setting changes between individual reads. Build immutable component configs
   when needed and use subscriptions to handle relevant runtime changes. Apply
   notification values in delivery order; request-scoped providers may construct
-  immutable settings for each HTTP request.
+  immutable settings for each HTTP request. Do not add alternative configuration
+  read mechanisms or reintroduce snapshots.
 - Immutable configs contain values only; subscriptions, providers, IO, registries,
   and other runtime dependencies belong in component constructors.
 - Local config types do not require a nested application-wide config tree.
