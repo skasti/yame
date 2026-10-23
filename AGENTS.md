@@ -188,8 +188,9 @@ unbounded buffering.
 - Each feature owns its keys, groups, immutable values, validation, and component
   factories. Modem config contains modem behavior/credentials only; PPP addressing,
   DNS, and HTTP compatibility are independent component configs.
-- HTML transformation settings, rules, and their separate startup INI reader live
-  in `ppp.proxy.transform`, alongside the transformation implementation.
+- HTML transformation settings and rules live in `ppp.proxy.transform`, alongside
+  the transformation implementation. The shared repository reads their INI file
+  through `ElementSimplifierSettings`; the older reader remains for compatibility.
 - Feature-owned `Settings` definitions own their identity, optional logical
   `file` name, static groups, typed keys, and optional dynamic-section mapping.
   A group's ID is its canonical INI section. Keys declare relative names and

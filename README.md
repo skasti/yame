@@ -179,7 +179,24 @@ and PPP subnet.
 Command-line options override file values for that run. Use `--config <path>` to
 select a different file.
 
-The file uses simple `key=value` properties and is limited to 32 KiB. YAME
+The file uses INI sections and is limited to 32 KiB. For example:
+
+```ini
+[serial]
+baud=57600
+
+[modem]
+pickup-time=500ms
+login.username=user
+login.password=secret
+
+[dns]
+upstream=1.1.1.1
+```
+
+Equivalent flat keys such as `serial.baud=57600` can be read, but saves write
+the section form. Older names such as `modem.pickup-time-nanos` and numeric
+nanosecond values need manual updating. YAME
 rejects a save that exceeds this limit before replacing the existing file.
 Serial port names are limited to 256 characters, and login usernames and
 passwords to 64 printable ASCII characters each.
@@ -247,8 +264,9 @@ input is empty. The current choice is marked in the on/off palette.
 
 Changes apply to subsequent HTTP requests without reconnecting PPP. Reload the
 page to see the new result. A request already in progress finishes using its
-original settings. TUI changes are saved as `transformers.<name>.enabled` in
-`yame.ini`, independently of the mapping rules in `element-simplifier.ini`.
+original settings. TUI changes are saved under `[transformers]` as
+`<name>-enabled=true|false` in `yame.ini`, independently of the mapping rules
+in `element-simplifier.ini`.
 Turning off `style-remover` retains style blocks and linked stylesheets;
 `attribute-cleaner` separately controls removal of upstream inline styles.
 
@@ -512,33 +530,6 @@ Run the automated tests with:
 ```shell
 ./gradlew test
 ```
-
-The Linux DOSBox PPP/DNS/TCP integration suite also requires `curl`, `sha1sum`,
-Python 3, DOSBox, `socat`, Xvfb and `xauth`:
-
-```shell
-bash scripts/dosbox-network-integration-test.sh
-# Optionally reuse downloaded archives between local runs:
-YAME_DOSBOX_DOWNLOAD_CACHE="$HOME/.cache/yame/dosbox-network" bash scripts/dosbox-network-integration-test.sh
-```
-
-CI caches the test-only LSppp and mTCP archives outside the suite's temporary
-working directory. Every use checks the pinned SHA-1 digest, including cache
-hits; missing or invalid archives are downloaded again with bounded retries
-and connection/transfer timeouts. Each archive has an ibiblio URL and a separate
-FreeDOS GitLab URL pinned to a full commit ID. A network error or digest mismatch
-advances to the next source. GitLab uses different ZIP packaging for the same
-program versions, so each source has its own expected digest. Cache hits must
-match one of those explicitly pinned digests before an archive can be used.
-Download failures appear in the dependency preparation step before the
-DOSBox/YAME suite starts. The binaries are not redistributed with YAME.
-
-Update dependency URLs/versions and expected digests in
-`scripts/dosbox-network-downloads.sh` together. CI hashes that file for the exact
-cache key, so changing either automatically invalidates the cache. Caches may be
-evicted or unavailable across branches/PRs; a cache miss still requires upstream
-access. Run the offline cache regression tests with
-`python3 -m unittest discover -s tests -p 'test_dosbox_downloads.py'`.
 
 ## Expected first test
 

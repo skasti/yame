@@ -113,9 +113,9 @@ stable-pipeline assumption for source validators and cached transformed output.
 The bundled INI file is the single source of default mappings. See the README
 for the format and editing behavior.
 
-Live on/off settings are separate from the immutable INI rules. A shared
-runtime control survives PPP/TCP proxy creation, and each HTTP request constructs
-one immutable `HtmlTransformerSettings` object before fetching upstream. Its transformation
+Live on/off settings are separate from the immutable INI rules. The HTTP handler
+uses an injected store-backed provider to construct one immutable
+`HtmlTransformerSettings` object for each request before fetching upstream. Its transformation
 profile and transformed-cache/in-flight-work keys include the four switch
 values; the same source bytes under different settings never share transformed
 output. Source acquisition may still be coalesced because it is independent of

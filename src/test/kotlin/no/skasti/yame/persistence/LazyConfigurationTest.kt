@@ -362,7 +362,7 @@ class LazyConfigurationTest {
 
         val conflict = SharedDefinition("third-owner", "first")
         val error = assertFailsWith<IllegalArgumentException> { store[conflict.key] }
-        assertTrue(error.message.orEmpty().contains("INI property"), error.message)
+        assertTrue(error.message.orEmpty().contains("Duplicate setting path shared.first"), error.message)
         assertEquals(8, store[first.key])
     }
 

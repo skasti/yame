@@ -54,7 +54,7 @@ class YameRuntimeConnectionTest {
         val directory = Files.createTempDirectory("yame-lazy-runtime")
         try {
             Files.writeString(directory.resolve("yame.ini"),
-                "serial.port=COM1\nserial.baud=38400\nloglevel.modem=debug\n")
+                "[serial]\nport=COM1\nbaud=38400\n[logging]\nlevel-modem=DEBUG\n")
             val store = lazyApplicationConfigStore(directory.resolve("yame.ini"))
             val functions = FunctionStore()
             val firstEntered = CountDownLatch(1)
