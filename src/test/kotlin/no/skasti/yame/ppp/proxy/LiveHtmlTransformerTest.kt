@@ -10,6 +10,8 @@ import no.skasti.yame.ppp.ip.Ipv4Address
 import no.skasti.yame.ppp.tcp.TcpFlowKey
 import no.skasti.yame.ppp.tcp.TcpProxyFlow
 import java.net.InetSocketAddress
+import java.nio.file.Files
+import java.nio.file.Path
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
@@ -19,9 +21,38 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import org.junit.jupiter.api.io.TempDir
+import no.skasti.yame.ppp.proxy.transform.ElementSimplifierSettings
+import no.skasti.yame.ppp.proxy.transform.TransformerSettings
+import no.skasti.yame.persistence.lazyApplicationConfigStore
 
 class LiveHtmlTransformerTest {
     private val source = "<html><script>run()</script><style>body{color:red}</style><main class=\"news\">News</main></html>"
+
+    @Test
+    fun `rule file switch gates new requests and shares the live transformer profile`(@TempDir directory: Path) {
+        val primary = directory.resolve("yame.ini")
+        Files.writeString(primary, "[transformers]\nscript-remover-enabled=false\nstyle-remover-enabled=false\nattribute-cleaner-enabled=false\n")
+        Files.writeString(directory.resolve("element-simplifier.ini"),
+            "[element-simplifier.general]\nenabled=false\n[main]\ntarget=div\n")
+        val store = lazyApplicationConfigStore(primary)
+        val server = server {}
+        val handler = SystemHttpCompatibilityHandler(
+            config = PppHttpCompatibilityConfig.fromConfigStore(store),
+            transformerSettings = { HtmlTransformerSettings.fromConfigStore(store) },
+        )
+        try {
+            val request = request(server)
+            assertEquals(source, handler.handle(connection(), request).body.toString(Charsets.UTF_8))
+            store.set(ElementSimplifierSettings.Enabled to true)
+            assertEquals(source.replace("<main", "<div").replace("</main>", "</div>"),
+                handler.handle(connection(), request).body.toString(Charsets.UTF_8))
+            store.set(TransformerSettings.Elements to false)
+            assertEquals(source, handler.handle(connection(), request).body.toString(Charsets.UTF_8))
+            store.set(TransformerSettings.Elements to true, ElementSimplifierSettings.Enabled to false)
+            assertEquals(source, handler.handle(connection(), request).body.toString(Charsets.UTF_8))
+        } finally { handler.close(); server.stop(0) }
+    }
 
     @Test
     fun `same handler toggles profiles without stale transformed cache or browser 304 reuse`() {

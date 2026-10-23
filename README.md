@@ -234,10 +234,12 @@ elements. The default mappings use `div` for structural containers such as
 Existing `h1`–`h6` and `p` elements remain unchanged unless explicitly mapped.
 Custom tag names can be added as shown above.
 
-`[element-simplifier.general] enabled` is reserved and currently has no effect
-on transformations. Use the `element-simplifier` switch under `/transformers`
-(stored in the main file's `[transformers]` section) to enable or disable this
-stage.
+Set `[element-simplifier.general] enabled=false` in `element-simplifier.ini`
+to disable element mapping without removing the rules. Both this setting and
+the `element-simplifier` switch under `/transformers` (stored in the main file's
+`[transformers]` section) must be on for the stage to run. Changes made through
+the running configuration controls affect new HTTP requests; edits to the INI
+file itself take effect after a restart.
 
 The file is the complete mapping, not an override layered over defaults:
 remove a section to leave that tag unchanged, or use an empty file to disable

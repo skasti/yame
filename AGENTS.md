@@ -225,8 +225,10 @@ unbounded buffering.
   agree with the parser's case-normalized structural names. Rule discovery
   composes only valid tag sections; unrelated sections and root-flat entries
   remain unclaimed. The separate file's `[element-simplifier.general] enabled`
-  setting is reserved and does not control the transformer; use the live
-  `TransformerSettings.Elements` switch. The repository applies owner-only POSIX
+  setting and the live `TransformerSettings.Elements` switch both gate the
+  element simplifier. `HtmlTransformerSettings.fromConfigStore(store)` reads
+  both directly for each new request; its effective value determines the
+  transformation profile. The repository applies owner-only POSIX
   permissions to all INI files on read/write because a lazy, unregistered feature
   may already have sensitive values in a shared file.
 - `YameConfiguration` and `YameConfigurationBindings` remain compatibility and CLI

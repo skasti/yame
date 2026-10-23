@@ -6,6 +6,8 @@ import no.skasti.yame.serial.SerialSettings
 import no.skasti.yame.modem.ModemSettings
 import no.skasti.yame.modem.LoginCredentials
 import no.skasti.yame.ppp.proxy.transform.TransformerSettings
+import no.skasti.yame.ppp.proxy.transform.ElementSimplifierSettings
+import no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings
 import no.skasti.yame.logging.LogSettings
 import no.skasti.yame.logging.YameLogModule
 import no.skasti.yame.logging.YameLogLevel
@@ -13,6 +15,16 @@ import java.nio.file.Files
 import kotlin.test.*
 
 class ApplicationConfigStoreTest {
+    @Test fun `legacy DTO adapter uses default rule file switch and rejects unsupported writes`() {
+        val store = applicationConfigStore(YameConfiguration())
+        assertTrue(HtmlTransformerSettings.fromConfigStore(store).elementSimplifier)
+        val error = assertFailsWith<IllegalArgumentException> {
+            store.set(ElementSimplifierSettings.Enabled to false)
+        }
+        assertTrue(error.message.orEmpty().contains("cannot persist"))
+        assertTrue(store[ElementSimplifierSettings.Enabled])
+    }
+
     @Test fun `CLI overrides and runtime discovery do not leak into later persistent changes`() {
         val baseline = YameConfiguration()
         val effective = baseline.copy(baudRate = 115200, modemConfig = baseline.modemConfig.copy(username = "cli", password = "secret"))

@@ -378,14 +378,23 @@ class LazyConfigurationTest {
         assertEquals("h2", store[ElementSimplifierSettings.Rules].rules.getValue("heading").target)
     }
 
-    @Test fun `reserved rule file enabled setting does not replace the live transformer switch`() {
+    @Test fun `rule file enabled and live switch both control element simplification`() {
+        val rulesFile = directory.resolve("element-simplifier.ini")
+        Files.writeString(rulesFile, "[element-simplifier.general]\nenabled=false\n[main]\ntarget=div\n")
         val store = lazyApplicationConfigStore(directory.resolve("yame.ini"))
-        assertTrue(store[ElementSimplifierSettings.Enabled])
-        store.set(ElementSimplifierSettings.Enabled to false)
+        assertFalse(store[ElementSimplifierSettings.Enabled])
+        assertEquals("div", store[ElementSimplifierSettings.Rules].rules.getValue("main").target)
+        assertFalse(HtmlTransformerSettings.fromConfigStore(store).elementSimplifier)
+
+        store.set(ElementSimplifierSettings.Enabled to true)
         assertTrue(HtmlTransformerSettings.fromConfigStore(store).elementSimplifier)
         store.set(TransformerSettings.Elements to false)
         assertFalse(HtmlTransformerSettings.fromConfigStore(store).elementSimplifier)
-        assertFalse(store[ElementSimplifierSettings.Enabled])
+        store.set(ElementSimplifierSettings.Enabled to false, TransformerSettings.Elements to true)
+        assertFalse(HtmlTransformerSettings.fromConfigStore(store).elementSimplifier)
+        assertTrue(Files.readString(rulesFile).contains("enabled=false"))
+        assertTrue(Files.readString(rulesFile).contains("[main]\ntarget=div"))
+        assertFalse(HtmlTransformerSettings.fromConfigStore(lazyApplicationConfigStore(directory.resolve("yame.ini"))).elementSimplifier)
     }
 
     @Test fun `concurrent first use installs one consistent definition`() {

@@ -21,7 +21,7 @@ data class HtmlTransformerSettings(
                 store[TransformerSettings.Script],
                 store[TransformerSettings.Style],
                 store[TransformerSettings.Attributes],
-                store[TransformerSettings.Elements],
+                store[TransformerSettings.Elements] && store[ElementSimplifierSettings.Enabled],
             )
     }
 

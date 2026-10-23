@@ -57,9 +57,11 @@ contain a sensitive setting from a feature that has not been lazy-loaded, so
 permission decisions do not depend on enumerating loaded keys or on hardcoded
 credential paths. `SettingKey.sensitive` remains metadata for redacting values
 in trusted in-process adapters and diagnostics.
-`ElementSimplifierSettings.Enabled` in `[element-simplifier.general]` is reserved
-and currently has no runtime effect. The live
-element-simplifier switch is `TransformerSettings.Elements` in `[transformers]`.
+`ElementSimplifierSettings.Enabled` in `[element-simplifier.general]` is a general
+gate for the rule file. The element simplifier runs only when this and the live
+`TransformerSettings.Elements` switch in `[transformers]` are both enabled.
+The effective switch is read for each new HTTP request and participates in its
+transformation profile. External edits to either INI file still require restart.
 
 ## Transactions, persistence and CLI precedence
 

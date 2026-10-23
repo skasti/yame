@@ -116,8 +116,9 @@ for the format and editing behavior.
 Live on/off settings are separate from the immutable INI rules. The HTTP handler
 uses an injected store-backed provider to construct one immutable
 `HtmlTransformerSettings` object for each request before fetching upstream. Its transformation
-profile and transformed-cache/in-flight-work keys include the four switch
-values; the same source bytes under different settings never share transformed
+profile and transformed-cache/in-flight-work keys include the four effective switch
+values. Element simplification requires both the rule file's general `enabled`
+setting and the `/transformers` switch. The same source bytes under different settings never share transformed
 output. Source acquisition may still be coalesced because it is independent of
 the transformation profile. Already-running requests retain their settings object.
 
