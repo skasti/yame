@@ -22,9 +22,11 @@ object ElementSimplifierSettings : SeparateSettings("element-simplifier") {
             properties.keys.firstOrNull { it != "target" && it != "style" }?.let {
                 throw IllegalArgumentException("${context.filename} [$section]: unknown setting '$it'")
             }
-            val target = context.claim(section, "target")
+            // Rule fields have their own domain normalization. The shared INI
+            // parser leaves their source values untouched.
+            val target = context.claim(section, "target")?.trim()
                 ?: throw IllegalArgumentException("${context.filename} [$section] requires target")
-            val style = if ("style" in properties) context.claim(section, "style")?.takeIf(String::isNotEmpty) else null
+            val style = if ("style" in properties) context.claim(section, "style")?.trim()?.takeIf(String::isNotEmpty) else null
             try { rules[section] = ElementSimplifierRule(target, style) }
             catch (error: IllegalArgumentException) { throw IllegalArgumentException("${context.filename} [$section]: ${error.message}", error) }
         }

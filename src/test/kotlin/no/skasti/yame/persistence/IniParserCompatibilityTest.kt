@@ -34,10 +34,11 @@ class IniParserCompatibilityTest {
 
     @Test fun `root Java Properties escapes leading spaces while unescaped leading spaces are syntax`() {
         val content = "serial.port=\\ leading  spaces\\=x\\\\path  \n" +
-            "another=  unescaped  \n# comment\n"
+            "another=  unescaped  \ninline=value # literal; still value\n# comment\n"
         val document = IniParser.parse(content)
         assertEquals(" leading  spaces=x\\path  ", document.get("", "serial.port"))
         assertEquals("unescaped  ", document.get("", "another"))
+        assertEquals("value # literal; still value", document.get("", "inline"))
         assertEquals(content, document.render())
     }
 

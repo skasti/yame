@@ -238,6 +238,8 @@ recognized in either representation. String deserialization preserves the
 logical value exactly; numeric, boolean, enum, and duration deserialization
 may trim surrounding whitespace. The writer keeps unrelated raw lines intact
 and writes changed owned values in section form without losing whitespace.
+ElementSimplifier's structural rule mapper trims its `target` and `style`
+fields as domain-specific normalization, preserving its established rule syntax.
 
 Ordinary scalar values use `kotlinx.serialization` with type metadata retained
 for nullable and collection-declared keys. Custom scalar types supply standard

@@ -140,6 +140,10 @@ class LazyConfigurationTest {
         assertEquals(" secret ", store[ModemSettings.Login].password)
         assertEquals("\t COM  1\\path=x:y\t ", store[SerialSettings.Port])
 
+        store.set(ModemSettings.Login to LoginCredentials("user", "temporary"))
+        store.set(ModemSettings.Login to LoginCredentials("user", " secret "))
+        assertEquals(" secret ", lazyApplicationConfigStore(path)[ModemSettings.Login].password)
+
         val credentials = LoginCredentials("user", "  new =: \\secret  ")
         val port = "  COM  2\t=mode:fast\\path  "
         store.set(ModemSettings.Login to credentials, SerialSettings.Port to port)
