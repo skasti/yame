@@ -596,6 +596,30 @@ class LazyConfigurationTest {
         assertEquals(7, store[replacement.key])
     }
 
+    @Test fun `candidate validation rejects staged ownership before installation`() {
+        val path = directory.resolve("yame.ini")
+        Files.writeString(path, "[shared]\nvalue=bad\n")
+        val invalid = object : Settings("invalid") {
+            val group = SettingGroup("shared", this)
+            val key = SettingKey<String>("candidate", group, validateValue = { require(it != "bad") },
+                default = { "ok" }, structural = true)
+            override fun loadFromIni(context: IniReadContext): List<ConfigChange<*>> = listOf(
+                key to requireNotNull(context.compose(key, "shared") { it["value"] }),
+            )
+        }
+        val replacement = object : Settings("replacement") {
+            val group = SettingGroup("shared", this)
+            val key = SettingKey<String>("replacement", group, default = { "" }, structural = true)
+            override fun loadFromIni(context: IniReadContext): List<ConfigChange<*>> = listOf(
+                key to requireNotNull(context.compose(key, "shared") { it["value"] }),
+            )
+        }
+        val store = lazyApplicationConfigStore(path)
+        assertFailsWith<IllegalArgumentException> { store[invalid.key] }
+        assertEquals("bad", store[replacement.key])
+        assertEquals("[shared]\nvalue=bad\n", Files.readString(path))
+    }
+
     @Test fun `unowned and differently owned attributes prevent whole section removal`() {
         val path = directory.resolve("yame.ini")
         Files.writeString(path, "[shared]\nfirst=7\nsecond=9\nunknown=keep\n")
