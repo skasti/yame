@@ -78,8 +78,10 @@ class ApplicationConfigStoreTest {
                 LogSettings.CaptureLimits.values.map { it to 20 }
             store.set(*changes.toTypedArray())
             assertEquals(1, saves)
-            val reloaded = applicationConfigStore(file.load()).snapshot()
-            assertEquals(store.snapshot().map { it.key.path to it.value }, reloaded.map { it.key.path to it.value })
+            val reloaded = applicationConfigStore(file.load())
+            YameConfigurationBindings.all.forEach { binding ->
+                assertEquals(store[binding.key], reloaded[binding.key], binding.key.path)
+            }
             val text = Files.readString(directory.resolve("yame.ini"))
             for (name in listOf("version=1", "login.username=user", "serial.port=COM4", "ppp.subnet=10.99.0.0/30", "dns.upstream=1.1.1.1")) {
                 assertTrue(text.contains(name), name)

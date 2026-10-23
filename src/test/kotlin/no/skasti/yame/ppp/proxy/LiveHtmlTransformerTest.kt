@@ -32,7 +32,7 @@ class LiveHtmlTransformerTest {
         run {
             val store = no.skasti.yame.persistence.applicationConfigStore(no.skasti.yame.persistence.YameConfiguration())
             val handler = SystemHttpCompatibilityHandler(config = PppHttpCompatibilityConfig(),
-                transformerSettings = { HtmlTransformerSettings.fromSnapshot(store.snapshot()) })
+                transformerSettings = { HtmlTransformerSettings.fromConfigStore(store) })
             try {
                 val request = request(server).copy(headers = request(server).headers + listOf(
                     "If-None-Match" to "\"source\"", "If-Modified-Since" to "Tue, 29 Sep 2026 12:00:00 GMT",
@@ -60,7 +60,7 @@ class LiveHtmlTransformerTest {
     }
 
     @Test
-    fun `in flight response keeps one settings snapshot and next request gets new setting`() {
+    fun `in flight response keeps its settings object and next request gets new setting`() {
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
         val server = server {
@@ -70,7 +70,7 @@ class LiveHtmlTransformerTest {
         run {
             val store = no.skasti.yame.persistence.applicationConfigStore(no.skasti.yame.persistence.YameConfiguration())
             val handler = SystemHttpCompatibilityHandler(config = PppHttpCompatibilityConfig(),
-                transformerSettings = { HtmlTransformerSettings.fromSnapshot(store.snapshot()) })
+                transformerSettings = { HtmlTransformerSettings.fromConfigStore(store) })
             try {
                 val response = CompletableFuture.supplyAsync { handler.handle(connection(), request(server)) }
                 assertTrue(entered.await(5, TimeUnit.SECONDS))

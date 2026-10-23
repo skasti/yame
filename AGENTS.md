@@ -147,14 +147,14 @@ unbounded buffering.
 ## Component configuration pattern
 
 - Keep a component's immutable configuration type beside its owning component.
-- Provide `ConfigType.fromConfigStore()` on its companion object. Read a single
-  snapshot from `ConfigStore.current` when mapping multiple setting keys.
+- Provide `ConfigType.fromConfigStore()` on its companion object. Read owned
+  settings directly through typed keys on the supplied `ConfigStore`.
 - Accept explicit configuration with a non-null constructor default, for example
   `config: ConfigType = ConfigType.fromConfigStore()`. Do not pass the store into
   that factory or use a nullable config argument merely to implement a fallback.
 - Explicit config must allow isolated tests without installing or modifying a
   global store. Config data-class defaults remain ordinary standalone defaults.
-- Factories produce snapshots. Live updates require a separately owned subscription;
+- Factories produce immutable component configuration values. Live updates require a separately owned subscription;
   never silently overwrite explicit constructor configuration.
 - `ConfigStore.current` fails fast until `Main` explicitly installs the process store.
   Hold the returned installation handle for the application's lifetime and close it
@@ -162,10 +162,13 @@ unbounded buffering.
   frontends share the existing store; they never install a replacement.
 - Runtime and presentation constructors receive the shared stores, not duplicate
   initial setting values or the persistent application configuration tree.
-- Runtime composition maps each component config from the same committed snapshot.
-  Apply notification values in delivery order rather than rereading a newer store
-  snapshot inside a change callback. Live request settings may read a fresh snapshot
-  once at the start of each request through an explicitly injected provider.
+- `ConfigStore` is the single authoritative source of configuration values.
+  Components read settings directly through typed keys; multi-key read snapshots
+  are intentionally unsupported. YAME accepts the negligible possibility that a
+  setting changes between individual reads. Build immutable component configs
+  when needed and use subscriptions to handle relevant runtime changes. Apply
+  notification values in delivery order; request-scoped providers may construct
+  immutable settings for each HTTP request.
 - Immutable configs contain values only; subscriptions, providers, IO, registries,
   and other runtime dependencies belong in component constructors.
 - Local config types do not require a nested application-wide config tree.
@@ -174,7 +177,7 @@ unbounded buffering.
 
 - `no.skasti.yame.config` and `.function` contain generic infrastructure only.
   They must not import concrete features, persistence adapters, or frontends.
-- Each feature owns its keys, groups, immutable values, validation, and snapshot
+- Each feature owns its keys, groups, immutable values, validation, and component
   factories. Modem config contains modem behavior/credentials only; PPP addressing,
   DNS, and HTTP compatibility are independent component configs.
 - HTML transformation settings, rules, and their separate startup INI reader live

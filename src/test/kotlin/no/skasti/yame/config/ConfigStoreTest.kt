@@ -117,7 +117,7 @@ class ConfigStoreTest {
         assertEquals(2400, store[baud])
     }
 
-    @Test fun `cleanup skips queued delivery and snapshots cannot be mutated through iterators`() {
+    @Test fun `cleanup skips queued delivery and earlier change notifications keep their values`() {
         val store = ConfigStore(listOf(baud to 38400, tone to true))
         lateinit var subscription: AutoCloseable
         store.onChange[serial].subscribe { subscription.close() }
@@ -125,8 +125,9 @@ class ConfigStoreTest {
         subscription = store.onChange[serial].subscribe { calls++ }
         store.set(baud to 9600)
         assertEquals(0, calls)
-        val snapshot = store.snapshot()
+        var first: ConfigChanges? = null
+        store.onChange[serial].subscribe(initial = true) { first = it }.close()
         store.set(baud to 19200)
-        assertEquals(9600, snapshot[baud]?.value)
+        assertEquals(9600, first?.get(baud)?.value)
     }
 }

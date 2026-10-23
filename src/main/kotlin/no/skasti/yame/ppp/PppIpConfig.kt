@@ -1,7 +1,6 @@
 package no.skasti.yame.ppp
 
 import no.skasti.yame.config.ConfigStore
-import no.skasti.yame.config.ConfigChanges
 import no.skasti.yame.ppp.ip.Ipv4Address
 import no.skasti.yame.ppp.ip.Ipv4Cidr
 
@@ -9,14 +8,8 @@ data class PppIpConfig(
     val configuredSubnet: Ipv4Cidr? = null,
 ) {
     companion object {
-        fun fromConfigStore(store: ConfigStore = ConfigStore.current): PppIpConfig {
-            store.ensureLoaded(PppSettings);
-            return fromSnapshot(store.snapshot())
-        }
-
-        internal fun fromSnapshot(snapshot: ConfigChanges): PppIpConfig {
-            return PppIpConfig(configuredSubnet = requireNotNull(snapshot[PppSettings.Subnet]).value)
-        }
+        fun fromConfigStore(store: ConfigStore = ConfigStore.current): PppIpConfig =
+            PppIpConfig(configuredSubnet = store[PppSettings.Subnet])
     }
 
     init {

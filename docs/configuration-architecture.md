@@ -24,7 +24,7 @@ store contracts contain no feature imports. Each feature's `ConfigBase` owns its
 and optional custom mapping. The generic store contains no central list of keys.
 A direct `store[key]` read requests the definition attached to the key's group,
 loading that definition on first use. Component `fromConfigStore()` factories
-request their own definitions before taking a snapshot of multiple values.
+read only their owned keys through the supplied store.
 The `persistence` package retains compatibility adapters for existing callers and
 CLI composition. They do not register features or supply the runtime's settings.
 `YameConfiguration` is used only during startup/CLI parsing and file persistence.
@@ -35,15 +35,16 @@ semantics remain unchanged.
 
 ## Transactions, persistence and CLI precedence
 
-`set(vararg changes)` validates registered keys and the candidate snapshot,
+`set(vararg changes)` validates registered keys and the internal candidate state,
 then persists changed keys through the repository's prepared, permission-restricted
-temporary file and safe replacement. Only after a successful save are both snapshots published. Validation
+temporary file and safe replacement. Only after a successful save are the persistent
+and effective states published. Validation
 or persistence exceptions reach the caller; neither in-memory state nor observers
 are updated on rejection. The TUI reports the failure without displaying input
 values. No-op batches skip both saving and notifications.
 
 Persistent defaults/file values and effective runtime values are separate layers
-inside the same store. CLI values override only the effective startup snapshot.
+inside the same store. CLI values override only the effective startup values.
 Writing an unrelated setting cannot persist CLI credentials, ports, baud or other
 overrides. An explicit `set` promotes only its named settings to the persistent
 baseline; selecting an already effective CLI value can therefore save it without
@@ -75,8 +76,8 @@ Exceptions are reported to the configured failure sink and cannot roll back a
 saved transaction or prevent other listeners from receiving it.
 
 Use `subscribe(initial = true)` to initialize **from the callback**, rather than
-reading before subscribing. Registration and enqueueing the initial immutable
-snapshot occur under the commit lock, so later events cannot overtake it. Initial
+reading before subscribing. Registration and enqueueing the initial notification
+occur under the commit lock, so later events cannot overtake it. Initial
 delivery may be queued behind an existing drainer. Closing a subscription suppresses
 queued deliveries; an already executing callback may finish. Modules own their
 subscriptions and function registration handles.
@@ -96,7 +97,7 @@ credential values.
 | Modem pickup/dial-tone durations and handshake profile | Restart connection with the new modem configuration |
 | Modem tones | Update the active modem immediately |
 | Modem login credentials | Apply to the next call; an established call keeps its credentials |
-| HTML transformer switches | Read one consistent snapshot per request; reload the page, keep PPP connected |
+| HTML transformer switches | Construct immutable settings for each request; reload the page, keep PPP connected |
 | Log levels and capture limits | Apply immediately |
 | `element-simplifier.ini` rules | Can be saved through the store; external file edits take effect after restart |
 | Config/log paths, UI mode, tone-test mode | CLI startup policy, not runtime persistent settings |
@@ -105,7 +106,7 @@ credential values.
 All existing TUI settings use the store. `HtmlTransformerControl` has been removed.
 The runtime injects a `() -> HtmlTransformerSettings` provider through the PPP/proxy
 composition into the HTTP handler. The handler invokes it once at request entry,
-retaining that immutable snapshot for redirects, resource work, and profile-specific
+retaining that immutable component settings object for redirects, resource work, and profile-specific
 cache identity. Live HTML responses disable browser validator reuse. Without a
 provider, explicitly supplied `PppHttpCompatibilityConfig.htmlTransformers` remains
 fixed and retains the ordinary conditional-request behavior. Providers never live
@@ -127,13 +128,15 @@ The runtime registers disconnect, reconnect, refresh-ports and quit. Palette
 navigation and clearing presentation history remain presentation responsibilities.
 No core component knows about a palette, GUI toolkit or network transport.
 
-## Component configuration snapshots
+## Component configuration values
 
 Component configuration follows the pattern in `AGENTS.md`: a local immutable
 config type exposes `fromConfigStore()`, and its component accepts that type as a
 non-null constructor argument defaulting to the factory call. Explicit arguments
-bypass global configuration entirely. A factory maps a single committed snapshot;
-it does not subscribe or introduce another mutable authority. `ConfigStore.current`
+bypass global configuration entirely. Factories read typed keys directly from
+`ConfigStore`; they do not subscribe or introduce another mutable authority.
+Multi-key read snapshots are intentionally unsupported. YAME accepts the negligible
+possibility that a value changes between individual reads. `ConfigStore.current`
 fails fast until `Main` installs a process store. `install` returns an idempotent
 lifetime handle, rejects an existing owner, and releases the store on close.
 `Main` closes that handle after the runtime and frontend. Multiple frontends take
@@ -147,24 +150,24 @@ loaded from the existing separate INI file; runtime writes are rejected.
 | Package / component | Owns / depends on |
 | --- | --- |
 | `config`, `function` | Typed generic stores, changes, subscriptions and operations; no concrete features or persistence |
-| `serial`, `modem`, `ppp`, `ppp.dns`, `ppp.proxy`, `logging` | Their own keys, groups, value validation and immutable config snapshots |
+| `serial`, `modem`, `ppp`, `ppp.dns`, `ppp.proxy`, `logging` | Their own keys, groups, value validation and immutable component configs |
 | `ppp.proxy.transform` | HTML switches, element rules/INI, transformation policy and implementation |
 | `persistence` | Legacy application file representation, all key bindings, autosave adapter and file IO |
 | `Main` | Load file, apply transient CLI precedence, create/install shared stores, choose frontend and startup retry policy |
-| `YameRuntime` | Compose component configs from a consistent snapshot, observe committed batches, own connections and registered functions |
+| `YameRuntime` | Construct component configs from direct store reads, observe committed batches, own connections and registered functions |
 | TUI | Derive presentation caches from the store; display runtime observations separately; invoke core functions |
 
 The CLI reads serial, modem, PPP, DNS, proxy enabled, and logging defaults for
 normal startup; tone test uses serial, modem, and logging. Neither mode requests
 HTML transformer or element rule definitions merely to parse options. The runtime
-requests its HTTP configuration and child definitions before its first snapshot.
-Runtime and TUI initialization read one store snapshot and subscribe with initial
-delivery to close the read/subscribe race. Runtime accumulates ordered event values
-in a derived immutable snapshot, then uses each feature's `fromSnapshot` mapper to
-construct connection dependencies. No persistence bindings or legacy DTOs enter
-this path. A cross-feature batch restarts the connection once. Logging values and
-modem tones/credentials update incrementally. Runtime caches are derived views;
-configuration writes always go through ConfigStore.
+loads only the definitions it needs through typed reads. Runtime and TUI subscribe
+with initial delivery to close the read/subscribe race. Runtime constructs immutable
+component configurations from direct store reads when a connection is established;
+the connection generation prevents an older attempt from replacing a newer one.
+No persistence bindings or legacy DTOs enter this path. A cross-feature batch
+restarts the connection once. Logging values and modem tones/credentials update
+incrementally. TUI keeps presentation state, while configuration values remain
+authoritative in `ConfigStore`.
 
 The intentional cross-feature dependencies are composition relationships:
 `YameRuntime` orchestrates independent features; `RetroPppHandler` composes addressing,
@@ -195,8 +198,8 @@ port without requiring serial hardware or process-global configuration.
 
 The runtime now uses `IniConfigurationRepository` and `ConfigStore.ensureLoaded`.
 Feature-owned `ConfigBase` definitions declare their file, groups and typed INI
-bindings. `fromConfigStore(store)` requests the owner's definition before taking a
-snapshot. A new feature can supply its own definition without editing the generic
+bindings. `fromConfigStore(store)` reads owned keys directly and lazily loads their
+definition. A new feature can supply its own definition without editing the generic
 store or a registry of all available modules. CLI option reads request the
 features whose values it exposes as command-line defaults; unrelated files are
 never scanned. The legacy `applicationConfigStore` and `YameConfigurationStore`
@@ -232,7 +235,7 @@ A first request loads and validates all of a definition's keys under the store
 lock, then installs them together without a save or notification. Concurrent
 requests share the completed load; failure installs nothing and the next call
 retries. Previously loaded values are never reset by a later definition in the
-same file. Only registered keys appear in snapshots and frontend enumeration.
+same file. Only registered keys appear in initial notifications and frontend enumeration.
 Registration claims individual properties, including absent declared properties;
 an overlapping registration fails rather than silently replacing an owner.
 

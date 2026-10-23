@@ -1,7 +1,6 @@
 package no.skasti.yame.ppp.dns
 
 import no.skasti.yame.config.ConfigStore
-import no.skasti.yame.config.ConfigChanges
 import no.skasti.yame.ppp.ip.Ipv4Address
 
 data class PppDnsConfig(
@@ -18,14 +17,8 @@ data class PppDnsConfig(
     }
 
     companion object {
-        fun fromConfigStore(store: ConfigStore = ConfigStore.current): PppDnsConfig {
-            store.ensureLoaded(DnsSettings);
-            return fromSnapshot(store.snapshot())
-        }
-
-        internal fun fromSnapshot(snapshot: ConfigChanges): PppDnsConfig {
-            return PppDnsConfig(upstreamServer = requireNotNull(snapshot[DnsSettings.Upstream]).value)
-        }
+        fun fromConfigStore(store: ConfigStore = ConfigStore.current): PppDnsConfig =
+            PppDnsConfig(upstreamServer = store[DnsSettings.Upstream])
 
         const val DNS_PORT = 53
         val DEFAULT_UPSTREAM_SERVER: Ipv4Address = Ipv4Address.Companion.parse("8.8.8.8")

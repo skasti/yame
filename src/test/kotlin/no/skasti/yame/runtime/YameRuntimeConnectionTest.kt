@@ -3,6 +3,9 @@ package no.skasti.yame.runtime
 import com.github.ajalt.mordant.terminal.Terminal
 import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.function.FunctionStore
+import no.skasti.yame.lifecycle.ApplicationFunctions
+import no.skasti.yame.logging.YameLogLevel
+import no.skasti.yame.logging.YameLogModule
 import no.skasti.yame.logging.YameLogManager
 import no.skasti.yame.ppp.proxy.NavigationResourceRegistry
 import no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig
@@ -14,6 +17,7 @@ import no.skasti.yame.ppp.tcp.TcpProxyEvent
 import no.skasti.yame.ppp.tcp.TcpProxyFlow
 import no.skasti.yame.persistence.YameConfiguration
 import no.skasti.yame.persistence.applicationConfigStore
+import no.skasti.yame.persistence.lazyApplicationConfigStore
 import no.skasti.yame.ppp.ip.Ipv4Address
 import no.skasti.yame.serial.*
 import no.skasti.yame.ui.TuiYameObserver
@@ -24,21 +28,81 @@ import java.net.ServerSocket
 import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 import kotlin.test.*
 
 class YameRuntimeConnectionTest {
     private class Port(
         private val failure: Exception? = null,
         private val onReadingStarted: () -> Unit = {},
+        private val onOpen: () -> Unit = {},
     ) : SerialTransport {
         override val output = ByteArrayOutputStream()
         var closed = false
-        override fun open() { failure?.let { throw it } }
+        override fun open() { onOpen(); failure?.let { throw it } }
         override fun setCarrierPresent(carrierPresent: Boolean) = Unit
         override fun startReading(onBytes: (ByteArray) -> Unit, onStopped: (Throwable?) -> Unit) = onReadingStarted()
         override fun close() { closed = true }
+    }
+
+    @Test
+    fun `fresh lazy runtime reads settings and a stale connection cannot replace a newer one`() {
+        val directory = Files.createTempDirectory("yame-lazy-runtime")
+        try {
+            Files.writeString(directory.resolve("yame.ini"),
+                "serial.port=COM1\nserial.baud=38400\nloglevel.modem=debug\n")
+            val store = lazyApplicationConfigStore(directory.resolve("yame.ini"))
+            val functions = FunctionStore()
+            val firstEntered = CountDownLatch(1)
+            val releaseFirst = CountDownLatch(1)
+            val secondReady = CountDownLatch(1)
+            val openedBauds = java.util.Collections.synchronizedList(mutableListOf<Int>())
+            val messages = java.util.Collections.synchronizedList(mutableListOf<String>())
+            val failures = java.util.Collections.synchronizedList(mutableListOf<Throwable>())
+            val first = Port(onOpen = {
+                firstEntered.countDown()
+                check(releaseFirst.await(5, TimeUnit.SECONDS))
+            })
+            YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
+                YameRuntime(
+                    observer = object : RuntimeObserver { override fun onLog(message: String) {
+                        messages += message
+                        if (message.contains("YAME ready on COM1 at 57600 baud")) secondReady.countDown()
+                    } },
+                    configStore = store, functions = functions, logManager = logs,
+                    resourceGraphs = NavigationResourceRegistry(),
+                    portProvider = { listOf(SerialPortDescriptor("COM1", "test port")) },
+                    connectionFactory = { _, baud, _, _ ->
+                        openedBauds += baud
+                        if (baud == 38_400) first else Port()
+                    },
+                ).use { runtime ->
+                    assertEquals(YameLogLevel.DEBUG, logs.level(YameLogModule.MODEM))
+                    val worker = thread {
+                        try { runtime.run() } catch (error: Throwable) { failures += error }
+                    }
+                    try {
+                        assertTrue(firstEntered.await(5, TimeUnit.SECONDS))
+                        store.set(SerialSettings.Baud to 57_600)
+                        releaseFirst.countDown()
+                        assertTrue(secondReady.await(8, TimeUnit.SECONDS))
+                        assertTrue(first.closed)
+                        assertEquals(listOf(38_400, 57_600), openedBauds.toList())
+                        assertEquals(1, messages.count { it.contains("YAME ready on COM1 at 57600 baud") })
+                        assertTrue(messages.none { it.contains("YAME ready on COM1 at 38400 baud") })
+                    } finally {
+                        releaseFirst.countDown()
+                        functions.invoke(ApplicationFunctions.Quit)
+                        worker.join(5_000)
+                        assertFalse(worker.isAlive)
+                    }
+                    assertTrue(failures.isEmpty(), failures.toString())
+                }
+            }
+        } finally { directory.toFile().deleteRecursively() }
     }
 
     @Test

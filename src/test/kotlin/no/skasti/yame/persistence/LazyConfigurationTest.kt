@@ -3,8 +3,12 @@ package no.skasti.yame.persistence
 import no.skasti.yame.config.*
 import no.skasti.yame.modem.HayesModemConfig
 import no.skasti.yame.modem.ModemSettings
+import no.skasti.yame.ppp.PppIpConfig
 import no.skasti.yame.ppp.PppSettings
+import no.skasti.yame.ppp.dns.PppDnsConfig
+import no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig
 import no.skasti.yame.ppp.proxy.transform.ElementSimplifierSettings
+import no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings
 import no.skasti.yame.ppp.proxy.transform.TransformerSettings
 import no.skasti.yame.serial.SerialSettings
 import java.nio.file.Files
@@ -37,12 +41,11 @@ class LazyConfigurationTest {
             }
         }
         val store = ConfigStore(emptyList(), repository = repository)
-        assertNull(store.snapshot()[used.key])
-        assertNull(store.snapshot()[unused.key])
+        assertEquals(0, loads.get())
         assertEquals(7, store[used.key])
         assertEquals(7, store[used.key])
         assertEquals(1, loads.get())
-        assertNull(store.snapshot()[unused.key])
+        assertEquals(1, loads.get())
         assertEquals(9, store[unused.key])
         assertEquals(2, loads.get())
     }
@@ -50,6 +53,32 @@ class LazyConfigurationTest {
     @Test fun `an explicitly populated store can read an owned key without a repository`() {
         val store = ConfigStore(listOf(ModemSettings.Tone to false))
         assertFalse(store[ModemSettings.Tone])
+    }
+
+    @Test fun `component factories read their keys from a fresh lazy store without global installation`() {
+        val path = directory.resolve("yame.ini")
+        Files.writeString(path, """
+            modem.tone-simulation-enabled=false
+            ppp.subnet=10.1.1.0/30
+            dns.upstream=1.1.1.1
+            http-https-proxy.enabled=false
+            transformers.script-remover.enabled=false
+        """.trimIndent())
+        val store = lazyApplicationConfigStore(path)
+
+        assertFalse(HayesModemConfig.fromConfigStore(store).toneSimulationEnabled)
+        assertEquals("10.1.1.0/30", PppIpConfig.fromConfigStore(store).configuredSubnet.toString())
+        assertEquals("1.1.1.1", PppDnsConfig.fromConfigStore(store).upstreamServer.toString())
+        assertFalse(HtmlTransformerSettings.fromConfigStore(store).scriptRemover)
+        val http = PppHttpCompatibilityConfig.fromConfigStore(store)
+        assertFalse(http.enabled)
+        assertFalse(http.htmlTransformers.scriptRemover)
+
+        assertFailsWith<IllegalStateException> { ConfigStore.current }
+        assertEquals("10.2.2.0/30", PppIpConfig(no.skasti.yame.ppp.ip.Ipv4Cidr.parse("10.2.2.0/30")).configuredSubnet.toString())
+        assertEquals("9.9.9.9", PppDnsConfig(no.skasti.yame.ppp.ip.Ipv4Address.parse("9.9.9.9")).upstreamServer.toString())
+        assertFalse(HayesModemConfig(toneSimulationEnabled = false).toneSimulationEnabled)
+        assertFalse(PppHttpCompatibilityConfig(enabled = false, htmlTransformers = HtmlTransformerSettings(scriptRemover = false)).htmlTransformers.scriptRemover)
     }
 
     @Test fun `concurrent first reads load one definition once`() {
@@ -84,8 +113,12 @@ class LazyConfigurationTest {
         Files.writeString(directory.resolve("element-simplifier.ini"), "[heading]\ntarget=h2\n")
         val store = lazyApplicationConfigStore(path)
         assertEquals(57600, cliConfiguration(store).baudRate)
-        assertNull(store.snapshot()[TransformerSettings.Script])
-        assertNull(store.snapshot()[ElementSimplifierSettings.Rules])
+        var transformersLoaded = false
+        var rulesLoaded = false
+        store.onChange[TransformerSettings.Group].subscribe(initial = true) { transformersLoaded = true }.close()
+        store.onChange[ElementSimplifierSettings.Group].subscribe(initial = true) { rulesLoaded = true }.close()
+        assertFalse(transformersLoaded)
+        assertFalse(rulesLoaded)
 
         val http = no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig.fromConfigStore(store)
         assertFalse(http.htmlTransformers.scriptRemover)
@@ -99,7 +132,9 @@ class LazyConfigurationTest {
         val saved = cliConfiguration(store)
         applyCliOverrides(store, saved, saved.copy(baudRate = 9600))
         assertEquals(9600, store[SerialSettings.Baud])
-        assertNull(store.snapshot()[TransformerSettings.Script])
+        var transformersLoaded = false
+        store.onChange[TransformerSettings.Group].subscribe(initial = true) { transformersLoaded = true }.close()
+        assertFalse(transformersLoaded)
         assertFalse(store[TransformerSettings.Script])
         assertTrue(Files.readString(path).contains("serial.baud=57600"))
     }
@@ -111,8 +146,12 @@ class LazyConfigurationTest {
         val options = cliConfiguration(store, toneTest = true)
         assertEquals(57600, options.baudRate)
         assertFalse(options.modemConfig.toneSimulationEnabled)
-        assertNull(store.snapshot()[PppSettings.Subnet])
-        assertNull(store.snapshot()[TransformerSettings.Script])
+        var pppLoaded = false
+        var transformersLoaded = false
+        store.onChange[PppSettings.Group].subscribe(initial = true) { pppLoaded = true }.close()
+        store.onChange[TransformerSettings.Group].subscribe(initial = true) { transformersLoaded = true }.close()
+        assertFalse(pppLoaded)
+        assertFalse(transformersLoaded)
     }
 
     @Test fun `only requested definitions load and late load preserves saved changes`() {
@@ -120,7 +159,9 @@ class LazyConfigurationTest {
         Files.writeString(path, "# original\nmodem.tone-simulation-enabled=false\nppp.subnet=10.1.1.0/30\nunknown.keep=value\n")
         val store = lazyApplicationConfigStore(path)
         store.ensureLoaded(ModemSettings)
-        assertNull(store.snapshot()[PppSettings.Subnet])
+        var pppLoaded = false
+        store.onChange[PppSettings.Group].subscribe(initial = true) { pppLoaded = true }.close()
+        assertFalse(pppLoaded)
         assertFalse(HayesModemConfig.fromConfigStore(store).toneSimulationEnabled)
         store.set(ModemSettings.Tone to true)
         assertTrue(Files.readString(path).contains("ppp.subnet=10.1.1.0/30"))
@@ -150,7 +191,9 @@ class LazyConfigurationTest {
         Files.writeString(path, "serial.baud=bad\n")
         val store = lazyApplicationConfigStore(path)
         assertFailsWith<IllegalArgumentException> { store[SerialSettings.Baud] }
-        assertNull(store.snapshot()[SerialSettings.Baud])
+        var serialLoaded = false
+        store.onChange[SerialSettings.Group].subscribe(initial = true) { serialLoaded = true }.close()
+        assertFalse(serialLoaded)
         Files.writeString(path, "serial.baud=57600\n")
         assertEquals(57600, store[SerialSettings.Baud])
         Files.writeString(path, "serial.baud=9600\n")
@@ -179,7 +222,9 @@ class LazyConfigurationTest {
         start.countDown()
         workers.forEach(Thread::join)
         assertFalse(store[ModemSettings.Tone])
-        assertEquals(5, store.snapshot().count())
+        var modemKeyCount = 0
+        store.onChange[ModemSettings.Group].subscribe(initial = true) { modemKeyCount = it.count() }.close()
+        assertEquals(5, modemKeyCount)
     }
 
     @Test fun `new definitions share an INI without central registration`() {
@@ -194,7 +239,9 @@ class LazyConfigurationTest {
         val second = TestDefinition("second")
         val store = lazyApplicationConfigStore(path)
         store.ensureLoaded(first)
-        assertNull(store.snapshot()[second.key])
+        var secondLoaded = false
+        store.onChange[second.group].subscribe(initial = true) { secondLoaded = true }.close()
+        assertFalse(secondLoaded)
         store.set(first.key to 8)
         store.ensureLoaded(second)
         assertEquals(9, store[second.key])
@@ -208,7 +255,9 @@ class LazyConfigurationTest {
         Files.writeString(path, "[heading]\nstyle=color:red\n")
         val store = lazyApplicationConfigStore(directory.resolve("yame.ini"))
         assertFailsWith<IllegalArgumentException> { store.ensureLoaded(ElementSimplifierSettings) }
-        assertNull(store.snapshot()[ElementSimplifierSettings.Rules])
+        var rulesLoaded = false
+        store.onChange[ElementSimplifierSettings.Group].subscribe(initial = true) { rulesLoaded = true }.close()
+        assertFalse(rulesLoaded)
     }
 
     @Test fun `legacy files load the same effective values through the lazy store`() {

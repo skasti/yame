@@ -88,8 +88,6 @@ class ConfigStore(
         requireNotNull(ConfigChanges(listOfNotNull(effective[key]))[key]) { "Unregistered setting ${key.path}" }.value
     }
 
-    fun snapshot(): ConfigChanges = synchronized(lock) { ConfigChanges(effective.values) }
-
     /** Save before publishing. A failed save rejects the entire transaction. Duplicate keys are rejected. */
     fun set(vararg changes: ConfigChange<*>) {
         commit(changes, persistent = true)
