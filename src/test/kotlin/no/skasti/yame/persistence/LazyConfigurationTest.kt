@@ -151,11 +151,41 @@ class LazyConfigurationTest {
             val Admin = SettingKey<LoginCredentials>("admin", Group, default = { LoginCredentials(null, null) })
             val User = SettingKey<LoginCredentials>("user", Group, default = { LoginCredentials(null, null) })
         }
-        Files.writeString(path, "[accounts]\nadmin.username=a\nadmin.password=b\nuser.username=c\nuser.password=d\n")
+        Files.writeString(path, "accounts.admin.username=a\n[accounts]\nadmin.password=b\nuser.username=c\nuser.password=d\n")
         val reused = lazyApplicationConfigStore(path)
         assertEquals(LoginCredentials("a", "b"), reused[accounts.Admin])
         assertEquals(LoginCredentials("c", "d"), reused[accounts.User])
         assertEquals(2, accounts.compositeSettingKeys.size)
+        reused.set(accounts.Admin to LoginCredentials("new", "secret"),
+            accounts.User to LoginCredentials("other", "password"))
+        val normalized = Files.readString(path)
+        assertFalse(normalized.contains("accounts.admin.username="))
+        for (child in listOf("admin.username=new", "admin.password=secret",
+            "user.username=other", "user.password=password")) {
+            assertTrue(normalized.contains(child), child)
+        }
+    }
+
+    @Test fun `readable durations round trip and malformed duration reports file and property`() {
+        val path = directory.resolve("yame.ini")
+        val durations = object : Settings("durations") {
+            val Group = SettingGroup(this)
+            val Interval = SettingKey<kotlin.time.Duration>("interval", Group,
+                default = { kotlin.time.Duration.ZERO })
+        }
+        for (duration in listOf("500ms", "2s", "1.5s", "2h 5m")) {
+            Files.writeString(path, "[durations]\ninterval=$duration\n")
+            val store = lazyApplicationConfigStore(path)
+            assertEquals(kotlin.time.Duration.parse(duration), store[durations.Interval])
+            store.set(durations.Interval to kotlin.time.Duration.parse("3s"))
+            assertTrue(Files.readString(path).contains("interval=3s"))
+        }
+        Files.writeString(path, "[durations]\ninterval=invalid\n")
+        val error = assertFailsWith<IllegalArgumentException> {
+            lazyApplicationConfigStore(path)[durations.Interval]
+        }
+        assertTrue(error.message.orEmpty().contains("yame.ini"))
+        assertTrue(error.message.orEmpty().contains("interval"))
     }
 
     @Test fun `CLI leaves HTTP transformations unloaded until the HTTP owner requests them`() {

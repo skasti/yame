@@ -30,7 +30,10 @@ abstract class Settings(val id: String, val file: String? = null) {
                 // Object properties are backed by static fields on the JVM; a
                 // reflected field getter can reject the apparent object receiver.
                 val field = property.javaField
-                val value = if (field != null) field.get(this)
+                val value = if (field != null) {
+                    check(field.trySetAccessible()) { "Cannot inspect ${property.name} in $id" }
+                    field.get(this)
+                }
                     else if (property.getter.parameters.isEmpty()) property.getter.call()
                     else property.getter.call(this)
                 discover(value).asSequence()
