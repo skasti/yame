@@ -42,8 +42,8 @@ class IniParserCompatibilityTest {
         assertEquals(57_600, legacy.baudRate)
         assertEquals(legacy.baudRate, runtime[SerialSettings.Baud])
         assertEquals(legacy.portName, runtime[SerialSettings.Port])
-        assertEquals(legacy.modemConfig.username, no.skasti.yame.modem.HayesModemConfig.fromConfigStore(runtime).username)
-        assertEquals(legacy.modemConfig.password, no.skasti.yame.modem.HayesModemConfig.fromConfigStore(runtime).password)
+        // Historical login.* is intentionally not an alias for modem.login.*.
+        assertEquals(null, no.skasti.yame.modem.HayesModemConfig.fromConfigStore(runtime).username)
     }
 
     @Test fun `writing one setting keeps unknown escaped values continuation and comments`() {
@@ -64,13 +64,14 @@ class IniParserCompatibilityTest {
         store.set(SerialSettings.Baud to 115_200)
 
         val written = Files.readString(path)
-        assertTrue(written.startsWith(untouched + "serial.baud=38400\n"))
-        assertTrue(written.contains("serial.baud=115200\n"))
+        assertTrue(written.startsWith(untouched))
+        assertTrue(written.contains("[serial]\nbaud=115200\n"))
+        assertTrue(!written.contains("serial.baud="))
         val updated = Properties().apply { Files.newBufferedReader(path).use { load(it) } }
         original.stringPropertyNames().filter { it != "serial.baud" }.forEach { key ->
             assertEquals(original.getProperty(key), updated.getProperty(key), key)
         }
-        assertEquals("115200", updated.getProperty("serial.baud"))
+        assertEquals("115200", IniParser.parse(written).get("serial", "baud"))
         assertEquals(115_200, YameConfigurationStore(path).load().baudRate)
     }
 
@@ -89,14 +90,14 @@ class IniParserCompatibilityTest {
         store[SerialSettings.Baud]
         store.set(SerialSettings.Baud to 57_600)
         assertTrue(Files.readString(crlf).startsWith("# existing\r\nfuture.continued=one\\\r\n  two\r\n"))
-        assertTrue(Files.readString(crlf).endsWith("serial.baud=57600\r\n"))
+        assertTrue(Files.readString(crlf).endsWith("[serial]\r\nbaud=57600\r\n"))
 
         val unterminated = directory.resolve("unterminated.ini")
         Files.writeString(unterminated, "# keep\nserial.baud=38400")
         val second = lazyApplicationConfigStore(unterminated)
         second[SerialSettings.Baud]
         second.set(SerialSettings.Baud to 57_600)
-        assertEquals("# keep\nserial.baud=57600", Files.readString(unterminated))
+        assertEquals("# keep\n[serial]\nbaud=57600", Files.readString(unterminated))
     }
 
     @Test fun `malformed Unicode escape reports file and physical line`() {

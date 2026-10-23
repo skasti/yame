@@ -58,11 +58,14 @@ class ConfigStore(
             }
             val repo = repository ?: run {
                 // Compatibility for explicitly populated stores used by existing embedders.
-                if (definition.bindings.all { it.key in saved }) return
+                if (definition.allSettingKeys.all { it in saved }) return
                 error("This ConfigStore has no lazy INI repository")
             }
             val (entries, owned) = repo.load(definition)
             require(entries.map { it.key.path }.distinct().size == entries.size) { "Duplicate setting path in ${definition.id}" }
+            require(entries.map { it.key }.toSet() == definition.allSettingKeys.toSet()) {
+                "${definition.id} did not load exactly its declared setting keys"
+            }
             entries.forEach { entry ->
                 require(entry.key.group.configuration === definition) { "${entry.key.path} belongs to another definition" }
                 require(saved.keys.none { it.path == entry.key.path }) { "Duplicate setting path ${entry.key.path}" }

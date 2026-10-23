@@ -19,9 +19,9 @@ writing duplicate paths is rejected, including an unrelated key with the same pa
 Concrete keys and groups live in their owning serial, modem, PPP, DNS, proxy,
 transformer and logging packages. Baud belongs to serial, not modem. Credentials
 are one modem-owned `LoginCredentials` setting because username/password form one
-validated concept; the existing two INI properties remain compatible. Generic
+validated concept; its two child INI properties live under `[modem]` as `login.username` and `login.password`. Generic
 store contracts contain no feature imports. Each feature's `Settings` owns its
-identity, optional logical file name, static sections, typed bindings, and optional
+identity, optional logical file name, static sections, lazily discovered typed keys, and optional
 custom mapping. `Settings` defines ownership, while `ConfigStore` holds current
 values and immutable component `*Config` objects carry values into components;
 component configs do not inherit `Settings`. The generic store contains no central
@@ -33,9 +33,8 @@ The `persistence` package retains compatibility adapters for existing callers an
 CLI composition. They do not register features or supply the runtime's settings.
 `YameConfiguration` is used only during startup/CLI parsing and file persistence.
 It reuses immutable feature values as sibling fields without putting PPP, DNS, or
-HTTP configuration inside the modem config. The existing `yame.ini` property names,
-version, defaults, CLI precedence, credential permissions, and safe replacement
-semantics remain unchanged.
+HTTP configuration inside the modem config. The new section-based `yame.ini` names are owned by feature definitions.
+Version checks, CLI precedence, credential permissions, and safe replacement remain.
 
 ## Transactions, persistence and CLI precedence
 
@@ -147,7 +146,7 @@ lifetime handle, rejects an existing owner, and releases the store on close.
 shared store instances; they do not replace global state. Explicit constructor
 configurations never require installation, including the modem's standalone PPP
 child defaults. Element-simplifier rules are a typed setting in a separate INI file
-loaded from the existing separate INI file; runtime writes are rejected.
+loaded from its separate INI file; runtime writes use the repository.
 
 ## Ownership and composition boundaries
 
@@ -156,7 +155,7 @@ loaded from the existing separate INI file; runtime writes are rejected.
 | `config`, `function` | Typed generic stores, changes, subscriptions and operations; no concrete features or persistence |
 | `serial`, `modem`, `ppp`, `ppp.dns`, `ppp.proxy`, `logging` | Their own keys, groups, value validation and immutable component configs |
 | `ppp.proxy.transform` | HTML switches, element rules/INI, transformation policy and implementation |
-| `persistence` | Legacy application file representation, all key bindings, autosave adapter and file IO |
+| `persistence` | Generic INI repository and legacy CLI/DTO adapters; feature definitions own mappings |
 | `Main` | Load file, apply transient CLI precedence, create/install shared stores, choose frontend and startup retry policy |
 | `YameRuntime` | Construct component configs from direct store reads, observe committed batches, own connections and registered functions |
 | TUI | Derive presentation caches from the store; display runtime observations separately; invoke core functions |
@@ -200,84 +199,65 @@ port without requiring serial hardware or process-global configuration.
 
 ## Lazy configuration definitions (issue #96)
 
-The runtime now uses `IniConfigurationRepository` and `ConfigStore.ensureLoaded`.
-Feature-owned `Settings` definitions declare their logical file name, groups,
-and typed bindings. `fromConfigStore(store)` reads owned keys directly and lazily loads their
-definition. A new feature can supply its own definition without editing the generic
-store or a registry of all available modules. CLI option reads request the
-features whose values it exposes as command-line defaults; unrelated files are
-never scanned. The legacy `applicationConfigStore` and `YameConfigurationStore`
-remain as compatibility adapters for existing callers and startup default-file
-creation. Their INI reads/writes now use the same syntax parser/writer as the lazy
-repository. The former central `YameConfigurationBindings` is used for CLI override
-translation and compatibility calls, not registration in the lazy store.
+A typed read such as `store[SerialSettings.Baud]` loads only the owning
+`Settings` definition on first use. `Settings` discovers public `SettingKey`
+properties (including keys in collections) once, lazily and thread-safely.
+`settingKeys` and `compositeSettingKeys` partition that discovery. There is no
+central feature registry, `IniBinding`, or codec registry. The group ID is the
+canonical INI section; a key declares only its relative name and derives its
+external path as `group.id + "." + name`.
 
-`id` identifies a definition independently of its `file`. The default
-`Settings("modem")` has `file = null` and uses the primary file selected by
-`--config` (normally `yame.ini`). `SeparateSettings("element-simplifier")`
-uses the logical name `element-simplifier`; `IniConfigurationRepository` resolves
-it beside the primary file as `element-simplifier.ini`. A custom
-`Settings("owner", file = "shared-settings")` resolves to
-`shared-settings.ini`, and multiple definitions may share that file if their
-property claims do not overlap. Logical names contain only ASCII letters,
-digits, hyphens, and underscores, starting with a letter or digit; extensions,
-directory separators, and traversal are rejected. Only the INI repository
-chooses the `.ini` extension. Existing files need no migration.
+`Settings.file = null` selects the primary file (`yame.ini` or `--config`).
+`SeparateSettings("element-simplifier")` selects `element-simplifier.ini` beside
+it. A logical file name has no extension, path separator, traversal, or non-ASCII
+characters. Multiple definitions can share a file or section if they claim
+different properties. The repository resolves files and performs all IO.
+
+For each key, reads accept either `[serial]` with `baud=115200` or root-level
+`serial.baud=115200`. Equal duplicates are accepted; different values fail with
+a file and property diagnostic. Writes normalize only the affected owned
+properties into sections and remove their flat equivalents. Unknown and
+unregistered properties and comments remain untouched. Existing root properties
+retain Java `Properties` escaping, separators, Unicode escapes, continuations,
+comments, and last-declaration-wins decoding. Named sections use `key=value`
+and reject duplicate sections/properties with file and line diagnostics. Modified
+lines are rendered canonically; untouched lines retain their spelling and line
+endings. Saving after an external edit merges the fresh file, while already
+loaded values in memory are refreshed only on restart.
+
+Ordinary scalar values use `kotlinx.serialization` with type metadata retained
+for nullable and collection-declared keys. Custom scalar types supply standard
+serializers. Durations specifically use `Duration.toString()` and
+`Duration.parse()`, so `500ms` and `2s` are valid. A companion implementing
+`CompositeSetting<T>` maps one logical key to child properties relative to that
+key; `LoginCredentials` is `[modem] login.username/password`. ElementSimplifier
+delegates static settings to `Settings` and maps dynamically named rule sections
+through its override. A missing rule file uses bundled defaults; an existing
+empty file has no rules. It preserves rule ordering and validation.
+
+Historical names such as `http-https-proxy.enabled`, `ppp.dns.upstream`, and
+`modem.pickup-time-nanos`, along with numeric nanosecond durations, are not
+aliases for the new runtime format. Existing files using them need manual
+updates. The only dual representation is the section and equivalent flat form
+of a *new* key path.
+
+A first request validates and installs a definition atomically without writing
+or notifying. Concurrent readers load it once; a failed load installs nothing
+and retries on the next read. `ConfigStore.set` validates a transaction, asks
+the repository to save changed keys, and publishes it only after successful
+persistence. Subscribers receive ordered changes outside the store lock.
+Transactions spanning multiple files are not atomic across the filesystem:
+`PartialIniWriteException` reports replaced files and the process should
+restart to reconcile disk and memory.
 
 ### Legacy adapter boundary
 
-| API | Remaining responsibility | Intended lifetime |
+| API | Responsibility | Future |
 | --- | --- | --- |
-| `YameConfiguration` | Value object for existing callers, CLI argument defaults, and first-run file creation. Its component values are ordinary feature config types. | Retain while these callers need the aggregate shape; remove from startup when CLI composition can use typed settings directly. |
-| `YameConfigurationBindings` and `ConfigurationBinding` | Project fields that already exist in that aggregate onto feature-owned keys, so `applicationConfigStore` and CLI override translation can use `ConfigStore`. | Internal compatibility bridge; removable when aggregate callers migrate. It is not extended for settings that the aggregate does not expose. |
-| `applicationConfigStore` | Construct an explicitly populated store for legacy embedders and existing tests, preserving its save callback contract. | Compatibility API; normal `Main` uses the lazy repository-backed store. |
-| `YameConfigurationStore` | Preserve its public `load(defaults)` behavior, including caller-supplied defaults and historic validation errors; create the initial `yame.ini` through `save`. | Compatibility API. `save` now delegates physical property names, codecs, and optional property removal to the feature definitions. The older `load(defaults)` decoder remains for its contract and can be removed when those callers migrate. |
+| `YameConfiguration` | CLI defaults and older aggregate callers | Retain until CLI callers migrate to typed keys |
+| `YameConfigurationBindings` / `applicationConfigStore` | Translate fields exposed by that existing aggregate into feature keys; no registration role | Internal compatibility bridge, removable with aggregate callers |
+| `YameConfigurationStore` | Older file API and first-run file creation; its new-format save delegates mappings to feature definitions | Keep while public callers need the API; historic flat-format load remains a compatibility path |
 
-Feature-owned definitions are the source of truth for runtime defaults, validation,
-and persistence. A new setting is added to its owning feature; it needs no entry in
-the legacy aggregate or binding list unless an existing compatibility API or CLI
-option explicitly exposes it. The old loader still mirrors decoding for historical
-callers, so parity tests compare its values with the repository-backed store.
-
-`SettingGroup` carries a definition owner and physical section. Existing `yame.ini`
-settings retain their established flat dotted property names (the empty/root INI
-section) and their public logical key paths. New definitions may use ordinary
-`[section]` groups. `ElementSimplifierSettings` owns the separate
-`element-simplifier.ini` file and interprets its existing tag-named sections as
-an ordered collection. A missing file uses bundled defaults; an existing empty
-file means no rules. Dynamic rule edits can now be persisted through the store.
-
-A first request loads and validates all of a definition's keys under the store
-lock, then installs them together without a save or notification. Concurrent
-requests share the completed load; failure installs nothing and the next call
-retries. Previously loaded values are never reset by a later definition in the
-same file. Only registered keys appear in initial notifications and frontend enumeration.
-Registration claims individual properties, including absent declared properties;
-an overlapping registration fails rather than silently replacing an owner.
-
-Every save reads the affected file afresh, updates only changed properties or
-dynamic sections, preserves unowned entries and untouched comments,
-and replaces the file using a temporary file. Rewritten property lines use
-canonical `key=value` formatting. Rewritten dynamic sections can lose comments
-within those sections; untouched sections and lines retain their original text.
-An external edit to an already loaded key is not imported into memory; restarting
-reloads it. External edits to unowned entries are retained on the next save.
-Root `yame.ini` properties retain Java `Properties` decoding: `=`/`:`/whitespace
-separators, escapes, `\\u` escapes, continuation lines, `#` and `!` comments,
-and last-declaration-wins for duplicate root keys. The writer updates the last
-declaration and keeps earlier declarations and unrelated physical records intact.
-Unchanged comments and properties retain their spelling; uniform CRLF or LF
-line endings and the presence of a final newline are preserved on a save.
-The shared format also treats full-line `;` as a comment and `[name]` as a section
-header; these lines were ordinary (usually unused) Java properties in old
-`yame.ini` files. A section header changes how following entries are parsed.
-Named sections retain the stricter rules already used by
-`element-simplifier.ini`: duplicate sections or properties, unknown rule fields,
-and rules without a `target` are errors. `[general]` is a valid rule tag, and
-an existing empty rules file means no rules. Syntax errors identify the file
-and physical line; invalid rule fields identify the file, section, and field.
-Transactions serialize file IO and memory publication under one store lock. If a
-transaction spans files, each replacement is individually atomic. On failure after
-an earlier file was replaced, `PartialIniWriteException` identifies replaced
-files, memory remains unchanged, and the application should restart to reconcile
-its state with disk. This is not a cross-file filesystem transaction.
+Feature definitions are the source of truth for runtime defaults, validation,
+and persistence. Adding a feature key does not require changing the aggregate or
+central bindings unless a particular legacy API explicitly exposes that field.

@@ -1,7 +1,14 @@
 package no.skasti.yame.serial
 
 import com.fazecast.jSerialComm.SerialPort
+import kotlinx.serialization.KSerializer
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
 
+@Serializable(with = SerialFlowControlSerializer::class)
 enum class SerialFlowControl(
     val commandName: String,
     val displayName: String,
@@ -40,4 +47,10 @@ enum class SerialFlowControl(
                     entries.joinToString(", ") { it.commandName },
             )
     }
+}
+
+object SerialFlowControlSerializer : KSerializer<SerialFlowControl> {
+    override val descriptor = PrimitiveSerialDescriptor("SerialFlowControl", PrimitiveKind.STRING)
+    override fun serialize(encoder: Encoder, value: SerialFlowControl) = encoder.encodeString(value.commandName)
+    override fun deserialize(decoder: Decoder): SerialFlowControl = SerialFlowControl.parse(decoder.decodeString())
 }

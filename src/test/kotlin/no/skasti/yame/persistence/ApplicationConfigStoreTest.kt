@@ -83,7 +83,7 @@ class ApplicationConfigStoreTest {
                 assertEquals(store[binding.key], reloaded[binding.key], binding.key.path)
             }
             val text = Files.readString(directory.resolve("yame.ini"))
-            for (name in listOf("version=1", "login.username=user", "serial.port=COM4", "ppp.subnet=10.99.0.0/30", "dns.upstream=1.1.1.1")) {
+            for (name in listOf("version=1", "login.username=user", "port=COM4", "subnet=10.99.0.0/30", "upstream=1.1.1.1")) {
                 assertTrue(text.contains(name), name)
             }
         } finally { directory.toFile().deleteRecursively() }

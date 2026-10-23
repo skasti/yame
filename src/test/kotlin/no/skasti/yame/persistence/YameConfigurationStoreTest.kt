@@ -123,7 +123,7 @@ class YameConfigurationStoreTest {
         val text = Files.readString(path)
         assertTrue(text.contains("# keep\nfuture.setting=42"))
         assertTrue(text.contains("[future]\nenabled=yes"))
-        assertTrue(text.contains("serial.baud=57600"))
+        assertTrue(text.contains("[serial]\nbaud=57600"))
     }
 
     @Test
@@ -134,7 +134,8 @@ class YameConfigurationStoreTest {
 
         val text = Files.readString(path)
         assertTrue(text.contains("loglevel.ppp=warn"))
-        assertTrue(text.contains("loglevel.modem=info"))
+        assertTrue(text.contains("[logging]"))
+        assertTrue(text.contains("level-modem=INFO"))
     }
 
     @Test
@@ -255,8 +256,8 @@ class YameConfigurationStoreTest {
         )
         store.save(configuration)
         assertEquals(configuration, store.load())
-        assertTrue(Files.readString(path).contains("transformers.script-remover.enabled=false"))
-        Files.writeString(path, "transformers.style-remover.enabled=maybe")
-        assertFailsWith<IllegalStateException> { store.load() }
+        assertTrue(Files.readString(path).contains("script-remover-enabled=false"))
+        Files.writeString(path, "[transformers]\nstyle-remover-enabled=maybe")
+        assertFailsWith<IllegalArgumentException> { store.load() }
     }
 }

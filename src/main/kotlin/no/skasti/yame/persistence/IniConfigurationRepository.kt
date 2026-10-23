@@ -66,7 +66,7 @@ class IniConfigurationRepository(private val primaryFile: Path) : ConfigurationR
         val doc = IniParser.parse(bytes.toString(Charsets.UTF_8), path.fileName.toString())
         if (path.fileName.toString() == primaryName) {
             doc.get("", "version")?.let { require(it == "1") { "Unsupported yame.ini version '$it'" } }
-            if (doc.get("", "login.password") != null) restrictPermissions(path)
+            if (doc.get("modem", "login.password") != null) restrictPermissions(path)
         }
         return doc
     }

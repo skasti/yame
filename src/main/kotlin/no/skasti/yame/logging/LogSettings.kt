@@ -4,18 +4,12 @@ import no.skasti.yame.config.*
 
 object LogSettings : Settings("logging") {
     val DEFAULT_LEVEL = YameLogLevel.INFO
-    val Group = SettingGroup("logging", this, "")
+    val Group = SettingGroup(this)
     val Levels = YameLogModule.entries.associateWith {
-        SettingKey<YameLogLevel>("loglevel.${it.fileName}", Group)
+        SettingKey<YameLogLevel>("level-${it.fileName}", Group, default = { DEFAULT_LEVEL })
     }
     val CaptureLimits = PacketCaptureLimitKind.entries.associateWith {
-        SettingKey<Int>(it.configKey, Group, { value -> require(value > 0) })
-    }
-
-    override val bindings: List<IniBinding<*>> by lazy {
-        Levels.map { (module, key) -> IniBinding(key, "loglevel.${module.fileName}", { DEFAULT_LEVEL },
-            YameLogLevel::parse, { it.name.lowercase() }) } +
-        CaptureLimits.map { (kind, key) -> IniBinding(key, kind.configKey, { kind.value(PacketCaptureLimits()) },
-            kind::parse, Int::toString) }
+        SettingKey<Int>(it.configKey.substringAfterLast('.'), Group,
+            { value -> require(value > 0) }, default = { it.value(PacketCaptureLimits()) })
     }
 }

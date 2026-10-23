@@ -15,6 +15,7 @@ import no.skasti.yame.ppp.PppIpConfig
 import no.skasti.yame.ppp.dns.PppDnsConfig
 import no.skasti.yame.ppp.ip.Ipv4Address
 import no.skasti.yame.ppp.ip.Ipv4Cidr
+import no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig
 import no.skasti.yame.serial.SerialFlowControl
 import no.skasti.yame.tone.HandshakeProfile
 import java.io.ByteArrayInputStream
@@ -37,12 +38,12 @@ import kotlin.time.Duration.Companion.nanoseconds
 /** Compatibility file API. Runtime reads and writes use ConfigStore and feature definitions. */
 class YameConfigurationStore(private val path: Path) {
     fun load(defaults: YameConfiguration = YameConfiguration()): YameConfiguration {
-        val httpDefaults = defaults.pppHttpCompatibilityConfig
-        val elementSimplifier = ElementSimplifierConfigurationStore.alongside(path).load(httpDefaults.elementSimplifier)
-        val loadedDefaults = defaults.copy(
-            pppHttpCompatibilityConfig = httpDefaults.copy(elementSimplifier = elementSimplifier),
+        if (!Files.exists(path)) return defaults.copy(
+            pppHttpCompatibilityConfig = defaults.pppHttpCompatibilityConfig.copy(
+                elementSimplifier = ElementSimplifierConfigurationStore.alongside(path)
+                    .load(defaults.pppHttpCompatibilityConfig.elementSimplifier),
+            ),
         )
-        if (!Files.exists(path)) return loadedDefaults
         require(Files.isRegularFile(path)) {
             "Configuration path must be a regular file: $path"
         }
@@ -50,8 +51,21 @@ class YameConfigurationStore(private val path: Path) {
         val properties = Properties()
         val bytes = Files.newInputStream(path).use { it.readNBytes(MAX_CONFIG_BYTES + 1) }
         require(bytes.size <= MAX_CONFIG_BYTES) { "Configuration file is larger than $MAX_CONFIG_BYTES bytes: $path" }
-        IniParser.parse(bytes.toString(StandardCharsets.UTF_8), path.fileName.toString())
-            .properties("").forEach { (key, value) -> properties.setProperty(key, value) }
+        val document = IniParser.parse(bytes.toString(StandardCharsets.UTF_8), path.fileName.toString())
+        // The old DTO remains an adapter. New section-based files are read through
+        // feature definitions, so this API does not own a second set of mappings.
+        if (document.sections().any { it in setOf("serial", "modem", "ppp", "dns", "proxy", "transformers", "logging") }) {
+            val store = lazyApplicationConfigStore(path)
+            return cliConfiguration(store).copy(
+                pppHttpCompatibilityConfig = PppHttpCompatibilityConfig.fromConfigStore(store),
+            )
+        }
+        val httpDefaults = defaults.pppHttpCompatibilityConfig
+        val elementSimplifier = ElementSimplifierConfigurationStore.alongside(path).load(httpDefaults.elementSimplifier)
+        val loadedDefaults = defaults.copy(
+            pppHttpCompatibilityConfig = httpDefaults.copy(elementSimplifier = elementSimplifier),
+        )
+        document.properties("").forEach { (key, value) -> properties.setProperty(key, value) }
         if (properties.containsKey("login.password")) {
             restrictPermissions(path)
         }

@@ -1,18 +1,48 @@
 package no.skasti.yame.config
 
-/** Identity-based keys prevent unrelated definitions from impersonating a registered path. */
-data class SettingGroup(val name: String, val configuration: Settings? = null, val iniSection: String = name)
+import kotlin.reflect.KType
+import kotlin.reflect.typeOf
 
-class SettingKey<T>(
-    val path: String,
+/** The group ID is both the logical namespace and its canonical INI section. */
+data class SettingGroup(val id: String, val configuration: Settings? = null) {
+    constructor(configuration: Settings) : this(configuration.id, configuration)
+
+    init {
+        require(id.split('.').all { it.matches(Regex("[A-Za-z0-9][A-Za-z0-9_-]*")) }) {
+            "Invalid setting group ID: $id"
+        }
+    }
+}
+
+/** Identity-based typed key; its external path is derived from its owner and relative name. */
+class SettingKey<T> @PublishedApi internal constructor(
+    val name: String,
     val group: SettingGroup,
-    private val validateValue: (T) -> Unit = {},
-    val sensitive: Boolean = false,
+    val type: KType,
+    private val validateValue: (T) -> Unit,
+    val sensitive: Boolean,
+    internal val default: () -> T,
+    val structural: Boolean,
 ) {
+    val path: String = "${group.id}.$name"
+
+    init {
+        require(name.matches(Regex("[A-Za-z0-9][A-Za-z0-9_-]*"))) { "Invalid setting name: $name" }
+    }
+
     internal fun validate(value: T) = validateValue(value)
     infix fun to(value: T): ConfigChange<T> = ConfigChange(this, value)
     override fun toString(): String = path
 }
+
+inline fun <reified T> SettingKey(
+    name: String,
+    group: SettingGroup,
+    noinline validateValue: (T) -> Unit = {},
+    sensitive: Boolean = false,
+    noinline default: () -> T = { error("No default for ${group.id}.$name") },
+    structural: Boolean = false,
+): SettingKey<T> = SettingKey(name, group, typeOf<T>(), validateValue, sensitive, default, structural)
 
 class ConfigChange<T> internal constructor(val key: SettingKey<T>, val value: T) {
     internal fun validate() = key.validate(value)

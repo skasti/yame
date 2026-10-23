@@ -9,8 +9,8 @@ import kotlin.test.*
 class ConfigStoreTest {
     private val serial = SettingGroup("serial")
     private val modem = SettingGroup("modem")
-    private val baud = SettingKey<Int>("serial.baud", serial, { require(it > 0) })
-    private val tone = SettingKey<Boolean>("modem.tone", modem)
+    private val baud = SettingKey<Int>("baud", serial, { require(it > 0) })
+    private val tone = SettingKey<Boolean>("tone", modem)
 
     @Test fun `batch validates saves once and delivers indexed group views after commit`() {
         var saves = 0
@@ -46,7 +46,7 @@ class ConfigStoreTest {
         store.onChange.subscribe { events++ }
         assertFailsWith<IllegalArgumentException> { store.set(tone to false, baud to -1) }
         assertFailsWith<IllegalArgumentException> { store.set(baud to 9600, baud to 19200) }
-        assertFailsWith<IllegalArgumentException> { store.set(SettingKey<Int>(baud.path, serial) to 9600) }
+        assertFailsWith<IllegalArgumentException> { store.set(SettingKey<Int>(baud.name, serial) to 9600) }
         assertEquals(0, saves)
         assertFailsWith<IOException> { store.set(baud to 9600, tone to false) }
         assertEquals(38400, store[baud])
@@ -55,7 +55,7 @@ class ConfigStoreTest {
     }
 
     @Test fun `nullable lookup distinguishes absent from present null and initial subscription is ordered`() {
-        val port = SettingKey<String?>("serial.port", serial)
+        val port = SettingKey<String?>("port", serial)
         val store = ConfigStore(listOf(port to "COM1", baud to 38400))
         val values = mutableListOf<String?>()
         store.onChange[serial].subscribe(initial = true) { changes ->

@@ -4,14 +4,16 @@ import no.skasti.yame.config.*
 
 /** Dynamic tag sections in the existing element-simplifier.ini. */
 object ElementSimplifierSettings : SeparateSettings("element-simplifier") {
-    val Group = SettingGroup("ppp.proxy.transform.rules", this, "general")
-    val Rules = SettingKey<ElementSimplifierConfiguration>("html-transformers.element-rules", Group)
-    override val bindings: List<IniBinding<*>> = emptyList()
+    val General = SettingGroup("element-simplifier.general", this)
+    val Enabled = SettingKey<Boolean>("enabled", General, default = { true })
+    val Group = SettingGroup(this)
+    val Rules = SettingKey<ElementSimplifierConfiguration>("rules", Group, structural = true,
+        default = { ElementSimplifierConfiguration.defaults() })
 
     override fun loadFromIni(context: IniReadContext): List<ConfigChange<*>> {
-        require(context.properties("").isEmpty()) { "${context.filename}: rule settings must follow a tag section" }
+        val ordinary = super.loadFromIni(context)
         val rules = linkedMapOf<String, ElementSimplifierRule>()
-        for (section in context.unconsumedSections()) {
+        for (section in context.unconsumedSections().filter { it != General.id }) {
             require(TAG_NAME.matches(section)) { "${context.filename}: invalid rule section [$section]" }
             val properties = context.properties(section)
             properties.keys.firstOrNull { it != "target" && it != "style" }?.let {
@@ -23,12 +25,13 @@ object ElementSimplifierSettings : SeparateSettings("element-simplifier") {
             try { rules[section] = ElementSimplifierRule(target, style) }
             catch (error: IllegalArgumentException) { throw IllegalArgumentException("${context.filename} [$section]: ${error.message}", error) }
         }
-        return listOf(Rules to if (context.existed) ElementSimplifierConfiguration(rules) else ElementSimplifierConfiguration.defaults())
+        return ordinary + (Rules to if (context.existed) ElementSimplifierConfiguration(rules) else ElementSimplifierConfiguration.defaults())
     }
 
     override fun saveToIni(context: IniWriteContext) {
+        super.saveToIni(context)
         if (Rules !in context.changedKeys) return
-        context.sections().filter(TAG_NAME::matches).forEach(context::removeSection)
+        context.sections().filter { it != General.id && TAG_NAME.matches(it) }.forEach(context::removeSection)
         requireNotNull(context.snapshot[Rules]).value.rules.forEach { (tag, rule) ->
             context.write(tag, "target", rule.target)
             rule.style?.let { context.write(tag, "style", it) }

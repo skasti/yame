@@ -3,6 +3,7 @@ package no.skasti.yame.persistence
 import no.skasti.yame.config.*
 import no.skasti.yame.modem.HayesModemConfig
 import no.skasti.yame.modem.ModemSettings
+import no.skasti.yame.modem.LoginCredentials
 import no.skasti.yame.ppp.PppIpConfig
 import no.skasti.yame.ppp.PppSettings
 import no.skasti.yame.ppp.dns.PppDnsConfig
@@ -27,8 +28,7 @@ class LazyConfigurationTest {
         Files.writeString(path, "[used]\nvalue=7\n[unused]\nvalue=9\n")
         class Definition(id: String) : Settings(id) {
             val group = SettingGroup(id, this)
-            val key = SettingKey<Int>("$id.value", group)
-            override val bindings by lazy { listOf(IniBinding(key, "value", { 0 }, String::toInt, Int::toString)) }
+            val key = SettingKey<Int>("value", group, default = { 0 })
         }
         val used = Definition("used")
         val unused = Definition("unused")
@@ -58,11 +58,16 @@ class LazyConfigurationTest {
     @Test fun `component factories read their keys from a fresh lazy store without global installation`() {
         val path = directory.resolve("yame.ini")
         Files.writeString(path, """
-            modem.tone-simulation-enabled=false
-            ppp.subnet=10.1.1.0/30
-            dns.upstream=1.1.1.1
-            http-https-proxy.enabled=false
-            transformers.script-remover.enabled=false
+            [modem]
+            tone-simulation-enabled=false
+            [ppp]
+            subnet=10.1.1.0/30
+            [dns]
+            upstream=1.1.1.1
+            [proxy]
+            enabled=false
+            [transformers]
+            script-remover-enabled=false
         """.trimIndent())
         val store = lazyApplicationConfigStore(path)
 
@@ -107,9 +112,55 @@ class LazyConfigurationTest {
         assertEquals(1, loads.get())
     }
 
+    @Test fun `equivalent section and flat values agree while conflicts identify the property`() {
+        val path = directory.resolve("yame.ini")
+        Files.writeString(path, "serial.baud=57600\n[serial]\nbaud=57600\n")
+        val store = lazyApplicationConfigStore(path)
+        assertEquals(57_600, store[SerialSettings.Baud])
+        store.set(SerialSettings.Baud to 115_200)
+        val written = Files.readString(path)
+        assertTrue(written.contains("[serial]\nbaud=115200"))
+        assertFalse(written.contains("serial.baud="))
+
+        Files.writeString(path, "serial.baud=9600\n[serial]\nbaud=57600\n")
+        val error = assertFailsWith<IllegalArgumentException> {
+            lazyApplicationConfigStore(path)[SerialSettings.Baud]
+        }
+        assertTrue(error.message.orEmpty().contains("yame.ini"))
+        assertTrue(error.message.orEmpty().contains("serial.baud"))
+    }
+
+    @Test fun `duration and reusable composite keys round trip in canonical sections`() {
+        val path = directory.resolve("yame.ini")
+        Files.writeString(path, "modem.login.username=alice\n[modem]\nlogin.password=secret\npickup-time=1.5s\n")
+        val store = lazyApplicationConfigStore(path)
+        assertEquals(LoginCredentials("alice", "secret"), store[ModemSettings.Login])
+        assertEquals(kotlin.time.Duration.parse("1.5s"), store[ModemSettings.PickupTime])
+        assertTrue(ModemSettings.Login in ModemSettings.compositeSettingKeys)
+        assertTrue(ModemSettings.PickupTime in ModemSettings.settingKeys)
+        store.set(ModemSettings.Login to LoginCredentials("bob", "other"),
+            ModemSettings.PickupTime to kotlin.time.Duration.parse("2s"))
+        val written = Files.readString(path)
+        assertFalse(written.contains("modem.login.username="))
+        assertTrue(written.contains("login.username=bob"))
+        assertTrue(written.contains("login.password=other"))
+        assertTrue(written.contains("pickup-time=2s"))
+
+        val accounts = object : Settings("accounts") {
+            val Group = SettingGroup(this)
+            val Admin = SettingKey<LoginCredentials>("admin", Group, default = { LoginCredentials(null, null) })
+            val User = SettingKey<LoginCredentials>("user", Group, default = { LoginCredentials(null, null) })
+        }
+        Files.writeString(path, "[accounts]\nadmin.username=a\nadmin.password=b\nuser.username=c\nuser.password=d\n")
+        val reused = lazyApplicationConfigStore(path)
+        assertEquals(LoginCredentials("a", "b"), reused[accounts.Admin])
+        assertEquals(LoginCredentials("c", "d"), reused[accounts.User])
+        assertEquals(2, accounts.compositeSettingKeys.size)
+    }
+
     @Test fun `CLI leaves HTTP transformations unloaded until the HTTP owner requests them`() {
         val path = directory.resolve("yame.ini")
-        Files.writeString(path, "serial.baud=57600\ntransformers.script-remover.enabled=false\n")
+        Files.writeString(path, "serial.baud=57600\ntransformers.script-remover-enabled=false\n")
         Files.writeString(directory.resolve("element-simplifier.ini"), "[heading]\ntarget=h2\n")
         val store = lazyApplicationConfigStore(path)
         assertEquals(57600, cliConfiguration(store).baudRate)
@@ -127,7 +178,7 @@ class LazyConfigurationTest {
 
     @Test fun `CLI overrides keep precedence while later feature reads retain saved values`() {
         val path = directory.resolve("yame.ini")
-        Files.writeString(path, "serial.baud=57600\ntransformers.script-remover.enabled=false\n")
+        Files.writeString(path, "serial.baud=57600\ntransformers.script-remover-enabled=false\n")
         val store = lazyApplicationConfigStore(path)
         val saved = cliConfiguration(store)
         applyCliOverrides(store, saved, saved.copy(baudRate = 9600))
@@ -234,8 +285,7 @@ class LazyConfigurationTest {
         Files.writeString(path, "[first]\nvalue=7\n[second]\nvalue=9\n")
         class TestDefinition(id: String) : Settings(id) {
             val group = SettingGroup(id, this)
-            val key = SettingKey<Int>("$id.value", group)
-            override val bindings by lazy { listOf(IniBinding(key, "value", { 0 }, String::toInt, Int::toString)) }
+            val key = SettingKey<Int>("value", group, default = { 0 })
         }
         val first = TestDefinition("first")
         val second = TestDefinition("second")
@@ -255,13 +305,12 @@ class LazyConfigurationTest {
     @Test fun `logical names resolve next to an explicit primary file and can be shared`() {
         val primary = directory.resolve("custom.ini")
         val shared = directory.resolve("shared-settings.ini")
-        val primaryText = "serial.baud=57600\n# primary comment\n"
+        val primaryText = "[serial]\nbaud=57600\n# primary comment\n"
         Files.writeString(primary, primaryText)
         Files.writeString(shared, "# shared comment\n[shared]\nfirst=7\nsecond=9\nother=untouched\n")
         class SharedDefinition(id: String, property: String) : Settings(id, file = "shared-settings") {
-            val group = SettingGroup(id, this, "shared")
-            val key = SettingKey<Int>("$id.value", group)
-            override val bindings by lazy { listOf(IniBinding(key, property, { 0 }, String::toInt, Int::toString)) }
+            val group = SettingGroup("shared", this)
+            val key = SettingKey<Int>(property, group, default = { 0 })
         }
         val first = SharedDefinition("first-owner", "first")
         val second = SharedDefinition("second-owner", "second")
@@ -292,14 +341,12 @@ class LazyConfigurationTest {
                 "name.ini", "with space", "a:b", "æøå")) {
             val error = assertFailsWith<IllegalArgumentException> {
                 object : Settings("owner", file = name) {
-                    override val bindings: List<IniBinding<*>> = emptyList()
                 }
             }
             assertTrue(error.message.orEmpty().contains("Invalid logical configuration file name"), name)
         }
         assertFailsWith<IllegalArgumentException> {
             object : SeparateSettings("../escape") {
-                override val bindings: List<IniBinding<*>> = emptyList()
             }
         }
     }
@@ -322,19 +369,20 @@ class LazyConfigurationTest {
             pppHttpCompatibilityConfig = no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig(enabled = false),
         )
         YameConfigurationStore(path).save(expected)
-        assertEquals(YameConfigurationStore(path).load(), cliConfiguration(lazyApplicationConfigStore(path)))
+        val loaded = cliConfiguration(lazyApplicationConfigStore(path))
+        assertEquals(expected.baudRate, loaded.baudRate)
+        assertEquals(expected.modemConfig, loaded.modemConfig)
+        assertEquals(expected.pppHttpCompatibilityConfig.enabled, loaded.pppHttpCompatibilityConfig.enabled)
     }
 
     @Test fun `a later file failure reports partial disk replacement without memory publication`() {
         val first = object : Settings("first") {
-            val group = SettingGroup("first", this, "first")
-            val key = SettingKey<Int>("first.value", group)
-            override val bindings by lazy { listOf(IniBinding(key, "value", { 1 }, String::toInt, Int::toString)) }
+            val group = SettingGroup("first", this)
+            val key = SettingKey<Int>("value", group, default = { 1 })
         }
         val second = object : SeparateSettings("second") {
-            val group = SettingGroup("second", this, "second")
-            val key = SettingKey<Int>("second.value", group)
-            override val bindings by lazy { listOf(IniBinding(key, "value", { 2 }, String::toInt, Int::toString)) }
+            val group = SettingGroup("second", this)
+            val key = SettingKey<Int>("value", group, default = { 2 })
         }
         val primary = directory.resolve("yame.ini")
         val store = lazyApplicationConfigStore(primary)

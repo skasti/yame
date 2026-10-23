@@ -191,7 +191,12 @@ unbounded buffering.
 - HTML transformation settings, rules, and their separate startup INI reader live
   in `ppp.proxy.transform`, alongside the transformation implementation.
 - Feature-owned `Settings` definitions own their identity, optional logical
-  `file` name, static groups, typed mappings, and optional dynamic-section mapping.
+  `file` name, static groups, typed keys, and optional dynamic-section mapping.
+  A group's ID is its canonical INI section. Keys declare relative names and
+  derive paths as `group.id + "." + name`; do not add an `iniSection`, binding
+  registry, or per-key codecs. One lazy reflection pass discovers public keys,
+  including key collections. Ordinary scalar values use `kotlinx.serialization`;
+  multi-property values use a reusable `CompositeSetting<T>` companion.
   `ConfigStore` owns the current values; immutable component `*Config` objects are
   ordinary values and do not inherit from `Settings`.
   `file = null` uses the configured primary file; `SeparateSettings(id)` uses a
@@ -200,6 +205,11 @@ unbounded buffering.
   `shared-settings.ini`. Definitions may share a logical file and must not claim
   the same property. The generic ConfigStore registers only definitions requested
   by components; it never enumerates all features.
+- INI reads accept `[serial] baud=115200` and the equivalent root property
+  `serial.baud=115200`. A conflict is an error. Writes emit only the section
+  form and remove the owned flat variant; unknown settings and comments survive.
+  Durations use readable Kotlin syntax such as `500ms` or `2s`. Older names and
+  nanosecond values are not aliases; update old files when adopting this format.
 - `YameConfiguration` and `YameConfigurationBindings` remain compatibility and CLI
   adapters. New persistence mappings live in their owning feature definitions.
 - Application persistence may reuse immutable feature config values. This does not
