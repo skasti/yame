@@ -641,8 +641,11 @@ class LazyConfigurationTest {
         assertEquals(before, Files.readString(path))
         assertEquals(7, store[first.key])
         assertEquals(9, store[second.key])
-        assertFailsWith<IllegalArgumentException> { store.set(first.key to 8) }
-        assertEquals(before, Files.readString(path))
+        Files.writeString(path, before.replace("unknown=keep\n", ""))
+        val sharedOnly = Files.readString(path)
+        val error = assertFailsWith<IllegalArgumentException> { store.set(first.key to 8) }
+        assertTrue(error.message.orEmpty().contains(second.key.path), error.message)
+        assertEquals(sharedOnly, Files.readString(path))
     }
 
     @Test fun `key scoped writes cannot overwrite another key or composite child`() {
