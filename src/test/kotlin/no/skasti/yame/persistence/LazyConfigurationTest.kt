@@ -130,6 +130,21 @@ class LazyConfigurationTest {
         assertTrue(error.message.orEmpty().contains("serial.baud"))
     }
 
+    @Test fun `lowercase declared names read case insensitive section syntax and write canonical paths`() {
+        val path = directory.resolve("yame.ini")
+        val feature = object : Settings("feature") {
+            val group = SettingGroup("feature.options_2", this)
+            val key = SettingKey<Int>("max-rate_2", group, default = { 1 })
+        }
+        Files.writeString(path, "[ FEATURE.OPTIONS_2 ]\nMAX-RATE_2=7\n")
+        val store = lazyApplicationConfigStore(path)
+        assertEquals("feature.options_2.max-rate_2", feature.key.path)
+        assertEquals(7, store[feature.key])
+        store.set(feature.key to 9)
+        assertTrue(Files.readString(path).contains("max-rate_2=9"))
+        assertEquals(9, lazyApplicationConfigStore(path)[feature.key])
+    }
+
     @Test fun `string settings preserve exact whitespace through section load save and reload`() {
         val path = directory.resolve("yame.ini")
         val original = "# keep\nfuture.value=  untouched  \n  \t  \n" +
@@ -361,6 +376,16 @@ class LazyConfigurationTest {
         store.set(ElementSimplifierSettings.Rules to no.skasti.yame.ppp.proxy.transform.ElementSimplifierConfiguration(mapOf("heading" to no.skasti.yame.ppp.proxy.transform.ElementSimplifierRule("h2"))))
         assertTrue(Files.readString(path).contains("; keep"))
         assertEquals("h2", store[ElementSimplifierSettings.Rules].rules.getValue("heading").target)
+    }
+
+    @Test fun `reserved rule file enabled setting does not replace the live transformer switch`() {
+        val store = lazyApplicationConfigStore(directory.resolve("yame.ini"))
+        assertTrue(store[ElementSimplifierSettings.Enabled])
+        store.set(ElementSimplifierSettings.Enabled to false)
+        assertTrue(HtmlTransformerSettings.fromConfigStore(store).elementSimplifier)
+        store.set(TransformerSettings.Elements to false)
+        assertFalse(HtmlTransformerSettings.fromConfigStore(store).elementSimplifier)
+        assertFalse(store[ElementSimplifierSettings.Enabled])
     }
 
     @Test fun `concurrent first use installs one consistent definition`() {
@@ -719,6 +744,56 @@ class LazyConfigurationTest {
         assertFalse(written.contains("rules="))
         assertEquals("span", lazyApplicationConfigStore(primary)[ElementSimplifierSettings.Rules]
             .rules.getValue("external").target)
+    }
+
+    @Test fun `unrelated named and root flat sections remain unclaimed during rule updates`() {
+        val primary = directory.resolve("yame.ini")
+        val path = directory.resolve("element-simplifier.ini")
+        val original = "# keep\nfuture.meta.target=span\nfuture.meta.value=untouched\n" +
+            "[future.meta]\n# foreign comment\nvalue=keep\ntarget=div\n" +
+            "[heading]\ntarget=h1\nstyle=color:red;\n"
+        Files.writeString(path, original)
+        val store = lazyApplicationConfigStore(primary)
+        val rules = store[ElementSimplifierSettings.Rules]
+        assertEquals(listOf("heading"), rules.rules.keys.toList())
+        store.set(ElementSimplifierSettings.Rules to no.skasti.yame.ppp.proxy.transform.ElementSimplifierConfiguration(
+            mapOf("heading" to no.skasti.yame.ppp.proxy.transform.ElementSimplifierRule("h2", "color:red;"))))
+        val saved = Files.readString(path)
+        assertTrue(saved.startsWith(original.substringBefore("[heading]")))
+        assertTrue(saved.contains("[heading]\ntarget=h2\nstyle=color:red;"))
+        assertEquals(listOf("heading"), lazyApplicationConfigStore(primary)[ElementSimplifierSettings.Rules].rules.keys.toList())
+
+        Files.writeString(path, "[future.meta]\nvalue=keep\n[heading]\ntarget=h1\nunknown=bad\n")
+        val error = assertFailsWith<IllegalArgumentException> {
+            lazyApplicationConfigStore(primary)[ElementSimplifierSettings.Rules]
+        }
+        assertTrue(error.message.orEmpty().contains("[heading]"), error.message)
+        assertTrue(error.message.orEmpty().contains("unknown"), error.message)
+    }
+
+    @Test fun `lazy reads protect files even before sensitive keys are requested`() {
+        val primary = directory.resolve("yame.ini")
+        Files.writeString(primary, "[serial]\nbaud=57600\n[modem]\nlogin.username=user\nlogin.password=secret\n")
+        if (!Files.getFileStore(primary).supportsFileAttributeView("posix")) return
+        val public = java.nio.file.attribute.PosixFilePermissions.fromString("rw-r--r--")
+        val private = java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")
+        Files.setPosixFilePermissions(primary, public)
+        val store = lazyApplicationConfigStore(primary)
+        assertEquals(57_600, store[SerialSettings.Baud])
+        assertEquals(private, Files.getPosixFilePermissions(primary))
+        store.set(SerialSettings.Baud to 115_200)
+        assertEquals(private, Files.getPosixFilePermissions(primary))
+        assertTrue(Files.readString(primary).contains("login.password=secret"))
+
+        val separate = object : SeparateSettings("future-secret") {
+            val group = SettingGroup(this)
+            val secret = SettingKey<String>("value", group, sensitive = true, default = { "" })
+        }
+        val extra = directory.resolve("future-secret.ini")
+        Files.writeString(extra, "[future-secret]\nvalue=token\n")
+        Files.setPosixFilePermissions(extra, public)
+        assertEquals("token", store[separate.secret])
+        assertEquals(private, Files.getPosixFilePermissions(extra))
     }
 
     @Test fun `obsolete rule deletion refuses unknown attributes but removes only owned sections`() {

@@ -5,6 +5,7 @@ import no.skasti.yame.config.*
 /** Dynamic tag sections in the existing element-simplifier.ini. */
 object ElementSimplifierSettings : SeparateSettings("element-simplifier") {
     val General = SettingGroup("element-simplifier.general", this)
+    /** Reserved; currently unused by the runtime. The active switch is TransformerSettings.Elements. */
     val Enabled = SettingKey<Boolean>("enabled", General, default = { true })
     val Group = SettingGroup(this)
     val Rules = SettingKey<ElementSimplifierConfiguration>("rules", Group, structural = true,
@@ -17,8 +18,7 @@ object ElementSimplifierSettings : SeparateSettings("element-simplifier") {
         }
         val rules = linkedMapOf<String, ElementSimplifierRule>()
         val sections = (context.unconsumedSections() + context.flatSectionsFor("target", "style")).distinct()
-        for (section in sections.filter { it != General.id }) {
-            require(TAG_NAME.matches(section)) { "${context.filename}: invalid rule section [$section]" }
+        for (section in sections.filter { it != General.id && TAG_NAME.matches(it) }) {
             val rule = context.compose(Rules, section) { attrs ->
                 attrs.keys.firstOrNull { it != "target" && it != "style" }?.let {
                     throw IllegalArgumentException("unknown setting '$it'")

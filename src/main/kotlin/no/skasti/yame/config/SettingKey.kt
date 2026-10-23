@@ -3,13 +3,15 @@ package no.skasti.yame.config
 import kotlin.reflect.KType
 import kotlin.reflect.typeOf
 
+private val SETTING_NAME_SEGMENT = Regex("[a-z0-9][a-z0-9_-]*")
+
 /** The group ID is both the logical namespace and its canonical INI section. */
 data class SettingGroup(val id: String, val configuration: Settings? = null) {
     constructor(configuration: Settings) : this(configuration.id, configuration)
 
     init {
-        require(id.split('.').all { it.matches(Regex("[A-Za-z0-9][A-Za-z0-9_-]*")) }) {
-            "Invalid setting group ID: $id"
+        require(id.split('.').all { it.matches(SETTING_NAME_SEGMENT) }) {
+            "Invalid setting group ID '$id'; use lowercase letters, digits, hyphens, underscores and dots between segments"
         }
     }
 }
@@ -27,7 +29,9 @@ class SettingKey<T> @PublishedApi internal constructor(
     val path: String = "${group.id}.$name"
 
     init {
-        require(name.matches(Regex("[A-Za-z0-9][A-Za-z0-9_-]*"))) { "Invalid setting name: $name" }
+        require(name.matches(SETTING_NAME_SEGMENT)) {
+            "Invalid setting name '$name'; use lowercase letters, digits, hyphens and underscores"
+        }
     }
 
     internal fun validate(value: T) = validateValue(value)

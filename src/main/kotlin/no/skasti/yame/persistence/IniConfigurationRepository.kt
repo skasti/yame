@@ -103,14 +103,14 @@ class IniConfigurationRepository internal constructor(
     private fun read(path: Path): IniDocument {
         if (!Files.exists(path)) return IniParser.parse("", path.fileName.toString())
         require(Files.isRegularFile(path)) { "Configuration path must be a regular file: $path" }
+        // The file may contain secrets owned by definitions that have not loaded yet.
+        // Restrict every existing INI file rather than enumerating feature keys.
+        restrictPermissions(path)
         val bytes = Files.newInputStream(path).use { it.readNBytes(IniParser.MAX_BYTES + 1) }
         require(bytes.size <= IniParser.MAX_BYTES) { "Configuration file is larger than ${IniParser.MAX_BYTES} bytes: $path" }
         val doc = IniParser.parse(bytes.toString(Charsets.UTF_8), path.fileName.toString())
         if (path.fileName.toString() == primaryName) {
             doc.get("", "version")?.let { require(it == "1") { "Unsupported yame.ini version '$it'" } }
-            if (doc.get("modem", "login.password") != null || doc.get("", "modem.login.password") != null) {
-                restrictPermissions(path)
-            }
         }
         return doc
     }

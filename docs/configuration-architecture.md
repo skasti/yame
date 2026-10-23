@@ -51,6 +51,15 @@ remains uncommitted.
 It reuses immutable feature values as sibling fields without putting PPP, DNS, or
 HTTP configuration inside the modem config. The new section-based `yame.ini` names are owned by feature definitions.
 Version checks, CLI precedence, credential permissions, and safe replacement remain.
+The repository restricts every existing INI file to owner-only POSIX permissions
+when reading it and writes replacements with the same permissions. A file may
+contain a sensitive setting from a feature that has not been lazy-loaded, so
+permission decisions do not depend on enumerating loaded keys or on hardcoded
+credential paths. `SettingKey.sensitive` remains metadata for redacting values
+in trusted in-process adapters and diagnostics.
+`ElementSimplifierSettings.Enabled` in `[element-simplifier.general]` is reserved
+and currently has no runtime effect. The live
+element-simplifier switch is `TransformerSettings.Elements` in `[transformers]`.
 
 ## Transactions, persistence and CLI precedence
 

@@ -44,6 +44,7 @@ class ElementSimplifierConfigurationStoreTest {
         assertEquals("p", rules.getValue("summary").target)
         assertEquals("font-weight:bold; color:#333; background:url('/icon.gif?v=1');", rules.getValue("summary").style)
         assertTrue(ElementSimplifierIni.parse("; no rules").rules.isEmpty())
+        assertTrue(ElementSimplifierIni.parse("[bad tag]\ntarget=p\n").rules.isEmpty())
     }
 
     @Test
@@ -98,7 +99,7 @@ class ElementSimplifierConfigurationStoreTest {
             "target=p", "[summary]\nstyle=font-weight:bold;", "[summary]\ntarget=<p>",
             "[summary]\ntarget=script", "[summary]\ntarget=img", "[summary]\ntarget=p\nunknown=yes",
             "[summary]\ntarget=p\ntarget=div", "[summary]\ntarget=p\n[SUMMARY]\ntarget=span",
-            "[bad tag]\ntarget=p", "[summary]\ntarget=p\nstyle=${"x".repeat(1025)}",
+            "[summary]\ntarget=p\nstyle=${"x".repeat(1025)}",
         )) {
             assertFailsWith<IllegalArgumentException>(text) { ElementSimplifierIni.parse(text) }
         }

@@ -221,6 +221,14 @@ unbounded buffering.
   replacement. Custom writers use `writeAttributes` and `removeSection` with their
   predeclared key; never mutate an `IniDocument` directly or delete sections just
   because their names match a feature pattern. Unknown properties remain untouched.
+- Declare `SettingGroup.id` and `SettingKey.name` in lowercase. Their paths must
+  agree with the parser's case-normalized structural names. Rule discovery
+  composes only valid tag sections; unrelated sections and root-flat entries
+  remain unclaimed. The separate file's `[element-simplifier.general] enabled`
+  setting is reserved and does not control the transformer; use the live
+  `TransformerSettings.Elements` switch. The repository applies owner-only POSIX
+  permissions to all INI files on read/write because a lazy, unregistered feature
+  may already have sensitive values in a shared file.
 - `YameConfiguration` and `YameConfigurationBindings` remain compatibility and CLI
   adapters. New persistence mappings live in their owning feature definitions.
 - Application persistence may reuse immutable feature config values. This does not

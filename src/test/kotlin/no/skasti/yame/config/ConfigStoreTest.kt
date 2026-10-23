@@ -12,6 +12,19 @@ class ConfigStoreTest {
     private val baud = SettingKey<Int>("baud", serial, { require(it > 0) })
     private val tone = SettingKey<Boolean>("tone", modem)
 
+    @Test fun `declared group and key names must match lowercase INI identity`() {
+        for (name in listOf("Serial", "serial.Port", "SERIAL.port", "serial..port")) {
+            val error = assertFailsWith<IllegalArgumentException> { SettingGroup(name) }
+            assertTrue(error.message.orEmpty().contains("lowercase"), name)
+        }
+        for (name in listOf("Baud", "baudRate", "FOO", "bad.name")) {
+            val error = assertFailsWith<IllegalArgumentException> { SettingKey<Int>(name, serial) }
+            assertTrue(error.message.orEmpty().contains("lowercase"), name)
+        }
+        val group = SettingGroup("serial.options_2")
+        assertEquals("serial.options_2.flow-control_2", SettingKey<Int>("flow-control_2", group).path)
+    }
+
     @Test fun `batch validates saves once and delivers indexed group views after commit`() {
         var saves = 0
         val store = ConfigStore(listOf(baud to 38400, tone to true), persist = { saves++ })

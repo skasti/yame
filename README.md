@@ -200,8 +200,10 @@ nanosecond values need manual updating. YAME
 rejects a save that exceeds this limit before replacing the existing file.
 Serial port names are limited to 256 characters, and login usernames and
 passwords to 64 printable ASCII characters each.
-It stores the terminal password as plain text, with owner-only file permissions
-on POSIX systems; `/yame.ini` is ignored by Git.
+It stores the terminal password as plain text. Configuration INI files are
+restricted to owner-only read/write permissions on POSIX systems when read or
+written, including files whose settings have not yet been loaded; `/yame.ini`
+is ignored by Git.
 
 ### HTML element simplification
 
@@ -231,6 +233,11 @@ elements. The default mappings use `div` for structural containers such as
 `summary`; and `span` for `time` and `mark`. `summary` gets the bold style above.
 Existing `h1`–`h6` and `p` elements remain unchanged unless explicitly mapped.
 Custom tag names can be added as shown above.
+
+`[element-simplifier.general] enabled` is reserved and currently has no effect
+on transformations. Use the `element-simplifier` switch under `/transformers`
+(stored in the main file's `[transformers]` section) to enable or disable this
+stage.
 
 The file is the complete mapping, not an override layered over defaults:
 remove a section to leave that tag unchanged, or use an empty file to disable
@@ -530,6 +537,33 @@ Run the automated tests with:
 ```shell
 ./gradlew test
 ```
+
+The Linux DOSBox PPP/DNS/TCP integration suite also requires `curl`, `sha1sum`,
+Python 3, DOSBox, `socat`, Xvfb and `xauth`:
+
+```shell
+bash scripts/dosbox-network-integration-test.sh
+# Optionally reuse downloaded archives between local runs:
+YAME_DOSBOX_DOWNLOAD_CACHE="$HOME/.cache/yame/dosbox-network" bash scripts/dosbox-network-integration-test.sh
+```
+
+CI caches the test-only LSppp and mTCP archives outside the suite's temporary
+working directory. Every use checks the pinned SHA-1 digest, including cache
+hits; missing or invalid archives are downloaded again with bounded retries
+and connection/transfer timeouts. Each archive has an ibiblio URL and a separate
+FreeDOS GitLab URL pinned to a full commit ID. A network error or digest mismatch
+advances to the next source. GitLab uses different ZIP packaging for the same
+program versions, so each source has its own expected digest. Cache hits must
+match one of those explicitly pinned digests before an archive can be used.
+Download failures appear in the dependency preparation step before the
+DOSBox/YAME suite starts. The binaries are not redistributed with YAME.
+
+Update dependency URLs/versions and expected digests in
+`scripts/dosbox-network-downloads.sh` together. CI hashes that file for the exact
+cache key, so changing either automatically invalidates the cache. Caches may be
+evicted or unavailable across branches/PRs; a cache miss still requires upstream
+access. Run the offline cache regression tests with
+`python3 -m unittest discover -s tests -p 'test_dosbox_downloads.py'`.
 
 ## Expected first test
 
