@@ -39,13 +39,14 @@ class YameRuntimeConnectionTest {
         private val failure: Exception? = null,
         private val onReadingStarted: () -> Unit = {},
         private val onOpen: () -> Unit = {},
+        private val onClose: () -> Unit = {},
     ) : SerialTransport {
         override val output = ByteArrayOutputStream()
         var closed = false
         override fun open() { onOpen(); failure?.let { throw it } }
         override fun setCarrierPresent(carrierPresent: Boolean) = Unit
         override fun startReading(onBytes: (ByteArray) -> Unit, onStopped: (Throwable?) -> Unit) = onReadingStarted()
-        override fun close() { closed = true }
+        override fun close() { closed = true; onClose() }
     }
 
     @Test
@@ -58,6 +59,7 @@ class YameRuntimeConnectionTest {
             val functions = FunctionStore()
             val firstEntered = CountDownLatch(1)
             val releaseFirst = CountDownLatch(1)
+            val firstClosed = CountDownLatch(1)
             val secondReady = CountDownLatch(1)
             val openedBauds = java.util.Collections.synchronizedList(mutableListOf<Int>())
             val messages = java.util.Collections.synchronizedList(mutableListOf<String>())
@@ -65,7 +67,7 @@ class YameRuntimeConnectionTest {
             val first = Port(onOpen = {
                 firstEntered.countDown()
                 check(releaseFirst.await(5, TimeUnit.SECONDS))
-            })
+            }, onClose = { firstClosed.countDown() })
             YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
                 YameRuntime(
                     observer = object : RuntimeObserver { override fun onLog(message: String) {
@@ -89,6 +91,7 @@ class YameRuntimeConnectionTest {
                         store.set(SerialSettings.Baud to 57_600)
                         releaseFirst.countDown()
                         assertTrue(secondReady.await(8, TimeUnit.SECONDS))
+                        assertTrue(firstClosed.await(5, TimeUnit.SECONDS))
                         assertTrue(first.closed)
                         assertEquals(listOf(38_400, 57_600), openedBauds.toList())
                         assertEquals(1, messages.count { it.contains("YAME ready on COM1 at 57600 baud") })
