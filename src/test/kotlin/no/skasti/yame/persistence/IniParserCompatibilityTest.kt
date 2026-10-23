@@ -15,6 +15,32 @@ import org.junit.jupiter.api.io.TempDir
 class IniParserCompatibilityTest {
     @TempDir lateinit var directory: Path
 
+    @Test fun `section values preserve whitespace separators escapes and inline comment markers`() {
+        val content = "# keep\n  \t  \n[ Modem ]\n login.password = secret  \t\n" +
+            "arbitrary=\t  a  b\t=c:d\\path # literal ; literal  \nempty=\n; keep too\n"
+        val document = IniParser.parse(content, "yame.ini")
+        assertEquals(" secret  \t", document.get("modem", "login.password"))
+        assertEquals("\t  a  b\t=c:d\\path # literal ; literal  ", document.get("modem", "arbitrary"))
+        assertEquals("", document.get("modem", "empty"))
+        assertEquals(null, document.get("modem", "missing"))
+        assertEquals(content, document.render())
+
+        document.put("modem", "arbitrary", "  changed\t=x:y\\z # stays  ")
+        val written = document.render()
+        assertTrue(written.startsWith("# keep\n  \t  \n[ Modem ]\n login.password = secret  \t\n"))
+        assertTrue(written.contains("; keep too\n"))
+        assertEquals("  changed\t=x:y\\z # stays  ", IniParser.parse(written).get("modem", "arbitrary"))
+    }
+
+    @Test fun `root Java Properties escapes leading spaces while unescaped leading spaces are syntax`() {
+        val content = "serial.port=\\ leading  spaces\\=x\\\\path  \n" +
+            "another=  unescaped  \n# comment\n"
+        val document = IniParser.parse(content)
+        assertEquals(" leading  spaces=x\\path  ", document.get("", "serial.port"))
+        assertEquals("unescaped  ", document.get("", "another"))
+        assertEquals(content, document.render())
+    }
+
     @Test fun `root properties retain Java Properties decoding and last declaration wins`() {
         val content = """
             # existing comment

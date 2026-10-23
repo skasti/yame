@@ -225,6 +225,20 @@ lines are rendered canonically; untouched lines retain their spelling and line
 endings. Saving after an external edit merges the fresh file, while already
 loaded values in memory are refreshed only on restart.
 
+The parser never trims a section property's value: everything after its first
+unescaped `=` is data, including leading/trailing spaces, tabs, additional `=`,
+backslashes, `#`, and `;`. An empty value differs from a missing property.
+Root-level properties intentionally follow Java `Properties` syntax: an
+unescaped leading space after `=` or `:` is skipped, while `\\ ` preserves it;
+backslash escapes and continuations are decoded. Section values are literal
+and do not apply Java escape decoding. For example, `[modem]` with
+`login.password= secret ` yields the exact password `" secret "`; the equivalent
+root property is `modem.login.password=\\ secret `. No inline comments are
+recognized in either representation. String deserialization preserves the
+logical value exactly; numeric, boolean, enum, and duration deserialization
+may trim surrounding whitespace. The writer keeps unrelated raw lines intact
+and writes changed owned values in section form without losing whitespace.
+
 Ordinary scalar values use `kotlinx.serialization` with type metadata retained
 for nullable and collection-declared keys. Custom scalar types supply standard
 serializers. Durations specifically use `Duration.toString()` and

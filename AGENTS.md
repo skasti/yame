@@ -209,6 +209,9 @@ unbounded buffering.
 - INI reads accept `[serial] baud=115200` and the equivalent root property
   `serial.baud=115200`. A conflict is an error. Writes emit only the section
   form and remove the owned flat variant; unknown settings and comments survive.
+  The parser must preserve section values verbatim, including surrounding
+  whitespace. Root values retain Java `Properties` escape semantics. Normalize
+  non-string types in `IniScalar`; string values retain their logical contents.
   Durations use readable Kotlin syntax such as `500ms` or `2s`. Older names and
   nanosecond values are not aliases; update old files when adopting this format.
 - `YameConfiguration` and `YameConfigurationBindings` remain compatibility and CLI

@@ -106,11 +106,14 @@ object IniParser {
                     val name = properties.stringPropertyNames().singleOrNull() ?: invalid("invalid property")
                     lines.add(IniDocument.Line.Property(section, name, properties.getProperty(name), raw))
                 } else {
-                    val sep = trimmed.indexOf('=')
-                    if (sep < 1) invalid("expected key=value")
-                    val name = trimmed.substring(0, sep).trim().lowercase(Locale.ROOT)
+                    val sep = raw.indexOfFirstUnescapedEquals()
+                    if (sep < 0) invalid("expected key=value")
+                    val name = raw.substring(0, sep).trim().lowercase(Locale.ROOT)
+                    if (name.isEmpty()) invalid("expected key=value")
                     if (!seen.add(section to name)) invalid("duplicate setting '$name' in [$section]")
-                    lines.add(IniDocument.Line.Property(section, name, trimmed.substring(sep + 1).trim(), raw))
+                    // The value starts immediately after the separator. Whitespace,
+                    // extra '=' characters, backslashes and comment markers are data.
+                    lines.add(IniDocument.Line.Property(section, name, raw.substring(sep + 1), raw))
                 }
             }
             index++
@@ -121,6 +124,18 @@ object IniParser {
     }
 
     private fun String.countTrailingBackslashes(): Int = length - trimEnd('\\').length
+
+    private fun String.indexOfFirstUnescapedEquals(): Int {
+        var backslashes = 0
+        for (index in indices) {
+            when (this[index]) {
+                '\\' -> backslashes++
+                '=' -> if (backslashes % 2 == 0) return index else backslashes = 0
+                else -> backslashes = 0
+            }
+        }
+        return -1
+    }
 }
 
 object IniWriter { fun write(document: IniDocument): String = document.render() }

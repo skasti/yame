@@ -130,6 +130,69 @@ class LazyConfigurationTest {
         assertTrue(error.message.orEmpty().contains("serial.baud"))
     }
 
+    @Test fun `string settings preserve exact whitespace through section load save and reload`() {
+        val path = directory.resolve("yame.ini")
+        val original = "# keep\nfuture.value=  untouched  \n  \t  \n" +
+            "[modem]\nlogin.username=user\nlogin.password= secret \n" +
+            "[serial]\nport=\t COM  1\\path=x:y\t \n"
+        Files.writeString(path, original)
+        val store = lazyApplicationConfigStore(path)
+        assertEquals(" secret ", store[ModemSettings.Login].password)
+        assertEquals("\t COM  1\\path=x:y\t ", store[SerialSettings.Port])
+
+        val credentials = LoginCredentials("user", "  new =: \\secret  ")
+        val port = "  COM  2\t=mode:fast\\path  "
+        store.set(ModemSettings.Login to credentials, SerialSettings.Port to port)
+        val written = Files.readString(path)
+        assertTrue(written.startsWith("# keep\nfuture.value=  untouched  \n  \t  \n"))
+        assertTrue(written.contains("login.password=  new =: \\secret  \n"))
+        assertTrue(written.contains("port=$port\n"))
+        val reloaded = lazyApplicationConfigStore(path)
+        assertEquals(credentials, reloaded[ModemSettings.Login])
+        assertEquals(port, reloaded[SerialSettings.Port])
+    }
+
+    @Test fun `root escaped string values agree with sections and unequal logical values conflict`() {
+        val path = directory.resolve("yame.ini")
+        Files.writeString(path, "modem.login.password=\\ secret \n[modem]\n" +
+            "login.username=user\nlogin.password= secret \n")
+        val store = lazyApplicationConfigStore(path)
+        assertEquals(" secret ", store[ModemSettings.Login].password)
+        store.set(ModemSettings.Login to LoginCredentials("user", " new "))
+        val written = Files.readString(path)
+        assertFalse(written.contains("modem.login.password="))
+        assertEquals(" new ", lazyApplicationConfigStore(path)[ModemSettings.Login].password)
+
+        Files.writeString(path, "modem.login.password= secret \n[modem]\n" +
+            "login.username=user\nlogin.password= secret \n")
+        val error = assertFailsWith<IllegalArgumentException> {
+            lazyApplicationConfigStore(path)[ModemSettings.Login]
+        }
+        assertTrue(error.message.orEmpty().contains("yame.ini"))
+        assertTrue(error.message.orEmpty().contains("login.password"))
+    }
+
+    @Test fun `empty string is present while absent nullable property uses its default`() {
+        val path = directory.resolve("yame.ini")
+        Files.writeString(path, "[serial]\nport=\n")
+        assertEquals("", lazyApplicationConfigStore(path)[SerialSettings.Port])
+        Files.writeString(path, "[serial]\n")
+        assertNull(lazyApplicationConfigStore(path)[SerialSettings.Port])
+    }
+
+    @Test fun `numeric and duration values tolerate surrounding whitespace in both layouts`() {
+        val path = directory.resolve("yame.ini")
+        for (content in listOf(
+            "[serial]\nbaud= 57600 \t\n[modem]\npickup-time= 500ms \t\n",
+            "serial.baud= 57600 \t\nmodem.pickup-time= 500ms \t\n",
+        )) {
+            Files.writeString(path, content)
+            val store = lazyApplicationConfigStore(path)
+            assertEquals(57_600, store[SerialSettings.Baud])
+            assertEquals(kotlin.time.Duration.parse("500ms"), store[ModemSettings.PickupTime])
+        }
+    }
+
     @Test fun `duration and reusable composite keys round trip in canonical sections`() {
         val path = directory.resolve("yame.ini")
         Files.writeString(path, "modem.login.username=alice\n[modem]\nlogin.password=secret\npickup-time=1.5s\n")
