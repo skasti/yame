@@ -3,6 +3,7 @@ package no.skasti.yame.ppp.proxy
 import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.ppp.proxy.transform.ElementSimplifierConfiguration
 import no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings
+import no.skasti.yame.ppp.proxy.transform.ElementSimplifierSettings
 import no.skasti.yame.ppp.proxy.transform.TransformerSettings
 
 data class PppHttpCompatibilityConfig(
@@ -25,7 +26,7 @@ data class PppHttpCompatibilityConfig(
         fun fromConfigStore(store: ConfigStore = ConfigStore.current): PppHttpCompatibilityConfig =
             PppHttpCompatibilityConfig(
                 enabled = store[ProxySettings.Enabled],
-                elementSimplifier = store[TransformerSettings.Rules],
+                elementSimplifier = store[ElementSimplifierSettings.Rules],
                 htmlTransformers = HtmlTransformerSettings.fromConfigStore(store),
             )
     }

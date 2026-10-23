@@ -2,6 +2,7 @@ package no.skasti.yame.config
 
 import no.skasti.yame.persistence.*
 import no.skasti.yame.ppp.proxy.transform.*
+import no.skasti.yame.ppp.proxy.transform.ElementSimplifierSettings
 import no.skasti.yame.ppp.proxy.transform.TransformerSettings
 import no.skasti.yame.modem.HayesModemConfig
 import no.skasti.yame.modem.ModemSettings
@@ -87,7 +88,7 @@ class ComponentConfigurationTest {
             assertEquals("<p>text</p>", apply(component))
             assertEquals("<div>text</div>", apply(ElementSimplifier()))
             assertFailsWith<IllegalArgumentException> {
-                store.set(TransformerSettings.Rules to explicit)
+                store.set(ElementSimplifierSettings.Rules to explicit)
             }
             assertEquals(rules, ElementSimplifierConfiguration.fromConfigStore())
         }

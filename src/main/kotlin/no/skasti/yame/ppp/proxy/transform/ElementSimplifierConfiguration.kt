@@ -35,7 +35,7 @@ class ElementSimplifierConfiguration(rules: Map<String, ElementSimplifierRule>) 
 
     companion object {
         fun fromConfigStore(store: ConfigStore = ConfigStore.current): ElementSimplifierConfiguration {
-            return store[TransformerSettings.Rules]
+            return store[ElementSimplifierSettings.Rules]
         }
 
         fun defaults(): ElementSimplifierConfiguration = ElementSimplifierIni.defaults

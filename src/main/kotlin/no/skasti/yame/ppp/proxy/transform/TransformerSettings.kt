@@ -14,6 +14,4 @@ object TransformerSettings : Settings("transformers") {
         HtmlTransformer.ATTRIBUTE_CLEANER -> Attributes
         HtmlTransformer.ELEMENT_SIMPLIFIER -> Elements
     }
-    val Rules get() = ElementSimplifierSettings.Rules
-
 }

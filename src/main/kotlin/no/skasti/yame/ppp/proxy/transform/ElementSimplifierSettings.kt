@@ -12,6 +12,9 @@ object ElementSimplifierSettings : SeparateSettings("element-simplifier") {
 
     override fun loadFromIni(context: IniReadContext): List<ConfigChange<*>> {
         val ordinary = super.loadFromIni(context)
+        require("target" !in context.properties("")) {
+            "${context.filename}: a rule target requires a named section"
+        }
         val rules = linkedMapOf<String, ElementSimplifierRule>()
         for (section in context.unconsumedSections().filter { it != General.id }) {
             require(TAG_NAME.matches(section)) { "${context.filename}: invalid rule section [$section]" }

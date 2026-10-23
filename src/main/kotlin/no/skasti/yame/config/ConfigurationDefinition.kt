@@ -6,6 +6,7 @@ import kotlin.reflect.KVisibility
 import kotlin.reflect.full.companionObjectInstance
 import kotlin.reflect.full.declaredMemberProperties
 import kotlin.reflect.KClass
+import kotlin.reflect.jvm.javaField
 
 /** Feature-owned setting definitions and mappings, not the current values held by ConfigStore. */
 abstract class Settings(val id: String, val file: String? = null) {
@@ -25,7 +26,15 @@ abstract class Settings(val id: String, val file: String? = null) {
     private val discovered by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         val keys = this::class.declaredMemberProperties.asSequence()
             .filter { it.visibility == KVisibility.PUBLIC }
-            .flatMap { property -> discover(property.getter.call(this)).asSequence() }
+            .flatMap { property ->
+                // Object properties are backed by static fields on the JVM; a
+                // reflected field getter can reject the apparent object receiver.
+                val field = property.javaField
+                val value = if (field != null) field.get(this)
+                    else if (property.getter.parameters.isEmpty()) property.getter.call()
+                    else property.getter.call(this)
+                discover(value).asSequence()
+            }
             .filter { it.group.configuration === this }
             .distinct()
             .toList()

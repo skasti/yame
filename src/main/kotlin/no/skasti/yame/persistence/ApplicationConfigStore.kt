@@ -1,6 +1,7 @@
 package no.skasti.yame.persistence
 
 import no.skasti.yame.config.*
+import no.skasti.yame.ppp.proxy.transform.ElementSimplifierSettings
 import no.skasti.yame.ppp.proxy.transform.TransformerSettings
 
 /** Composition root: assembles the application persistence bindings, preserving yame.ini compatibility. */
@@ -18,7 +19,7 @@ fun applicationConfigStore(
         overrides = bindings.map { it.change(effective) },
         persist = { save(configuration(it)) },
         validateSnapshot = {
-            require(it[TransformerSettings.Rules]?.value == saved.pppHttpCompatibilityConfig.elementSimplifier) {
+            require(it[ElementSimplifierSettings.Rules]?.value == saved.pppHttpCompatibilityConfig.elementSimplifier) {
                 "Element-simplifier rules are startup configuration; edit element-simplifier.ini and restart"
             }
             configuration(it)
