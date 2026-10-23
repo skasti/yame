@@ -450,12 +450,14 @@ class LazyConfigurationTest {
 
     @Test fun `invalid dynamic rule does not partially register`() {
         val path = directory.resolve("element-simplifier.ini")
-        Files.writeString(path, "[heading]\nstyle=color:red\n")
+        Files.writeString(path, "[heading]\ntarget=h1\n[broken]\nstyle=color:red\n")
         val store = lazyApplicationConfigStore(directory.resolve("yame.ini"))
         assertFailsWith<IllegalArgumentException> { store.ensureLoaded(ElementSimplifierSettings) }
         var rulesLoaded = false
         store.onChange[ElementSimplifierSettings.Group].subscribe(initial = true) { rulesLoaded = true }.close()
         assertFalse(rulesLoaded)
+        Files.writeString(path, "[heading]\ntarget=h1\n[broken]\ntarget=p\n")
+        assertEquals(listOf("heading", "broken"), store[ElementSimplifierSettings.Rules].rules.keys.toList())
     }
 
     @Test fun `legacy files load the same effective values through the lazy store`() {
@@ -678,7 +680,7 @@ class LazyConfigurationTest {
     @Test fun `saving rules preserves newly added sections that this store never claimed`() {
         val primary = directory.resolve("yame.ini")
         val path = directory.resolve("element-simplifier.ini")
-        Files.writeString(path, "; keep\n[heading]\ntarget=h1\n")
+        Files.writeString(path, "; keep\n[heading]\n# retain rule comment\ntarget=h1\n")
         val store = lazyApplicationConfigStore(primary)
         val rules = store[ElementSimplifierSettings.Rules]
         Files.writeString(path, Files.readString(path) + "[external]\ntarget=span\n")
@@ -686,10 +688,29 @@ class LazyConfigurationTest {
             rules.rules + ("heading" to no.skasti.yame.ppp.proxy.transform.ElementSimplifierRule("h2"))))
         val written = Files.readString(path)
         assertTrue(written.contains("[external]\ntarget=span"))
-        assertTrue(written.contains("[heading]\ntarget=h2"))
+        assertTrue(written.contains("[heading]\n# retain rule comment\ntarget=h2"))
         assertFalse(written.contains("rules="))
         assertEquals("span", lazyApplicationConfigStore(primary)[ElementSimplifierSettings.Rules]
             .rules.getValue("external").target)
+    }
+
+    @Test fun `obsolete rule deletion refuses unknown attributes but removes only owned sections`() {
+        val primary = directory.resolve("yame.ini")
+        val path = directory.resolve("element-simplifier.ini")
+        Files.writeString(path, "[heading]\ntarget=h1\n[paragraph]\ntarget=p\n")
+        val store = lazyApplicationConfigStore(primary)
+        store[ElementSimplifierSettings.Rules]
+        val replacement = no.skasti.yame.ppp.proxy.transform.ElementSimplifierConfiguration(
+            mapOf("heading" to no.skasti.yame.ppp.proxy.transform.ElementSimplifierRule("h2")))
+        Files.writeString(path, Files.readString(path).replace("[paragraph]\ntarget=p", "[paragraph]\ntarget=p\nunknown=keep"))
+        val before = Files.readString(path)
+        assertFailsWith<IllegalArgumentException> { store.set(ElementSimplifierSettings.Rules to replacement) }
+        assertEquals(before, Files.readString(path))
+        Files.writeString(path, before.replace("\nunknown=keep", ""))
+        store.set(ElementSimplifierSettings.Rules to replacement)
+        assertFalse(Files.readString(path).contains("[paragraph]"))
+        assertEquals("h2", lazyApplicationConfigStore(primary)[ElementSimplifierSettings.Rules]
+            .rules.getValue("heading").target)
     }
 
     @Test fun `root flat dynamic rule attributes normalize into owned sections`() {
@@ -704,7 +725,8 @@ class LazyConfigurationTest {
         val written = Files.readString(path)
         assertFalse(written.contains("heading.target="))
         assertTrue(written.contains("# retain"))
-        assertTrue(written.contains("[heading]\ntarget=h2"))
+        assertTrue(written.contains("[heading]"))
+        assertTrue(written.contains("target=h2"))
         assertEquals("h2", lazyApplicationConfigStore(primary)[ElementSimplifierSettings.Rules]
             .rules.getValue("heading").target)
     }

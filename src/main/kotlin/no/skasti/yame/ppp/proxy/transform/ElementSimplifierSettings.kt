@@ -37,8 +37,10 @@ object ElementSimplifierSettings : SeparateSettings("element-simplifier") {
     override fun saveToIni(context: IniWriteContext) {
         super.saveToIni(context)
         if (Rules !in context.changedKeys) return
-        context.ownedSections(Rules).filter { it != General.id }.forEach { context.removeSection(Rules, it) }
-        requireNotNull(context.snapshot[Rules]).value.rules.forEach { (tag, rule) ->
+        val rules = requireNotNull(context.snapshot[Rules]).value.rules
+        context.ownedSections(Rules).filter { it != General.id && it !in rules }
+            .forEach { context.removeSection(Rules, it) }
+        rules.forEach { (tag, rule) ->
             context.writeAttributes(Rules, tag) { attrs ->
                 attrs["target"] = rule.target
                 if (rule.style == null) attrs.remove("style") else attrs["style"] = rule.style
