@@ -1,7 +1,7 @@
 package no.skasti.yame.config
 
-import no.skasti.yame.config.ini.IniDocument
 import no.skasti.yame.config.ini.IniScalar
+import no.skasti.yame.config.ini.IniDocument
 import kotlin.reflect.KVisibility
 import kotlin.reflect.full.companionObjectInstance
 import kotlin.reflect.full.declaredMemberProperties
@@ -109,57 +109,206 @@ interface CompositeSetting<T : Any> {
     fun saveToIni(value: T, context: IniWriteContext)
 }
 
+/** Attribute names alone never grant ownership; only a key-scoped get claims one. */
+interface IniReadableAttributes {
+    val keys: Set<String>
+    operator fun get(name: String): String?
+}
+
+interface IniWritableAttributes {
+    operator fun set(name: String, value: String)
+    fun remove(name: String)
+}
+
+/** One logical location for both [section] property and root section.property. */
+data class IniPropertyId(val file: String, val section: String, val property: String)
+
+private fun checkClaim(
+    owners: MutableMap<Pair<String, String>, SettingKey<*>>,
+    section: String, property: String, key: SettingKey<*>, filename: String,
+) {
+    require(section.isNotEmpty() && property.matches(Regex("[A-Za-z0-9][A-Za-z0-9_.-]*"))) {
+        "$filename: invalid INI section/property [$section] $property"
+    }
+    val location = section to property
+    val previous = owners[location]
+    require(previous == null || previous === key) {
+        "$filename [$section] $property: ${key.path} conflicts with ${previous?.path}"
+    }
+    owners[location] = key
+}
+
 class IniReadContext internal constructor(
     val filename: String,
-    val document: IniDocument,
+    private val document: IniDocument,
     val existed: Boolean,
-    private val claimed: MutableSet<Pair<String, String>> = mutableSetOf(),
+    private val claimed: MutableMap<Pair<String, String>, SettingKey<*>> = linkedMapOf(),
     private val key: SettingKey<*>? = null,
+    private val definition: Settings? = null,
 ) {
-    fun forKey(key: SettingKey<*>): IniReadContext = IniReadContext(filename, document, existed, claimed, key)
+    private fun requireOwner(key: SettingKey<*>) {
+        require(definition == null || (key.group.configuration === definition && key in definition.allSettingKeys)) {
+            "$filename: ${key.path} does not belong to ${definition?.id}"
+        }
+    }
+    fun forKey(key: SettingKey<*>): IniReadContext {
+        requireOwner(key)
+        return IniReadContext(filename, document, existed, claimed, key, definition)
+    }
+
+    private fun value(section: String, property: String): String? {
+        val flat = "$section.$property"
+        val canonical = document.get(section, property)
+        val root = document.get("", flat)
+        require(canonical == null || root == null || canonical == root) {
+            "$filename: conflicting [$section] $property and root $flat"
+        }
+        return canonical ?: root
+    }
 
     fun read(child: String): String? {
         val owner = requireNotNull(key) { "A setting key is required for relative INI reads" }
         val property = owner.name + if (child.isEmpty()) "" else ".$child"
-        val section = owner.group.id
-        val flat = "$section.$property"
-        val canonical = read(section, property)
-        val legacy = read("", flat)
-        require(canonical == null || legacy == null || canonical == legacy) {
-            "$filename: conflicting [$section] $property and root $flat"
-        }
-        return canonical ?: legacy
+        val result = value(owner.group.id, property)
+        checkClaim(claimed, owner.group.id, property, owner, filename)
+        return result
     }
 
-    fun read(section: String, property: String): String? {
-        require(claimed.add(section to property)) { "Duplicate claim [$section] $property in $filename" }
-        return document.get(section, property)
+    fun <T, R : Any> compose(
+        key: SettingKey<T>, section: String, block: (IniReadableAttributes) -> R?,
+    ): R? {
+        requireOwner(key)
+        val tentative = linkedMapOf<Pair<String, String>, SettingKey<*>>()
+        val attrs = IniAttributes(filename, document, section, key, tentative)
+        val result = try { block(attrs) }
+        catch (error: Exception) {
+            throw IllegalArgumentException("$filename [$section] ${key.path}: ${error.message}", error)
+        }
+        if (result != null) {
+            // Check the entire block before installing any of its claims.
+            tentative.forEach { (location, owner) ->
+                val previous = claimed[location]
+                require(previous == null || previous === owner) {
+                    "$filename [${location.first}] ${location.second}: ${owner.path} conflicts with ${previous?.path}"
+                }
+            }
+            claimed.putAll(tentative)
+        }
+        return result
     }
+
     fun unconsumedSections(): List<String> = document.sections().filter { name ->
         name.isNotEmpty() && (document.properties(name).isEmpty() || document.properties(name).keys.any { name to it !in claimed })
     }
-    fun properties(section: String): Map<String, String> = document.properties(section)
-    fun claim(section: String, property: String): String? = read(section, property)
-    internal fun claims(): Set<Pair<String, String>> = claimed.toSet()
+    /** Root-form candidates are considered only if the feature requests these child names. */
+    fun flatSectionsFor(vararg properties: String): List<String> = document.properties("").keys.mapNotNull { flat ->
+        properties.firstNotNullOfOrNull { property ->
+            if (flat.endsWith(".$property")) flat.removeSuffix(".$property") else null
+        }
+    }.distinct()
+    fun rootProperties(): Set<String> = document.properties("").keys
+    internal fun claims(): Map<Pair<String, String>, SettingKey<*>> = claimed.toMap()
+
+    /** A single implementation supplies the narrow read and write views. */
+    private class IniAttributes(
+        private val filename: String,
+        private val document: IniDocument,
+        private val section: String,
+        private val owner: SettingKey<*>,
+        private val claims: MutableMap<Pair<String, String>, SettingKey<*>>,
+    ) : IniReadableAttributes, IniWritableAttributes {
+        override val keys: Set<String> get() = (document.properties(section).keys +
+            document.properties("").keys.mapNotNull { it.removePrefix("$section.").takeIf { part ->
+                part != it && part.isNotEmpty()
+            } }).toSet()
+
+        override fun get(name: String): String? {
+            require(name.isNotEmpty()) { "$filename [$section]: empty attribute name" }
+            val canonical = document.get(section, name)
+            val root = document.get("", "$section.$name")
+            require(canonical == null || root == null || canonical == root) {
+                "$filename: conflicting [$section] $name and root $section.$name"
+            }
+            checkClaim(claims, section, name, owner, filename)
+            return canonical ?: root
+        }
+
+        override fun set(name: String, value: String) {
+            checkClaim(claims, section, name, owner, filename)
+            document.remove("", "$section.$name")
+            document.put(section, name, value)
+        }
+
+        override fun remove(name: String) {
+            checkClaim(claims, section, name, owner, filename)
+            document.remove("", "$section.$name")
+            document.remove(section, name)
+        }
+    }
+
+    internal companion object {
+        fun writable(
+            filename: String, document: IniDocument, section: String, owner: SettingKey<*>,
+            claims: MutableMap<Pair<String, String>, SettingKey<*>>,
+        ): IniWritableAttributes = IniAttributes(filename, document, section, owner, claims)
+    }
 }
 
 class IniWriteContext internal constructor(
     val snapshot: ConfigChanges,
-    val document: IniDocument,
+    private val document: IniDocument,
     val changedKeys: Set<SettingKey<*>>,
+    private val filename: String = "configuration.ini",
+    private val claims: MutableMap<Pair<String, String>, SettingKey<*>> = linkedMapOf(),
     private val key: SettingKey<*>? = null,
+    private val definition: Settings? = null,
 ) {
-    fun forKey(key: SettingKey<*>): IniWriteContext = IniWriteContext(snapshot, document, changedKeys, key)
+    fun forKey(key: SettingKey<*>): IniWriteContext {
+        requireOwner(key)
+        return IniWriteContext(snapshot, document, changedKeys, filename, claims, key, definition)
+    }
+    private fun requireOwner(key: SettingKey<*>) {
+        require(definition == null || (key.group.configuration === definition && key in definition.allSettingKeys)) {
+            "$filename: ${key.path} does not belong to ${definition?.id}"
+        }
+    }
     fun write(child: String, value: String?) {
         val owner = requireNotNull(key) { "A setting key is required for relative INI writes" }
-        val property = owner.name + if (child.isEmpty()) "" else ".$child"
-        val section = owner.group.id
-        document.remove("", "$section.$property")
-        if (value == null) document.remove(section, property) else document.put(section, property, value)
+        writeAttributes(owner, owner.group.id) { attrs ->
+            val property = owner.name + if (child.isEmpty()) "" else ".$child"
+            if (value == null) attrs.remove(property) else attrs[property] = value
+        }
     }
-    fun write(section: String, property: String, value: String) = document.put(section, property, value)
-    fun remove(section: String, property: String) = document.remove(section, property)
-    fun removeSection(section: String) = document.removeSection(section)
-    fun sections(): List<String> = document.sections()
-    fun properties(section: String): Map<String, String> = document.properties(section)
+    fun <T> writeAttributes(key: SettingKey<T>, section: String, block: (IniWritableAttributes) -> Unit) {
+        requireOwner(key)
+        require(key in changedKeys) { "$filename: ${key.path} was not changed" }
+        block(IniReadContext.writable(filename, document, section, key, claims))
+    }
+    fun <T> removeSection(key: SettingKey<T>, section: String) {
+        requireOwner(key)
+        require(key in changedKeys) { "$filename: ${key.path} was not changed" }
+        require(section.isNotEmpty()) { "$filename: cannot remove root section" }
+        document.properties(section).keys.forEach { property ->
+            val previous = claims[section to property]
+            require(previous === key) {
+                "$filename [$section] $property: cannot remove attribute owned by ${previous?.path ?: "unknown key"}"
+            }
+        }
+        // Root-flat properties at this logical location are subject to the same check.
+        document.properties("").keys.filter { it.startsWith("$section.") }.forEach { flat ->
+            val property = flat.removePrefix("$section.")
+            val previous = claims[section to property]
+            require(previous === key) {
+                "$filename [$section] $property: cannot remove attribute owned by ${previous?.path ?: "unknown key"}"
+            }
+            document.remove("", flat)
+        }
+        document.removeSection(section)
+        claims.keys.removeAll { it.first == section && claims[it] === key }
+    }
+    fun ownedSections(key: SettingKey<*>): List<String> = claims.entries.mapNotNull { (location, owner) ->
+        location.first.takeIf { owner === key &&
+            (document.properties(it).isNotEmpty() || document.properties("").keys.any { flat -> flat.startsWith("$it.") }) }
+    }.distinct()
+    internal fun claims(): Map<Pair<String, String>, SettingKey<*>> = claims.toMap()
 }

@@ -214,6 +214,13 @@ unbounded buffering.
   non-string types in `IniScalar`; string values retain their logical contents.
   Durations use readable Kotlin syntax such as `500ms` or `2s`. Older names and
   nanosecond values are not aliases; update old files when adopting this format.
+- INI ownership is per `SettingKey`, not per definition or section. A key may
+  claim several attributes through a composite or `compose(key, section)`;
+  reading attribute names does not claim them. The repository stages claims until
+  a complete validated load, and stages/validates all affected documents before
+  replacement. Custom writers use `writeAttributes` and `removeSection` with their
+  predeclared key; never mutate an `IniDocument` directly or delete sections just
+  because their names match a feature pattern. Unknown properties remain untouched.
 - `YameConfiguration` and `YameConfigurationBindings` remain compatibility and CLI
   adapters. New persistence mappings live in their owning feature definitions.
 - Application persistence may reuse immutable feature config values. This does not

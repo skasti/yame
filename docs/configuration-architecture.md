@@ -31,6 +31,22 @@ loading that definition on first use. Component `fromConfigStore()` factories
 read only their owned keys through the supplied store.
 The `persistence` package retains compatibility adapters for existing callers and
 CLI composition. They do not register features or supply the runtime's settings.
+INI ownership lives in `IniConfigurationRepository`, scoped to its store. Each
+logical `(file, section, property)` belongs to at most one `SettingKey`, including
+conventional keys, composite children and dynamic rule attributes. Two keys may
+share a section when their properties differ. A section property and its equivalent
+root-flat property are one logical location. Missing optional properties can also
+be reserved by their key, so a later definition cannot claim them accidentally.
+Reads stage claims until the entire definition and typed candidate pass validation;
+failed loads can be retried without partial ownership. `compose(key, section)`
+exposes attribute names without claiming them, claims only attributes accessed by
+`get`, and discards those claims if it returns null or throws. Writes are key-scoped:
+`writeAttributes` checks each mutation, while `removeSection` refuses to erase
+unknown or differently owned properties. Dynamic rule sections are removed only
+when `Rules` had previously claimed their attributes. Each affected document is
+prepared and validated before the first replacement; an actual filesystem failure
+in a later replacement still reports partial disk state while the typed store
+remains uncommitted.
 `YameConfiguration` is used only during startup/CLI parsing and file persistence.
 It reuses immutable feature values as sibling fields without putting PPP, DNS, or
 HTTP configuration inside the modem config. The new section-based `yame.ini` names are owned by feature definitions.

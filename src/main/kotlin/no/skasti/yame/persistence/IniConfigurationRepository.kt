@@ -15,17 +15,33 @@ class PartialIniWriteException(val replacedFiles: List<Path>, cause: Exception) 
 class IniConfigurationRepository(private val primaryFile: Path) : ConfigurationRepository {
     private val directory = requireNotNull(primaryFile.toAbsolutePath().normalize().parent)
     private val primaryName = primaryFile.fileName.toString()
+    /** Repository-local ownership; a failed definition load never enters this map. */
+    private val owners = linkedMapOf<IniPropertyId, SettingKey<*>>()
     init { require(primaryName.endsWith(".ini")) }
 
     fun file(definition: Settings): Path =
         definition.file?.let { directory.resolve("$it.ini") } ?: directory.resolve(primaryName)
 
-    override fun fileIdentity(definition: Settings): String = file(definition).toString()
-
-    override fun load(definition: Settings): Pair<List<ConfigChange<*>>, Set<Pair<String, String>>> {
+    override fun load(definition: Settings): ConfigurationLoad {
         val path = file(definition)
-        val context = IniReadContext(path.fileName.toString(), read(path), Files.exists(path))
-        return definition.loadFromIni(context) to context.claims()
+        val context = IniReadContext(path.fileName.toString(), read(path), Files.exists(path), definition = definition)
+        val entries = definition.loadFromIni(context)
+        val staged = context.claims().mapKeys { (location, _) ->
+            IniPropertyId(path.toString(), location.first, location.second)
+        }
+        return ConfigurationLoad(entries) {
+            synchronized(owners) {
+                staged.forEach { (location, owner) -> checkOwner(location, owner, owners) }
+                owners.putAll(staged)
+            }
+        }
+    }
+
+    private fun checkOwner(location: IniPropertyId, owner: SettingKey<*>, registry: Map<IniPropertyId, SettingKey<*>>) {
+        val previous = registry[location]
+        require(previous == null || previous === owner) {
+            "${location.file} [${location.section}] ${location.property}: ${owner.path} conflicts with ${previous?.path}"
+        }
     }
 
     /** The store holds its transaction lock across this call. */
@@ -35,13 +51,30 @@ class IniConfigurationRepository(private val primaryFile: Path) : ConfigurationR
             val byOwner = changes.groupBy { change ->
                 requireNotNull(change.key.group.configuration) { "No INI owner for ${change.key.path}" }
             }
-            byOwner.entries.groupBy { file(it.key) }.forEach { (path, owners) ->
+            val prepared = mutableListOf<Pair<Path, ByteArray>>()
+            val pending = synchronized(owners) { LinkedHashMap(owners) }
+            byOwner.entries.groupBy { file(it.key) }.forEach { (path, definitions) ->
                 val document = read(path)
-                owners.forEach { (definition, changed) ->
-                    definition.saveToIni(IniWriteContext(snapshot, document, changed.map { it.key }.toSet()))
+                val claims = linkedMapOf<Pair<String, String>, SettingKey<*>>()
+                pending.filterKeys { it.file == path.toString() }.forEach { (location, owner) ->
+                    claims[location.section to location.property] = owner
+                }
+                definitions.forEach { (definition, changed) ->
+                    definition.saveToIni(IniWriteContext(snapshot, document, changed.map { it.key }.toSet(),
+                        path.fileName.toString(), claims, definition = definition))
+                }
+                pending.keys.removeAll { it.file == path.toString() }
+                claims.forEach { (location, owner) ->
+                    val id = IniPropertyId(path.toString(), location.first, location.second)
+                    checkOwner(id, owner, pending)
+                    pending[id] = owner
                 }
                 val bytes = IniWriter.write(document).toByteArray(Charsets.UTF_8)
                 require(bytes.size <= IniParser.MAX_BYTES) { "Configuration file exceeds ${IniParser.MAX_BYTES} bytes: $path" }
+                prepared += path to bytes
+            }
+            // Every document and ownership mutation is validated before replacing any file.
+            prepared.forEach { (path, bytes) ->
                 Files.createDirectories(directory)
                 val temporary = Files.createTempFile(directory, ".yame-ini-", ".tmp")
                 try {
@@ -52,6 +85,7 @@ class IniConfigurationRepository(private val primaryFile: Path) : ConfigurationR
                     replaced.add(path)
                 } finally { Files.deleteIfExists(temporary) }
             }
+            synchronized(owners) { owners.clear(); owners.putAll(pending) }
         } catch (error: Exception) {
             if (replaced.isNotEmpty()) throw PartialIniWriteException(replaced, error)
             throw error

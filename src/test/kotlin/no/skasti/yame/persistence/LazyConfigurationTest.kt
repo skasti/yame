@@ -35,7 +35,7 @@ class LazyConfigurationTest {
         val delegate = IniConfigurationRepository(path)
         val loads = AtomicInteger()
         val repository = object : ConfigurationRepository by delegate {
-            override fun load(definition: Settings): Pair<List<ConfigChange<*>>, Set<Pair<String, String>>> {
+            override fun load(definition: Settings): ConfigurationLoad {
                 loads.incrementAndGet()
                 return delegate.load(definition)
             }
@@ -92,7 +92,7 @@ class LazyConfigurationTest {
         val delegate = IniConfigurationRepository(path)
         val loads = AtomicInteger()
         val repository = object : ConfigurationRepository by delegate {
-            override fun load(definition: Settings): Pair<List<ConfigChange<*>>, Set<Pair<String, String>>> {
+            override fun load(definition: Settings): ConfigurationLoad {
                 loads.incrementAndGet()
                 return delegate.load(definition)
             }
@@ -502,5 +502,206 @@ class LazyConfigurationTest {
         Files.createDirectory(path)
         assertFails { store.set(SerialSettings.Baud to 9600) }
         assertEquals(38_400, store[SerialSettings.Baud])
+    }
+
+    @Test fun `different keys share a section but cannot claim the same attribute in either syntax`() {
+        val path = directory.resolve("yame.ini")
+        Files.writeString(path, "shared.first=7\n[shared]\nsecond=9\n")
+        class Owner(id: String, name: String) : Settings(id) {
+            val group = SettingGroup("shared", this)
+            val key = SettingKey<Int>(name, group, default = { 0 })
+        }
+        val first = Owner("first-owner", "first")
+        val second = Owner("second-owner", "second")
+        val store = lazyApplicationConfigStore(path)
+        assertEquals(7, store[first.key])
+        assertEquals(9, store[second.key])
+        store.set(first.key to 8, second.key to 10)
+        val text = Files.readString(path)
+        assertTrue(text.contains("first=8"))
+        assertTrue(text.contains("second=10"))
+        assertFalse(text.contains("shared.first="))
+
+        val conflicting = object : Settings("third-owner") {
+            val group = SettingGroup("shared", this)
+            val key = SettingKey<Int>("alias", group, default = { 0 }, structural = true)
+            override fun loadFromIni(context: IniReadContext): List<ConfigChange<*>> = listOf(
+                key to requireNotNull(context.compose(key, "shared") { attrs -> attrs["first"]?.toInt() }),
+            )
+        }
+        val error = assertFailsWith<IllegalArgumentException> { store[conflicting.key] }
+        assertTrue(error.message.orEmpty().contains("yame.ini [shared] first"), error.message)
+        assertTrue(error.message.orEmpty().contains(first.key.path), error.message)
+        assertEquals(8, store[first.key])
+    }
+
+    @Test fun `composition commits only nonnull claims including absent attributes`() {
+        val doc = no.skasti.yame.config.ini.IniParser.parse("[tags]\ntarget=p\nother=keep\n", "rules.ini")
+        val definition = object : Settings("test") {
+            val group = SettingGroup(this)
+            val selected = SettingKey<String>("selected", group, default = { "" }, structural = true)
+            val other = SettingKey<String>("other", group, default = { "" }, structural = true)
+        }
+        val context = IniReadContext("rules.ini", doc, true)
+        assertEquals(2, context.compose(definition.selected, "tags") { it.keys.size })
+        assertTrue(context.claims().isEmpty())
+        assertNull(context.compose<String, String>(definition.selected, "tags") { attrs ->
+            assertEquals(setOf("target", "other"), attrs.keys)
+            attrs["target"]
+            null
+        })
+        assertTrue(context.claims().isEmpty())
+        assertFailsWith<IllegalArgumentException> {
+            context.compose<String, String>(definition.selected, "tags") { attrs -> attrs["target"]; error("bad rule") }
+        }
+        assertTrue(context.claims().isEmpty())
+        assertEquals("p", context.compose(definition.selected, "tags") { attrs ->
+            assertEquals(setOf("target", "other"), attrs.keys)
+            assertEquals(null, attrs["style"])
+            attrs["target"]
+        })
+        assertEquals(setOf("tags" to "target", "tags" to "style"), context.claims().keys)
+        assertFailsWith<IllegalArgumentException> {
+            context.compose(definition.other, "tags") { it["style"] ?: "fallback" }
+        }
+    }
+
+    @Test fun `later load failure rolls back earlier key claims and allows retry`() {
+        val path = directory.resolve("yame.ini")
+        Files.writeString(path, "[shared]\nfirst=7\nsecond=bad\n")
+        val first = object : Settings("first-owner") {
+            val group = SettingGroup("shared", this)
+            val key = SettingKey<Int>("first", group, default = { 0 })
+            val second = SettingKey<Int>("second", group, default = { 0 })
+        }
+        val replacement = object : Settings("replacement-owner") {
+            val group = SettingGroup("shared", this)
+            val key = SettingKey<Int>("replacement", group, default = { 0 }, structural = true)
+            override fun loadFromIni(context: IniReadContext): List<ConfigChange<*>> = listOf(
+                key to requireNotNull(context.compose(key, "shared") { attrs -> attrs["first"]?.toInt() }),
+            )
+        }
+        val store = lazyApplicationConfigStore(path)
+        assertFailsWith<IllegalArgumentException> { store[first.key] }
+        assertEquals(7, store[replacement.key])
+        Files.writeString(path, "[shared]\nfirst=7\nsecond=9\n")
+        val conflict = assertFailsWith<IllegalArgumentException> { store[first.key] }
+        assertTrue(conflict.message.orEmpty().contains("conflicts with"))
+        assertEquals(7, store[replacement.key])
+    }
+
+    @Test fun `unowned and differently owned attributes prevent whole section removal`() {
+        val path = directory.resolve("yame.ini")
+        Files.writeString(path, "[shared]\nfirst=7\nsecond=9\nunknown=keep\n")
+        val first = object : Settings("first-owner") {
+            val group = SettingGroup("shared", this)
+            val key = SettingKey<Int>("first", group, default = { 0 })
+            override fun saveToIni(context: IniWriteContext) {
+                context.removeSection(key, "shared")
+            }
+        }
+        val second = object : Settings("second-owner") {
+            val group = SettingGroup("shared", this)
+            val key = SettingKey<Int>("second", group, default = { 0 })
+        }
+        val store = lazyApplicationConfigStore(path)
+        assertEquals(7, store[first.key])
+        val before = Files.readString(path)
+        assertFailsWith<IllegalArgumentException> { store.set(first.key to 8) }
+        assertEquals(before, Files.readString(path))
+        assertEquals(7, store[first.key])
+        assertEquals(9, store[second.key])
+        assertFailsWith<IllegalArgumentException> { store.set(first.key to 8) }
+        assertEquals(before, Files.readString(path))
+    }
+
+    @Test fun `key scoped writes cannot overwrite another key or composite child`() {
+        val path = directory.resolve("yame.ini")
+        Files.writeString(path, "[modem]\nlogin.username=user\nlogin.password=secret\n")
+        val trespasser = object : Settings("trespasser") {
+            val group = SettingGroup("modem", this)
+            val key = SettingKey<Int>("attempt", group, default = { 0 })
+            override fun saveToIni(context: IniWriteContext) {
+                context.writeAttributes(key, "modem") { it["login.password"] = "stolen" }
+            }
+        }
+        val store = lazyApplicationConfigStore(path)
+        assertEquals(LoginCredentials("user", "secret"), store[ModemSettings.Login])
+        assertEquals(0, store[trespasser.key])
+        val original = Files.readString(path)
+        val error = assertFailsWith<IllegalArgumentException> { store.set(trespasser.key to 1) }
+        assertTrue(error.message.orEmpty().contains("modem.login"), error.message)
+        assertEquals(original, Files.readString(path))
+        assertEquals(0, store[trespasser.key])
+
+        val competingReader = object : Settings("competing-reader") {
+            val group = SettingGroup("modem", this)
+            val key = SettingKey<String>("alias", group, default = { "" }, structural = true)
+            override fun loadFromIni(context: IniReadContext): List<ConfigChange<*>> = listOf(
+                key to requireNotNull(context.compose(key, "modem") { it["login.password"] }),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> { store[competingReader.key] }
+    }
+
+    @Test fun `all documents validate before the first file is replaced`() {
+        val primary = directory.resolve("yame.ini")
+        val secondary = directory.resolve("secondary.ini")
+        Files.writeString(primary, "[first]\nvalue=1\n")
+        Files.writeString(secondary, "[second]\nvalue=2\n")
+        val first = object : Settings("first") {
+            val group = SettingGroup(this)
+            val key = SettingKey<Int>("value", group, default = { 1 })
+        }
+        val second = object : SeparateSettings("secondary") {
+            val group = SettingGroup("second", this)
+            val key = SettingKey<Int>("value", group, default = { 2 })
+            override fun saveToIni(context: IniWriteContext) {
+                context.writeAttributes(key, "second") { it["value"] = "3" }
+                error("validation failed")
+            }
+        }
+        val store = lazyApplicationConfigStore(primary)
+        assertEquals(1, store[first.key])
+        assertEquals(2, store[second.key])
+        assertFails { store.set(first.key to 3, second.key to 3) }
+        assertEquals("[first]\nvalue=1\n", Files.readString(primary))
+        assertEquals("[second]\nvalue=2\n", Files.readString(secondary))
+        assertEquals(1, store[first.key])
+        assertEquals(2, store[second.key])
+    }
+
+    @Test fun `saving rules preserves newly added sections that this store never claimed`() {
+        val primary = directory.resolve("yame.ini")
+        val path = directory.resolve("element-simplifier.ini")
+        Files.writeString(path, "; keep\n[heading]\ntarget=h1\n")
+        val store = lazyApplicationConfigStore(primary)
+        val rules = store[ElementSimplifierSettings.Rules]
+        Files.writeString(path, Files.readString(path) + "[external]\ntarget=span\n")
+        store.set(ElementSimplifierSettings.Rules to no.skasti.yame.ppp.proxy.transform.ElementSimplifierConfiguration(
+            rules.rules + ("heading" to no.skasti.yame.ppp.proxy.transform.ElementSimplifierRule("h2"))))
+        val written = Files.readString(path)
+        assertTrue(written.contains("[external]\ntarget=span"))
+        assertTrue(written.contains("[heading]\ntarget=h2"))
+        assertFalse(written.contains("rules="))
+        assertEquals("span", lazyApplicationConfigStore(primary)[ElementSimplifierSettings.Rules]
+            .rules.getValue("external").target)
+    }
+
+    @Test fun `root flat dynamic rule attributes normalize into owned sections`() {
+        val primary = directory.resolve("yame.ini")
+        val path = directory.resolve("element-simplifier.ini")
+        Files.writeString(path, "# retain\nheading.target=h1\n[heading]\nstyle=color:red;\n")
+        val store = lazyApplicationConfigStore(primary)
+        val rules = store[ElementSimplifierSettings.Rules]
+        assertEquals("h1", rules.rules.getValue("heading").target)
+        store.set(ElementSimplifierSettings.Rules to no.skasti.yame.ppp.proxy.transform.ElementSimplifierConfiguration(
+            rules.rules + ("heading" to no.skasti.yame.ppp.proxy.transform.ElementSimplifierRule("h2", "color:red;"))))
+        val written = Files.readString(path)
+        assertFalse(written.contains("heading.target="))
+        assertTrue(written.contains("# retain"))
+        assertTrue(written.contains("[heading]\ntarget=h2"))
+        assertEquals("h2", lazyApplicationConfigStore(primary)[ElementSimplifierSettings.Rules]
+            .rules.getValue("heading").target)
     }
 }

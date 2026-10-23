@@ -29,7 +29,6 @@ class ConfigStore(
     private val lock = Any()
     private var saved = persistent.associateByTo(linkedMapOf()) { it.key }
     private val loaded = linkedMapOf<String, Settings>()
-    private val claims = mutableMapOf<Pair<String, Pair<String, String>>, Settings>()
     private var effective = LinkedHashMap(saved)
     private val listeners = mutableListOf<Listener>()
     private val pending = ArrayDeque<Delivery>()
@@ -61,7 +60,8 @@ class ConfigStore(
                 if (definition.allSettingKeys.all { it in saved }) return
                 error("This ConfigStore has no lazy INI repository")
             }
-            val (entries, owned) = repo.load(definition)
+            val loadedDefinition = repo.load(definition)
+            val entries = loadedDefinition.entries
             require(entries.map { it.key.path }.distinct().size == entries.size) { "Duplicate setting path in ${definition.id}" }
             require(entries.map { it.key }.toSet() == definition.allSettingKeys.toSet()) {
                 "${definition.id} did not load exactly its declared setting keys"
@@ -71,16 +71,12 @@ class ConfigStore(
                 require(saved.keys.none { it.path == entry.key.path }) { "Duplicate setting path ${entry.key.path}" }
                 entry.validate()
             }
-            owned.forEach { property ->
-                val owner = claims[repo.fileIdentity(definition) to property]
-                require(owner == null || owner === definition) { "INI property $property is owned by ${owner?.id}" }
-            }
             val candidate = LinkedHashMap(saved)
             entries.forEach { candidate[it.key] = it }
             validateSnapshot(ConfigChanges(candidate.values))
+            loadedDefinition.install()
             saved = candidate
             effective = LinkedHashMap(effective).apply { entries.forEach { this[it.key] = it } }
-            owned.forEach { claims[repo.fileIdentity(definition) to it] = definition }
             loaded[definition.id] = definition
         }
     }
