@@ -482,10 +482,14 @@ class LazyConfigurationTest {
             val key = SettingKey<Int>("value", group, default = { 2 })
         }
         val primary = directory.resolve("yame.ini")
-        val store = lazyApplicationConfigStore(primary)
+        val secondary = directory.resolve("second.ini")
+        val repo = IniConfigurationRepository(primary) { temporary, destination ->
+            if (destination == secondary) throw java.io.IOException("injected replacement failure")
+            Files.move(temporary, destination, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        }
+        val store = ConfigStore(emptyList(), repository = repo)
         store.ensureLoaded(first)
         store.ensureLoaded(second)
-        Files.createDirectory(directory.resolve("second.ini"))
         val error = assertFailsWith<PartialIniWriteException> {
             store.set(first.key to 3, second.key to 4)
         }

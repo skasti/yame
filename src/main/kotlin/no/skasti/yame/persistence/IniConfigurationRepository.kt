@@ -11,8 +11,17 @@ import java.nio.file.attribute.PosixFilePermission
 class PartialIniWriteException(val replacedFiles: List<Path>, cause: Exception) :
     IllegalStateException("INI write failed after replacing ${replacedFiles.joinToString()}; restart to reload disk state", cause)
 
+private fun safeReplace(source: Path, destination: Path) {
+    try { Files.move(source, destination, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE) }
+    catch (_: AtomicMoveNotSupportedException) { Files.move(source, destination, StandardCopyOption.REPLACE_EXISTING) }
+}
+
 /** No directory scanning or document cache: every save merges a fresh bounded read. */
-class IniConfigurationRepository(private val primaryFile: Path) : ConfigurationRepository {
+class IniConfigurationRepository internal constructor(
+    private val primaryFile: Path,
+    private val replaceFile: (Path, Path) -> Unit,
+) : ConfigurationRepository {
+    constructor(primaryFile: Path) : this(primaryFile, ::safeReplace)
     private val directory = requireNotNull(primaryFile.toAbsolutePath().normalize().parent)
     private val primaryName = primaryFile.fileName.toString()
     /** Repository-local ownership; a failed definition load never enters this map. */
@@ -80,8 +89,7 @@ class IniConfigurationRepository(private val primaryFile: Path) : ConfigurationR
                 try {
                     restrictPermissions(temporary)
                     Files.write(temporary, bytes)
-                    try { Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE) }
-                    catch (_: AtomicMoveNotSupportedException) { Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING) }
+                    replaceFile(temporary, path)
                     replaced.add(path)
                 } finally { Files.deleteIfExists(temporary) }
             }
