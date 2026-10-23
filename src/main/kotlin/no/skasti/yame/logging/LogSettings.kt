@@ -2,7 +2,7 @@ package no.skasti.yame.logging
 
 import no.skasti.yame.config.*
 
-object LogSettings : ConfigBase("logging") {
+object LogSettings : Settings("logging") {
     val DEFAULT_LEVEL = YameLogLevel.INFO
     val Group = SettingGroup("logging", this, "")
     val Levels = YameLogModule.entries.associateWith {

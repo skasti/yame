@@ -2,7 +2,7 @@ package no.skasti.yame.serial
 
 import no.skasti.yame.config.*
 
-object SerialSettings : ConfigBase("serial") {
+object SerialSettings : Settings("serial") {
     val Group = SettingGroup("serial", this, "")
     const val MAX_PORT_NAME_LENGTH = 256
     const val DEFAULT_BAUD_RATE = 38_400

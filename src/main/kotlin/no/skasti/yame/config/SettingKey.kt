@@ -1,7 +1,7 @@
 package no.skasti.yame.config
 
 /** Identity-based keys prevent unrelated definitions from impersonating a registered path. */
-data class SettingGroup(val name: String, val configuration: ConfigBase? = null, val iniSection: String = name)
+data class SettingGroup(val name: String, val configuration: Settings? = null, val iniSection: String = name)
 
 class SettingKey<T>(
     val path: String,

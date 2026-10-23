@@ -182,9 +182,11 @@ unbounded buffering.
   DNS, and HTTP compatibility are independent component configs.
 - HTML transformation settings, rules, and their separate startup INI reader live
   in `ppp.proxy.transform`, alongside the transformation implementation.
-- Feature-owned `ConfigBase` definitions own their identity, optional logical
+- Feature-owned `Settings` definitions own their identity, optional logical
   `file` name, static groups, typed mappings, and optional dynamic-section mapping.
-  `file = null` uses the configured primary file; `SeparateConfigBase(id)` uses a
+  `ConfigStore` owns the current values; immutable component `*Config` objects are
+  ordinary values and do not inherit from `Settings`.
+  `file = null` uses the configured primary file; `SeparateSettings(id)` uses a
   separate file named after its ID. Use a bare name such as `shared-settings`,
   never an extension or path. `IniConfigurationRepository` resolves it to
   `shared-settings.ini`. Definitions may share a logical file and must not claim

@@ -2,7 +2,7 @@ package no.skasti.yame.ppp.proxy
 
 import no.skasti.yame.config.*
 
-object ProxySettings : ConfigBase("proxy") {
+object ProxySettings : Settings("proxy") {
     val Group = SettingGroup("ppp.proxy", this, "")
     val Enabled = SettingKey<Boolean>("http-https-proxy.enabled", Group)
 

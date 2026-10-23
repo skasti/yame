@@ -2,7 +2,7 @@ package no.skasti.yame.ppp
 
 import no.skasti.yame.config.*
 
-object PppSettings : ConfigBase("ppp") {
+object PppSettings : Settings("ppp") {
     val Group = SettingGroup("ppp", this, "")
     val Subnet = SettingKey<no.skasti.yame.ppp.ip.Ipv4Cidr?>("ppp.subnet", Group, { PppIpConfig(it) })
 

@@ -2,7 +2,7 @@ package no.skasti.yame.ppp.proxy.transform
 
 import no.skasti.yame.config.*
 
-object TransformerSettings : ConfigBase("transformers") {
+object TransformerSettings : Settings("transformers") {
     val Group = SettingGroup("ppp.proxy.transform", this, "")
     val Script = SettingKey<Boolean>("transformers.script-remover.enabled", Group)
     val Style = SettingKey<Boolean>("transformers.style-remover.enabled", Group)

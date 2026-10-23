@@ -17,12 +17,12 @@ class IniConfigurationRepository(private val primaryFile: Path) : ConfigurationR
     private val primaryName = primaryFile.fileName.toString()
     init { require(primaryName.endsWith(".ini")) }
 
-    fun file(definition: ConfigBase): Path =
+    fun file(definition: Settings): Path =
         definition.file?.let { directory.resolve("$it.ini") } ?: directory.resolve(primaryName)
 
-    override fun fileIdentity(definition: ConfigBase): String = file(definition).toString()
+    override fun fileIdentity(definition: Settings): String = file(definition).toString()
 
-    override fun load(definition: ConfigBase): Pair<List<ConfigChange<*>>, Set<Pair<String, String>>> {
+    override fun load(definition: Settings): Pair<List<ConfigChange<*>>, Set<Pair<String, String>>> {
         val path = file(definition)
         val context = IniReadContext(path.fileName.toString(), read(path), Files.exists(path))
         return definition.loadFromIni(context) to context.claims()

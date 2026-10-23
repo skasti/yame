@@ -28,8 +28,8 @@ class ConfigStore(
 
     private val lock = Any()
     private var saved = persistent.associateByTo(linkedMapOf()) { it.key }
-    private val loaded = linkedMapOf<String, ConfigBase>()
-    private val claims = mutableMapOf<Pair<String, Pair<String, String>>, ConfigBase>()
+    private val loaded = linkedMapOf<String, Settings>()
+    private val claims = mutableMapOf<Pair<String, Pair<String, String>>, Settings>()
     private var effective = LinkedHashMap(saved)
     private val listeners = mutableListOf<Listener>()
     private val pending = ArrayDeque<Delivery>()
@@ -50,7 +50,7 @@ class ConfigStore(
     }
 
     /** A failed load leaves the store untouched; a later request retries from disk. */
-    fun ensureLoaded(definition: ConfigBase) {
+    fun ensureLoaded(definition: Settings) {
         synchronized(lock) {
             loaded[definition.id]?.let {
                 require(it === definition) { "Conflicting definition identity ${definition.id}" }

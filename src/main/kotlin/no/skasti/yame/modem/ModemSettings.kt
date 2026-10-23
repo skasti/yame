@@ -3,7 +3,7 @@ package no.skasti.yame.modem
 import no.skasti.yame.config.*
 import kotlin.time.Duration.Companion.nanoseconds
 
-object ModemSettings : ConfigBase("modem") {
+object ModemSettings : Settings("modem") {
     val Group = SettingGroup("modem", this, "")
     val PickupTime = SettingKey<kotlin.time.Duration>("modem.pickup-time-nanos", Group, { HayesModemConfig(pickupTime = it) })
     val DialToneTime = SettingKey<kotlin.time.Duration>("modem.dial-tone-time-nanos", Group, { HayesModemConfig(dialToneTime = it) })

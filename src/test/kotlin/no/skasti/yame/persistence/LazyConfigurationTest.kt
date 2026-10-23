@@ -25,7 +25,7 @@ class LazyConfigurationTest {
     @Test fun `reading an owned key loads only its definition and only once`() {
         val path = directory.resolve("yame.ini")
         Files.writeString(path, "[used]\nvalue=7\n[unused]\nvalue=9\n")
-        class Definition(id: String) : ConfigBase(id) {
+        class Definition(id: String) : Settings(id) {
             val group = SettingGroup(id, this)
             val key = SettingKey<Int>("$id.value", group)
             override val bindings by lazy { listOf(IniBinding(key, "value", { 0 }, String::toInt, Int::toString)) }
@@ -35,7 +35,7 @@ class LazyConfigurationTest {
         val delegate = IniConfigurationRepository(path)
         val loads = AtomicInteger()
         val repository = object : ConfigurationRepository by delegate {
-            override fun load(definition: ConfigBase): Pair<List<ConfigChange<*>>, Set<Pair<String, String>>> {
+            override fun load(definition: Settings): Pair<List<ConfigChange<*>>, Set<Pair<String, String>>> {
                 loads.incrementAndGet()
                 return delegate.load(definition)
             }
@@ -87,7 +87,7 @@ class LazyConfigurationTest {
         val delegate = IniConfigurationRepository(path)
         val loads = AtomicInteger()
         val repository = object : ConfigurationRepository by delegate {
-            override fun load(definition: ConfigBase): Pair<List<ConfigChange<*>>, Set<Pair<String, String>>> {
+            override fun load(definition: Settings): Pair<List<ConfigChange<*>>, Set<Pair<String, String>>> {
                 loads.incrementAndGet()
                 return delegate.load(definition)
             }
@@ -232,7 +232,7 @@ class LazyConfigurationTest {
     @Test fun `new definitions share an INI without central registration`() {
         val path = directory.resolve("yame.ini")
         Files.writeString(path, "[first]\nvalue=7\n[second]\nvalue=9\n")
-        class TestDefinition(id: String) : ConfigBase(id) {
+        class TestDefinition(id: String) : Settings(id) {
             val group = SettingGroup(id, this)
             val key = SettingKey<Int>("$id.value", group)
             override val bindings by lazy { listOf(IniBinding(key, "value", { 0 }, String::toInt, Int::toString)) }
@@ -258,7 +258,7 @@ class LazyConfigurationTest {
         val primaryText = "serial.baud=57600\n# primary comment\n"
         Files.writeString(primary, primaryText)
         Files.writeString(shared, "# shared comment\n[shared]\nfirst=7\nsecond=9\nother=untouched\n")
-        class SharedDefinition(id: String, property: String) : ConfigBase(id, file = "shared-settings") {
+        class SharedDefinition(id: String, property: String) : Settings(id, file = "shared-settings") {
             val group = SettingGroup(id, this, "shared")
             val key = SettingKey<Int>("$id.value", group)
             override val bindings by lazy { listOf(IniBinding(key, property, { 0 }, String::toInt, Int::toString)) }
@@ -291,14 +291,14 @@ class LazyConfigurationTest {
         for (name in listOf("", ".", "..", "../escape", "nested/file", "nested\\file", "/absolute",
                 "name.ini", "with space", "a:b", "æøå")) {
             val error = assertFailsWith<IllegalArgumentException> {
-                object : ConfigBase("owner", file = name) {
+                object : Settings("owner", file = name) {
                     override val bindings: List<IniBinding<*>> = emptyList()
                 }
             }
             assertTrue(error.message.orEmpty().contains("Invalid logical configuration file name"), name)
         }
         assertFailsWith<IllegalArgumentException> {
-            object : SeparateConfigBase("../escape") {
+            object : SeparateSettings("../escape") {
                 override val bindings: List<IniBinding<*>> = emptyList()
             }
         }
@@ -326,12 +326,12 @@ class LazyConfigurationTest {
     }
 
     @Test fun `a later file failure reports partial disk replacement without memory publication`() {
-        val first = object : ConfigBase("first") {
+        val first = object : Settings("first") {
             val group = SettingGroup("first", this, "first")
             val key = SettingKey<Int>("first.value", group)
             override val bindings by lazy { listOf(IniBinding(key, "value", { 1 }, String::toInt, Int::toString)) }
         }
-        val second = object : SeparateConfigBase("second") {
+        val second = object : SeparateSettings("second") {
             val group = SettingGroup("second", this, "second")
             val key = SettingKey<Int>("second.value", group)
             override val bindings by lazy { listOf(IniBinding(key, "value", { 2 }, String::toInt, Int::toString)) }
