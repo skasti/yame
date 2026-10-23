@@ -20,8 +20,9 @@ Concrete keys and groups live in their owning serial, modem, PPP, DNS, proxy,
 transformer and logging packages. Baud belongs to serial, not modem. Credentials
 are one modem-owned `LoginCredentials` setting because username/password form one
 validated concept; the existing two INI properties remain compatible. Generic
-store contracts contain no feature imports. Each feature's `ConfigBase` owns its file name, static sections, typed bindings,
-and optional custom mapping. The generic store contains no central list of keys.
+store contracts contain no feature imports. Each feature's `ConfigBase` owns its
+identity, optional logical file name, static sections, typed bindings, and optional
+custom mapping. The generic store contains no central list of keys.
 A direct `store[key]` read requests the definition attached to the key's group,
 loading that definition on first use. Component `fromConfigStore()` factories
 read only their owned keys through the supplied store.
@@ -197,8 +198,8 @@ port without requiring serial hardware or process-global configuration.
 ## Lazy configuration definitions (issue #96)
 
 The runtime now uses `IniConfigurationRepository` and `ConfigStore.ensureLoaded`.
-Feature-owned `ConfigBase` definitions declare their file, groups and typed INI
-bindings. `fromConfigStore(store)` reads owned keys directly and lazily loads their
+Feature-owned `ConfigBase` definitions declare their logical file name, groups,
+and typed bindings. `fromConfigStore(store)` reads owned keys directly and lazily loads their
 definition. A new feature can supply its own definition without editing the generic
 store or a registry of all available modules. CLI option reads request the
 features whose values it exposes as command-line defaults; unrelated files are
@@ -207,6 +208,18 @@ remain as compatibility adapters for existing callers and startup default-file
 creation. Their INI reads/writes now use the same syntax parser/writer as the lazy
 repository. The former central `YameConfigurationBindings` is used for CLI override
 translation and compatibility calls, not registration in the lazy store.
+
+`id` identifies a definition independently of its `file`. The default
+`ConfigBase("modem")` has `file = null` and uses the primary file selected by
+`--config` (normally `yame.ini`). `SeparateConfigBase("element-simplifier")`
+uses the logical name `element-simplifier`; `IniConfigurationRepository` resolves
+it beside the primary file as `element-simplifier.ini`. A custom
+`ConfigBase("owner", file = "shared-settings")` resolves to
+`shared-settings.ini`, and multiple definitions may share that file if their
+property claims do not overlap. Logical names contain only ASCII letters,
+digits, hyphens, and underscores, starting with a letter or digit; extensions,
+directory separators, and traversal are rejected. Only the INI repository
+chooses the `.ini` extension. Existing files need no migration.
 
 ### Legacy adapter boundary
 

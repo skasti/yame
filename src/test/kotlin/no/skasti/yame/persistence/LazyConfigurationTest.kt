@@ -203,6 +203,8 @@ class LazyConfigurationTest {
 
     @Test fun `dynamic legacy rule sections round trip with static root file`() {
         val path = directory.resolve("element-simplifier.ini")
+        assertEquals("element-simplifier", ElementSimplifierSettings.file)
+        assertEquals(path, IniConfigurationRepository(directory.resolve("yame.ini")).file(ElementSimplifierSettings))
         Files.writeString(path, "; keep\n[heading]\ntarget=h1\nstyle=color:red;\n")
         val store = lazyApplicationConfigStore(directory.resolve("yame.ini"))
         store.ensureLoaded(ElementSimplifierSettings)
@@ -250,6 +252,58 @@ class LazyConfigurationTest {
         assertFailsWith<IllegalArgumentException> { store.ensureLoaded(overlap) }
     }
 
+    @Test fun `logical names resolve next to an explicit primary file and can be shared`() {
+        val primary = directory.resolve("custom.ini")
+        val shared = directory.resolve("shared-settings.ini")
+        val primaryText = "serial.baud=57600\n# primary comment\n"
+        Files.writeString(primary, primaryText)
+        Files.writeString(shared, "# shared comment\n[shared]\nfirst=7\nsecond=9\nother=untouched\n")
+        class SharedDefinition(id: String, property: String) : ConfigBase(id, file = "shared-settings") {
+            val group = SettingGroup(id, this, "shared")
+            val key = SettingKey<Int>("$id.value", group)
+            override val bindings by lazy { listOf(IniBinding(key, property, { 0 }, String::toInt, Int::toString)) }
+        }
+        val first = SharedDefinition("first-owner", "first")
+        val second = SharedDefinition("second-owner", "second")
+        val repository = IniConfigurationRepository(primary)
+        assertEquals(primary, repository.file(SerialSettings))
+        assertEquals(shared, repository.file(first))
+        assertEquals(shared, repository.file(second))
+
+        val store = lazyApplicationConfigStore(primary)
+        assertEquals(57600, store[SerialSettings.Baud])
+        assertEquals(7, store[first.key])
+        assertEquals(9, store[second.key])
+        store.set(first.key to 8, second.key to 10)
+        assertEquals(primaryText, Files.readString(primary))
+        val saved = Files.readString(shared)
+        for (record in listOf("# shared comment", "first=8", "second=10", "other=untouched")) {
+            assertTrue(saved.contains(record), record)
+        }
+
+        val conflict = SharedDefinition("third-owner", "first")
+        val error = assertFailsWith<IllegalArgumentException> { store[conflict.key] }
+        assertTrue(error.message.orEmpty().contains("INI property"), error.message)
+        assertEquals(8, store[first.key])
+    }
+
+    @Test fun `logical file names reject paths extensions and invalid characters`() {
+        for (name in listOf("", ".", "..", "../escape", "nested/file", "nested\\file", "/absolute",
+                "name.ini", "with space", "a:b", "æøå")) {
+            val error = assertFailsWith<IllegalArgumentException> {
+                object : ConfigBase("owner", file = name) {
+                    override val bindings: List<IniBinding<*>> = emptyList()
+                }
+            }
+            assertTrue(error.message.orEmpty().contains("Invalid logical configuration file name"), name)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            object : SeparateConfigBase("../escape") {
+                override val bindings: List<IniBinding<*>> = emptyList()
+            }
+        }
+    }
+
     @Test fun `invalid dynamic rule does not partially register`() {
         val path = directory.resolve("element-simplifier.ini")
         Files.writeString(path, "[heading]\nstyle=color:red\n")
@@ -277,7 +331,7 @@ class LazyConfigurationTest {
             val key = SettingKey<Int>("first.value", group)
             override val bindings by lazy { listOf(IniBinding(key, "value", { 1 }, String::toInt, Int::toString)) }
         }
-        val second = object : ConfigBase("second", "second.ini") {
+        val second = object : SeparateConfigBase("second") {
             val group = SettingGroup("second", this, "second")
             val key = SettingKey<Int>("second.value", group)
             override val bindings by lazy { listOf(IniBinding(key, "value", { 2 }, String::toInt, Int::toString)) }

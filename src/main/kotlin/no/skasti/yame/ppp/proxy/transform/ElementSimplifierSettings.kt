@@ -3,7 +3,7 @@ package no.skasti.yame.ppp.proxy.transform
 import no.skasti.yame.config.*
 
 /** Dynamic tag sections in the existing element-simplifier.ini. */
-object ElementSimplifierSettings : ConfigBase("element-simplifier", "element-simplifier.ini") {
+object ElementSimplifierSettings : SeparateConfigBase("element-simplifier") {
     val Group = SettingGroup("ppp.proxy.transform.rules", this, "general")
     val Rules = SettingKey<ElementSimplifierConfiguration>("html-transformers.element-rules", Group)
     override val bindings: List<IniBinding<*>> = emptyList()

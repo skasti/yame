@@ -17,7 +17,8 @@ class IniConfigurationRepository(private val primaryFile: Path) : ConfigurationR
     private val primaryName = primaryFile.fileName.toString()
     init { require(primaryName.endsWith(".ini")) }
 
-    fun file(definition: ConfigBase): Path = directory.resolve(definition.filename ?: primaryName)
+    fun file(definition: ConfigBase): Path =
+        definition.file?.let { directory.resolve("$it.ini") } ?: directory.resolve(primaryName)
 
     override fun fileIdentity(definition: ConfigBase): String = file(definition).toString()
 

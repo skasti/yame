@@ -182,9 +182,14 @@ unbounded buffering.
   DNS, and HTTP compatibility are independent component configs.
 - HTML transformation settings, rules, and their separate startup INI reader live
   in `ppp.proxy.transform`, alongside the transformation implementation.
-- Feature-owned `ConfigBase` definitions own their INI file, static groups, typed
-  mappings and optional dynamic-section mapping. The generic ConfigStore registers
-  only definitions requested by components; it never enumerates all features.
+- Feature-owned `ConfigBase` definitions own their identity, optional logical
+  `file` name, static groups, typed mappings, and optional dynamic-section mapping.
+  `file = null` uses the configured primary file; `SeparateConfigBase(id)` uses a
+  separate file named after its ID. Use a bare name such as `shared-settings`,
+  never an extension or path. `IniConfigurationRepository` resolves it to
+  `shared-settings.ini`. Definitions may share a logical file and must not claim
+  the same property. The generic ConfigStore registers only definitions requested
+  by components; it never enumerates all features.
 - `YameConfiguration` and `YameConfigurationBindings` remain compatibility and CLI
   adapters. New persistence mappings live in their owning feature definitions.
 - Application persistence may reuse immutable feature config values. This does not

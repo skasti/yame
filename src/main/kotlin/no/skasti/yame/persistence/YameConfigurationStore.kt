@@ -144,7 +144,7 @@ class YameConfigurationStore(private val path: Path) {
         val logKeys = LogSettings.Levels.values.toSet()
         val includedLogKeys = configuration.logLevels.keys.mapNotNull { LogSettings.Levels[it] }.toSet()
         val supported = YameConfigurationBindings.all.filter { binding ->
-            binding.key.group.configuration?.filename == null &&
+            binding.key.group.configuration?.file == null &&
                 (binding.key !in logKeys || binding.key in includedLogKeys)
         }
         val snapshot = ConfigChanges(supported.map { it.change(configuration).also { change -> change.validate() } })

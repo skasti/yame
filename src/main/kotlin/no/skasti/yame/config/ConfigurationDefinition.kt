@@ -2,12 +2,12 @@ package no.skasti.yame.config
 
 import no.skasti.yame.config.ini.IniDocument
 
-/** A feature owns its keys and the mapping to one declared file. */
-abstract class ConfigBase(val id: String, val filename: String? = null) {
+/** A feature owns its keys and optionally names a separate logical configuration file. */
+abstract class ConfigBase(val id: String, val file: String? = null) {
     init {
         require(id.isNotBlank())
-        require(filename == null || (filename.matches(Regex("[A-Za-z0-9][A-Za-z0-9._-]*\\.ini")) && filename != "..ini")) {
-            "Invalid configuration filename: $filename"
+        require(file == null || file.matches(Regex("[A-Za-z0-9][A-Za-z0-9_-]*"))) {
+            "Invalid logical configuration file name: $file"
         }
     }
 
@@ -20,6 +20,9 @@ abstract class ConfigBase(val id: String, val filename: String? = null) {
         bindings.forEach { it.save(context) }
     }
 }
+
+/** Use a separate file named after this definition; the repository chooses its extension. */
+abstract class SeparateConfigBase(id: String) : ConfigBase(id = id, file = id)
 
 /** Null is a valid default; a supplier differentiates it from an absent binding. */
 class IniBinding<T>(
