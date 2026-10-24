@@ -7,6 +7,7 @@ import no.skasti.yame.ppp.proxy.transform.ResourceTransformationSummary
 import java.net.URI
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class ResourceGraphTest {
