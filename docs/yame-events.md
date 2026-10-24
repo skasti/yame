@@ -7,7 +7,9 @@ and [#101](https://github.com/skasti/yame/issues/101). The
 [v1 design](design/yame-events-v1.md) describes the wider migration; the
 [historical inventory](.history/yame-events-a37ac65.md) records its starting point.
 [ADR 0001](adrs/0001-fatal-event-queue-saturation.md) decides overload handling;
-[ADR 0004](adrs/0004-extensible-event-contract.md) decides event ownership and access.
+[ADR 0004](adrs/0004-extensible-event-contract.md) decides event ownership and access;
+[ADR 0006](adrs/0006-consumer-owned-event-ordering.md) adds occurrence-time
+semantics and consumer-owned dependency handling.
 
 ## Event contract
 
@@ -23,6 +25,24 @@ reads the values. Metadata and private implementation fields are excluded. Typed
 property access and broker publication do not use reflection. The map is read-only.
 `UnhandledPacket` copies its byte array on construction and each typed or map
 read. Future mutable payloads must make the same snapshot guarantee.
+
+## Event occurrence and ordering responsibilities
+
+**Decided design, pending producer/consumer migration (#100–#103):** New domain
+transition events expose an occurrence timestamp (normally `occurredAt`),
+captured when authoritative state changes, not when they enter the broker.
+Producers publish truthful immutable observations and sufficient entity,
+lifecycle and operation-correlation data. Consumers interpret domain semantics
+first (for example, distinguish an old fetch from a refetch), and may consult
+occurrence time when useful. Timestamps are not a guaranteed total order.
+
+Consumers own any dependency buffering, stale-event handling and projection
+ordering. A consumer may defer a resource event until it knows the graph;
+another may ignore the dependency entirely. Deferred work must be private and
+bounded, and must not block the shared dispatcher. The broker still orders
+**enqueue**, not domain occurrences; it does not reorder or replay events,
+and does not require producer-side root-before-resource publication. See
+[ADR 0006](adrs/0006-consumer-owned-event-ordering.md).
 
 ## Admission and delivery
 
