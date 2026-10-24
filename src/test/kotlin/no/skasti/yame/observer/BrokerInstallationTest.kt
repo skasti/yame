@@ -49,8 +49,8 @@ class BrokerInstallationTest {
         val pool = Executors.newFixedThreadPool(2)
         val start = CountDownLatch(1)
         try {
-            val publish = pool.submit { start.await(); installation.current.publish(event(1)) }
-            val subscribe = pool.submit { start.await(); installation.current.subscribe("late") {} }
+            val publish = pool.submit<Long> { start.await(); installation.current.publish(event(1)) }
+            val subscribe = pool.submit<AutoCloseable> { start.await(); installation.current.subscribe("late") {} }
             start.countDown()
             publish.get(5, TimeUnit.SECONDS)
             val handle = subscribe.get(5, TimeUnit.SECONDS)
@@ -91,7 +91,7 @@ class BrokerInstallationTest {
             val pool = Executors.newFixedThreadPool(2)
             val start = CountDownLatch(1)
             try {
-                val first = pool.submit { start.await(); installation.current }
+                val first = pool.submit<EventBroker> { start.await(); installation.current }
                 val second = pool.submit<AutoCloseable?> {
                     start.await()
                     try { installation.install(candidate) } catch (_: IllegalStateException) { null }

@@ -20,11 +20,11 @@ class YameEventsLazyTest {
                 assertTrue(start.await(5, TimeUnit.SECONDS))
                 YameEvents.current
             } }
-            val publication = pool.submit {
+            val publication = pool.submit<Long> {
                 assertTrue(start.await(5, TimeUnit.SECONDS))
                 YameEvents.publish(TransferBytes("first", TransferDirection.TO_HOST, 1))
             }
-            val subscription = pool.submit {
+            val subscription = pool.submit<AutoCloseable> {
                 assertTrue(start.await(5, TimeUnit.SECONDS))
                 YameEvents.subscribe("racing") {}
             }
