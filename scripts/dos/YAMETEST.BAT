@@ -7,6 +7,8 @@ del SUITE.OK >NUL 2>NUL
 del DNS.OUT >NUL 2>NUL
 del TCP.OUT >NUL 2>NUL
 del HTTP.OUT >NUL 2>NUL
+del SMOKE.OK >NUL 2>NUL
+del SMOKE.OUT >NUL 2>NUL
 
 rem DOSBox's transparent nullmodem carries bytes but not DCD.  Let LSppp
 rem perform the real Hayes dial first; after CONNECT it exits because it
@@ -22,6 +24,8 @@ if errorlevel 1 goto ppp_failed
 echo OK>PPP.OK
 
 set MTCPCFG=C:\MTCP.CFG
+if "%2"=="smoke" goto smoke
+
 echo Resolving ci.yame.test through YAME...
 DNSTEST.EXE -name ci.yame.test -timeout 10 > DNS.OUT
 if errorlevel 1 goto dns_failed
@@ -34,8 +38,9 @@ if errorlevel 22 goto tcp_failed
 if not errorlevel 21 goto tcp_failed
 echo OK>TCP.OK
 
-echo Fetching real-world HTTP page from example.com through YAME...
-HTGET.EXE -quiet -o HTTP.OUT http://example.com/
+rem The HTTP compatibility proxy (port 80) uses a local, deterministic fixture.
+echo Fetching HTTP compatibility fixture through YAME...
+HTGET.EXE -quiet -o HTTP.OUT http://%1/compat.txt
 if errorlevel 22 goto http_failed
 if not errorlevel 21 goto http_failed
 if not exist HTTP.OUT goto http_failed
@@ -44,8 +49,24 @@ echo OK>HTTP.OK
 echo OK>SUITE.OK
 goto done
 
+:smoke
+rem Optional external smoke probe; the required suite never depends on this host.
+echo Fetching Microsoft connectivity probe through YAME...
+HTGET.EXE -quiet -o SMOKE.OUT http://www.msftconnecttest.com/connecttest.txt
+rem mTCP HTGet returns DOS code 21 for HTTP 200.
+if errorlevel 22 goto smoke_failed
+if not errorlevel 21 goto smoke_failed
+if not exist SMOKE.OUT goto smoke_failed
+echo OK>SMOKE.OK
+goto done
+
+:smoke_failed
+echo FAIL>SMOKE.OK
+goto done
+
 :ppp_failed
 echo FAIL>PPP.OK
+if "%2"=="smoke" goto smoke_failed
 echo FAIL>SUITE.OK
 goto done
 

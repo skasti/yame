@@ -212,3 +212,10 @@ jobs:
       - name: DOSBox dial-up PPP, DNS and TCP compatibility suite
         if: needs.preview-gate.outputs.reuse != 'true'
         run: bash scripts/dosbox-network-integration-test.sh
+
+      # External availability is outside YAME's control. Report the smoke
+      # failure but never fail an otherwise healthy pull request.
+      - name: DOSBox external HTTP smoke test (Microsoft Connect Test)
+        if: needs.preview-gate.outputs.reuse != 'true'
+        continue-on-error: true
+        run: bash scripts/dosbox-network-integration-test.sh external-smoke
