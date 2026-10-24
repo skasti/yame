@@ -142,8 +142,12 @@ provider, explicitly supplied `PppHttpCompatibilityConfig.htmlTransformers` rema
 fixed and retains the ordinary conditional-request behavior. Providers never live
 inside config values and do not own mutable settings. Leaf transformers never
 construct palette items.
-Runtime observations (connections, transfers, logs and resource graphs) remain
-separate from settings and functions; their event unification is separate work.
+Runtime observations remain separate from settings and functions. The proxy
+resource registry now emits its producer-owned lifecycle contract; production
+broker wiring remains tracked by [#102](https://github.com/skasti/yame/issues/102),
+and TUI projection migration remains tracked by
+[#103](https://github.com/skasti/yame/issues/103). Other connection, transfer
+and log observation migrations are separate work.
 
 ## Functions
 

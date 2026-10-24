@@ -2,9 +2,10 @@
 
 This document describes the decided v1 design for
 [#92](https://github.com/skasti/yame/issues/92). **Implementation status: partial.**
-The broker infrastructure is implemented in [#106](https://github.com/skasti/yame/pull/106);
-production runtime and frontend migration remain assigned to the issues below.
-Decided design does not imply implemented behavior: the
+The broker infrastructure is implemented in [#106](https://github.com/skasti/yame/pull/106),
+and the proxy resource event contract and producer are implemented in #100.
+Production broker wiring remains tracked by #102 and frontend migration remains
+tracked by #101 and #103. Decided design does not imply implemented behavior: the
 [current broker architecture](../yame-events.md) documents verified code.
 
 Decision rationale, alternatives and consequences belong in
@@ -49,12 +50,13 @@ contract boundary; do not expose internal registry objects through a public
 event. Copy collections at ownership boundaries. Kotlin's read-only `List`
 alone does not establish immutability.
 
-Proxy events need the following semantic data. Names are illustrative; #100
-owns the concrete event types.
+The proxy producer currently exposes ResourceGraphLifecycleEvent and
+ResourceLifecycleEvent, both with stable v1 schemas. Their payloads carry the
+following semantic data.
 
 | Observation | Required information and interpretation |
 | --- | --- |
-| Graph/root added | Stable process-lifetime graph ID, canonical root legacy URL and initial root/resource values. A revisit retains the ID; an evicted root recreated later gets a new ID. |
+| Graph/root created | Stable process-lifetime graph ID, canonical root legacy URL and initial snapshots for the root and any directly admitted resource. A revisit retains the ID; an evicted root recreated later gets a new ID. Resource transitions are also reported separately. |
 | Graph/root used | Graph ID, cumulative use count and occurrence/last-use time from the registry, not the consumer's rendering time. |
 | Resource admitted/updated | Graph ID, canonical resource identity/legacy URL, full state and kind, sticky prefetch flag, immutable transformation summaries and correlation for separate fetch attempts. Shared resources can occur in several graph IDs. |
 | Resource removed | Graph ID and resource identity; enough information to remove precisely that association. |
@@ -69,7 +71,7 @@ repeat. Retained graph state is process-scoped; legitimate work on a retained
 graph must be checked using membership and fetch-attempt identity, not rejected
 solely because a connection changed.
 
-New lifecycle event contracts expose an `occurredAt` timestamp captured when
+New lifecycle event contracts expose an occurredAt: Instant timestamp captured when
 the **authoritative transition occurred**, not when the event was constructed,
 enqueued or handled. Consumers prefer domain semantics for interpretation,
 using occurrence times as supporting evidence where useful. Timestamps alone
@@ -95,8 +97,9 @@ silently drop events.
 
 The [historical inventory](../.history/yame-events-a37ac65.md) records the
 migration starting point. Tests for #100 cover immutable payloads, real
-transitions and sufficient correlation; consumer-owned reordered handling
-is exercised independently in #103.
+transitions and sufficient correlation. A test-only consumer exercises bounded
+buffering and stale-event handling under deliberately reordered delivery;
+the production TUI projection migration remains in #103.
 
 ### Broker admission, delivery and subscriptions
 

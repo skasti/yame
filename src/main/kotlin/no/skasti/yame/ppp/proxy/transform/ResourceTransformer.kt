@@ -33,7 +33,7 @@ internal data class ResourceRepresentation(
     val body: ByteArray,
 )
 
-internal data class ResourceTransformationSummary(
+data class ResourceTransformationSummary(
     val transformerId: String,
     val sourceBytes: Int,
     val outputBytes: Int,

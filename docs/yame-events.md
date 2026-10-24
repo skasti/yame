@@ -1,9 +1,14 @@
 # YameEvents broker infrastructure
 
-Implemented in PR #106 in `no.skasti.yame.observer`. **Production runtime still
-uses existing event sinks.** Installation, application fatal supervision and
-runtime/frontend migration belong to [#102](https://github.com/skasti/yame/issues/102)
-and [#101](https://github.com/skasti/yame/issues/101). The
+Implemented in PR #106 in `no.skasti.yame.observer`. The proxy resource registry
+now defines and publishes producer-owned lifecycle observations through an
+injected event publisher ([#100](https://github.com/skasti/yame/issues/100)).
+**Production runtime still uses existing event sinks.** Installation,
+application fatal supervision and broker wiring belong to
+[#102](https://github.com/skasti/yame/issues/102); moving TUI work off producer
+threads and migrating its projection remain tracked by
+[#101](https://github.com/skasti/yame/issues/101) and
+[#103](https://github.com/skasti/yame/issues/103). The
 [v1 design](design/yame-events-v1.md) describes the wider migration; the
 [historical inventory](.history/yame-events-a37ac65.md) records its starting point.
 [ADR 0001](adrs/0001-fatal-event-queue-saturation.md) decides overload handling;
@@ -26,10 +31,41 @@ property access and broker publication do not use reflection. The map is read-on
 `UnhandledPacket` copies its byte array on construction and each typed or map
 read. Future mutable payloads must make the same snapshot guarantee.
 
+The proxy registry owns two immutable event contracts:
+
+- `ResourceGraphLifecycleEvent` reports `CREATED`, `USED` and `REMOVED` graph
+  lifetimes with the graph ID, canonical root legacy URL, cumulative registry
+  use count and last-use `Instant`. Its `CREATED` event also includes immutable
+  initial snapshots of the graph's root and any directly admitted resource.
+- `ResourceLifecycleEvent` reports resource admission, discovery, association,
+  state, kind, transformation and removal changes. It includes the graph ID and
+  root, normalized resource key and display URL, upstream/content-base URLs,
+  incident parent/relation associations, state, kind, sticky prefetch state,
+  transformation summaries, and fetch-attempt ID and number.
+
+Each type has a stable `typeName` and v1 schema. Resource collections are copied
+into unmodifiable snapshots. `occurredAt` is a UTC `Instant` captured by the
+registry at the authoritative state transition; event publication and consumer
+delivery happen afterward. A graph's usage count increments for graph creation,
+reuse and accepted resource discovery, matching the registry's existing root-use
+observations. Fetch attempts move the authoritative state back to `FETCHING`;
+the attempt number distinguishes a legitimate retry from a delayed event from
+an earlier attempt. The registry rejects stale attempt updates before emitting
+an event.
+
+The registry receives `(YameEvent) -> Unit` as an injectable publisher and
+invokes it outside its state lock. It does not create a second queue or suppress
+publication failures. Standalone registries default to no publication; #102
+will inject the installed broker into production composition. Until that wiring
+lands, the event contract is implemented but production consumers do not receive
+these observations.
+
 ## Event occurrence and ordering responsibilities
 
-**Decided design, pending producer/consumer migration (#100–#103):** New domain
-transition events expose an occurrence timestamp (normally `occurredAt`),
+**Producer implementation status:** The proxy resource producer contract and
+transition events are implemented in #100. Production broker wiring remains
+tracked by #102 and the TUI projection migration by #103. New domain transition
+events expose an occurrence timestamp (normally `occurredAt`),
 captured when authoritative state changes, not when they enter the broker.
 Producers publish truthful immutable observations and sufficient entity,
 lifecycle and operation-correlation data. Consumers interpret domain semantics

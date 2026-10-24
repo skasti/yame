@@ -185,12 +185,13 @@ class ResourceGraphTest {
             ResourceRelation.IMG_SRC,
             ResourceKind.IMAGE,
         )
-        registry.markFetched(
-            first,
-            first.rootLegacyUri,
-            URI("https://legacy.test/one"),
-            URI("https://legacy.test/one"),
-            ResourceState.READY,
+        assertNull(
+            registry.beginFetch(
+                first,
+                first.rootLegacyUri,
+                URI("https://legacy.test/one"),
+                URI("https://legacy.test/one"),
+            ),
         )
 
         assertTrue(registry.contextsFor(staleChild).isEmpty())

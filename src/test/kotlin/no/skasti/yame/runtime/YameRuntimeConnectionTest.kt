@@ -1,6 +1,7 @@
 package no.skasti.yame.runtime
 
 import com.github.ajalt.mordant.terminal.Terminal
+import no.skasti.yame.observer.YameEvent
 import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.lifecycle.ApplicationFunctions
@@ -8,6 +9,8 @@ import no.skasti.yame.logging.YameLogLevel
 import no.skasti.yame.logging.YameLogModule
 import no.skasti.yame.logging.YameLogManager
 import no.skasti.yame.ppp.proxy.NavigationResourceRegistry
+import no.skasti.yame.ppp.proxy.ResourceGraphChange
+import no.skasti.yame.ppp.proxy.ResourceGraphLifecycleEvent
 import no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig
 import no.skasti.yame.ppp.proxy.ResourceRelation
 import no.skasti.yame.ppp.proxy.ResourceState
@@ -216,7 +219,11 @@ class YameRuntimeConnectionTest {
         try {
             val functions = FunctionStore()
             val store = applicationConfigStore(YameConfiguration(portName = "COM1"))
-            val registry = NavigationResourceRegistry(maxContexts = 4)
+            val resourceEvents = mutableListOf<YameEvent>()
+            val registry = NavigationResourceRegistry(
+                maxContexts = 4,
+                eventPublisher = { resourceEvents += it },
+            )
             val httpConfig = PppHttpCompatibilityConfig(enabled = true, requestTimeoutMillis = 2_000)
 
             // Create graph state through the same HTTP routing path used by PPP sessions.
@@ -276,6 +283,12 @@ class YameRuntimeConnectionTest {
                     assertEquals(2, readingStarted)
                     assertEquals(2, attempts)
                     assertEquals(graph.id, registry.startNavigation(root).id)
+                    assertTrue(resourceEvents.filterIsInstance<ResourceGraphLifecycleEvent>().any {
+                        it.change == ResourceGraphChange.USED && it.graphId == graph.id
+                    })
+                    assertFalse(resourceEvents.filterIsInstance<ResourceGraphLifecycleEvent>().any {
+                        it.change == ResourceGraphChange.REMOVED && it.graphId == graph.id
+                    })
                     assertEquals(
                         graphSnapshot,
                         registry.snapshots().single(),

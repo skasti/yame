@@ -58,6 +58,18 @@ bounds.
 Eviction is a capacity policy, not a browser/TCP/PPP lifetime boundary: closing
 Netscape, opening new TCP flows, or reconnecting PPP never clears the registry.
 
+The registry emits immutable ResourceGraphLifecycleEvent and
+ResourceLifecycleEvent observations for graph and resource transitions. Resource
+observations include the normalized URL identity, graph lifetime, incident
+parent/relation edges, current state and kind, sticky prefetch state,
+transformation summaries and fetch-attempt identity. Their occurredAt value is
+captured at the registry transition, before publication or consumer handling.
+The publisher is injected, so registry tests use an isolated recorder; production
+broker wiring remains tracked by [#102](https://github.com/skasti/yame/issues/102),
+and the TUI projection migration remains tracked by
+[#103](https://github.com/skasti/yame/issues/103). See the
+[event contract](yame-events.md#event-contract) for payload and ordering details.
+
 Reconnect never resets or replaces the process registry. If an explicit reset is
 needed, its contract is to clear retained data in place, preserve registry
 identity, and invalidate outstanding fetch attempts so obsolete work cannot
