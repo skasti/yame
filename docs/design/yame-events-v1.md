@@ -4,7 +4,7 @@ This document describes the decided v1 design for
 [#92](https://github.com/skasti/yame/issues/92). **Implementation status: partial.**
 The broker infrastructure is implemented in [#106](https://github.com/skasti/yame/pull/106),
 and the proxy resource event contract and producer are implemented in #100.
-Production broker wiring remains tracked by #102 and frontend migration remains
+Production consumer registration and shutdown integration remain tracked by #102; frontend migration remains
 tracked by #101 and #103. Decided design does not imply implemented behavior: the
 [current broker architecture](../yame-events.md) documents verified code.
 
@@ -26,9 +26,11 @@ are defined in [ADR 0002](../adrs/0002-architecture-decision-records.md).
 belong near their producers. `AbstractYameEvent` offers lazy, cached Kotlin-property
 reflection for generic map access; typed access and publication stay reflection-free.
 Event payloads are immutable snapshots, with defensive copies for mutable values.
-An instantiable broker delivers observations to trusted in-process consumers, and
-`YameEvents` exposes the installed production broker. Each consumer owns its state,
-subscriptions and execution context. See [ADR 0004](../adrs/0004-extensible-event-contract.md).
+An instantiable broker delivers observations to trusted in-process consumers.
+`YameEvents` exposes one process broker, created lazily on first use unless an
+explicit broker was installed first. Each consumer owns its state, subscriptions
+and execution context. See [ADR 0004](../adrs/0004-extensible-event-contract.md)
+and [ADR 0007](../adrs/0007-lazy-global-event-broker.md).
 
 The proxy's `NavigationResourceRegistry` owns actual resource knowledge. Runtime
 composition must retain and inject it across serial reconnects. The TUI's
@@ -180,17 +182,14 @@ those consumers are integrated; it must not silently leave a stale view in servi
 
 ### Startup, reconnect and late consumers
 
-Composition creates the broker and required consumers before starting runtime
+Composition registers consumers needing complete observations before runtime
 enumeration, serial reads, connection attempts or other event-producing work.
-Register diagnostic/frontend subscriptions before publishing initial connection
-state and port-list values. Apply the same rule in plain mode and the tone-test
-startup path if it publishes observations. Tests construct fresh brokers and
-explicit dependencies; they never replace a mutable production singleton.
-
-Install the production facade explicitly at application composition and retain its
-installation handle until producers/consumers stop. Access before installation
-fails fast, a second installation fails, and extra frontends reuse the same broker.
-The facade does not lazily create a hidden worker or own application projections.
+The first facade access creates one default broker under a synchronized boundary;
+an explicitly installed broker wins if installed before that access. Producers
+publish directly through `YameEvents` without publisher callbacks. Tests may
+install isolated brokers before producer work, while standalone broker tests
+construct independent instances. Tests using the process facade run serially in
+isolated JVMs so first access and installation cannot race across tests.
 
 The v1 TUI is an early subscriber and remains subscribed through reconnect. It
 receives a session-ended event qualified by the old connection/session identity.
@@ -199,11 +198,10 @@ then publish new-session startup. Closing projected transfers applies only to th
 old session, so queued cleanup cannot close a newer connection's transfers. Late
 work must not recreate old active transfers or overwrite newer registry attempts.
 
-v1 does not offer complete-state bootstrap for a new late subscriber. A late
-consumer may explicitly choose a view labeled as observations since attachment;
-it cannot claim a complete current proxy graph. An equivalent complete consumer
-must subscribe during application startup. Full-state attachment after activity begins is outside v1. Calling `snapshots()`
-and then subscribing is not a supported bootstrap.
+v1 does not replay events to late subscribers. A consumer needing earlier or
+current state queries the authoritative domain component through an appropriate
+API or subscribes before relevant publication. The proxy registry has snapshots;
+a query followed by subscription is not an atomic broker bootstrap protocol.
 
 ### Diagnostics and logging
 
@@ -260,8 +258,15 @@ Normal application shutdown follows this order:
    producer, broker and UI processing threads.
 3. Drain consumer-owned processing while its state/render resources remain valid,
    close subscription handles and then stop frontend resources.
-4. Finish independent diagnostic/capture work and close logging; release facade
-   installation last. An early frontend close fences its own already queued work.
+4. Finish independent diagnostic/capture work and close logging. Seal the facade
+   with `YameEvents.shutdown()` at final application shutdown. The facade owns
+   and closes its default broker; explicit installers close and await their own
+   brokers before releasing the installation handle. The default also has a JVM
+   shutdown hook until #102 integrates full runtime shutdown.
+
+Publication after final shutdown fails instead of lazily starting a new worker.
+An explicit installation released after termination can be followed by another
+explicit installation for serial isolated tests; lazy creation stays disabled.
 
 Report a timeout as incomplete shutdown; do not advertise successful drain or close
 resources still in use. Shutdown orchestration must not wait for a queue/worker

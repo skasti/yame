@@ -1,6 +1,7 @@
 package no.skasti.yame.ppp.proxy
 
 import no.skasti.yame.observer.YameEvent
+import no.skasti.yame.observer.YameEvents
 import no.skasti.yame.ppp.proxy.transform.ResourceTransformationSummary
 import java.net.URI
 import java.time.Clock
@@ -414,8 +415,6 @@ internal class NavigationResourceRegistry(
     private val maxNodesPerHost: Int = 4_096,
     private val maxEdgesPerContext: Int = 2_048,
     val hooks: ResourceRegistryHooks = ResourceRegistryHooks(),
-    // Runtime composition injects the broker publisher; isolated registries need no global broker.
-    private val eventPublisher: (YameEvent) -> Unit = {},
     private val clock: Clock = Clock.systemUTC(),
 ) {
     init {
@@ -855,10 +854,10 @@ internal class NavigationResourceRegistry(
         graphs[graphId] = graph
     }
 
-    /** Preserve the existing TUI hooks while sending immutable domain events to the injected publisher. */
+    /** Preserve the existing TUI hooks while publishing immutable domain events outside the registry lock. */
     private fun deliver(pending: List<PendingEvent>) {
         pending.forEach { it.fire(hooks) }
-        pending.forEach { eventPublisher(it.event) }
+        pending.forEach { YameEvents.publish(it.event) }
     }
 
     private fun evictLeastRecentlyUsedLocked(pending: MutableList<PendingEvent>) {

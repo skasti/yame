@@ -2,6 +2,9 @@ package no.skasti.yame.runtime
 
 import com.github.ajalt.mordant.terminal.Terminal
 import no.skasti.yame.observer.YameEvent
+import no.skasti.yame.observer.YameEvents
+import no.skasti.yame.observer.EventBroker
+import no.skasti.yame.observer.BrokerWaitResult
 import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.lifecycle.ApplicationFunctions
@@ -31,6 +34,8 @@ import java.net.ServerSocket
 import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
+import java.time.Duration
+import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -38,6 +43,25 @@ import kotlin.concurrent.thread
 import kotlin.test.*
 
 class YameRuntimeConnectionTest {
+    private val resourceEvents = Collections.synchronizedList(mutableListOf<YameEvent>())
+    private lateinit var broker: EventBroker
+    private lateinit var installation: AutoCloseable
+    private lateinit var subscription: AutoCloseable
+
+    @BeforeTest fun setUpEvents() {
+        broker = EventBroker()
+        installation = YameEvents.install(broker)
+        subscription = YameEvents.subscribe("runtime-resource-test") { resourceEvents += it }
+    }
+
+    @AfterTest fun tearDownEvents() {
+        subscription.close()
+        broker.close()
+        assertEquals(BrokerWaitResult.COMPLETED, broker.awaitClosed(Duration.ofSeconds(5)))
+        installation.close()
+        resourceEvents.clear()
+    }
+
     private class Port(
         private val failure: Exception? = null,
         private val onReadingStarted: () -> Unit = {},
@@ -219,11 +243,7 @@ class YameRuntimeConnectionTest {
         try {
             val functions = FunctionStore()
             val store = applicationConfigStore(YameConfiguration(portName = "COM1"))
-            val resourceEvents = mutableListOf<YameEvent>()
-            val registry = NavigationResourceRegistry(
-                maxContexts = 4,
-                eventPublisher = { resourceEvents += it },
-            )
+            val registry = NavigationResourceRegistry(maxContexts = 4)
             val httpConfig = PppHttpCompatibilityConfig(enabled = true, requestTimeoutMillis = 2_000)
 
             // Create graph state through the same HTTP routing path used by PPP sessions.
@@ -283,10 +303,12 @@ class YameRuntimeConnectionTest {
                     assertEquals(2, readingStarted)
                     assertEquals(2, attempts)
                     assertEquals(graph.id, registry.startNavigation(root).id)
-                    assertTrue(resourceEvents.filterIsInstance<ResourceGraphLifecycleEvent>().any {
+                    assertEquals(BrokerWaitResult.COMPLETED, broker.drain().await(Duration.ofSeconds(5)))
+                    val published = synchronized(resourceEvents) { resourceEvents.toList() }
+                    assertTrue(published.filterIsInstance<ResourceGraphLifecycleEvent>().any {
                         it.change == ResourceGraphChange.USED && it.graphId == graph.id
                     })
-                    assertFalse(resourceEvents.filterIsInstance<ResourceGraphLifecycleEvent>().any {
+                    assertFalse(published.filterIsInstance<ResourceGraphLifecycleEvent>().any {
                         it.change == ResourceGraphChange.REMOVED && it.graphId == graph.id
                     })
                     assertEquals(

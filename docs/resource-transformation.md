@@ -64,8 +64,9 @@ observations include the normalized URL identity, graph lifetime, incident
 parent/relation edges, current state and kind, sticky prefetch state,
 transformation summaries and fetch-attempt identity. Their occurredAt value is
 captured at the registry transition, before publication or consumer handling.
-The publisher is injected, so registry tests use an isolated recorder; production
-broker wiring remains tracked by [#102](https://github.com/skasti/yame/issues/102),
+The registry publishes directly through `YameEvents`; tests install an isolated
+real broker and record through a subscriber. Production consumer registration,
+fatal supervision and shutdown remain tracked by [#102](https://github.com/skasti/yame/issues/102),
 and the TUI projection migration remains tracked by
 [#103](https://github.com/skasti/yame/issues/103). See the
 [event contract](yame-events.md#event-contract) for payload and ordering details.

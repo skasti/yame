@@ -30,11 +30,25 @@ application {
 
 tasks.test {
     useJUnitPlatform()
+    exclude("**/ResourceLifecycleEventTest.class", "**/YameRuntimeConnectionTest.class", "**/YameEventsLazyTest.class")
     testLogging {
         events("failed")
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
     }
 }
+
+// Global facade tests require a fresh JVM per class; ordinary broker tests stay isolated in-process.
+val eventFacadeTest by tasks.registering(Test::class) {
+    group = "verification"
+    testClassesDirs = sourceSets.test.get().output.classesDirs
+    classpath = sourceSets.test.get().runtimeClasspath
+    include("**/ResourceLifecycleEventTest.class", "**/YameRuntimeConnectionTest.class", "**/YameEventsLazyTest.class")
+    forkEvery = 1
+    maxParallelForks = 1
+    useJUnitPlatform()
+}
+
+tasks.named("check") { dependsOn(eventFacadeTest) }
 
 
 val yameGitCommit = providers.provider {

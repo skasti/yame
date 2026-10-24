@@ -68,7 +68,9 @@ Event ownership and generic access follow
 [ADR 0004](docs/adrs/0004-extensible-event-contract.md); event occurrence time
 and consumer-owned ordering follow
 [ADR 0006](docs/adrs/0006-consumer-owned-event-ordering.md); overload handling
-follows [ADR 0001](docs/adrs/0001-fatal-event-queue-saturation.md).
+follows [ADR 0001](docs/adrs/0001-fatal-event-queue-saturation.md). The lazy
+global event facade and lifecycle follow
+[ADR 0007](docs/adrs/0007-lazy-global-event-broker.md).
 
 - Record architectural decisions in `docs/adrs/<sequence>-<topic>.md`, using the
   next repository-wide four-digit sequence and a lowercase hyphenated topic.
@@ -117,6 +119,12 @@ Prefer code that is easy to reason about, test, review, and extend.
 - use deterministic, canonical representations for identifiers, fingerprints, protocol/header normalization, ordering, and other values that participate in equality or caching;
 - keep concurrency boundaries explicit: publish state before signalling completion, avoid races between shared work and caches, and do not let observers/hooks block critical request or protocol paths;
 - when an event subscriber publishes another event, check for direct or indirect feedback loops; publish only meaningful changes and use deduplication or state-change detection where necessary. The dispatcher can time out and fail fatally if it publishes into its own full queue. See [event publication from subscribers](docs/yame-events.md#event-publication-from-subscribers);
+- publish producer-owned observations through `YameEvents.publish()` directly;
+  the facade lazily creates one process broker on first use. Subscribe before
+  relevant publication or query authoritative state when a late consumer needs
+  it. Tests may install an explicit broker before first use and must close and
+  await it before releasing its handle. Never replace an active broker or
+  swallow overload failures;
 - treat external input as untrusted: bound memory, CPU, decoded sizes, recursion/depth, queues, and IO; avoid unnecessary parsing or implicit filesystem/network side effects;
 - prefer fail-safe behavior and explicit fallback paths over partially mutated state;
 - design new behavior so important success, boundary, failure, passthrough, and concurrency paths can be tested deterministically;

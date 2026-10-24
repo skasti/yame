@@ -1,13 +1,20 @@
 package no.skasti.yame.ppp.proxy
 
 import no.skasti.yame.observer.YameEvent
+import no.skasti.yame.observer.YameEvents
+import no.skasti.yame.observer.EventBroker
+import no.skasti.yame.observer.BrokerWaitResult
 import no.skasti.yame.observer.VersionNumber
 import no.skasti.yame.ppp.proxy.transform.ResourceTransformationSummary
 import java.net.URI
 import java.time.Clock
 import java.time.Instant
+import java.time.Duration
 import java.time.ZoneId
 import java.time.ZoneOffset
+import java.util.Collections
+import kotlin.test.AfterTest
+import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -17,26 +24,44 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class ResourceLifecycleEventTest {
+    private val events = Collections.synchronizedList(mutableListOf<YameEvent>())
+    private lateinit var broker: EventBroker
+    private lateinit var installation: AutoCloseable
+    private lateinit var subscription: AutoCloseable
+    private val timeout = Duration.ofSeconds(5)
+
+    @BeforeTest fun setUp() {
+        broker = EventBroker()
+        installation = YameEvents.install(broker)
+        subscription = YameEvents.subscribe("resource-test") { events += it }
+    }
+
+    @AfterTest fun tearDown() {
+        subscription.close()
+        broker.close()
+        assertEquals(BrokerWaitResult.COMPLETED, broker.awaitClosed(timeout))
+        installation.close()
+        events.clear()
+    }
+
+    private fun observedEvents(): List<YameEvent> {
+        assertEquals(BrokerWaitResult.COMPLETED, broker.drain().await(timeout))
+        return synchronized(events) { events.toList() }
+    }
+
     @Test
     fun `events carry occurrence time complete resource state and graph usage`() {
-        val events = mutableListOf<YameEvent>()
         val clock = MutableClock(Instant.parse("2026-10-24T12:00:00Z"))
-        val registry = NavigationResourceRegistry(
-            eventPublisher = { event ->
-                events += event
-                // Simulate publication being delayed after the registry transition.
-                clock.advanceSeconds(1)
-            },
-            clock = clock,
-        )
+        val registry = NavigationResourceRegistry(clock = clock)
         val rootRequest = URI("http://Example.test:80/index.html")
         val firstOccurrence = clock.instant()
 
         val graph = registry.startNavigation(rootRequest)
-        val admitted = events.filterIsInstance<ResourceLifecycleEvent>().first()
-        val created = events.filterIsInstance<ResourceGraphLifecycleEvent>()
+        clock.advanceSeconds(1)
+        val admitted = observedEvents().filterIsInstance<ResourceLifecycleEvent>().first()
+        val created = observedEvents().filterIsInstance<ResourceGraphLifecycleEvent>()
             .first { it.change == ResourceGraphChange.CREATED }
-        val firstUse = events.filterIsInstance<ResourceGraphLifecycleEvent>()
+        val firstUse = observedEvents().filterIsInstance<ResourceGraphLifecycleEvent>()
             .first { it.change == ResourceGraphChange.USED }
 
         assertEquals("yame.ppp.proxy.resource.lifecycle", admitted.typeName)
@@ -67,9 +92,9 @@ class ResourceLifecycleEventTest {
             ResourceRelation.LINK_STYLESHEET,
             ResourceKind.STYLESHEET,
         )
-        val discovered = events.filterIsInstance<ResourceLifecycleEvent>()
+        val discovered = observedEvents().filterIsInstance<ResourceLifecycleEvent>()
             .last { it.change == ResourceLifecycleChange.DISCOVERED }
-        val latestUse = events.filterIsInstance<ResourceGraphLifecycleEvent>()
+        val latestUse = observedEvents().filterIsInstance<ResourceGraphLifecycleEvent>()
             .last { it.change == ResourceGraphChange.USED }
 
         assertEquals(associationTime, discovered.occurredAt)
@@ -88,14 +113,13 @@ class ResourceLifecycleEventTest {
 
         val revisited = registry.startNavigation(rootRequest)
         assertEquals(graph.id, revisited.id)
-        assertEquals(3L, events.filterIsInstance<ResourceGraphLifecycleEvent>()
+        assertEquals(3L, observedEvents().filterIsInstance<ResourceGraphLifecycleEvent>()
             .last { it.change == ResourceGraphChange.USED }.usageCount)
     }
 
     @Test
     fun `fetch retry has a new identity and can return to fetching after ready`() {
-        val events = mutableListOf<YameEvent>()
-        val registry = NavigationResourceRegistry(eventPublisher = { events += it })
+        val registry = NavigationResourceRegistry()
         val graph = registry.startNavigation(URI("http://legacy.test/root"))
         val resource = URI("http://legacy.test/image.gif")
         val upstream = URI("https://legacy.test/image.gif")
@@ -115,7 +139,7 @@ class ResourceLifecycleEventTest {
         assertEquals(1L, first.attemptNumber)
         assertEquals(2L, retry.attemptNumber)
 
-        val retryStarted = events.filterIsInstance<ResourceLifecycleEvent>()
+        val retryStarted = observedEvents().filterIsInstance<ResourceLifecycleEvent>()
             .last { it.change == ResourceLifecycleChange.FETCH_RETRIED }
         assertEquals(ResourceState.FETCHING, retryStarted.state)
         assertEquals(retry.id, retryStarted.fetchAttemptId)
@@ -124,7 +148,7 @@ class ResourceLifecycleEventTest {
 
         assertFalse(registry.markFetchState(graph, first, resource, upstream, upstream, ResourceState.FAILED))
         assertTrue(registry.markFetchState(graph, retry, resource, upstream, upstream, ResourceState.READY))
-        val completion = events.filterIsInstance<ResourceLifecycleEvent>()
+        val completion = observedEvents().filterIsInstance<ResourceLifecycleEvent>()
             .last { it.change == ResourceLifecycleChange.FETCH_COMPLETED }
         assertEquals(ResourceState.READY, completion.state)
         assertEquals(retry.id, completion.fetchAttemptId)
@@ -135,8 +159,7 @@ class ResourceLifecycleEventTest {
 
     @Test
     fun `resource event payloads are immutable snapshots through typed and generic access`() {
-        val events = mutableListOf<YameEvent>()
-        val registry = NavigationResourceRegistry(eventPublisher = { events += it })
+        val registry = NavigationResourceRegistry()
         val graph = registry.startNavigation(URI("http://legacy.test/root"))
         val resource = URI("http://legacy.test/image.jpg")
         val upstream = URI("https://legacy.test/image.jpg")
@@ -155,7 +178,7 @@ class ResourceLifecycleEventTest {
         val original = ResourceTransformationSummary("jpeg-optimizer", 1_000, 250, "reduced")
         val callerOwned = mutableListOf(original)
         registry.recordTransformations(resource, callerOwned)
-        val event = events.filterIsInstance<ResourceLifecycleEvent>()
+        val event = observedEvents().filterIsInstance<ResourceLifecycleEvent>()
             .last { it.change == ResourceLifecycleChange.TRANSFORMATIONS_UPDATED }
 
         val later = ResourceTransformationSummary("later", 250, 200)
@@ -178,8 +201,7 @@ class ResourceLifecycleEventTest {
 
     @Test
     fun `shared resources remain associated with each graph and eviction starts a new graph lifetime`() {
-        val events = mutableListOf<YameEvent>()
-        val registry = NavigationResourceRegistry(maxContexts = 2, eventPublisher = { events += it })
+        val registry = NavigationResourceRegistry(maxContexts = 2)
         val firstRoot = URI("http://first.test/page")
         val secondRoot = URI("http://second.test/page")
         val shared = URI("http://cdn.test/shared.css")
@@ -189,7 +211,7 @@ class ResourceLifecycleEventTest {
         val second = registry.startNavigation(secondRoot)
         registry.discover(second, secondRoot, shared, upstream, ResourceRelation.LINK_STYLESHEET, ResourceKind.STYLESHEET)
 
-        val sharedEvents = events.filterIsInstance<ResourceLifecycleEvent>()
+        val sharedEvents = observedEvents().filterIsInstance<ResourceLifecycleEvent>()
             .filter { it.change == ResourceLifecycleChange.DISCOVERED && it.canonicalResourceKey == "http://cdn.test/shared.css" }
         assertEquals(setOf(first.id, second.id), sharedEvents.map { it.graphId }.toSet())
         assertEquals(
@@ -199,30 +221,29 @@ class ResourceLifecycleEventTest {
 
         val third = registry.startNavigation(URI("http://third.test/page"))
         assertTrue(third.id != first.id && third.id != second.id)
-        val removedGraph = events.filterIsInstance<ResourceGraphLifecycleEvent>()
+        val removedGraph = observedEvents().filterIsInstance<ResourceGraphLifecycleEvent>()
             .first { it.change == ResourceGraphChange.REMOVED }
         assertEquals(first.id, removedGraph.graphId)
         assertEquals(URI("http://first.test/"), removedGraph.rootLegacyUri)
-        val removedShared = events.filterIsInstance<ResourceLifecycleEvent>()
+        val removedShared = observedEvents().filterIsInstance<ResourceLifecycleEvent>()
             .first { it.change == ResourceLifecycleChange.REMOVED && it.graphId == first.id && it.resourceLegacyUri == shared }
         assertEquals(listOf(ResourceEdgeSnapshot(firstRoot, shared, ResourceRelation.LINK_STYLESHEET)), removedShared.associations)
 
         val recreated = registry.startNavigation(firstRoot)
         assertTrue(recreated.id != first.id)
-        assertNotNull(events.filterIsInstance<ResourceGraphLifecycleEvent>().first {
+        assertNotNull(observedEvents().filterIsInstance<ResourceGraphLifecycleEvent>().first {
             it.change == ResourceGraphChange.CREATED && it.rootLegacyUri == URI("http://first.test/")
         })
     }
 
     @Test
     fun `consumer projection buffers resource before root and rejects updates after eviction`() {
-        val events = mutableListOf<YameEvent>()
-        val registry = NavigationResourceRegistry(maxContexts = 1, eventPublisher = { events += it })
+        val registry = NavigationResourceRegistry(maxContexts = 1)
         val projection = ReorderedProjection()
         val root = URI("http://legacy.test/page")
         val graph = registry.startNavigation(root)
-        val admitted = events.filterIsInstance<ResourceLifecycleEvent>().first()
-        val created = events.filterIsInstance<ResourceGraphLifecycleEvent>()
+        val admitted = observedEvents().filterIsInstance<ResourceLifecycleEvent>().first()
+        val created = observedEvents().filterIsInstance<ResourceGraphLifecycleEvent>()
             .first { it.change == ResourceGraphChange.CREATED }
 
         projection.accept(admitted)
@@ -237,18 +258,18 @@ class ResourceLifecycleEventTest {
         registry.discover(graph, root, resource, upstream, ResourceRelation.IMG_SRC, ResourceKind.IMAGE)
         val attempt = requireNotNull(registry.beginFetch(graph, resource, upstream, upstream))
         registry.markFetchState(graph, attempt, resource, upstream, upstream, ResourceState.READY)
-        val staleUpdate = events.filterIsInstance<ResourceLifecycleEvent>()
+        val staleUpdate = observedEvents().filterIsInstance<ResourceLifecycleEvent>()
             .last { it.graphId == graph.id && it.change == ResourceLifecycleChange.FETCH_COMPLETED }
-        events.filterIsInstance<ResourceLifecycleEvent>().filter { it.graphId == graph.id }
+        observedEvents().filterIsInstance<ResourceLifecycleEvent>().filter { it.graphId == graph.id }
             .forEach(projection::accept)
         assertEquals(ResourceState.READY, projection.graph(graph.id)?.resources?.get(staleUpdate.canonicalResourceKey)?.state)
 
         registry.startNavigation(URI("http://next.test/page"))
-        val removed = events.filterIsInstance<ResourceGraphLifecycleEvent>()
+        val removed = observedEvents().filterIsInstance<ResourceGraphLifecycleEvent>()
             .first { it.graphId == graph.id && it.change == ResourceGraphChange.REMOVED }
         projection.accept(removed)
         projection.accept(staleUpdate)
-        events.filterIsInstance<ResourceLifecycleEvent>()
+        observedEvents().filterIsInstance<ResourceLifecycleEvent>()
             .filter { it.graphId == graph.id && it.change == ResourceLifecycleChange.REMOVED }
             .forEach(projection::accept)
 

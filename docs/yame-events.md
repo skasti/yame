@@ -1,10 +1,10 @@
 # YameEvents broker infrastructure
 
 Implemented in PR #106 in `no.skasti.yame.observer`. The proxy resource registry
-now defines and publishes producer-owned lifecycle observations through an
-injected event publisher ([#100](https://github.com/skasti/yame/issues/100)).
-**Production runtime still uses existing event sinks.** Installation,
-application fatal supervision and broker wiring belong to
+defines and publishes producer-owned lifecycle observations directly through
+`YameEvents.publish()` ([#100](https://github.com/skasti/yame/issues/100)).
+**Production runtime still uses existing event sinks.** Consumer registration,
+application fatal supervision and shutdown coordination belong to
 [#102](https://github.com/skasti/yame/issues/102); moving TUI work off producer
 threads and migrating its projection remain tracked by
 [#101](https://github.com/skasti/yame/issues/101) and
@@ -14,7 +14,8 @@ threads and migrating its projection remain tracked by
 [ADR 0001](adrs/0001-fatal-event-queue-saturation.md) decides overload handling;
 [ADR 0004](adrs/0004-extensible-event-contract.md) decides event ownership and access;
 [ADR 0006](adrs/0006-consumer-owned-event-ordering.md) adds occurrence-time
-semantics and consumer-owned dependency handling.
+semantics and consumer-owned dependency handling; [ADR 0007](adrs/0007-lazy-global-event-broker.md)
+decides lazy global broker ownership.
 
 ## Event contract
 
@@ -53,17 +54,15 @@ the attempt number distinguishes a legitimate retry from a delayed event from
 an earlier attempt. The registry rejects stale attempt updates before emitting
 an event.
 
-The registry receives `(YameEvent) -> Unit` as an injectable publisher and
-invokes it outside its state lock. It does not create a second queue or suppress
-publication failures. Standalone registries default to no publication; #102
-will inject the installed broker into production composition. Until that wiring
-lands, the event contract is implemented but production consumers do not receive
-these observations.
+The registry publishes through `YameEvents` outside its state lock. It does not
+create a second queue or suppress publication failures. First publication
+creates the default broker unless composition installed one earlier. Production
+consumer registration and fatal supervision remain part of #102.
 
 ## Event occurrence and ordering responsibilities
 
 **Producer implementation status:** The proxy resource producer contract and
-transition events are implemented in #100. Production broker wiring remains
+transition events are implemented in #100. Production consumer wiring remains
 tracked by #102 and the TUI projection migration by #103. New domain transition
 events expose an occurrence timestamp (normally `occurredAt`),
 captured when authoritative state changes, not when they enter the broker.
@@ -82,9 +81,12 @@ and does not require producer-side root-before-resource publication. See
 
 ## Admission and delivery
 
-Each `EventBroker` owns one daemon dispatcher. `YameEvents.current` exposes an
-explicitly installed production instance; no hidden worker or test reset exists.
-Register consumers before starting producers. `publish(event): Long` returns an
+Each `EventBroker` owns one daemon dispatcher. `YameEvents.current`, `publish`
+and `subscribe` share a lazily created default unless an explicit broker was
+installed before first access. Concurrent first access creates exactly one
+broker. Active replacement is rejected; a rejected distinct candidate is closed.
+Register consumers before producers when they need every event.
+`publish(event): Long` returns an
 accepted sequence; it never invokes a subscriber, reads the payload or performs
 I/O. The short admission lock orders concurrent producers and subscriptions.
 
@@ -144,3 +146,14 @@ delivery while healthy; it never joins the worker or enqueues a poison pill.
 `awaitClosed(timeout)` observes actual worker termination and returns
 `WOULD_DEADLOCK` when called from that worker. A blocked user callback can delay
 healthy close. Fatal shutdown must not depend on drains or final events.
+
+The facade owns its default broker. `YameEvents.shutdown()` seals the facade and
+closes that default, which the owner can then await. A JVM shutdown hook closes
+and briefly awaits the default when runtime integration has not shut it down.
+Explicitly installed brokers remain owned by their installers: close and await
+the broker before releasing the installation handle. Release permits another
+explicit installation in serial isolated tests, but does not restore lazy
+creation. Publishing after final shutdown fails and cannot restart a worker.
+Late subscribers receive only future events; they can query authoritative
+components for current state when needed. #102 owns application-level producer
+quiescence, fatal supervision and shutdown ordering.
