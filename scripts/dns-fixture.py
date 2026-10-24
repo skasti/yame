@@ -12,6 +12,8 @@ EXPECTED_NAME = "ci.yame.test"
 ANSWER_ADDRESS = "203.0.113.42"
 TCP_NAME = "tcp.yame.test"
 TCP_ANSWER_ADDRESS = os.environ.get("YAME_TCP_FIXTURE_ADDRESS", "127.0.0.1")
+SMOKE_HOST = "www.msftconnecttest.com"
+ALLOW_EXTERNAL_SMOKE = os.environ.get("YAME_EXTERNAL_HTTP_SMOKE") == "1"
 
 
 def question_end(packet: bytes) -> int:
@@ -54,13 +56,18 @@ with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             qtype, qclass = struct.unpack("!HH", packet[end - 4:end])
             print(f"query {name} type={qtype} class={qclass} from {peer[0]}:{peer[1]}", flush=True)
 
-            if qtype == 1 and qclass == 1 and name in (EXPECTED_NAME, TCP_NAME):
+            allowed = name in (EXPECTED_NAME, TCP_NAME) or (ALLOW_EXTERNAL_SMOKE and name == SMOKE_HOST)
+            if qtype == 1 and qclass == 1 and allowed:
                 flags = 0x8180
                 answer_count = 1
                 if name == EXPECTED_NAME:
                     address = ANSWER_ADDRESS
-                else:
+                elif name == TCP_NAME:
                     address = TCP_ANSWER_ADDRESS
+                else:
+                    # Only the optional smoke test may consult real DNS.
+                    address = socket.getaddrinfo(name, 80, socket.AF_INET, socket.SOCK_STREAM)[0][4][0]
+                    print(f"resolved external {name} to {address}", flush=True)
                 answer = (
                     bytes((0xC0, 0x0C))
                     + struct.pack("!HHIH", 1, 1, 60, 4)

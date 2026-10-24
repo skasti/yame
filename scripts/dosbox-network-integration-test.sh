@@ -19,6 +19,21 @@ DEPENDENCIES_READY=false
 PORT=50453
 HTTP_PORT=18080
 BAUD=19200
+MODE="${1:-integration}"
+if [[ $# -gt 1 || ( "$MODE" != "integration" && "$MODE" != "external-smoke" ) ]]; then
+    echo "Usage: $0 [integration|external-smoke]" >&2
+    exit 2
+fi
+
+if [[ "$MODE" == "external-smoke" ]]; then
+    RESULT_FILE="$DOS_DRIVE/SMOKE.OK"
+    DOS_BATCH_ARGS="smoke"
+    EXTERNAL_HTTP_SMOKE=1
+else
+    RESULT_FILE="$DOS_DRIVE/SUITE.OK"
+    DOS_BATCH_ARGS=""
+    EXTERNAL_HTTP_SMOKE=0
+fi
 
 DNS_FIXTURE_PID=""
 HTTP_FIXTURE_PID=""
@@ -69,10 +84,12 @@ cleanup() {
             "$DOS_DRIVE/DNS.OK" \
             "$DOS_DRIVE/TCP.OK" \
             "$DOS_DRIVE/HTTP.OK" \
+            "$DOS_DRIVE/SMOKE.OK" \
             "$DOS_DRIVE/SUITE.OK" \
             "$DOS_DRIVE/DNS.OUT" \
             "$DOS_DRIVE/TCP.OUT" \
-            "$DOS_DRIVE/HTTP.OUT"; do
+            "$DOS_DRIVE/HTTP.OUT" \
+            "$DOS_DRIVE/SMOKE.OUT"; do
             echo "--- $(basename "$result") ---"
             cat "$result" 2>/dev/null || echo "<missing>"
         done
@@ -163,7 +180,7 @@ serial2=nullmodem server:127.0.0.1 port:$PORT transparent:1
 @echo off
 mount c "$DOS_DRIVE"
 c:
-YAMETEST.BAT $HOST_ADDRESS
+YAMETEST.BAT $HOST_ADDRESS $DOS_BATCH_ARGS
 EOF
 
 # Permit the unprivileged fixture process to bind the standard DNS port.
@@ -198,7 +215,7 @@ fi
 socat TCP-LISTEN:80,bind="$HOST_ADDRESS",reuseaddr,fork TCP:127.0.0.1:"$HTTP_PORT" >"$HTTP_COMPAT_LOG" 2>&1 &
 HTTP_COMPAT_PID=$!
 
-YAME_TCP_FIXTURE_ADDRESS="$HOST_ADDRESS" \
+YAME_TCP_FIXTURE_ADDRESS="$HOST_ADDRESS" YAME_EXTERNAL_HTTP_SMOKE="$EXTERNAL_HTTP_SMOKE" \
     python3 "$ROOT/scripts/dns-fixture.py" >"$DNS_FIXTURE_LOG" 2>&1 &
 DNS_FIXTURE_PID=$!
 
@@ -275,13 +292,13 @@ DOSBOX_PID=$!
 
 deadline=$((SECONDS + 75))
 while [[ $SECONDS -lt $deadline ]]; do
-    if [[ -f "$DOS_DRIVE/SUITE.OK" ]]; then
-        result="$(tr -d '\r\n' < "$DOS_DRIVE/SUITE.OK")"
+    if [[ -f "$RESULT_FILE" ]]; then
+        result="$(tr -d '\r\n' < "$RESULT_FILE")"
         if [[ "$result" == "OK" ]]; then
             break
         fi
         if [[ "$result" == "FAIL" ]]; then
-            echo "DOS PPP/DNS/TCP compatibility suite reported a failure" >&2
+            echo "DOSBox $MODE test reported a failure" >&2
             exit 1
         fi
     fi
@@ -331,10 +348,27 @@ while [[ $SECONDS -lt $deadline ]]; do
     sleep 0.1
 done
 
-if [[ ! -f "$DOS_DRIVE/SUITE.OK" ]] ||
-    [[ "$(tr -d '\r\n' < "$DOS_DRIVE/SUITE.OK")" != "OK" ]]; then
-    echo "Timed out waiting for the DOS PPP/DNS/TCP compatibility suite" >&2
+if [[ ! -f "$RESULT_FILE" ]] ||
+    [[ "$(tr -d '\r\n' < "$RESULT_FILE")" != "OK" ]]; then
+    echo "Timed out waiting for the DOSBox $MODE result" >&2
     exit 1
+fi
+
+if [[ "$MODE" == "external-smoke" ]]; then
+    if ! grep -Fq "Microsoft Connect Test" "$DOS_DRIVE/SMOKE.OUT"; then
+        echo "Microsoft connectivity probe response did not match expected content" >&2
+        exit 1
+    fi
+    if ! grep -Fq "resolved external www.msftconnecttest.com to " "$DNS_FIXTURE_LOG"; then
+        echo "External smoke probe did not resolve the Microsoft hostname" >&2
+        exit 1
+    fi
+    if ! grep -Fq "HTTP compatibility => GET http://www.msftconnecttest.com/connecttest.txt" "$YAME_LOG"; then
+        echo "External smoke probe did not pass through YAME HTTP compatibility" >&2
+        exit 1
+    fi
+    echo "DOSBox external HTTP smoke test passed: Microsoft connectivity probe via YAME"
+    exit 0
 fi
 
 if [[ "$(tr -d '\r\n' < "$DOS_DRIVE/PPP.OK")" != "OK" ]]; then
