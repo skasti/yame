@@ -10,6 +10,7 @@ YAME_LOG="$WORK_DIR/yame.log"
 DOSBOX_LOG="$WORK_DIR/dosbox.log"
 DNS_FIXTURE_LOG="$WORK_DIR/dns-fixture.log"
 HTTP_FIXTURE_LOG="$WORK_DIR/http-fixture.log"
+HTTP_COMPAT_LOG="$WORK_DIR/http-compat-forwarder.log"
 DOSBOX_CONF="$WORK_DIR/dosbox.conf"
 DOWNLOAD_DIR="${YAME_DOSBOX_DOWNLOAD_CACHE:-$WORK_DIR/downloads}"
 LS_PPP_ZIP="$DOWNLOAD_DIR/lsppp.zip"
@@ -21,6 +22,7 @@ BAUD=19200
 
 DNS_FIXTURE_PID=""
 HTTP_FIXTURE_PID=""
+HTTP_COMPAT_PID=""
 SOCAT_PID=""
 YAME_PID=""
 DOSBOX_PID=""
@@ -29,7 +31,7 @@ ORIGINAL_UNPRIVILEGED_PORT_START=""
 cleanup() {
     local status=$?
 
-    for pid in "$DOSBOX_PID" "$YAME_PID" "$SOCAT_PID" "$HTTP_FIXTURE_PID" "$DNS_FIXTURE_PID"; do
+    for pid in "$DOSBOX_PID" "$YAME_PID" "$SOCAT_PID" "$HTTP_COMPAT_PID" "$HTTP_FIXTURE_PID" "$DNS_FIXTURE_PID"; do
         if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
             kill "$pid" 2>/dev/null || true
         fi
@@ -52,6 +54,9 @@ cleanup() {
         echo "=== HTTP fixture log ==="
         cat "$HTTP_FIXTURE_LOG" 2>/dev/null || true
         echo
+        echo "=== HTTP compatibility forwarder log ==="
+        cat "$HTTP_COMPAT_LOG" 2>/dev/null || true
+        echo
         echo "=== socat log ==="
         cat "$SOCAT_LOG" 2>/dev/null || true
         echo
@@ -63,9 +68,11 @@ cleanup() {
             "$DOS_DRIVE/PPP.OK" \
             "$DOS_DRIVE/DNS.OK" \
             "$DOS_DRIVE/TCP.OK" \
+            "$DOS_DRIVE/HTTP.OK" \
             "$DOS_DRIVE/SUITE.OK" \
             "$DOS_DRIVE/DNS.OUT" \
-            "$DOS_DRIVE/TCP.OUT"; do
+            "$DOS_DRIVE/TCP.OUT" \
+            "$DOS_DRIVE/HTTP.OUT"; do
             echo "--- $(basename "$result") ---"
             cat "$result" 2>/dev/null || echo "<missing>"
         done
@@ -125,23 +132,6 @@ extract_executable "$MTCP_ZIP" "HTGET.EXE" "$DOS_DRIVE/HTGET.EXE"
 "$ROOT/gradlew" --no-daemon installDist >/dev/null
 YAME="$ROOT/build/install/yame/bin/yame"
 
-cat > "$DOSBOX_CONF" <<EOF
-[sdl]
-fullscreen=false
-
-[mixer]
-nosound=true
-
-[serial]
-serial2=nullmodem server:127.0.0.1 port:$PORT transparent:1
-
-[autoexec]
-@echo off
-mount c "$DOS_DRIVE"
-c:
-YAMETEST.BAT
-EOF
-
 HOST_ADDRESS="$(python3 - <<'PY'
 import socket
 
@@ -158,6 +148,23 @@ if [[ -z "$HOST_ADDRESS" || "$HOST_ADDRESS" == "0.0.0.0" ]]; then
     echo "Could not determine the host IPv4 address for the TCP fixture" >&2
     exit 1
 fi
+
+cat > "$DOSBOX_CONF" <<EOF
+[sdl]
+fullscreen=false
+
+[mixer]
+nosound=true
+
+[serial]
+serial2=nullmodem server:127.0.0.1 port:$PORT transparent:1
+
+[autoexec]
+@echo off
+mount c "$DOS_DRIVE"
+c:
+YAMETEST.BAT $HOST_ADDRESS
+EOF
 
 # Permit the unprivileged fixture process to bind the standard DNS port.
 current_unprivileged_port_start="$(sysctl -n net.ipv4.ip_unprivileged_port_start)"
@@ -186,6 +193,10 @@ if ! grep -Fq "HTTP fixture listening" "$HTTP_FIXTURE_LOG" 2>/dev/null; then
     echo "HTTP fixture did not become ready" >&2
     exit 1
 fi
+
+# Exercise the port-80 compatibility proxy against the same local fixture.
+socat TCP-LISTEN:80,bind="$HOST_ADDRESS",reuseaddr,fork TCP:127.0.0.1:"$HTTP_PORT" >"$HTTP_COMPAT_LOG" 2>&1 &
+HTTP_COMPAT_PID=$!
 
 YAME_TCP_FIXTURE_ADDRESS="$HOST_ADDRESS" \
     python3 "$ROOT/scripts/dns-fixture.py" >"$DNS_FIXTURE_LOG" 2>&1 &
@@ -303,6 +314,13 @@ while [[ $SECONDS -lt $deadline ]]; do
         exit 1
     fi
 
+    if ! kill -0 "$HTTP_COMPAT_PID" 2>/dev/null; then
+        wait "$HTTP_COMPAT_PID" || true
+        HTTP_COMPAT_PID=""
+        echo "HTTP compatibility forwarder exited before the suite completed" >&2
+        exit 1
+    fi
+
     if ! kill -0 "$DOSBOX_PID" 2>/dev/null; then
         wait "$DOSBOX_PID" || true
         DOSBOX_PID=""
@@ -331,6 +349,16 @@ fi
 
 if [[ "$(tr -d '\r\n' < "$DOS_DRIVE/TCP.OK")" != "OK" ]]; then
     echo "mTCP HTGet reported a TCP/HTTP failure" >&2
+    exit 1
+fi
+
+if [[ "$(tr -d '\r\n' < "$DOS_DRIVE/HTTP.OK")" != "OK" ]]; then
+    echo "mTCP HTGet reported an HTTP compatibility failure" >&2
+    exit 1
+fi
+
+if ! grep -Fq "YAME HTTP compatibility OK" "$DOS_DRIVE/HTTP.OUT"; then
+    echo "mTCP did not receive the deterministic HTTP compatibility response" >&2
     exit 1
 fi
 
@@ -389,6 +417,16 @@ if ! grep -Fq "request GET /test.txt " "$HTTP_FIXTURE_LOG"; then
     exit 1
 fi
 
+if ! grep -Fq "request GET /compat.txt " "$HTTP_FIXTURE_LOG"; then
+    echo "HTTP fixture did not receive the compatibility proxy request" >&2
+    exit 1
+fi
+
+if ! grep -Fq "HTTP compatibility => GET http://$HOST_ADDRESS/compat.txt" "$YAME_LOG"; then
+    echo "YAME did not route the DOS request through HTTP compatibility" >&2
+    exit 1
+fi
+
 if ! grep -Fq "TCP <= SYN 10.64.0.2:" "$YAME_LOG"; then
     echo "YAME did not observe the DOS TCP SYN" >&2
     exit 1
@@ -411,3 +449,4 @@ echo "  - mTCP DNSTEST resolved ci.yame.test through YAME's DNS proxy"
 echo "  - the deterministic upstream answer 203.0.113.42 reached DOS"
 echo "  - mTCP HTGet connected through YAME's host TCP proxy"
 echo "  - the multi-window HTTP fixture response reached DOS over the emulated TCP flow"
+echo "  - the HTTP compatibility proxy delivered the deterministic local fixture response"

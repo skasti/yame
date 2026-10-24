@@ -6,6 +6,8 @@ import socket
 LISTEN_ADDRESS = "0.0.0.0"
 LISTEN_PORT = 18080
 EXPECTED_PATH = "/test.txt"
+COMPAT_PATH = "/compat.txt"
+COMPAT_BODY = b"YAME HTTP compatibility OK\r\n"
 BODY = b"YAME TCP integration OK\r\n" + (b"x" * 20000) + b"\r\nYAME TCP window OK\r\n"
 
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
@@ -33,6 +35,9 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
             if path == EXPECTED_PATH:
                 status = b"HTTP/1.1 200 OK\r\n"
                 body = BODY
+            elif path == COMPAT_PATH:
+                status = b"HTTP/1.1 200 OK\r\n"
+                body = COMPAT_BODY
             else:
                 status = b"HTTP/1.1 404 Not Found\r\n"
                 body = b"not found\r\n"

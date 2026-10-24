@@ -34,8 +34,9 @@ if errorlevel 22 goto tcp_failed
 if not errorlevel 21 goto tcp_failed
 echo OK>TCP.OK
 
-echo Fetching real-world HTTP page from example.com through YAME...
-HTGET.EXE -quiet -o HTTP.OUT http://example.com/
+rem The HTTP compatibility proxy (port 80) uses a local, deterministic fixture.
+echo Fetching HTTP compatibility fixture through YAME...
+HTGET.EXE -quiet -o HTTP.OUT http://%1/compat.txt
 if errorlevel 22 goto http_failed
 if not errorlevel 21 goto http_failed
 if not exist HTTP.OUT goto http_failed
