@@ -158,8 +158,9 @@ class ResourceLifecycleEventTest {
         val event = events.filterIsInstance<ResourceLifecycleEvent>()
             .last { it.change == ResourceLifecycleChange.TRANSFORMATIONS_UPDATED }
 
-        callerOwned += ResourceTransformationSummary("later", 250, 200)
-        registry.recordTransformations(resource, listOf(ResourceTransformationSummary("later", 250, 200)))
+        val later = ResourceTransformationSummary("later", 250, 200)
+        callerOwned += later
+        registry.recordTransformations(resource, listOf(later))
 
         assertEquals(listOf(original), event.transformations)
         assertEquals(listOf(original), event["transformations"])
@@ -171,7 +172,7 @@ class ResourceLifecycleEventTest {
                 ResourceTransformationSummary("mutation", 1, 0)
         }
         assertEquals(listOf(original), event.transformations)
-        assertEquals(listOf(original, ResourceTransformationSummary("later", 250, 200)),
+        assertEquals(listOf(later),
             graph.snapshot().nodes.single { it.legacyUri == resource }.transformations)
     }
 
