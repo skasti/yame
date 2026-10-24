@@ -1,13 +1,17 @@
 package no.skasti.yame.modem
 
-import no.skasti.yame.config.SettingGroup
-import no.skasti.yame.config.SettingKey
+import no.skasti.yame.config.*
 
-object ModemSettings {
-    val Group = SettingGroup("modem")
-    val PickupTime = SettingKey<kotlin.time.Duration>("modem.pickup-time-nanos", Group, { HayesModemConfig(pickupTime = it) })
-    val DialToneTime = SettingKey<kotlin.time.Duration>("modem.dial-tone-time-nanos", Group, { HayesModemConfig(dialToneTime = it) })
-    val Handshake = SettingKey<no.skasti.yame.tone.HandshakeProfile>("modem.handshake-profile", Group)
-    val Tone = SettingKey<Boolean>("modem.tone-simulation-enabled", Group)
-    val Login = SettingKey<LoginCredentials>("login.credentials", Group, sensitive = true)
+object ModemSettings : Settings("modem") {
+    val Group = SettingGroup(this)
+    val PickupTime = SettingKey<kotlin.time.Duration>("pickup-time", Group,
+        { HayesModemConfig(pickupTime = it) }, default = { HayesModemConfig().pickupTime })
+    val DialToneTime = SettingKey<kotlin.time.Duration>("dial-tone-time", Group,
+        { HayesModemConfig(dialToneTime = it) }, default = { HayesModemConfig().dialToneTime })
+    val Handshake = SettingKey<no.skasti.yame.tone.HandshakeProfile>("handshake-profile", Group,
+        default = { HayesModemConfig().handshakeProfile })
+    val Tone = SettingKey<Boolean>("tone-simulation-enabled", Group,
+        default = { HayesModemConfig().toneSimulationEnabled })
+    val Login = SettingKey<LoginCredentials>("login", Group, sensitive = true,
+        default = { LoginCredentials(null, null) })
 }

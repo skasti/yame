@@ -105,21 +105,22 @@ The structural stages run in this order: `script-remover`, `style-remover`,
 upstream inline styles before element rules add explicitly configured styles.
 URL rewriting and image optimization run afterward.
 
-`element-simplifier.ini` is loaded alongside `yame.ini` into an immutable rule
-snapshot at startup, then passed through the HTTP configuration into the
+`element-simplifier.ini` is loaded alongside `yame.ini` into immutable rules
+when the HTTP configuration first needs them, then passed through it into the
 pipeline. Neither request handling nor transformation reads the file. Restarting
 YAME applies edits and creates fresh representation caches, preserving the
 stable-pipeline assumption for source validators and cached transformed output.
 The bundled INI file is the single source of default mappings. See the README
 for the format and editing behavior.
 
-Live on/off settings are separate from the immutable INI rules. A shared
-runtime control survives PPP/TCP proxy creation, and each HTTP request captures
-one immutable settings snapshot before fetching upstream. Its transformation
-profile and transformed-cache/in-flight-work keys include the four switch
-values; the same source bytes under different settings never share transformed
+Live on/off settings are separate from the immutable INI rules. The HTTP handler
+uses an injected store-backed provider to construct one immutable
+`HtmlTransformerSettings` object for each request before fetching upstream. Its transformation
+profile and transformed-cache/in-flight-work keys include the four effective switch
+values. Element simplification requires both the rule file's general `enabled`
+setting and the `/transformers` switch. The same source bytes under different settings never share transformed
 output. Source acquisition may still be coalesced because it is independent of
-the transformation profile. Already-running requests retain their snapshot.
+the transformation profile. Already-running requests retain their settings object.
 
 Mappings affect only explicitly configured tags, including matching closing
 tags. Generated style values are escaped as attributes. Expansion is limited

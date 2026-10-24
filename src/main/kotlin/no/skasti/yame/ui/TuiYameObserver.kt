@@ -69,20 +69,19 @@ class TuiYameObserver(
     private val onLogLevelSelected: (YameLogModule, YameLogLevel) -> Unit = { module, level -> configStore.set(LogSettings.Levels.getValue(module) to level) }
     private val onLoginAdded: (String, String) -> Unit = { username, password -> configStore.set(ModemSettings.Login to LoginCredentials(username, password)) }
 
-    // Presentation cache initialized from one consistent snapshot. The initial subscription
-    // below closes the snapshot/subscribe race and applies subsequent event values in order.
-    private val initial = configStore.snapshot()
+    // Presentation state starts from typed reads; the initial subscription closes
+    // the read/subscribe race and applies subsequent change values in order.
     private var captureLimits = PacketCaptureLimitKind.entries.fold(PacketCaptureLimits()) { limits, kind ->
-        kind.apply(limits, requireNotNull(initial[LogSettings.CaptureLimits.getValue(kind)]).value)
+        kind.apply(limits, configStore[LogSettings.CaptureLimits.getValue(kind)])
     }
-    private var portName = requireNotNull(initial[SerialSettings.Port]).value
-    private var baud = requireNotNull(initial[SerialSettings.Baud]).value
-    private var flowControl = requireNotNull(initial[SerialSettings.FlowControl]).value
-    private var dnsUpstream = requireNotNull(initial[DnsSettings.Upstream]).value.toString()
-    private var httpProxyEnabled = requireNotNull(initial[ProxySettings.Enabled]).value
-    private var toneSimulationEnabled = requireNotNull(initial[ModemSettings.Tone]).value
+    private var portName = configStore[SerialSettings.Port]
+    private var baud = configStore[SerialSettings.Baud]
+    private var flowControl = configStore[SerialSettings.FlowControl]
+    private var dnsUpstream = configStore[DnsSettings.Upstream].toString()
+    private var httpProxyEnabled = configStore[ProxySettings.Enabled]
+    private var toneSimulationEnabled = configStore[ModemSettings.Tone]
     private val logLevels = YameLogModule.entries.associateWith {
-        requireNotNull(initial[LogSettings.Levels.getValue(it)]).value
+        configStore[LogSettings.Levels.getValue(it)]
     }.toMutableMap()
     private var connected = false
     private var availablePorts: List<SerialPortDescriptor> = emptyList()

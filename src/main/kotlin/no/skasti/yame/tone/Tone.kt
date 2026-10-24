@@ -1,5 +1,7 @@
 package no.skasti.yame.tone
 
+import kotlinx.serialization.Serializable
+
 import java.io.Closeable
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.sound.sampled.AudioFormat
@@ -21,6 +23,7 @@ import kotlin.time.Duration.Companion.seconds
  * carrier/probing frequencies and timings where practical, but it does not
  * encode a valid modem negotiation payload.
  */
+@Serializable
 enum class HandshakeProfile {
     NONE,
     V34,

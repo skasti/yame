@@ -1,6 +1,6 @@
 package no.skasti.yame.ppp.proxy.transform
 
-import no.skasti.yame.config.*
+import no.skasti.yame.config.ConfigStore
 
 enum class HtmlTransformer(val command: String) {
     SCRIPT_REMOVER("script-remover"),
@@ -16,17 +16,13 @@ data class HtmlTransformerSettings(
     val elementSimplifier: Boolean = true,
 ) {
     companion object {
-        fun fromConfigStore(): HtmlTransformerSettings = fromSnapshot(ConfigStore.current.snapshot())
-
-        internal fun fromSnapshot(changes: ConfigChanges): HtmlTransformerSettings {
-            val keys = TransformerSettings
-            return HtmlTransformerSettings(
-                requireNotNull(changes[keys.Script]).value,
-                requireNotNull(changes[keys.Style]).value,
-                requireNotNull(changes[keys.Attributes]).value,
-                requireNotNull(changes[keys.Elements]).value,
+        fun fromConfigStore(store: ConfigStore = ConfigStore.current): HtmlTransformerSettings =
+            HtmlTransformerSettings(
+                store[TransformerSettings.Script],
+                store[TransformerSettings.Style],
+                store[TransformerSettings.Attributes],
+                store[TransformerSettings.Elements] && store[ElementSimplifierSettings.Enabled],
             )
-        }
     }
 
     fun enabled(transformer: HtmlTransformer): Boolean = when (transformer) {

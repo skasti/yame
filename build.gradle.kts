@@ -1,5 +1,6 @@
 plugins {
     kotlin("jvm") version "2.4.21"
+    kotlin("plugin.serialization") version "2.4.21"
     application
 }
 
@@ -12,6 +13,7 @@ repositories {
 
 dependencies {
     implementation(kotlin("reflect"))
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     implementation("com.fazecast:jSerialComm:2.11.4")
     implementation("com.github.ajalt.mordant:mordant:3.1.0")
     implementation("org.jline:jline-terminal-jni:4.4.8")
@@ -28,6 +30,10 @@ application {
 
 tasks.test {
     useJUnitPlatform()
+    testLogging {
+        events("failed")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+    }
 }
 
 

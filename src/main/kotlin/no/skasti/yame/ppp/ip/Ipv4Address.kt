@@ -1,5 +1,13 @@
 package no.skasti.yame.ppp.ip
 
+import kotlinx.serialization.KSerializer
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+
+@Serializable(with = Ipv4AddressSerializer::class)
 @JvmInline
 value class Ipv4Address(val value: UInt) {
     fun toByteArray(): ByteArray =
@@ -48,5 +56,11 @@ value class Ipv4Address(val value: UInt) {
             )
         }
     }
+}
+
+object Ipv4AddressSerializer : KSerializer<Ipv4Address> {
+    override val descriptor = PrimitiveSerialDescriptor("Ipv4Address", PrimitiveKind.STRING)
+    override fun serialize(encoder: Encoder, value: Ipv4Address) = encoder.encodeString(value.toString())
+    override fun deserialize(decoder: Decoder): Ipv4Address = Ipv4Address.parse(decoder.decodeString())
 }
 

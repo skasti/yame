@@ -147,14 +147,21 @@ unbounded buffering.
 ## Component configuration pattern
 
 - Keep a component's immutable configuration type beside its owning component.
-- Provide `ConfigType.fromConfigStore()` on its companion object. Read a single
-  snapshot from `ConfigStore.current` when mapping multiple setting keys.
-- Accept explicit configuration with a non-null constructor default, for example
-  `config: ConfigType = ConfigType.fromConfigStore()`. Do not pass the store into
-  that factory or use a nullable config argument merely to implement a fallback.
+- Provide `ConfigType.fromConfigStore(store: ConfigStore = ConfigStore.current)`
+  on its companion object. Read owned `SettingKey` values directly through
+  `store[key]`; these reads trigger lazy loading. Pass an available store
+  explicitly to `fromConfigStore(store)`. The `ConfigStore.current` default is
+  convenient when constructing a component without an explicit store.
+- Accept an explicitly constructed immutable config independently of any store.
+  A non-null constructor default such as
+  `config: ConfigType = ConfigType.fromConfigStore()` is useful when appropriate,
+  but is not the only construction pattern. Composition with an explicit store
+  can inject `ConfigType.fromConfigStore(store)` instead. Do not use a nullable
+  config argument merely to implement a fallback.
 - Explicit config must allow isolated tests without installing or modifying a
   global store. Config data-class defaults remain ordinary standalone defaults.
-- Factories produce snapshots. Live updates require a separately owned subscription;
+- Factories produce immutable component configuration values without retaining
+  a `ConfigStore` reference. Live updates require a separately owned subscription;
   never silently overwrite explicit constructor configuration.
 - `ConfigStore.current` fails fast until `Main` explicitly installs the process store.
   Hold the returned installation handle for the application's lifetime and close it
@@ -162,10 +169,14 @@ unbounded buffering.
   frontends share the existing store; they never install a replacement.
 - Runtime and presentation constructors receive the shared stores, not duplicate
   initial setting values or the persistent application configuration tree.
-- Runtime composition maps each component config from the same committed snapshot.
-  Apply notification values in delivery order rather than rereading a newer store
-  snapshot inside a change callback. Live request settings may read a fresh snapshot
-  once at the start of each request through an explicitly injected provider.
+- `ConfigStore` is the single authoritative source of configuration values.
+  Components read settings directly through typed keys; multi-key read snapshots
+  are intentionally unsupported. YAME accepts the negligible possibility that a
+  setting changes between individual reads. Build immutable component configs
+  when needed and use subscriptions to handle relevant runtime changes. Apply
+  notification values in delivery order; request-scoped providers may construct
+  immutable settings for each HTTP request. Do not add alternative configuration
+  read mechanisms or reintroduce snapshots.
 - Immutable configs contain values only; subscriptions, providers, IO, registries,
   and other runtime dependencies belong in component constructors.
 - Local config types do not require a nested application-wide config tree.
@@ -174,14 +185,54 @@ unbounded buffering.
 
 - `no.skasti.yame.config` and `.function` contain generic infrastructure only.
   They must not import concrete features, persistence adapters, or frontends.
-- Each feature owns its keys, groups, immutable values, validation, and snapshot
+- Each feature owns its keys, groups, immutable values, validation, and component
   factories. Modem config contains modem behavior/credentials only; PPP addressing,
   DNS, and HTTP compatibility are independent component configs.
-- HTML transformation settings, rules, and their separate startup INI reader live
-  in `ppp.proxy.transform`, alongside the transformation implementation.
-- Only `Main` and `persistence` understand `YameConfiguration`. It is a legacy file
-  representation, never a runtime settings API. `YameConfigurationBindings` owns
-  all key-to-file mappings; feature `*Settings` objects must not import it.
+- HTML transformation settings and rules live in `ppp.proxy.transform`, alongside
+  the transformation implementation. The shared repository reads their INI file
+  through `ElementSimplifierSettings`; the older reader remains for compatibility.
+- Feature-owned `Settings` definitions own their identity, optional logical
+  `file` name, static groups, typed keys, and optional dynamic-section mapping.
+  A group's ID is its canonical INI section. Keys declare relative names and
+  derive paths as `group.id + "." + name`; do not add an `iniSection`, binding
+  registry, or per-key codecs. One lazy reflection pass discovers public keys,
+  including key collections. Ordinary scalar values use `kotlinx.serialization`;
+  multi-property values use a reusable `CompositeSetting<T>` companion.
+  `ConfigStore` owns the current values; immutable component `*Config` objects are
+  ordinary values and do not inherit from `Settings`.
+  `file = null` uses the configured primary file; `SeparateSettings(id)` uses a
+  separate file named after its ID. Use a bare name such as `shared-settings`,
+  never an extension or path. `IniConfigurationRepository` resolves it to
+  `shared-settings.ini`. Definitions may share a logical file and must not claim
+  the same property. The generic ConfigStore registers only definitions requested
+  by components; it never enumerates all features.
+- INI reads accept `[serial] baud=115200` and the equivalent root property
+  `serial.baud=115200`. A conflict is an error. Writes emit only the section
+  form and remove the owned flat variant; unknown settings and comments survive.
+  The parser must preserve section values verbatim, including surrounding
+  whitespace. Root values retain Java `Properties` escape semantics. Normalize
+  non-string types in `IniScalar`; string values retain their logical contents.
+  Durations use readable Kotlin syntax such as `500ms` or `2s`. Older names and
+  nanosecond values are not aliases; update old files when adopting this format.
+- INI ownership is per `SettingKey`, not per definition or section. A key may
+  claim several attributes through a composite or `compose(key, section)`;
+  reading attribute names does not claim them. The repository stages claims until
+  a complete validated load, and stages/validates all affected documents before
+  replacement. Custom writers use `writeAttributes` and `removeSection` with their
+  predeclared key; never mutate an `IniDocument` directly or delete sections just
+  because their names match a feature pattern. Unknown properties remain untouched.
+- Declare `SettingGroup.id` and `SettingKey.name` in lowercase. Their paths must
+  agree with the parser's case-normalized structural names. Rule discovery
+  composes only valid tag sections; unrelated sections and root-flat entries
+  remain unclaimed. The separate file's `[element-simplifier.general] enabled`
+  setting and the live `TransformerSettings.Elements` switch both gate the
+  element simplifier. `HtmlTransformerSettings.fromConfigStore(store)` reads
+  both directly for each new request; its effective value determines the
+  transformation profile. The repository applies owner-only POSIX
+  permissions to all INI files on read/write because a lazy, unregistered feature
+  may already have sensitive values in a shared file.
+- `YameConfiguration` and `YameConfigurationBindings` remain compatibility and CLI
+  adapters. New persistence mappings live in their owning feature definitions.
 - Application persistence may reuse immutable feature config values. This does not
   authorize a feature to import the application schema or nest unrelated configs.
 - `YameRuntime` composes serial, modem, PPP, DNS, proxy, and logging behavior. TUI

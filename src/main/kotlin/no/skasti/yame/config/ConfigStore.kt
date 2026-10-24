@@ -5,6 +5,7 @@ class ConfigStore(
     persistent: List<ConfigChange<*>>,
     overrides: List<ConfigChange<*>> = emptyList(),
     private val persist: (ConfigChanges) -> Unit = {},
+    private val repository: ConfigurationRepository? = null,
     private val validateSnapshot: (ConfigChanges) -> Unit = {},
     private val onSubscriberFailure: (Throwable) -> Unit = { System.err.println("Configuration subscriber failed: ${it.javaClass.simpleName}") },
 ) {
@@ -27,6 +28,7 @@ class ConfigStore(
 
     private val lock = Any()
     private var saved = persistent.associateByTo(linkedMapOf()) { it.key }
+    private val loaded = linkedMapOf<String, Settings>()
     private var effective = LinkedHashMap(saved)
     private val listeners = mutableListOf<Listener>()
     private val pending = ArrayDeque<Delivery>()
@@ -46,11 +48,44 @@ class ConfigStore(
         validateSnapshot(ConfigChanges(effective.values))
     }
 
-    operator fun <T> get(key: SettingKey<T>): T = synchronized(lock) {
-        requireNotNull(ConfigChanges(listOfNotNull(effective[key]))[key]) { "Unregistered setting ${key.path}" }.value
+    /** A failed load leaves the store untouched; a later request retries from disk. */
+    fun ensureLoaded(definition: Settings) {
+        synchronized(lock) {
+            loaded[definition.id]?.let {
+                require(it === definition) { "Conflicting definition identity ${definition.id}" }
+                return
+            }
+            val repo = repository ?: run {
+                // Compatibility for explicitly populated stores used by existing embedders.
+                if (definition.allSettingKeys.all { it in saved }) return
+                error("This ConfigStore has no lazy INI repository")
+            }
+            val loadedDefinition = repo.load(definition)
+            val entries = loadedDefinition.entries
+            require(entries.map { it.key.path }.distinct().size == entries.size) { "Duplicate setting path in ${definition.id}" }
+            require(entries.map { it.key }.toSet() == definition.allSettingKeys.toSet()) {
+                "${definition.id} did not load exactly its declared setting keys"
+            }
+            entries.forEach { entry ->
+                require(entry.key.group.configuration === definition) { "${entry.key.path} belongs to another definition" }
+                require(saved.keys.none { it.path == entry.key.path }) { "Duplicate setting path ${entry.key.path}" }
+                entry.validate()
+            }
+            val candidate = LinkedHashMap(saved)
+            entries.forEach { candidate[it.key] = it }
+            validateSnapshot(ConfigChanges(candidate.values))
+            loadedDefinition.install()
+            saved = candidate
+            effective = LinkedHashMap(effective).apply { entries.forEach { this[it.key] = it } }
+            loaded[definition.id] = definition
+        }
     }
 
-    fun snapshot(): ConfigChanges = synchronized(lock) { ConfigChanges(effective.values) }
+    /** The requested key identifies its owner; no application-wide definition list is needed. */
+    operator fun <T> get(key: SettingKey<T>): T = synchronized(lock) {
+        if (key !in effective) key.group.configuration?.let(::ensureLoaded)
+        requireNotNull(ConfigChanges(listOfNotNull(effective[key]))[key]) { "Unregistered setting ${key.path}" }.value
+    }
 
     /** Save before publishing. A failed save rejects the entire transaction. Duplicate keys are rejected. */
     fun set(vararg changes: ConfigChange<*>) {
@@ -73,7 +108,12 @@ class ConfigStore(
             validateSnapshot(ConfigChanges(nextEffective.values))
             val durableChanges = persistent && changes.any { saved[it.key]?.value != it.value }
             val actual = changes.filter { effective[it.key]?.value != it.value }
-            if (durableChanges) persist(ConfigChanges(nextSaved.values))
+            if (durableChanges) {
+                val snapshot = ConfigChanges(nextSaved.values)
+                if (repository == null) persist(snapshot) else {
+                    repository.persist(changes.filter { saved[it.key]?.value != it.value }, snapshot)
+                }
+            }
             saved = nextSaved
             effective = nextEffective
             if (actual.isNotEmpty()) pending.addLast(Delivery(ConfigChanges(actual), listeners.toList()))

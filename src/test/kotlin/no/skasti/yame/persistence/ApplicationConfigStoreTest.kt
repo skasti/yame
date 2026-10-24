@@ -6,6 +6,8 @@ import no.skasti.yame.serial.SerialSettings
 import no.skasti.yame.modem.ModemSettings
 import no.skasti.yame.modem.LoginCredentials
 import no.skasti.yame.ppp.proxy.transform.TransformerSettings
+import no.skasti.yame.ppp.proxy.transform.ElementSimplifierSettings
+import no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings
 import no.skasti.yame.logging.LogSettings
 import no.skasti.yame.logging.YameLogModule
 import no.skasti.yame.logging.YameLogLevel
@@ -13,6 +15,16 @@ import java.nio.file.Files
 import kotlin.test.*
 
 class ApplicationConfigStoreTest {
+    @Test fun `legacy DTO adapter uses default rule file switch and rejects unsupported writes`() {
+        val store = applicationConfigStore(YameConfiguration())
+        assertTrue(HtmlTransformerSettings.fromConfigStore(store).elementSimplifier)
+        val error = assertFailsWith<IllegalArgumentException> {
+            store.set(ElementSimplifierSettings.Enabled to false)
+        }
+        assertTrue(error.message.orEmpty().contains("cannot persist"))
+        assertTrue(store[ElementSimplifierSettings.Enabled])
+    }
+
     @Test fun `CLI overrides and runtime discovery do not leak into later persistent changes`() {
         val baseline = YameConfiguration()
         val effective = baseline.copy(baudRate = 115200, modemConfig = baseline.modemConfig.copy(username = "cli", password = "secret"))
@@ -78,10 +90,12 @@ class ApplicationConfigStoreTest {
                 LogSettings.CaptureLimits.values.map { it to 20 }
             store.set(*changes.toTypedArray())
             assertEquals(1, saves)
-            val reloaded = applicationConfigStore(file.load()).snapshot()
-            assertEquals(store.snapshot().map { it.key.path to it.value }, reloaded.map { it.key.path to it.value })
+            val reloaded = applicationConfigStore(file.load())
+            YameConfigurationBindings.all.forEach { binding ->
+                assertEquals(store[binding.key], reloaded[binding.key], binding.key.path)
+            }
             val text = Files.readString(directory.resolve("yame.ini"))
-            for (name in listOf("version=1", "login.username=user", "serial.port=COM4", "ppp.subnet=10.99.0.0/30", "dns.upstream=1.1.1.1")) {
+            for (name in listOf("version=1", "login.username=user", "port=COM4", "subnet=10.99.0.0/30", "upstream=1.1.1.1")) {
                 assertTrue(text.contains(name), name)
             }
         } finally { directory.toFile().deleteRecursively() }

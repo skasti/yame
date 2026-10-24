@@ -44,6 +44,53 @@ class ElementSimplifierConfigurationStoreTest {
         assertEquals("p", rules.getValue("summary").target)
         assertEquals("font-weight:bold; color:#333; background:url('/icon.gif?v=1');", rules.getValue("summary").style)
         assertTrue(ElementSimplifierIni.parse("; no rules").rules.isEmpty())
+        assertTrue(ElementSimplifierIni.parse("[bad tag]\ntarget=p\n").rules.isEmpty())
+    }
+
+    @Test
+    fun `existing general tag section and section order remain valid`() {
+        val text = """
+            ; existing mapping
+            [SUMMARY]
+            target=p
+
+            [general]
+            target=div
+            style=color:#333; width:1px;
+
+            [time]
+            target=span
+        """.trimIndent() + "\n"
+        val expected = listOf("summary", "general", "time")
+        assertEquals(expected, ElementSimplifierIni.parse(text).rules.keys.toList())
+        val path = directory.resolve("element-simplifier.ini")
+        Files.writeString(path, text)
+        assertEquals(expected, ElementSimplifierConfigurationStore(path).load().rules.keys.toList())
+        val runtime = no.skasti.yame.persistence.lazyApplicationConfigStore(directory.resolve("yame.ini"))
+        assertEquals(expected, runtime[ElementSimplifierSettings.Rules].rules.keys.toList())
+        assertEquals(text, Files.readString(path))
+        runtime.set(ElementSimplifierSettings.Rules to runtime[ElementSimplifierSettings.Rules].let { current ->
+            ElementSimplifierConfiguration(current.rules + ("time" to ElementSimplifierRule("div")))
+        })
+        assertEquals(expected, ElementSimplifierConfigurationStore(path).load().rules.keys.toList())
+        assertEquals("div", ElementSimplifierConfigurationStore(path).load().rules.getValue("general").target)
+        assertTrue(ElementSimplifierIni.parse("").rules.isEmpty())
+        Files.writeString(path, "")
+        assertTrue(ElementSimplifierConfigurationStore(path).load().rules.isEmpty())
+        assertTrue(no.skasti.yame.persistence.lazyApplicationConfigStore(directory.resolve("yame.ini"))
+            [ElementSimplifierSettings.Rules].rules.isEmpty())
+    }
+
+    @Test
+    fun `changing yame ini leaves sibling rule comments and values untouched`() {
+        val rules = "; user rule\n[general]\n# keep\ntarget=div\nstyle=color:#333;\n"
+        val path = directory.resolve("element-simplifier.ini")
+        Files.writeString(path, rules)
+        val runtime = no.skasti.yame.persistence.lazyApplicationConfigStore(directory.resolve("yame.ini"))
+        assertEquals("color:#333;", runtime[ElementSimplifierSettings.Rules].rules.getValue("general").style)
+        runtime[no.skasti.yame.serial.SerialSettings.Baud]
+        runtime.set(no.skasti.yame.serial.SerialSettings.Baud to 57_600)
+        assertEquals(rules, Files.readString(path))
     }
 
     @Test
@@ -52,7 +99,7 @@ class ElementSimplifierConfigurationStoreTest {
             "target=p", "[summary]\nstyle=font-weight:bold;", "[summary]\ntarget=<p>",
             "[summary]\ntarget=script", "[summary]\ntarget=img", "[summary]\ntarget=p\nunknown=yes",
             "[summary]\ntarget=p\ntarget=div", "[summary]\ntarget=p\n[SUMMARY]\ntarget=span",
-            "[bad tag]\ntarget=p", "[summary]\ntarget=p\nstyle=${"x".repeat(1025)}",
+            "[summary]\ntarget=p\nstyle=${"x".repeat(1025)}",
         )) {
             assertFailsWith<IllegalArgumentException>(text) { ElementSimplifierIni.parse(text) }
         }

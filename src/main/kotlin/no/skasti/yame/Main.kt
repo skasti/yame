@@ -3,6 +3,9 @@ package no.skasti.yame
 import com.github.ajalt.mordant.terminal.Terminal
 import no.skasti.yame.persistence.YameConfiguration
 import no.skasti.yame.persistence.YameConfigurationStore
+import no.skasti.yame.persistence.lazyApplicationConfigStore
+import no.skasti.yame.persistence.cliConfiguration
+import no.skasti.yame.persistence.applyCliOverrides
 import no.skasti.yame.ppp.proxy.transform.ElementSimplifierConfigurationStore
 import no.skasti.yame.logging.PacketCaptureLimits
 import no.skasti.yame.logging.PacketCaptureLimitKind
@@ -28,12 +31,13 @@ import kotlin.time.Duration.Companion.seconds
 
 fun main(args: Array<String>) {
     val configPath = configurationPath(args)
-    val configStore = YameConfigurationStore(configPath)
+    val fileStore = YameConfigurationStore(configPath)
+    val runtimeConfigStore = lazyApplicationConfigStore(configPath)
     val informationalOnly = args.any { it == "--help" || it == "-h" || it == "--list" || it == "-l" }
     val savedConfiguration = if (informationalOnly) {
         YameConfiguration()
     } else {
-        configStore.load()
+        cliConfiguration(runtimeConfigStore, toneTest = args.any { it == "--test-tone" || it == "-t" })
     }
     val options = parseArgs(args, savedConfiguration, configPath)
 
@@ -82,7 +86,7 @@ fun main(args: Array<String>) {
         }
 
         if (!Files.exists(options.configPath)) {
-            runCatching { configStore.save(savedConfiguration) }
+            runCatching { fileStore.save(savedConfiguration) }
                 .onFailure { error ->
                     System.err.println("YAME could not create ${options.configPath}: ${error.message}")
                 }
@@ -109,9 +113,7 @@ fun main(args: Array<String>) {
             pppDnsConfig = options.pppDnsConfig, pppHttpCompatibilityConfig = options.httpConfig,
             captureLimits = options.captureLimits, logLevels = options.logLevels,
         )
-        val runtimeConfigStore = no.skasti.yame.persistence.applicationConfigStore(
-            savedConfiguration, effectiveConfiguration, configStore::save,
-        )
+        applyCliOverrides(runtimeConfigStore, savedConfiguration, effectiveConfiguration)
         no.skasti.yame.config.ConfigStore.install(runtimeConfigStore).use {
             val functions = no.skasti.yame.function.FunctionStore()
             if (useTui) {

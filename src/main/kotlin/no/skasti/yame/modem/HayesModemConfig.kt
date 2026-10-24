@@ -1,6 +1,5 @@
 package no.skasti.yame.modem
 
-import no.skasti.yame.config.ConfigChanges
 import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.tone.HandshakeProfile
 import no.skasti.yame.tone.TonePlayer
@@ -31,15 +30,13 @@ data class HayesModemConfig(
     }
 
     companion object {
-        fun fromConfigStore(): HayesModemConfig = fromSnapshot(ConfigStore.current.snapshot())
-
-        internal fun fromSnapshot(snapshot: ConfigChanges): HayesModemConfig {
-            val login = requireNotNull(snapshot[ModemSettings.Login]).value
+        fun fromConfigStore(store: ConfigStore = ConfigStore.current): HayesModemConfig {
+            val login = store[ModemSettings.Login]
             return HayesModemConfig(
-                pickupTime = requireNotNull(snapshot[ModemSettings.PickupTime]).value,
-                dialToneTime = requireNotNull(snapshot[ModemSettings.DialToneTime]).value,
-                handshakeProfile = requireNotNull(snapshot[ModemSettings.Handshake]).value,
-                toneSimulationEnabled = requireNotNull(snapshot[ModemSettings.Tone]).value,
+                pickupTime = store[ModemSettings.PickupTime],
+                dialToneTime = store[ModemSettings.DialToneTime],
+                handshakeProfile = store[ModemSettings.Handshake],
+                toneSimulationEnabled = store[ModemSettings.Tone],
                 username = login.username, password = login.password,
             )
         }

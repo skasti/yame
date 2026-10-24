@@ -1,5 +1,13 @@
 package no.skasti.yame.ppp.ip
 
+import kotlinx.serialization.KSerializer
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+
+@Serializable(with = Ipv4CidrSerializer::class)
 data class Ipv4Cidr private constructor(
     val networkAddress: Ipv4Address,
     val prefixLength: Int,
@@ -57,4 +65,10 @@ data class Ipv4Cidr private constructor(
                 else -> UInt.MAX_VALUE shl (32 - prefixLength)
             }
     }
+}
+
+object Ipv4CidrSerializer : KSerializer<Ipv4Cidr> {
+    override val descriptor = PrimitiveSerialDescriptor("Ipv4Cidr", PrimitiveKind.STRING)
+    override fun serialize(encoder: Encoder, value: Ipv4Cidr) = encoder.encodeString(value.toString())
+    override fun deserialize(decoder: Decoder): Ipv4Cidr = Ipv4Cidr.parse(decoder.decodeString())
 }

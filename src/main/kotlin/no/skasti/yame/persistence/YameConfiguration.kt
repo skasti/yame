@@ -10,10 +10,10 @@ import no.skasti.yame.ppp.PppIpConfig
 import no.skasti.yame.ppp.dns.PppDnsConfig
 import no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig
 
-/** Legacy file representation. Runtime components receive their own configuration snapshots. */
+/** Legacy file representation. Runtime components receive immutable configuration values. */
 data class YameConfiguration(
     val portName: String? = null,
-    val baudRate: Int = 38_400,
+    val baudRate: Int = no.skasti.yame.serial.SerialSettings.DEFAULT_BAUD_RATE,
     val flowControl: SerialFlowControl = SerialFlowControl.DISABLED,
     val modemConfig: HayesModemConfig = HayesModemConfig(),
     val pppIpConfig: PppIpConfig = PppIpConfig(),

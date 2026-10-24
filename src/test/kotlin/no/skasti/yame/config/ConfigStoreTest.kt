@@ -9,8 +9,21 @@ import kotlin.test.*
 class ConfigStoreTest {
     private val serial = SettingGroup("serial")
     private val modem = SettingGroup("modem")
-    private val baud = SettingKey<Int>("serial.baud", serial, { require(it > 0) })
-    private val tone = SettingKey<Boolean>("modem.tone", modem)
+    private val baud = SettingKey<Int>("baud", serial, { require(it > 0) })
+    private val tone = SettingKey<Boolean>("tone", modem)
+
+    @Test fun `declared group and key names must match lowercase INI identity`() {
+        for (name in listOf("Serial", "serial.Port", "SERIAL.port", "serial..port")) {
+            val error = assertFailsWith<IllegalArgumentException> { SettingGroup(name) }
+            assertTrue(error.message.orEmpty().contains("lowercase"), name)
+        }
+        for (name in listOf("Baud", "baudRate", "FOO", "bad.name")) {
+            val error = assertFailsWith<IllegalArgumentException> { SettingKey<Int>(name, serial) }
+            assertTrue(error.message.orEmpty().contains("lowercase"), name)
+        }
+        val group = SettingGroup("serial.options_2")
+        assertEquals("serial.options_2.flow-control_2", SettingKey<Int>("flow-control_2", group).path)
+    }
 
     @Test fun `batch validates saves once and delivers indexed group views after commit`() {
         var saves = 0
@@ -46,7 +59,7 @@ class ConfigStoreTest {
         store.onChange.subscribe { events++ }
         assertFailsWith<IllegalArgumentException> { store.set(tone to false, baud to -1) }
         assertFailsWith<IllegalArgumentException> { store.set(baud to 9600, baud to 19200) }
-        assertFailsWith<IllegalArgumentException> { store.set(SettingKey<Int>(baud.path, serial) to 9600) }
+        assertFailsWith<IllegalArgumentException> { store.set(SettingKey<Int>(baud.name, serial) to 9600) }
         assertEquals(0, saves)
         assertFailsWith<IOException> { store.set(baud to 9600, tone to false) }
         assertEquals(38400, store[baud])
@@ -55,7 +68,7 @@ class ConfigStoreTest {
     }
 
     @Test fun `nullable lookup distinguishes absent from present null and initial subscription is ordered`() {
-        val port = SettingKey<String?>("serial.port", serial)
+        val port = SettingKey<String?>("port", serial)
         val store = ConfigStore(listOf(port to "COM1", baud to 38400))
         val values = mutableListOf<String?>()
         store.onChange[serial].subscribe(initial = true) { changes ->
@@ -117,7 +130,7 @@ class ConfigStoreTest {
         assertEquals(2400, store[baud])
     }
 
-    @Test fun `cleanup skips queued delivery and snapshots cannot be mutated through iterators`() {
+    @Test fun `cleanup skips queued delivery and earlier change notifications keep their values`() {
         val store = ConfigStore(listOf(baud to 38400, tone to true))
         lateinit var subscription: AutoCloseable
         store.onChange[serial].subscribe { subscription.close() }
@@ -125,8 +138,9 @@ class ConfigStoreTest {
         subscription = store.onChange[serial].subscribe { calls++ }
         store.set(baud to 9600)
         assertEquals(0, calls)
-        val snapshot = store.snapshot()
+        var first: ConfigChanges? = null
+        store.onChange[serial].subscribe(initial = true) { first = it }.close()
         store.set(baud to 19200)
-        assertEquals(9600, snapshot[baud]?.value)
+        assertEquals(9600, first?.get(baud)?.value)
     }
 }

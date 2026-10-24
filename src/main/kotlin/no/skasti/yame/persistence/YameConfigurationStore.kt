@@ -1,6 +1,12 @@
 package no.skasti.yame.persistence
 
+import no.skasti.yame.config.ConfigChanges
+import no.skasti.yame.config.IniWriteContext
+import no.skasti.yame.config.ini.IniParser
+import no.skasti.yame.config.ini.IniWriter
+
 import no.skasti.yame.logging.PacketCaptureLimitKind
+import no.skasti.yame.logging.LogSettings
 import no.skasti.yame.logging.YameLogLevel
 import no.skasti.yame.logging.YameLogModule
 import no.skasti.yame.ppp.proxy.transform.*
@@ -9,6 +15,7 @@ import no.skasti.yame.ppp.PppIpConfig
 import no.skasti.yame.ppp.dns.PppDnsConfig
 import no.skasti.yame.ppp.ip.Ipv4Address
 import no.skasti.yame.ppp.ip.Ipv4Cidr
+import no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig
 import no.skasti.yame.serial.SerialFlowControl
 import no.skasti.yame.tone.HandshakeProfile
 import java.io.ByteArrayInputStream
@@ -28,34 +35,37 @@ import java.nio.file.attribute.PosixFilePermission
 import java.util.Properties
 import kotlin.time.Duration.Companion.nanoseconds
 
+/** Compatibility file API. Runtime reads and writes use ConfigStore and feature definitions. */
 class YameConfigurationStore(private val path: Path) {
     fun load(defaults: YameConfiguration = YameConfiguration()): YameConfiguration {
-        val httpDefaults = defaults.pppHttpCompatibilityConfig
-        val elementSimplifier = ElementSimplifierConfigurationStore.alongside(path).load(httpDefaults.elementSimplifier)
-        val loadedDefaults = defaults.copy(
-            pppHttpCompatibilityConfig = httpDefaults.copy(elementSimplifier = elementSimplifier),
+        if (!Files.exists(path)) return defaults.copy(
+            pppHttpCompatibilityConfig = defaults.pppHttpCompatibilityConfig.copy(
+                elementSimplifier = ElementSimplifierConfigurationStore.alongside(path)
+                    .load(defaults.pppHttpCompatibilityConfig.elementSimplifier),
+            ),
         )
-        if (!Files.exists(path)) return loadedDefaults
         require(Files.isRegularFile(path)) {
             "Configuration path must be a regular file: $path"
         }
 
         val properties = Properties()
-        Files.newByteChannel(
-            path,
-            StandardOpenOption.READ,
-        ).use { channel ->
-            val bytes = Channels.newInputStream(channel).use { input ->
-                input.readNBytes(MAX_CONFIG_BYTES + 1).also { content ->
-                    require(content.size <= MAX_CONFIG_BYTES) {
-                        "Configuration file is larger than $MAX_CONFIG_BYTES bytes: $path"
-                    }
-                }
-            }
-            InputStreamReader(ByteArrayInputStream(bytes), StandardCharsets.UTF_8).use { reader ->
-                properties.load(reader)
-            }
+        val bytes = Files.newInputStream(path).use { it.readNBytes(MAX_CONFIG_BYTES + 1) }
+        require(bytes.size <= MAX_CONFIG_BYTES) { "Configuration file is larger than $MAX_CONFIG_BYTES bytes: $path" }
+        val document = IniParser.parse(bytes.toString(StandardCharsets.UTF_8), path.fileName.toString())
+        // The old DTO remains an adapter. New section-based files are read through
+        // feature definitions, so this API does not own a second set of mappings.
+        if (document.sections().any { it in setOf("serial", "modem", "ppp", "dns", "proxy", "transformers", "logging") }) {
+            val store = lazyApplicationConfigStore(path)
+            return cliConfiguration(store).copy(
+                pppHttpCompatibilityConfig = PppHttpCompatibilityConfig.fromConfigStore(store),
+            )
         }
+        val httpDefaults = defaults.pppHttpCompatibilityConfig
+        val elementSimplifier = ElementSimplifierConfigurationStore.alongside(path).load(httpDefaults.elementSimplifier)
+        val loadedDefaults = defaults.copy(
+            pppHttpCompatibilityConfig = httpDefaults.copy(elementSimplifier = elementSimplifier),
+        )
+        document.properties("").forEach { (key, value) -> properties.setProperty(key, value) }
         if (properties.containsKey("login.password")) {
             restrictPermissions(path)
         }
@@ -138,44 +148,25 @@ class YameConfigurationStore(private val path: Path) {
     }
 
     fun save(configuration: YameConfiguration) {
-        val properties = Properties().apply {
-            setProperty("version", CONFIG_VERSION)
-            configuration.portName?.let { setProperty("serial.port", it) }
-            setProperty("serial.baud", configuration.baudRate.toString())
-            setProperty("serial.flow-control", configuration.flowControl.commandName)
-            setProperty("modem.pickup-time-nanos", configuration.modemConfig.pickupTime.inWholeNanoseconds.toString())
-            setProperty("modem.dial-tone-time-nanos", configuration.modemConfig.dialToneTime.inWholeNanoseconds.toString())
-            setProperty("modem.handshake-profile", configuration.modemConfig.handshakeProfile.name)
-            setProperty(
-                "modem.tone-simulation-enabled",
-                configuration.modemConfig.toneSimulationEnabled.toString(),
-            )
-            configuration.modemConfig.username?.let { setProperty("login.username", it) }
-            configuration.modemConfig.password?.let { setProperty("login.password", it) }
-            configuration.pppIpConfig.configuredSubnet?.let {
-                setProperty("ppp.subnet", it.toString())
-            }
-            setProperty(
-                "dns.upstream",
-                configuration.pppDnsConfig.upstreamServer.toString(),
-            )
-            setProperty(
-                "http-https-proxy.enabled",
-                configuration.pppHttpCompatibilityConfig.enabled.toString(),
-            )
-            PacketCaptureLimitKind.entries.forEach { kind ->
-                setProperty(kind.configKey, kind.value(configuration.captureLimits).toString())
-            }
-            HtmlTransformer.entries.forEach { transformer ->
-                setProperty("transformers.${transformer.command}.enabled",
-                    configuration.pppHttpCompatibilityConfig.htmlTransformers.enabled(transformer).toString())
-            }
-            configuration.logLevels.forEach { (module, level) ->
-                setProperty("loglevel.${module.fileName}", level.name.lowercase())
-            }
+        val existing = if (Files.exists(path)) {
+            val bytes = Files.newInputStream(path).use { it.readNBytes(MAX_CONFIG_BYTES + 1) }
+            require(bytes.size <= MAX_CONFIG_BYTES) { "Configuration file is larger than $MAX_CONFIG_BYTES bytes: $path" }
+            IniParser.parse(bytes.toString(StandardCharsets.UTF_8), path.fileName.toString())
+        } else IniParser.parse("", path.fileName.toString())
+        // Adapt only fields represented by the legacy DTO. Feature definitions own
+        // their property names, encodings, and removal of optional values.
+        val logKeys = LogSettings.Levels.values.toSet()
+        val includedLogKeys = configuration.logLevels.keys.mapNotNull { LogSettings.Levels[it] }.toSet()
+        val supported = YameConfigurationBindings.all.filter { binding ->
+            binding.key.group.configuration?.file == null &&
+                (binding.key !in logKeys || binding.key in includedLogKeys)
         }
-
-        val serialized = serializePropertiesWithinLimit(properties)
+        val snapshot = ConfigChanges(supported.map { it.change(configuration).also { change -> change.validate() } })
+        val context = IniWriteContext(snapshot, existing, snapshot.mapTo(mutableSetOf()) { it.key })
+        supported.mapNotNull { it.key.group.configuration }.distinct().forEach { it.saveToIni(context) }
+        existing.put("", "version", CONFIG_VERSION)
+        val serialized = IniWriter.write(existing).toByteArray(StandardCharsets.UTF_8)
+        if (serialized.size > MAX_CONFIG_BYTES) throw IOException("Serialized configuration exceeds $MAX_CONFIG_BYTES bytes")
         val destination = path.toAbsolutePath().normalize()
         val parent = requireNotNull(destination.parent) {
             "Configuration path must have a parent directory"

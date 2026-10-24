@@ -1,5 +1,7 @@
 package no.skasti.yame.logging
 
+import kotlinx.serialization.Serializable
+
 import no.skasti.yame.ppp.session.UnhandledPacket
 import no.skasti.yame.ppp.session.DnsQuery
 import no.skasti.yame.ppp.session.DnsResponse
@@ -23,6 +25,7 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
+@Serializable
 enum class YameLogLevel(val priority: Int) {
     ERROR(0),
     WARN(1),
@@ -306,7 +309,7 @@ class YameLogManager(
 
     companion object {
         fun defaultLevels(): Map<YameLogModule, YameLogLevel> =
-            YameLogModule.entries.associateWith { YameLogLevel.INFO }
+            YameLogModule.entries.associateWith { LogSettings.DEFAULT_LEVEL }
 
         private val LOG_TIME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS")
         private val ARCHIVE_TIME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd-HH-mm")

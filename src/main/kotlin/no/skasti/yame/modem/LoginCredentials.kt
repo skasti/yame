@@ -1,6 +1,20 @@
 package no.skasti.yame.modem
 
+import no.skasti.yame.config.CompositeSetting
+import no.skasti.yame.config.IniReadContext
+import no.skasti.yame.config.IniWriteContext
+
 data class LoginCredentials(val username: String?, val password: String?) {
+    companion object : CompositeSetting<LoginCredentials> {
+        override fun loadFromIni(context: IniReadContext) =
+            LoginCredentials(context.read("username"), context.read("password"))
+
+        override fun saveToIni(value: LoginCredentials, context: IniWriteContext) {
+            context.write("username", value.username)
+            context.write("password", value.password)
+        }
+    }
+
     init {
         require((username == null) == (password == null)) {
             "username and password must either both be set or both be omitted"

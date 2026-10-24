@@ -179,12 +179,31 @@ and PPP subnet.
 Command-line options override file values for that run. Use `--config <path>` to
 select a different file.
 
-The file uses simple `key=value` properties and is limited to 32 KiB. YAME
+The file uses INI sections and is limited to 32 KiB. For example:
+
+```ini
+[serial]
+baud=57600
+
+[modem]
+pickup-time=500ms
+login.username=user
+login.password=secret
+
+[dns]
+upstream=1.1.1.1
+```
+
+Equivalent flat keys such as `serial.baud=57600` can be read, but saves write
+the section form. Older names such as `modem.pickup-time-nanos` and numeric
+nanosecond values need manual updating. YAME
 rejects a save that exceeds this limit before replacing the existing file.
 Serial port names are limited to 256 characters, and login usernames and
 passwords to 64 printable ASCII characters each.
-It stores the terminal password as plain text, with owner-only file permissions
-on POSIX systems; `/yame.ini` is ignored by Git.
+It stores the terminal password as plain text. Configuration INI files are
+restricted to owner-only read/write permissions on POSIX systems when read or
+written, including files whose settings have not yet been loaded; `/yame.ini`
+is ignored by Git.
 
 ### HTML element simplification
 
@@ -214,6 +233,13 @@ elements. The default mappings use `div` for structural containers such as
 `summary`; and `span` for `time` and `mark`. `summary` gets the bold style above.
 Existing `h1`–`h6` and `p` elements remain unchanged unless explicitly mapped.
 Custom tag names can be added as shown above.
+
+Set `[element-simplifier.general] enabled=false` in `element-simplifier.ini`
+to disable element mapping without removing the rules. Both this setting and
+the `element-simplifier` switch under `/transformers` (stored in the main file's
+`[transformers]` section) must be on for the stage to run. Changes made through
+the running configuration controls affect new HTTP requests; edits to the INI
+file itself take effect after a restart.
 
 The file is the complete mapping, not an override layered over defaults:
 remove a section to leave that tag unchanged, or use an empty file to disable
@@ -247,8 +273,9 @@ input is empty. The current choice is marked in the on/off palette.
 
 Changes apply to subsequent HTTP requests without reconnecting PPP. Reload the
 page to see the new result. A request already in progress finishes using its
-original settings. TUI changes are saved as `transformers.<name>.enabled` in
-`yame.ini`, independently of the mapping rules in `element-simplifier.ini`.
+original settings. TUI changes are saved under `[transformers]` as
+`<name>-enabled=true|false` in `yame.ini`, independently of the mapping rules
+in `element-simplifier.ini`.
 Turning off `style-remover` retains style blocks and linked stylesheets;
 `attribute-cleaner` separately controls removal of upstream inline styles.
 

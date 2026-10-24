@@ -1,14 +1,15 @@
 package no.skasti.yame.logging
 
-import no.skasti.yame.config.SettingGroup
-import no.skasti.yame.config.SettingKey
+import no.skasti.yame.config.*
 
-object LogSettings {
-    val Group = SettingGroup("logging")
+object LogSettings : Settings("logging") {
+    val DEFAULT_LEVEL = YameLogLevel.INFO
+    val Group = SettingGroup(this)
     val Levels = YameLogModule.entries.associateWith {
-        SettingKey<YameLogLevel>("loglevel.${it.fileName}", Group)
+        SettingKey<YameLogLevel>("level-${it.fileName}", Group, default = { DEFAULT_LEVEL })
     }
     val CaptureLimits = PacketCaptureLimitKind.entries.associateWith {
-        SettingKey<Int>(it.configKey, Group, { value -> require(value > 0) })
+        SettingKey<Int>(it.configKey.substringAfterLast('.'), Group,
+            { value -> require(value > 0) }, default = { it.value(PacketCaptureLimits()) })
     }
 }

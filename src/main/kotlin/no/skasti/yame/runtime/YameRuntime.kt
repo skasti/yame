@@ -1,7 +1,6 @@
 package no.skasti.yame.runtime
 
 import no.skasti.yame.config.ConfigStore
-import no.skasti.yame.config.ConfigChanges
 import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.serial.ConnectionFunctions
 import no.skasti.yame.serial.SerialSettings
@@ -33,7 +32,7 @@ internal class YameRuntime(
     private val logManager: YameLogManager,
     private val resourceGraphs: NavigationResourceRegistry =
         YameRegistries.navigationResources(
-            PppHttpCompatibilityConfig.fromSnapshot(configStore.snapshot()),
+            PppHttpCompatibilityConfig.fromConfigStore(configStore),
         ),
     private val portProvider: () -> List<no.skasti.yame.serial.SerialPortDescriptor> =
         SerialConnection::availablePortDescriptors,
@@ -51,10 +50,10 @@ internal class YameRuntime(
     @Volatile
     private var autoConnectEnabled = true
 
-    @Volatile
-    private var settings = configStore.snapshot()
+    // Initial logging subscription must include its definition even for a fresh lazy store.
+    init { configStore[LogSettings.Levels.getValue(YameLogModule.MODEM)] }
 
-    private val selectedPortName: String? get() = requireNotNull(settings[SerialSettings.Port]).value
+    private val selectedPortName: String? get() = configStore[SerialSettings.Port]
 
     private val functionRegistrations = listOf(
         functions.register(ApplicationFunctions.Quit) { shutdown() },
@@ -138,7 +137,6 @@ internal class YameRuntime(
 
     private val configurationSubscription = configStore.onChange.subscribe(initial = true) { changes ->
         synchronized(lock) {
-            settings = ConfigChanges(settings + changes)
             changes[ModemSettings.Tone]?.let { activeModem?.updateToneSimulationEnabled(it.value) }
             changes[ModemSettings.Login]?.let { login ->
                 activeModem?.updateLoginCredentials(login.value.username, login.value.password)
@@ -174,12 +172,18 @@ internal class YameRuntime(
     private fun startConnection(portName: String, failFast: Boolean) {
         if (!running || !autoConnectEnabled) return
 
+        val observedGeneration = synchronized(lock) { generation }
+        val baud = configStore[SerialSettings.Baud]
+        val flowControl = configStore[SerialSettings.FlowControl]
+        val config = HayesModemConfig.fromConfigStore(configStore)
+        val ipConfig = PppIpConfig.fromConfigStore(configStore)
+        val dnsConfig = PppDnsConfig.fromConfigStore(configStore)
+        val httpConfig = PppHttpCompatibilityConfig.fromConfigStore(configStore)
+
         val connectionGeneration: Int
-        val baud: Int
-        val flowControl: SerialFlowControl
-        val snapshot: ConfigChanges
         synchronized(lock) {
             if (
+                generation != observedGeneration ||
                 activeConnection != null ||
                 activeModem != null ||
                 connectionAttemptGeneration != null
@@ -189,12 +193,8 @@ internal class YameRuntime(
             generation++
             connectionGeneration = generation
             connectionAttemptGeneration = connectionGeneration
-            snapshot = settings
-            baud = requireNotNull(snapshot[SerialSettings.Baud]).value
-            flowControl = requireNotNull(snapshot[SerialSettings.FlowControl]).value
         }
 
-        val config = HayesModemConfig.fromSnapshot(snapshot)
         val modemFileLogger = logManager.logger(YameLogModule.MODEM)
         val pppFileLogger = logManager.logger(YameLogModule.PPP)
         val dnsFileLogger = logManager.debugLogger(YameLogModule.DNS)
@@ -232,10 +232,10 @@ internal class YameRuntime(
             proxyLogger = proxyLogger,
             eventSink = eventSink,
             resourceGraphs = resourceGraphs,
-            ipConfig = PppIpConfig.fromSnapshot(snapshot),
-            dnsConfig = PppDnsConfig.fromSnapshot(snapshot),
-            httpCompatibilityConfig = PppHttpCompatibilityConfig.fromSnapshot(snapshot),
-            transformerSettings = { HtmlTransformerSettings.fromSnapshot(configStore.snapshot()) },
+            ipConfig = ipConfig,
+            dnsConfig = dnsConfig,
+            httpCompatibilityConfig = httpConfig,
+            transformerSettings = { HtmlTransformerSettings.fromConfigStore(configStore) },
         )
         val modem = HayesModem(
             baudRate = baud,
@@ -266,7 +266,7 @@ internal class YameRuntime(
                         connectionAttemptGeneration == connectionGeneration
 
                 if (isCurrent) {
-                    val latestConfig = HayesModemConfig.fromSnapshot(settings)
+                    val latestConfig = HayesModemConfig.fromConfigStore(configStore)
                     modem.updateLoginCredentials(latestConfig.username, latestConfig.password)
                     modem.updateToneSimulationEnabled(latestConfig.toneSimulationEnabled)
                     activeModem = modem
