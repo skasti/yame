@@ -283,19 +283,23 @@ class EventBrokerTest {
         val first = EventBroker(EventBrokerConfig(maxSubscribers = 1)); val second = EventBroker()
         val installation = BrokerInstallation()
         try {
-            assertFailsWith<IllegalStateException> { installation.current }
             val owner = installation.install(first)
             assertSame(first, installation.current)
             assertFailsWith<IllegalStateException> { installation.install(second) }
+            assertEquals(BrokerWaitResult.COMPLETED, second.awaitClosed(timeout))
             val subscription = first.subscribe("one") {}
             assertFailsWith<IllegalStateException> { first.subscribe("two") {} }
             assertNull(first.status.failure)
             subscription.close(); first.subscribe("two") {}
+            assertFailsWith<IllegalStateException> { owner.close() }
+            first.finish()
             owner.close(); owner.close()
-            val next = installation.install(second)
-            owner.close(); assertSame(second, installation.current)
+            assertFailsWith<BrokerClosedException> { installation.current }
+            val nextBroker = EventBroker()
+            val next = installation.install(nextBroker)
+            owner.close(); assertSame(nextBroker, installation.current)
+            nextBroker.finish()
             next.close()
-            assertFalse(first.status.closing)
         } finally { first.finish(); second.finish() }
     }
     @Test fun `concurrent saturation latches exactly one failure`() {

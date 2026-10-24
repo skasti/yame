@@ -1,6 +1,10 @@
 package no.skasti.yame.runtime
 
 import com.github.ajalt.mordant.terminal.Terminal
+import no.skasti.yame.observer.YameEvent
+import no.skasti.yame.observer.YameEvents
+import no.skasti.yame.observer.EventBroker
+import no.skasti.yame.observer.BrokerWaitResult
 import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.lifecycle.ApplicationFunctions
@@ -8,6 +12,8 @@ import no.skasti.yame.logging.YameLogLevel
 import no.skasti.yame.logging.YameLogModule
 import no.skasti.yame.logging.YameLogManager
 import no.skasti.yame.ppp.proxy.NavigationResourceRegistry
+import no.skasti.yame.ppp.proxy.ResourceGraphChange
+import no.skasti.yame.ppp.proxy.ResourceGraphLifecycleEvent
 import no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig
 import no.skasti.yame.ppp.proxy.ResourceRelation
 import no.skasti.yame.ppp.proxy.ResourceState
@@ -28,6 +34,8 @@ import java.net.ServerSocket
 import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
+import java.time.Duration
+import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -35,6 +43,25 @@ import kotlin.concurrent.thread
 import kotlin.test.*
 
 class YameRuntimeConnectionTest {
+    private val resourceEvents = Collections.synchronizedList(mutableListOf<YameEvent>())
+    private lateinit var broker: EventBroker
+    private lateinit var installation: AutoCloseable
+    private lateinit var subscription: AutoCloseable
+
+    @BeforeTest fun setUpEvents() {
+        broker = EventBroker()
+        installation = YameEvents.install(broker)
+        subscription = YameEvents.subscribe("runtime-resource-test") { resourceEvents += it }
+    }
+
+    @AfterTest fun tearDownEvents() {
+        subscription.close()
+        broker.close()
+        assertEquals(BrokerWaitResult.COMPLETED, broker.awaitClosed(Duration.ofSeconds(5)))
+        installation.close()
+        resourceEvents.clear()
+    }
+
     private class Port(
         private val failure: Exception? = null,
         private val onReadingStarted: () -> Unit = {},
@@ -276,6 +303,14 @@ class YameRuntimeConnectionTest {
                     assertEquals(2, readingStarted)
                     assertEquals(2, attempts)
                     assertEquals(graph.id, registry.startNavigation(root).id)
+                    assertEquals(BrokerWaitResult.COMPLETED, broker.drain().await(Duration.ofSeconds(5)))
+                    val published = synchronized(resourceEvents) { resourceEvents.toList() }
+                    assertTrue(published.filterIsInstance<ResourceGraphLifecycleEvent>().any {
+                        it.change == ResourceGraphChange.USED && it.graphId == graph.id
+                    })
+                    assertFalse(published.filterIsInstance<ResourceGraphLifecycleEvent>().any {
+                        it.change == ResourceGraphChange.REMOVED && it.graphId == graph.id
+                    })
                     assertEquals(
                         graphSnapshot,
                         registry.snapshots().single(),
