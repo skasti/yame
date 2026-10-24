@@ -9,7 +9,8 @@ Decided design does not imply implemented behavior: the
 
 Decision rationale, alternatives and consequences belong in
 [ADR 0001: fatal event-queue saturation](../adrs/0001-fatal-event-queue-saturation.md)
-and [ADR 0004: extensible event contract](../adrs/0004-extensible-event-contract.md).
+[ADR 0004: extensible event contract](../adrs/0004-extensible-event-contract.md)
+and [ADR 0006: consumer-owned event ordering](../adrs/0006-consumer-owned-event-ordering.md).
 The [historical inventory at a37ac65](../.history/yame-events-a37ac65.md) is
 maintained separately from this design. Documentation responsibilities are defined in
 [ADR 0003](../adrs/0003-document-decided-design.md); ADR numbering and lifecycle
@@ -40,54 +41,62 @@ contracts are documented in [configuration architecture](../configuration-archit
 v1 has no global state store, durable event log, IPC transport, subscriber watchdog
 or broker-managed per-subscriber queue. Saturation requires fatal application termination.
 
-### Event values and producer ordering
+### Event values, occurrence time and consumer-owned ordering
 
 Event payloads must be usable without TUI imports or mutable/internal registry
-objects. Define the externally visible resource enums and transformation summary
-values at an appropriate public contract boundary; do not expose an internal
-`ResourceRegistryResource` just by attaching it to a public event. Copy collections
-at ownership boundaries. Kotlin's read-only `List` alone does not establish
-immutability. `UnhandledPacket` already defensively copies its bytes.
+objects. Define externally visible resource values at an appropriate public
+contract boundary; do not expose internal registry objects through a public
+event. Copy collections at ownership boundaries. Kotlin's read-only `List`
+alone does not establish immutability.
 
-Proxy events need the following semantic data. Names are illustrative; #100 owns
-the concrete event types.
+Proxy events need the following semantic data. Names are illustrative; #100
+owns the concrete event types.
 
 | Observation | Required information and interpretation |
 | --- | --- |
-| Graph/root added | Stable process-lifetime graph ID, canonical root legacy URL, initial root-resource values and initial usage data. A revisit retains the ID; an evicted root later recreated gets a fresh ID. |
-| Graph/root used | Graph ID, cumulative use count and last-use order/time captured by the registry. Preserve existing explicit use semantics; incidental LRU touches need not count as user-visible uses. |
-| Resource admitted/updated | Graph ID, canonical resource identity/legacy URL, complete state and kind, sticky prefetch flag, copied transformation summaries, and revision within the registry stream. Shared resources can occur in several graph IDs. |
-| Resource removed | Graph ID, resource identity and revision; enough information to remove exactly the association involved. |
-| Graph/root removed | Graph ID and revision. Treat it as removal of all remaining resource associations in that graph. If resource removals are also emitted, place them before root removal and define them as idempotent. |
+| Graph/root added | Stable process-lifetime graph ID, canonical root legacy URL and initial root/resource values. A revisit retains the ID; an evicted root recreated later gets a new ID. |
+| Graph/root used | Graph ID, cumulative use count and occurrence/last-use time from the registry, not the consumer's rendering time. |
+| Resource admitted/updated | Graph ID, canonical resource identity/legacy URL, full state and kind, sticky prefetch flag, immutable transformation summaries and correlation for separate fetch attempts. Shared resources can occur in several graph IDs. |
+| Resource removed | Graph ID and resource identity; enough information to remove precisely that association. |
+| Graph/root removed | Graph identity and occurrence time; enough to invalidate all remaining associations and reject obsolete delayed observations. |
 
 Use the observable URL identity already defined by
 [LegacyHttpUrl.requestObservableKey](../../src/main/kotlin/no/skasti/yame/ppp/proxy/LegacyHttpUrl.kt):
-normalized scheme/host/default port, observable path/query and no fragment. Preserve
-the legacy URL needed for display. Graph IDs are not TCP flow IDs. Connection and
-PPP session identities must qualify transfer/DNS keys that can otherwise repeat.
-Retained graph state is process-scoped, so legitimate work on a retained graph
-must be checked using graph membership and fetch-attempt identity, not rejected
+normalized scheme/host/default port, observable path/query and no fragment.
+Preserve the legacy URL for display. Graph IDs are not TCP flow IDs. Connection
+and PPP session identities must qualify transfer/DNS keys that can otherwise
+repeat. Retained graph state is process-scoped; legitimate work on a retained
+graph must be checked using membership and fetch-attempt identity, not rejected
 solely because a connection changed.
 
-The broker supplies an increasing sequence number at successful admission. Its
-FIFO order is enqueue order, not wall-clock creation time. Registry revisions and
-usage values describe the producer's domain order; subscribers never use render
-time as host activity time. They retain responsibility for the existing aggregation
-and selection/expansion rules, including stable host-name tie-breaking.
+New lifecycle event contracts expose an `occurredAt` timestamp captured when
+the **authoritative transition occurred**, not when the event was constructed,
+enqueued or handled. Consumers prefer domain semantics for interpretation,
+using occurrence times as supporting evidence where useful. Timestamps alone
+are not an infallible total order because of clock changes and ties.
 
-The registry must enqueue causally dependent observations in mutation order under
-its own synchronization, using only the broker's bounded admission operation. No
-subscriber executes under that lock. The implementation may use an equivalent
-bounded ordered hand-off, but must not create an unbounded pending-batch queue.
+**Event ordering is consumer-owned** ([ADR 0006](../adrs/0006-consumer-owned-event-ordering.md)).
+The broker's increasing accepted sequence and FIFO order represent *enqueue*
+order, not a cross-producer domain order. Registry producers do not need to
+publish root events before resource events or coordinate mutation-order
+enqueue just to accommodate a projection. A consumer that needs a graph before
+processing its resource observation privately defers it; another consumer
+that does not care may process its own events immediately. Such deferral
+must be bounded and must not block broker dispatch.
 
-Registry publication must preserve root-before-resource and mutation order.
-Regression tests in #100 cover both invariants; the
-[historical inventory](../.history/yame-events-a37ac65.md) records the migration
-starting point.
+Event identities and domain correlation must allow consumers to reject stale
+observations without imposing a universal revision counter. For example,
+`READY` supersedes `FETCHING` within a single fetch attempt, but `FETCHING`
+from a later attempt is valid; the proxy contract must distinguish the two.
+A graph removed by eviction must not be resurrected by a late update. The
+registry still rejects stale mutations, and accepted lifecycle observations
+must describe actual transitions. Publication does not imply permission to
+silently drop events.
 
-No update may resurrect an evicted graph. Stale fetch attempts must not overwrite
-a newer attempt. Full resource snapshots make updates unambiguous; they do not
-permit arbitrary lifecycle-event loss.
+The [historical inventory](../.history/yame-events-a37ac65.md) records the
+migration starting point. Tests for #100 cover immutable payloads, real
+transitions and sufficient correlation; consumer-owned reordered handling
+is exercised independently in #103.
 
 ### Broker admission, delivery and subscriptions
 
@@ -265,15 +274,15 @@ fatal application termination; runtime wiring remains #102.
 | [#97: inventory and contract](https://github.com/skasti/yame/issues/97) | None | Source-grounded historical inventory; startup/bootstrap restriction and diagnostic independence; valid documentation links. |
 | [#98: broker and facade](https://github.com/skasti/yame/issues/98) | #97; [ADR 0001](../adrs/0001-fatal-event-queue-saturation.md) | Verify count-bounded queue admission, a 10 ms default timeout and independent fatal supervision. Checks: FIFO with multiple producers, blocked subscriber and full queue, bounded waiting and wakeup, safe status reads, filtering/failure/reentrant publication, concurrent subscribe/remove, idle wakeup, drain high-water mark, publish/close race and close from worker. Verify fatal signalling independent of worker progress and caught exceptions, with no recovery. |
 | [#99: registry lifetime](https://github.com/skasti/yame/issues/99) | None | Runtime-level serial/handler replacement retains graph identity and LRU limits; stale fetch attempts remain fenced. Define limit changes without session-teardown eviction. |
-| [#100: proxy event contract and publication](https://github.com/skasti/yame/issues/100) | #97 | Immutable snapshots, root-before-resource, mutation/publication order, full add/update/remove/reuse/eviction coverage, shared resources, fetch attempts, prefetch and transformations. Reconstruct retained state from a healthy stream. Hooks remain temporarily usable. |
+| [#100: proxy event contract and publication](https://github.com/skasti/yame/issues/100) | #97, #98, #99 | Immutable event snapshots and occurrence time; sufficient graph/resource/fetch correlation, including eviction and legitimate refetch; no producer-imposed root-first or cross-producer ordering. Existing hooks remain usable until #103. |
 | [#101: TUI processing boundary](https://github.com/skasti/yame/issues/101) | #97 | Blocking terminal/render work cannot hold up admission; bounded local backlog, independent fatal escalation on overflow, consistent observation order, drain and close behavior. Works with existing events/hooks before broker wiring. |
 | [#102: runtime composition and migration](https://github.com/skasti/yame/issues/102) | #97, #98, #101 | Plain/TUI startup receive initial observations, diagnostics/captures remain independent and are written once, no broker-worker I/O, old/new session ordering and full shutdown sequence. No unsupported late-consumer completeness claim. |
 | [#103: proxy dashboard migration and hook removal](https://github.com/skasti/yame/issues/103) | #99, #100, #102 | Existing hosts/unique URLs/states/transforms/sort/selection/expansion remain correct; reconnect and eviction work; no outbound registry hook plumbing remains; an independent early consumer reconstructs an equivalent view. |
 
 Use latches, barriers, controllable executors and explicit drain boundaries, with
 timeouts only as failure guards. Do not use arbitrary sleeps or reset shared global
-state between tests. FIFO/causality checks assert event values and order, not
-elapsed-time coincidences. Test count limits and publication deadlines with small injected capacities.
+state between tests. Broker FIFO tests assert enqueue order; domain/consumer tests deliberately
+reorder observations and verify semantic correlation without timing coincidences. Test count limits and publication deadlines with small injected capacities.
 Run the relevant JVM build/integration checks for implementation changes, following
 [AGENTS.md](../../AGENTS.md).
 
