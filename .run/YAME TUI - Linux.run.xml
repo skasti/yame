@@ -1,5 +1,5 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="YAME TUI" type="ShConfigurationType">
+  <configuration default="false" name="YAME TUI - Linux" type="ShConfigurationType">
     <option name="SCRIPT_PATH" value="$PROJECT_DIR$/scripts/run-tui-terminal.sh" />
     <option name="SCRIPT_OPTIONS" value="" />
     <option name="INTERPRETER_PATH" value="/bin/bash" />
