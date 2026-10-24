@@ -21,13 +21,13 @@ class HayesModem(
     private val dnsLogger: (String) -> Unit = pppLogger,
     private val transferLogger: (String) -> Unit = pppLogger,
     private val proxyLogger: (String) -> Unit = pppLogger,
-    private val eventSink: (YameEvent) -> Unit = {},
+    private val diagnosticSink: (YameEvent) -> Unit = {},
     private val pppHandler: PppHandler = RetroPppHandler(
         logger = pppLogger,
         dnsLogger = dnsLogger,
         transferLogger = transferLogger,
         proxyLogger = proxyLogger,
-        eventSink = eventSink,
+        diagnosticSink = diagnosticSink,
     ),
     private var setCarrierPresent: (Boolean) -> Unit = { /* no-op */ }
 ) : Closeable {
@@ -482,8 +482,7 @@ class HayesModem(
 
     override fun close() {
         setCarrierPresent(false)
-        pppHandler.close()
-        tonePlayer.close()
+        try { pppHandler.close() } finally { tonePlayer.close() }
     }
 
     private data class LoginCredentials(

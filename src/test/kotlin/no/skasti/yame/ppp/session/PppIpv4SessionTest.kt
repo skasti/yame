@@ -37,7 +37,7 @@ class PppIpv4SessionTest {
     fun `unsupported ICMP and IPv4 cases capture original packet including options and padding`() {
         val sent = mutableListOf<PppFrame>()
         val observed = mutableListOf<YameEvent>()
-        newSession(sent, eventSink = observed::add).use { session ->
+        newSession(sent, diagnosticSink = observed::add).use { session ->
             openIpcp(session, sent)
             val peer = Ipv4Address.parse("10.0.0.2")
             val payload = IcmpPacket(type = 13, code = 0, body = ByteArray(12)).encode()
@@ -79,7 +79,7 @@ class PppIpv4SessionTest {
     fun `unsupported PPP payload is captured without serial framing`() {
         val observed = mutableListOf<YameEvent>()
         PppSession(sendFrame = {}, logger = { error("Unsupported packet must not invoke a synchronous logger") },
-            eventSink = observed::add).use { session ->
+            diagnosticSink = observed::add).use { session ->
             val bytes = byteArrayOf(1, 2, 3)
             session.receive(PppFrame(0x8057, bytes))
             val event = observed.filterIsInstance<UnhandledPacket>().single()
@@ -104,7 +104,7 @@ class PppIpv4SessionTest {
             }
         }
         val proxy = HttpTcpProxy(handler, maxFlows = 1, maxRequestBytes = 1024)
-        val session = newSession(sent, logger = logs::add, tcpProxy = proxy, eventSink = observed::add)
+        val session = newSession(sent, logger = logs::add, tcpProxy = proxy, diagnosticSink = observed::add)
         val peer = Ipv4Address.parse("10.0.0.2")
         val remote = Ipv4Address.parse("203.0.113.11")
 
@@ -1035,7 +1035,7 @@ class PppIpv4SessionTest {
         val session = newSession(
             sent = sent,
             tcpProxy = tcpProxy,
-            eventSink = events::add,
+            diagnosticSink = events::add,
         )
         openIpcp(session, sent)
         sent.clear()
@@ -1106,7 +1106,7 @@ class PppIpv4SessionTest {
         val closed = events
             .filterIsInstance<TransferStateChanged>()
             .single { it.state == TransferState.CLOSED }
-        assertEquals("10.0.0.2:2060->203.0.113.20:80", closed.flowId)
+        assertEquals("0:10.0.0.2:2060->203.0.113.20:80", closed.flowId)
         assertEquals("IPCP renegotiated", closed.detail)
 
         session.close()
@@ -1121,7 +1121,7 @@ class PppIpv4SessionTest {
         tcpHandshakeTimeoutMillis: Long = 10_000,
         tcpRetransmitTimeoutMillis: Long = 3_000,
         dnsConfig: PppDnsConfig = PppDnsConfig(),
-        eventSink: (YameEvent) -> Unit = {},
+        diagnosticSink: (YameEvent) -> Unit = {},
     ): PppSession {
         val addresses = PppAddresses(
             localAddress = Ipv4Address.parse("10.0.0.1"),
@@ -1131,7 +1131,7 @@ class PppIpv4SessionTest {
         return PppSession(
             sendFrame = sent::add,
             logger = logger,
-            eventSink = eventSink,
+            diagnosticSink = diagnosticSink,
             ipAddresses = addresses,
             selectPeerAddress = { requested ->
                 if (requested == Ipv4Address.ZERO) addresses.peerAddress else requested

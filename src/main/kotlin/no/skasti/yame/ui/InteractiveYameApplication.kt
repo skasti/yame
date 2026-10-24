@@ -11,11 +11,11 @@ import no.skasti.yame.ppp.proxy.ResourceRegistryResource
 import no.skasti.yame.ppp.proxy.ResourceRegistryRoot
 import no.skasti.yame.ppp.proxy.YameRegistries
 import no.skasti.yame.runtime.YameRuntime
+import no.skasti.yame.observer.YameEvents
+import java.util.concurrent.TimeUnit
 import no.skasti.yame.serial.*
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
-import java.util.concurrent.locks.ReentrantLock
-import kotlin.concurrent.withLock
 
 /** Presentation composition root; runtime and stores are also usable without the TUI. */
 class InteractiveYameApplication internal constructor(
@@ -44,14 +44,12 @@ class InteractiveYameApplication internal constructor(
     )
 
     private val observer = TuiYameObserver(configStore, functions, terminal)
+    private val observations = YameEvents.subscribe("tui-runtime", handler = observer::onEvent)
     private val resourceUiExecutor = Executors.newSingleThreadExecutor { task ->
         Thread(task, "yame-resource-ui").apply { isDaemon = true }
     }
     private val resourceRegistryHooks: ResourceRegistryHooks = resourceGraphs.hooks
-    private val resourceUiLifecycle = ReentrantLock()
-    private val resourceUiIdle = resourceUiLifecycle.newCondition()
-    private var resourceUiClosed = false
-    private var activeResourceUiTasks = 0
+    @Volatile private var resourceUiAccepting = true
     private val onRootAdded: (ResourceRegistryRoot) -> Unit =
         { root -> refreshResourceGraph(root.graphId) }
     private val onRootRemoved: (ResourceRegistryRoot) -> Unit =
@@ -81,7 +79,6 @@ class InteractiveYameApplication internal constructor(
     }
 
     private val runtime = YameRuntime(
-        observer = observer,
         configStore = configStore,
         functions = functions,
         logManager = logManager,
@@ -90,9 +87,12 @@ class InteractiveYameApplication internal constructor(
     )
 
     fun run() { observer.start(); runtime.run() }
+    internal fun stop() = runtime.close()
+
     override fun close() {
-        closeResourceUiCallbacks()
         runtime.close()
+        closeResourceUiCallbacks()
+        observations.close()
         observer.close()
     }
 
@@ -112,64 +112,23 @@ class InteractiveYameApplication internal constructor(
     }
 
     private fun submitResourceUi(action: () -> Unit) {
+        if (!resourceUiAccepting) return
         try {
-            resourceUiExecutor.execute {
-                val accepted = resourceUiLifecycle.withLock {
-                    if (resourceUiClosed) {
-                        false
-                    } else {
-                        activeResourceUiTasks++
-                        true
-                    }
-                }
-                if (!accepted) return@execute
-
-                try {
-                    action()
-                } finally {
-                    resourceUiLifecycle.withLock {
-                        activeResourceUiTasks--
-                        if (activeResourceUiTasks == 0) resourceUiIdle.signalAll()
-                    }
-                }
-            }
+            resourceUiExecutor.execute(action)
         } catch (_: RejectedExecutionException) {
             // A callback can have been captured before unsubscription and arrive after shutdown.
         }
     }
 
     private fun closeResourceUiCallbacks() {
-        val closeCallbacks = resourceUiLifecycle.withLock {
-            if (resourceUiClosed) {
-                false
-            } else {
-                resourceUiClosed = true
-                true
-            }
-        }
-        if (closeCallbacks) {
-            resourceRegistryHooks.onRootAdded -= onRootAdded
-            resourceRegistryHooks.onRootRemoved -= onRootRemoved
-            resourceRegistryHooks.onRootUsed -= onRootUsed
-            resourceRegistryHooks.onResourceAdded -= onResourceAdded
-            resourceRegistryHooks.onResourceUpdated -= onResourceUpdated
-            resourceRegistryHooks.onResourceRemoved -= onResourceRemoved
-            resourceUiExecutor.shutdownNow()
-        }
-
-        var interrupted = false
-        resourceUiLifecycle.lock()
-        try {
-            while (activeResourceUiTasks > 0) {
-                try {
-                    resourceUiIdle.await()
-                } catch (_: InterruptedException) {
-                    interrupted = true
-                }
-            }
-        } finally {
-            resourceUiLifecycle.unlock()
-        }
-        if (interrupted) Thread.currentThread().interrupt()
+        resourceUiAccepting = false
+        resourceRegistryHooks.onRootAdded -= onRootAdded
+        resourceRegistryHooks.onRootRemoved -= onRootRemoved
+        resourceRegistryHooks.onRootUsed -= onRootUsed
+        resourceRegistryHooks.onResourceAdded -= onResourceAdded
+        resourceRegistryHooks.onResourceUpdated -= onResourceUpdated
+        resourceRegistryHooks.onResourceRemoved -= onResourceRemoved
+        resourceUiExecutor.shutdown()
+        check(resourceUiExecutor.awaitTermination(5, TimeUnit.SECONDS)) { "Resource UI did not drain" }
     }
 }

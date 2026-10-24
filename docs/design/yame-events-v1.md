@@ -4,8 +4,9 @@ This document describes the decided v1 design for
 [#92](https://github.com/skasti/yame/issues/92). **Implementation status: partial.**
 The broker infrastructure is implemented in [#106](https://github.com/skasti/yame/pull/106),
 and the proxy resource event contract and producer are implemented in #100.
-Production consumer registration and shutdown integration remain tracked by #102; frontend migration remains
-tracked by #101 and #103. Decided design does not imply implemented behavior: the
+Runtime observations, early consumer registration, fatal supervision and shutdown
+integration are implemented in #102. A dedicated TUI worker (#101) and proxy
+dashboard event projection (#103) remain separate follow-ups. Decided design does not imply implemented behavior: the
 [current broker architecture](../yame-events.md) documents verified code.
 
 Decision rationale, alternatives and consequences belong in
@@ -116,7 +117,10 @@ One worker takes accepted events in FIFO order and blocks on a condition/queue
 while idle. For each event it snapshots eligible registrations in registration
 order, releases broker synchronization, evaluates their filters and calls matching
 handlers sequentially. Reentrant publication appends through ordinary admission;
-it never dispatches recursively. Filters and handlers must return quickly.
+it never dispatches recursively. Filters and handlers should return quickly. As an explicitly accepted interim
+exception, the TUI may render synchronously until #101; this delays dispatch and
+can eventually trigger fatal queue saturation, without directly invoking the TUI
+on serial/PPP/proxy producer threads.
 Subscribers that publish new observations must guard against direct or indirect
 feedback loops, including A → B → A chains. Publish only meaningful state changes,
 with deduplication or state-change detection where needed. A full queue cannot be
@@ -193,9 +197,9 @@ isolated JVMs so first access and installation cannot race across tests.
 
 The v1 TUI is an early subscriber and remains subscribed through reconnect. It
 receives a session-ended event qualified by the old connection/session identity.
-Quiesce or generation-fence old work, enqueue its final observations/session end,
-then publish new-session startup. Closing projected transfers applies only to that
-old session, so queued cleanup cannot close a newer connection's transfers. Late
+Quiesce or fence old work. Consumers use process-unique connection/session
+identities and handle delayed teardown independently of cross-producer enqueue
+order. Closing projected transfers applies only to that old session, so queued cleanup cannot close a newer connection's transfers. Late
 work must not recreate old active transfers or overwrite newer registry attempts.
 
 v1 does not replay events to late subscribers. A consumer needing earlier or
@@ -213,8 +217,10 @@ failure behavior. Avoid a second logging subscription that writes duplicates.
 The tone-test path and plain mode use the same policy where applicable.
 
 This deliberately preserves existing synchronous module-log I/O before broker
-admission. `publish` and subscriber dispatch remain I/O-free; this design does
-not claim to remove existing file-system latency from all producer code. Packet
+admission. `publish` performs no I/O. Module files are never written by broker subscribers.
+The interim TUI subscriber may render synchronously on the broker worker; #101
+will move this work to a dedicated worker. This design does not claim to remove
+existing file-system latency from all producer code. Packet
 capture I/O already runs on the recorder's bounded executor. The recorder may
 already reject captures at its own limits; the broker must not add a new source
 of capture loss. Broader asynchronous module logging is separate work requiring
@@ -247,8 +253,9 @@ rejected after it; closed/faulted publication never starts a new worker.
 An explicit `awaitClosed(timeout)` may be used outside the worker. It returns
 `TimedOut` honestly if a callback is still blocked; calls from the worker return
 a would-deadlock result immediately. No forced interruption or guaranteed
-termination of arbitrary user handlers is promised. Normal consumers enqueue and
-return, and tests release intentionally blocked handlers in cleanup.
+termination of arbitrary user handlers is promised. The interim TUI consumer may render synchronously. It can delay dispatcher
+completion and eventually cause fatal saturation; #101 will isolate TUI work.
+Tests release intentionally blocked handlers in cleanup.
 
 Normal application shutdown follows this order:
 
@@ -261,8 +268,9 @@ Normal application shutdown follows this order:
 4. Finish independent diagnostic/capture work and close logging. Seal the facade
    with `YameEvents.shutdown()` at final application shutdown. The facade owns
    and closes its default broker; explicit installers close and await their own
-   brokers before releasing the installation handle. The default also has a JVM
-   shutdown hook until #102 integrates full runtime shutdown.
+   brokers before releasing the installation handle. The default JVM hook
+   delegates to application shutdown when a coordinator is registered, and
+   otherwise provides a close/await fallback.
 
 Publication after final shutdown fails instead of lazily starting a new worker.
 An explicit installation released after termination can be followed by another
@@ -275,7 +283,8 @@ while holding a lock that its callbacks or consumers need.
 ### Implementation and verification map
 
 The following map tracks the overall migration. The approved overload policy is
-fatal application termination; runtime wiring remains #102.
+fatal application termination. Runtime wiring is implemented in #102; the
+current runtime and consumer boundaries are documented in [yame-events.md](../yame-events.md).
 
 | Issue / independently reviewable PR | Dependencies | Required evidence |
 | --- | --- | --- |
@@ -284,7 +293,7 @@ fatal application termination; runtime wiring remains #102.
 | [#99: registry lifetime](https://github.com/skasti/yame/issues/99) | None | Runtime-level serial/handler replacement retains graph identity and LRU limits; stale fetch attempts remain fenced. Define limit changes without session-teardown eviction. |
 | [#100: proxy event contract and publication](https://github.com/skasti/yame/issues/100) | #97, #98, #99 | Immutable event snapshots and occurrence time; sufficient graph/resource/fetch correlation, including eviction and legitimate refetch; no producer-imposed root-first or cross-producer ordering. Existing hooks remain usable until #103. |
 | [#101: TUI processing boundary](https://github.com/skasti/yame/issues/101) | #97 | Blocking terminal/render work cannot hold up admission; bounded local backlog, independent fatal escalation on overflow, consistent observation order, drain and close behavior. Works with existing events/hooks before broker wiring. |
-| [#102: runtime composition and migration](https://github.com/skasti/yame/issues/102) | #97, #98, #101 | Plain/TUI startup receive initial observations, diagnostics/captures remain independent and are written once, no broker-worker I/O, old/new session ordering and full shutdown sequence. No unsupported late-consumer completeness claim. |
+| [#102: runtime composition and migration](https://github.com/skasti/yame/issues/102) | #97, #98; #101 is independent | Implemented: early Plain/TUI consumers, typed port query and automatic change events, independent single-write diagnostics/captures, session correlation and bounded shutdown/fatal supervision. Interim TUI rendering runs on the broker worker and may saturate the queue; no broker-worker module-file writes. |
 | [#103: proxy dashboard migration and hook removal](https://github.com/skasti/yame/issues/103) | #99, #100, #102 | Existing hosts/unique URLs/states/transforms/sort/selection/expansion remain correct; reconnect and eviction work; no outbound registry hook plumbing remains; an independent early consumer reconstructs an equivalent view. |
 
 Use latches, barriers, controllable executors and explicit drain boundaries, with

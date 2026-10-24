@@ -13,7 +13,7 @@ import java.time.Duration
 internal class SystemHttpCompatibilityProxy(
     config: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig.fromConfigStore(),
     logger: (String) -> Unit = {},
-    eventSink: (YameEvent) -> Unit = {},
+    diagnosticSink: (YameEvent) -> Unit = {},
     transformerSettings: (() -> no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings)? = null,
     resourceGraphs: NavigationResourceRegistry =
         NavigationResourceRegistry(
@@ -33,7 +33,7 @@ internal class SystemHttpCompatibilityProxy(
         SystemHttpCompatibilityHandler(
             config = config,
             logger = logger,
-            eventSink = eventSink,
+            diagnosticSink = diagnosticSink,
             transformerSettings = transformerSettings,
             resourceGraphs = resourceGraphs,
             httpClient = httpClient,
@@ -79,8 +79,8 @@ internal class SystemHttpCompatibilityProxy(
     internal fun resourceGraphSnapshots(): List<NavigationResourceGraphSnapshot> =
         handler.resourceGraphSnapshots()
 
-    override fun close() =
-        http.close()
+    override fun close() = http.close()
+    override fun awaitQuiescence(timeout: Duration): Boolean = http.awaitQuiescence(timeout)
 
     private companion object {
         const val RESPONSE_CHUNK_BYTES = 4 * 1024

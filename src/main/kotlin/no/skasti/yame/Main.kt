@@ -12,6 +12,10 @@ import no.skasti.yame.logging.PacketCaptureLimitKind
 import no.skasti.yame.logging.YameLogLevel
 import no.skasti.yame.logging.YameLogManager
 import no.skasti.yame.logging.YameLogModule
+import no.skasti.yame.lifecycle.ApplicationEventLifecycle
+import no.skasti.yame.observer.YameEvents
+import no.skasti.yame.logging.DiagnosticMessage
+import no.skasti.yame.logging.diagnosticLogger
 import no.skasti.yame.modem.HayesModem
 import no.skasti.yame.modem.HayesModemConfig
 import no.skasti.yame.ppp.ip.Ipv4Address
@@ -55,13 +59,17 @@ fun main(args: Array<String>) {
     }
 
     val logManager = YameLogManager(options.logLevels, options.logDirectory, captureLimits = options.captureLimits)
+    val events = ApplicationEventLifecycle()
+    events.consumer(logManager)
+    val coordinatedShutdown = YameEvents.coordinateShutdown(events::close)
+    val shutdownHook = Thread(events::close, "yame-shutdown")
+    Runtime.getRuntime().addShutdownHook(shutdownHook)
     try {
         if (options.testNumber != null) {
-            val modemFileLogger = logManager.logger(YameLogModule.MODEM)
-            val modemConsoleLogger: (String) -> Unit = { message ->
-                println(message)
-                modemFileLogger(message)
-            }
+            events.consumer(YameEvents.subscribe("plain-diagnostics", { it is DiagnosticMessage }) {
+                println((it as DiagnosticMessage).message)
+            })
+            val modemConsoleLogger = diagnosticLogger(logManager.logger(YameLogModule.MODEM))
             val modem = HayesModem(
                 baudRate = options.baudRate,
                 config = configurationForToneTest(options.modemConfig),
@@ -70,8 +78,9 @@ fun main(args: Array<String>) {
                 dnsLogger = logManager.debugLogger(YameLogModule.DNS),
                 transferLogger = logManager.debugLogger(YameLogModule.TRANSFERS),
                 proxyLogger = logManager.debugLogger(YameLogModule.PROXY),
-                eventSink = logManager::eventSink,
+                diagnosticSink = logManager::eventSink,
             )
+            events.producer(modem)
             println(
                 "Tone test. Dialing: ${options.testNumber} " +
                     "(pickup: ${options.modemConfig.pickupTime}, " +
@@ -81,7 +90,7 @@ fun main(args: Array<String>) {
             modem.use {
                 it.dial(options.testNumber)
             }
-            println("Tone test complete.")
+            YameEvents.publish(DiagnosticMessage("Tone test complete."))
             return
         }
 
@@ -114,7 +123,8 @@ fun main(args: Array<String>) {
             captureLimits = options.captureLimits, logLevels = options.logLevels,
         )
         applyCliOverrides(runtimeConfigStore, savedConfiguration, effectiveConfiguration)
-        no.skasti.yame.config.ConfigStore.install(runtimeConfigStore).use {
+        events.consumer(no.skasti.yame.config.ConfigStore.install(runtimeConfigStore))
+        run {
             val functions = no.skasti.yame.function.FunctionStore()
             if (useTui) {
                 val application = InteractiveYameApplication(
@@ -127,19 +137,9 @@ fun main(args: Array<String>) {
                         Terminal(interactive = true)
                     },
                 )
-                val shutdownHook = Thread(
-                    application::close,
-                    "yame-tui-shutdown",
-                )
-                Runtime.getRuntime().addShutdownHook(shutdownHook)
-                try {
-                    application.run()
-                } finally {
-                    application.close()
-                    runCatching {
-                        Runtime.getRuntime().removeShutdownHook(shutdownHook)
-                    }
-                }
+                events.producer(AutoCloseable(application::stop))
+                events.consumer(application)
+                application.run()
                 return
             }
 
@@ -148,21 +148,20 @@ fun main(args: Array<String>) {
                 return
             }
 
+            events.consumer(YameEvents.subscribe("plain-diagnostics", { it is DiagnosticMessage }) {
+                println((it as DiagnosticMessage).message)
+            })
             val runtime = no.skasti.yame.runtime.YameRuntime(
-                object : no.skasti.yame.runtime.RuntimeObserver {
-                    override fun onLog(message: String) { println(message) }
-                },
                 runtimeConfigStore, functions,
                 logManager = logManager, failFastStartup = true,
             )
-            val hook = Thread(runtime::close, "yame-shutdown")
-            Runtime.getRuntime().addShutdownHook(hook)
-            try { runtime.run() } finally {
-                runtime.close()
-                runCatching { Runtime.getRuntime().removeShutdownHook(hook) }
-            }
+            events.producer(runtime)
+            runtime.run()
         }
     } finally {
+        events.close()
+        coordinatedShutdown.close()
+        runCatching { Runtime.getRuntime().removeShutdownHook(shutdownHook) }
         logManager.close()
     }
 }

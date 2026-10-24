@@ -4,11 +4,14 @@ import java.time.Duration
 
 /** Process-wide entry point. The first access creates a broker unless one was installed first. */
 object YameEvents {
+    @Volatile private var applicationShutdown: (() -> Unit)? = null
     private val installation = BrokerInstallation(onDefaultCreated = { broker ->
-        // A default broker also has an owner before runtime shutdown integration lands in #102.
         Runtime.getRuntime().addShutdownHook(Thread({
-            broker.close()
-            broker.awaitClosed(Duration.ofSeconds(5))
+            val coordinated = applicationShutdown
+            if (coordinated != null) coordinated() else {
+                broker.close()
+                broker.awaitClosed(Duration.ofSeconds(5))
+            }
         }, "yame-events-shutdown"))
     })
 
@@ -18,7 +21,15 @@ object YameEvents {
     fun subscribe(name: String, filter: (YameEvent) -> Boolean = { true }, handler: (YameEvent) -> Unit): AutoCloseable =
         current.subscribe(name, filter, handler)
 
-    /** Final application shutdown; #102 coordinates this with producers and fatal supervision. */
+    /** Let the fallback hook participate in the same application shutdown, rather
+     * than racing producer quiescence by closing broker admission prematurely. */
+    internal fun coordinateShutdown(action: () -> Unit): AutoCloseable {
+        check(applicationShutdown == null)
+        applicationShutdown = action
+        return AutoCloseable { if (applicationShutdown === action) applicationShutdown = null }
+    }
+
+    /** Final application shutdown, after producer quiescence and broker drain. */
     fun shutdown() = installation.shutdown()
 }
 

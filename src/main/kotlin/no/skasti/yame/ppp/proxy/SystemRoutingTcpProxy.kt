@@ -1,6 +1,7 @@
 package no.skasti.yame.ppp.proxy
 
 import no.skasti.yame.observer.YameEvent
+import no.skasti.yame.observer.YameEvents
 import no.skasti.yame.ppp.tcp.SystemTcpProxy
 import no.skasti.yame.ppp.tcp.TcpProxy
 import no.skasti.yame.ppp.tcp.TcpProxyEvent
@@ -10,7 +11,7 @@ import java.util.concurrent.ConcurrentHashMap
 internal class SystemRoutingTcpProxy(
     private val httpConfig: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig(),
     private val logger: (String) -> Unit = {},
-    private val eventSink: (YameEvent) -> Unit = {},
+    private val diagnosticSink: (YameEvent) -> Unit = {},
     private val transformerSettings: (() -> no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings)? = null,
     private val resourceGraphs: NavigationResourceRegistry =
         NavigationResourceRegistry(
@@ -22,7 +23,7 @@ internal class SystemRoutingTcpProxy(
     private val httpProxy: TcpProxy = SystemHttpCompatibilityProxy(
         httpConfig,
         logger,
-        eventSink = eventSink,
+        diagnosticSink = diagnosticSink,
         transformerSettings = transformerSettings,
         resourceGraphs = resourceGraphs,
     ),
@@ -67,8 +68,16 @@ internal class SystemRoutingTcpProxy(
         directProxy.close()
         if (httpProxy !== directProxy) httpProxy.close()
     }
+    override fun awaitQuiescence(timeout: java.time.Duration): Boolean {
+        val deadline = System.nanoTime() + timeout.toNanos()
+        return directProxy.awaitQuiescence(timeout) &&
+            httpProxy.awaitQuiescence(java.time.Duration.ofNanos((deadline - System.nanoTime()).coerceAtLeast(0)))
+    }
     private fun route(flow: TcpProxyFlow): TcpProxy? = routes[flow]
-    private fun emitEvent(event: YameEvent) { runCatching { eventSink(event) } }
+    private fun emitEvent(event: YameEvent) { runCatching { diagnosticSink(event) }.onFailure {
+            System.err.println("YAME independent event diagnostic failed: ${it.javaClass.simpleName}")
+        }
+        YameEvents.publish(event) }
     private fun flowId(flow: TcpProxyFlow): String =
         "${flow.key.peerAddress}:${flow.key.peerPort}->${flow.key.remoteAddress}:${flow.key.remotePort}"
     private companion object { const val HTTP_PORT = 80 }

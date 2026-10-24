@@ -61,6 +61,7 @@ internal class HttpTcpProxy(
         @Volatile var interimTask: Future<*>? = null,
     )
 
+    private val handlerClosed = java.util.concurrent.CountDownLatch(1)
     private val executor = Executors.newFixedThreadPool(maxFlows) { runnable ->
         Thread(runnable, "http-tcp-proxy").apply { isDaemon = true }
     }
@@ -492,7 +493,7 @@ internal class HttpTcpProxy(
             }
 
         if (terminated) {
-            handler.close()
+            try { handler.close() } finally { handlerClosed.countDown() }
         } else {
             Thread(
                 {
@@ -504,7 +505,7 @@ internal class HttpTcpProxy(
                         Thread.currentThread().interrupt()
                         return@Thread
                     }
-                    handler.close()
+                    try { handler.close() } finally { handlerClosed.countDown() }
                 },
                 "http-tcp-proxy-close",
             ).apply {
@@ -513,6 +514,9 @@ internal class HttpTcpProxy(
             }
         }
     }
+
+    override fun awaitQuiescence(timeout: java.time.Duration): Boolean =
+        handlerClosed.await(timeout.toNanos(), TimeUnit.NANOSECONDS)
 
     private companion object {
         const val DEFAULT_RESPONSE_CHUNK_BYTES = 4_096

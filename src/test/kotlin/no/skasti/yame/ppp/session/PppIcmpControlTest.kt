@@ -147,7 +147,7 @@ class PppIcmpControlTest {
         val logs = mutableListOf<String>()
         val events = mutableListOf<YameEvent>()
         val udp = RecordingUdpProxy()
-        val session = PppSession(sendFrame = frames::add, logger = logs::add, eventSink = events::add,
+        val session = PppSession(sendFrame = frames::add, logger = logs::add, diagnosticSink = events::add,
             dnsConfig = dnsConfig, udpProxy = udp,
             icmpEchoProxy = object : IcmpEchoProxy {
                 override fun echo(destination: Ipv4Address, timeoutMillis: Long, callback: (Result<Boolean>) -> Unit) =

@@ -629,8 +629,10 @@ The [YameEvents broker architecture](docs/yame-events.md) documents the
 asynchronous count-bounded broker, 10 ms queue-full wait, subscriptions, fatal
 overload signal and lifecycle API. [ADR 0004](docs/adrs/0004-extensible-event-contract.md)
 records the open, producer-owned event contract and lazy generic map access.
-Production runtime wiring and fatal process termination remain part of
-[#102](https://github.com/skasti/yame/issues/102).
+Runtime observations use this broker in plain and TUI modes, with independent
+module logging, session correlation and bounded fatal process termination.
+TUI rendering currently runs synchronously on the broker worker; a dedicated
+worker remains [#101](https://github.com/skasti/yame/issues/101).
 The [v1 migration design](docs/design/yame-events-v1.md) describes the decided design
 for [#92](https://github.com/skasti/yame/issues/92). The
 [historical inventory](docs/.history/yame-events-a37ac65.md) describes `a37ac65`.

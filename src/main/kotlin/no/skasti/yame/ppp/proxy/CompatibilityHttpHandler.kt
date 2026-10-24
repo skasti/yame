@@ -1,6 +1,7 @@
 package no.skasti.yame.ppp.proxy
 
 import no.skasti.yame.observer.YameEvent
+import no.skasti.yame.observer.YameEvents
 import no.skasti.yame.ppp.http.HttpConnection
 import no.skasti.yame.ppp.http.HttpRequest as LegacyHttpRequest
 import no.skasti.yame.ppp.http.HttpRequestHandler
@@ -46,7 +47,7 @@ import java.util.concurrent.ConcurrentHashMap
 internal class SystemHttpCompatibilityHandler(
     private val config: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig.fromConfigStore(),
     private val logger: (String) -> Unit = {},
-    private val eventSink: (YameEvent) -> Unit = {},
+    private val diagnosticSink: (YameEvent) -> Unit = {},
     private val transformerSettings: (() -> no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings)? = null,
     private val resourceGraphs: NavigationResourceRegistry =
         NavigationResourceRegistry(
@@ -1434,16 +1435,17 @@ internal class SystemHttpCompatibilityHandler(
         kind: HttpProxyActionKind,
         message: String,
     ) {
-        runCatching {
-            eventSink(
-                HttpProxyAction(
-                    flowId = "${state.flow.key.peerAddress}:${state.flow.key.peerPort}->${state.flow.key.remoteAddress}:${state.flow.key.remotePort}",
-                    kind = kind,
-                    message = message,
-                ),
-            )
+        val event = HttpProxyAction(
+            flowId = "${state.flow.key.peerAddress}:${state.flow.key.peerPort}->${state.flow.key.remoteAddress}:${state.flow.key.remotePort}",
+            kind = kind,
+            message = message,
+        )
+        runCatching { diagnosticSink(event) }.onFailure {
+            System.err.println("YAME independent event diagnostic failed: ${it.javaClass.simpleName}")
         }
+        YameEvents.publish(event)
     }
+
     private class BadLegacyRequest(message: String) : IllegalArgumentException(message)
     private class ResponseTooLarge(message: String) : IllegalStateException(message)
 
