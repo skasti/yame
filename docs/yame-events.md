@@ -185,7 +185,9 @@ successful drain or closes a still-dispatching frontend.
   `PppSessionIdentity` containing that connection ID. Serial reconnect counters
   and repeated TCP endpoints are not global identities. Transfer flow IDs also
   include the IPCP generation, so a renegotiation does not reuse its old flow key.
-- TUI connection/session high-water marks reject old observations. Terminal
+- TUI projection keys qualify DNS/transfer IDs with their connection/session
+  identity, preserving bounded closed-transfer and DNS history across reconnects.
+  Connection/session high-water marks reject old observations. Terminal
   states dominate delayed open notifications for the same identity. A new PPP
   observation can precede its connection notification; no producer-specific
   connection-before-PPP publication order is required. Transfer details arriving

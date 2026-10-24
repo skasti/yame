@@ -32,7 +32,9 @@ class RuntimeObservationProjectionTest {
             ui.onEvent(ConnectionStateChanged(1, ConnectionState.DISCONNECTED))
             ui.onEvent(TransferStateChanged("same", TransferState.CLOSED, session = old))
             ui.onEvent(TransferBytes("same", TransferDirection.TO_HOST, 100, old))
-            val transfer = ui.transferProjectionSnapshot().single()
+            val history = ui.transferProjectionSnapshot()
+            assertEquals(TransferState.CLOSED, history.single { it.destination == "old" }.state)
+            val transfer = history.single { it.destination == "new" }
             assertTrue(ui.connectedSnapshot())
             assertEquals("new", transfer.destination)
             assertEquals(TransferState.OPEN, transfer.state)

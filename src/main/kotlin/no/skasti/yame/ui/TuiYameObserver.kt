@@ -282,8 +282,6 @@ class TuiYameObserver(
         if (event is PppObservation && !sessionGate.accept(event)) return
         if (previousConnection != sessionGate.connectionId || previousSession != sessionGate.sessionId) {
             closeActiveTransfers("session replaced")
-            transfers.clear()
-            dnsLookups.clear()
             pendingTransfers.clear()
             pendingTransferCount = 0
         }
@@ -306,9 +304,10 @@ class TuiYameObserver(
             }
             is UnhandledPacket -> appendLog(event.reason)
             is DnsQuery -> {
-                val existing = dnsLookups.indexOfFirst { it.key == event.key }
+                val key = observationKey(event, event.key)
+                val existing = dnsLookups.indexOfFirst { it.key == key }
                 val lookup = DashboardDnsLookup(
-                    key = event.key,
+                    key = key,
                     time = LocalTime.now().format(TIME_FORMAT),
                     transport = event.transport.name,
                     name = event.name ?: "?",
@@ -326,13 +325,14 @@ class TuiYameObserver(
             }
 
             is DnsResponse -> {
-                val index = dnsLookups.indexOfFirst { it.key == event.key }
+                val key = observationKey(event, event.key)
+                val index = dnsLookups.indexOfFirst { it.key == key }
                 val status = event.responseCode
                     ?.let(::dnsResponseCodeName)
                     ?: "REPLY"
                 val suffix = if (event.truncated) " TC" else ""
                 val updated = DashboardDnsLookup(
-                    key = event.key,
+                    key = key,
                     time = dnsLookups.getOrNull(index)?.time
                         ?: LocalTime.now().format(TIME_FORMAT),
                     transport = event.transport.name,
@@ -351,12 +351,13 @@ class TuiYameObserver(
             }
 
             is DnsFailure -> {
-                val index = dnsLookups.indexOfFirst { it.key == event.key }
+                val key = observationKey(event, event.key)
+                val index = dnsLookups.indexOfFirst { it.key == key }
                 if (index >= 0) {
                     dnsLookups[index] = dnsLookups[index].copy(status = "FAILED")
                 } else {
                     dnsLookups += DashboardDnsLookup(
-                        key = event.key,
+                        key = key,
                         time = LocalTime.now().format(TIME_FORMAT),
                         transport = event.transport.name,
                         name = "?",
@@ -370,8 +371,9 @@ class TuiYameObserver(
             }
 
             is TransferStarted -> {
-                transfers.remove(event.flowId)
-                transfers[event.flowId] = DashboardTransfer(
+                val key = observationKey(event, event.flowId)
+                transfers.remove(key)
+                transfers[key] = DashboardTransfer(
                     flowId = event.flowId,
                     destination = event.destination,
                     via = event.via,
@@ -384,16 +386,17 @@ class TuiYameObserver(
                     detail = null,
                 )
                 trimTransfers()
-                pendingTransfers.remove(event.flowId)?.let { pending ->
+                pendingTransfers.remove(key)?.let { pending ->
                     pendingTransferCount -= pending.size
                     pending.forEach(::onEvent)
                 }
             }
 
             is TransferStateChanged -> {
-                val transfer = transfers[event.flowId] ?: return deferTransfer(event.flowId, event)
+                val key = observationKey(event, event.flowId)
+                val transfer = transfers[key] ?: return deferTransfer(key, event)
                 if (transfer.state in setOf(TransferState.CLOSED, TransferState.FAILED)) return
-                transfers[event.flowId] = transfer.copy(
+                transfers[key] = transfer.copy(
                     state = event.state,
                     updatedNanos = System.nanoTime(),
                     detail = event.detail,
@@ -402,8 +405,9 @@ class TuiYameObserver(
             }
 
             is TransferBytes -> {
-                val transfer = transfers[event.flowId] ?: return deferTransfer(event.flowId, event)
-                transfers[event.flowId] = transfer.copy(
+                val key = observationKey(event, event.flowId)
+                val transfer = transfers[key] ?: return deferTransfer(key, event)
+                transfers[key] = transfer.copy(
                     toHostBytes = transfer.toHostBytes +
                         if (event.direction == TransferDirection.TO_HOST) event.bytes else 0,
                     toPeerBytes = transfer.toPeerBytes +
@@ -417,6 +421,9 @@ class TuiYameObserver(
         }
         render()
     }
+
+    private fun observationKey(event: PppObservation, key: String): String =
+        "${event.session.connectionId}:${event.session.id}:$key"
 
     private fun deferTransfer(flowId: String, event: YameEvent) {
         check(pendingTransferCount < 128) { "TUI transfer dependency buffer exhausted" }
