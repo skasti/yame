@@ -144,10 +144,10 @@ inside config values and do not own mutable settings. Leaf transformers never
 construct palette items.
 Runtime observations remain separate from settings and functions. The proxy
 resource registry now emits its producer-owned lifecycle contract; production
-consumer registration and broker shutdown remain tracked by [#102](https://github.com/skasti/yame/issues/102),
-and TUI projection migration remains tracked by
-[#103](https://github.com/skasti/yame/issues/103). Other connection, transfer
-and log observation migrations are separate work.
+consumer registration, fatal supervision and broker shutdown are implemented
+by application composition. Runtime connection, transfer and log observations
+also use YameEvents. The proxy dashboard projection migration remains tracked by
+[#103](https://github.com/skasti/yame/issues/103).
 
 ## Functions
 
@@ -158,7 +158,12 @@ the registry lock, and executes outside it. Function exceptions propagate to the
 adapter. A function may call `ConfigStore.set` for a multi-setting transaction.
 Unregistering removes future invocations; an already selected operation may finish.
 
-The runtime registers disconnect, reconnect, refresh-ports and quit. Palette
+The runtime registers disconnect, reconnect, refresh-ports and quit. Refresh-ports
+returns an unmodifiable `List<SerialPortDescriptor>` snapshot used directly by the
+existing port selector. Changed automatic observations independently publish
+`AvailablePortsChanged`; unchanged lists are suppressed. Quit requests producer
+stop, while application lifecycle cleanup runs outside the invoking UI/dispatcher.
+Palette
 navigation and clearing presentation history remain presentation responsibilities.
 No core component knows about a palette, GUI toolkit or network transport.
 
@@ -218,8 +223,12 @@ There are no feature-to-persistence dependencies or obsolete compatibility wrapp
 
 Plain mode propagates initial connection construction/open errors so scripts exit with a
 failure. TUI mode logs failed attempts and permits retry. Every core logger,
-including HTTP proxy diagnostics, reaches the runtime observer as well as the
-module file logger. Both modes share this routing and the same runtime functions.
+including HTTP proxy diagnostics, writes its module file independently before
+publishing `DiagnosticMessage` for the early plain/TUI subscriber. Producer-owned
+domain events likewise retain an independent single-write diagnostic tee before
+`YameEvents.publish`. `RuntimeObserver` has been removed. Both modes and tone-test
+startup share application event supervision and bounded shutdown;
+see [YameEvents](yame-events.md).
 Reselecting unchanged port, baud, or flow-control settings commits normally and
 invokes `Reconnect` separately when the effective value is unchanged. This preserves
 ConfigStore's no-op save/event semantics and the existing selection interaction.

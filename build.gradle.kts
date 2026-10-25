@@ -30,7 +30,7 @@ application {
 
 tasks.test {
     useJUnitPlatform()
-    exclude("**/ResourceLifecycleEventTest.class", "**/YameRuntimeConnectionTest.class", "**/YameEventsLazyTest.class")
+    exclude("**/ResourceLifecycleEventTest.class", "**/YameRuntimeConnectionTest.class", "**/YameEventsLazyTest.class", "**/RuntimeObservationIntegrationTest.class")
     testLogging {
         events("failed")
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
@@ -42,7 +42,7 @@ val eventFacadeTest by tasks.registering(Test::class) {
     group = "verification"
     testClassesDirs = sourceSets.test.get().output.classesDirs
     classpath = sourceSets.test.get().runtimeClasspath
-    include("**/ResourceLifecycleEventTest.class", "**/YameRuntimeConnectionTest.class", "**/YameEventsLazyTest.class")
+    include("**/ResourceLifecycleEventTest.class", "**/YameRuntimeConnectionTest.class", "**/YameEventsLazyTest.class", "**/RuntimeObservationIntegrationTest.class")
     forkEvery = 1
     maxParallelForks = 1
     useJUnitPlatform()

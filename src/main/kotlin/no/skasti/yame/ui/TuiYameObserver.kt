@@ -1,5 +1,11 @@
 package no.skasti.yame.ui
 
+import no.skasti.yame.ppp.session.PppObservation
+import no.skasti.yame.ppp.session.PppSessionEnded
+import no.skasti.yame.serial.AvailablePortsChanged
+import no.skasti.yame.serial.ConnectionStateChanged
+import no.skasti.yame.serial.ConnectionState
+import no.skasti.yame.logging.DiagnosticMessage
 import no.skasti.yame.ppp.session.UnhandledPacket
 import no.skasti.yame.ppp.session.DnsQuery
 import no.skasti.yame.ppp.session.DnsResponse
@@ -53,7 +59,7 @@ class TuiYameObserver(
     private val configStore: ConfigStore,
     private val functions: FunctionStore,
     private val terminal: Terminal = Terminal(interactive = true),
-) : AutoCloseable, no.skasti.yame.runtime.RuntimeObserver {
+) : AutoCloseable {
     private val paletteRegistry = CommandPalette()
     private val onPortSelected: (String) -> Unit = { value -> selectConnectionSetting(SerialSettings.Port, value) }
     private val onBaudSelected: (Int) -> Unit = { value -> selectConnectionSetting(SerialSettings.Baud, value) }
@@ -64,7 +70,7 @@ class TuiYameObserver(
     private val onQuit: () -> Unit = { functions.invoke(ApplicationFunctions.Quit) }
     private val onDisconnect: () -> Unit = { functions.invoke(ConnectionFunctions.Disconnect) }
     private val onReconnect: () -> Unit = { functions.invoke(ConnectionFunctions.Reconnect) }
-    private val onRefreshPorts: () -> Unit = { functions.invoke(ConnectionFunctions.RefreshPorts) }
+    private val onRefreshPorts: () -> Unit = { updateAvailablePorts(functions.invoke(ConnectionFunctions.RefreshPorts)) }
     private val onCaptureLimitSelected: (PacketCaptureLimitKind, Int) -> Unit = { kind, value -> configStore.set(LogSettings.CaptureLimits.getValue(kind) to value) }
     private val onLogLevelSelected: (YameLogModule, YameLogLevel) -> Unit = { module, level -> configStore.set(LogSettings.Levels.getValue(module) to level) }
     private val onLoginAdded: (String, String) -> Unit = { username, password -> configStore.set(ModemSettings.Login to LoginCredentials(username, password)) }
@@ -89,6 +95,10 @@ class TuiYameObserver(
     private val logs = ArrayDeque<String>()
     private val dnsLookups = mutableListOf<DashboardDnsLookup>()
     private val transfers = linkedMapOf<String, DashboardTransfer>()
+    private val sessionGate = SessionObservationGate()
+    private val pendingTransfers = linkedMapOf<String, MutableList<YameEvent>>()
+    private var pendingTransferCount = 0
+
     private data class HttpGraphState(
         val rootLegacyUri: URI,
         val resources: LinkedHashMap<URI, DashboardHttpResource> = linkedMapOf(),
@@ -179,13 +189,13 @@ class TuiYameObserver(
     }
 
     @Synchronized
-    override fun updateConnected(value: Boolean) {
+    private fun updateConnected(value: Boolean) {
         connected = value
         render()
     }
 
     @Synchronized
-    override fun closeActiveTransfers(detail: String?) {
+    private fun closeActiveTransfers(detail: String?) {
         if (transfers.isEmpty()) return
         val now = System.nanoTime()
         transfers.replaceAll { _, transfer ->
@@ -206,7 +216,7 @@ class TuiYameObserver(
     }
 
     @Synchronized
-    override fun updateAvailablePorts(ports: List<SerialPortDescriptor>) {
+    internal fun updateAvailablePorts(ports: List<SerialPortDescriptor>) {
         val previousPalette = commandPalette
         val selectedValue = previousPalette
             ?.takeIf { it.mode == TuiPaletteMode.PORTS }
@@ -239,7 +249,7 @@ class TuiYameObserver(
     }
 
     @Synchronized
-    override fun onLog(message: String) {
+    fun onLog(message: String) {
         appendLog(message)
         render()
     }
@@ -252,14 +262,52 @@ class TuiYameObserver(
         }
     }
 
+    @Volatile internal var observationFailure: Throwable? = null
+        private set
+
     @Synchronized
-    override fun onEvent(event: YameEvent) {
+    fun onEvent(event: YameEvent) {
+        try { applyObservation(event) } catch (error: Throwable) {
+            observationFailure = error
+            appendLog("Runtime observation failed; dashboard may be incomplete")
+            throw error
+        }
+    }
+
+    private fun applyObservation(event: YameEvent) {
+        if (closed) return
+        val previousConnection = sessionGate.connectionId
+        val previousSession = sessionGate.sessionId
+        if (event is ConnectionStateChanged && !sessionGate.accept(event)) return
+        if (event is PppObservation && !sessionGate.accept(event)) return
+        if (previousConnection != sessionGate.connectionId || previousSession != sessionGate.sessionId) {
+            closeActiveTransfers("session replaced")
+            pendingTransfers.clear()
+            pendingTransferCount = 0
+        }
         when (event) {
+            is DiagnosticMessage -> appendLog(event.message)
+            is AvailablePortsChanged -> { updateAvailablePorts(event.ports); return }
+            is ConnectionStateChanged -> {
+                if (event.state == ConnectionState.DISCONNECTED) {
+                    closeActiveTransfers("serial session stopped")
+                    pendingTransfers.clear()
+                    pendingTransferCount = 0
+                }
+                updateConnected(event.state == ConnectionState.CONNECTED)
+                return
+            }
+            is PppSessionEnded -> {
+                closeActiveTransfers("PPP session stopped")
+                pendingTransfers.clear()
+                pendingTransferCount = 0
+            }
             is UnhandledPacket -> appendLog(event.reason)
             is DnsQuery -> {
-                val existing = dnsLookups.indexOfFirst { it.key == event.key }
+                val key = observationKey(event, event.key)
+                val existing = dnsLookups.indexOfFirst { it.key == key }
                 val lookup = DashboardDnsLookup(
-                    key = event.key,
+                    key = key,
                     time = LocalTime.now().format(TIME_FORMAT),
                     transport = event.transport.name,
                     name = event.name ?: "?",
@@ -277,13 +325,14 @@ class TuiYameObserver(
             }
 
             is DnsResponse -> {
-                val index = dnsLookups.indexOfFirst { it.key == event.key }
+                val key = observationKey(event, event.key)
+                val index = dnsLookups.indexOfFirst { it.key == key }
                 val status = event.responseCode
                     ?.let(::dnsResponseCodeName)
                     ?: "REPLY"
                 val suffix = if (event.truncated) " TC" else ""
                 val updated = DashboardDnsLookup(
-                    key = event.key,
+                    key = key,
                     time = dnsLookups.getOrNull(index)?.time
                         ?: LocalTime.now().format(TIME_FORMAT),
                     transport = event.transport.name,
@@ -302,12 +351,13 @@ class TuiYameObserver(
             }
 
             is DnsFailure -> {
-                val index = dnsLookups.indexOfFirst { it.key == event.key }
+                val key = observationKey(event, event.key)
+                val index = dnsLookups.indexOfFirst { it.key == key }
                 if (index >= 0) {
                     dnsLookups[index] = dnsLookups[index].copy(status = "FAILED")
                 } else {
                     dnsLookups += DashboardDnsLookup(
-                        key = event.key,
+                        key = key,
                         time = LocalTime.now().format(TIME_FORMAT),
                         transport = event.transport.name,
                         name = "?",
@@ -321,8 +371,9 @@ class TuiYameObserver(
             }
 
             is TransferStarted -> {
-                transfers.remove(event.flowId)
-                transfers[event.flowId] = DashboardTransfer(
+                val key = observationKey(event, event.flowId)
+                transfers.remove(key)
+                transfers[key] = DashboardTransfer(
                     flowId = event.flowId,
                     destination = event.destination,
                     via = event.via,
@@ -335,11 +386,17 @@ class TuiYameObserver(
                     detail = null,
                 )
                 trimTransfers()
+                pendingTransfers.remove(key)?.let { pending ->
+                    pendingTransferCount -= pending.size
+                    pending.forEach(::onEvent)
+                }
             }
 
             is TransferStateChanged -> {
-                val transfer = transfers[event.flowId] ?: return
-                transfers[event.flowId] = transfer.copy(
+                val key = observationKey(event, event.flowId)
+                val transfer = transfers[key] ?: return deferTransfer(key, event)
+                if (transfer.state in setOf(TransferState.CLOSED, TransferState.FAILED)) return
+                transfers[key] = transfer.copy(
                     state = event.state,
                     updatedNanos = System.nanoTime(),
                     detail = event.detail,
@@ -348,8 +405,9 @@ class TuiYameObserver(
             }
 
             is TransferBytes -> {
-                val transfer = transfers[event.flowId] ?: return
-                transfers[event.flowId] = transfer.copy(
+                val key = observationKey(event, event.flowId)
+                val transfer = transfers[key] ?: return deferTransfer(key, event)
+                transfers[key] = transfer.copy(
                     toHostBytes = transfer.toHostBytes +
                         if (event.direction == TransferDirection.TO_HOST) event.bytes else 0,
                     toPeerBytes = transfer.toPeerBytes +
@@ -363,6 +421,21 @@ class TuiYameObserver(
         }
         render()
     }
+
+    private fun observationKey(event: PppObservation, key: String): String =
+        "${event.session.connectionId}:${event.session.id}:$key"
+
+    private fun deferTransfer(flowId: String, event: YameEvent) {
+        check(pendingTransferCount < 128) { "TUI transfer dependency buffer exhausted" }
+        pendingTransfers.getOrPut(flowId) { mutableListOf() }.add(event)
+        pendingTransferCount++
+    }
+
+    @Synchronized
+    internal fun transferProjectionSnapshot(): List<DashboardTransfer> = transfers.values.toList()
+
+    @Synchronized
+    internal fun connectedSnapshot(): Boolean = connected
 
     @Synchronized
     internal fun synchronizeResourceGraphs(snapshots: List<NavigationResourceGraphSnapshot>) {

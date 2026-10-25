@@ -65,9 +65,9 @@ parent/relation edges, current state and kind, sticky prefetch state,
 transformation summaries and fetch-attempt identity. Their occurredAt value is
 captured at the registry transition, before publication or consumer handling.
 The registry publishes directly through `YameEvents`; tests install an isolated
-real broker and record through a subscriber. Production consumer registration,
-fatal supervision and shutdown remain tracked by [#102](https://github.com/skasti/yame/issues/102),
-and the TUI projection migration remains tracked by
+real broker and record through a subscriber. Application composition registers
+consumers early, supervises fatal overload and coordinates shutdown.
+The TUI proxy projection still uses registry hooks until
 [#103](https://github.com/skasti/yame/issues/103). See the
 [event contract](yame-events.md#event-contract) for payload and ordering details.
 

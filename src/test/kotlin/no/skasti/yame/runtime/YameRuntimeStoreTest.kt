@@ -18,7 +18,7 @@ class YameRuntimeStoreTest {
             val functions = FunctionStore()
             YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
                 val runtime = YameRuntime(
-                    object : RuntimeObserver {}, store, functions, logManager = logs,
+                    store, functions, logManager = logs,
                     resourceGraphs = NavigationResourceRegistry(), portProvider = { emptyList() },
                 )
                 store.set(LogSettings.Levels.getValue(YameLogModule.MODEM) to YameLogLevel.DEBUG,

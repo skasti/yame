@@ -93,9 +93,17 @@ class SerialConnection(
     }
 
     override fun close() {
-        if (port.isOpen) {
-            port.closePort()
-            logger("Closed ${port.systemPortName}")
+        try {
+            if (port.isOpen) {
+                port.closePort()
+                logger("Closed ${port.systemPortName}")
+            }
+        } finally {
+            val reader = readerThread
+            if (reader != null && reader !== Thread.currentThread()) {
+                reader.join(2_000)
+                check(!reader.isAlive) { "Serial reader did not stop" }
+            }
         }
     }
 

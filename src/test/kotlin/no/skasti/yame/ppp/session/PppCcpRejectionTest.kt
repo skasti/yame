@@ -288,7 +288,7 @@ class PppCcpRejectionTest {
     ): PppSession = PppSession(
         sendFrame = sent::add,
         logger = {},
-        eventSink = events::add,
+        diagnosticSink = events::add,
         restartIntervalMillis = 60_000,
     )
 

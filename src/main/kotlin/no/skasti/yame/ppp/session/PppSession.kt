@@ -1,6 +1,7 @@
 package no.skasti.yame.ppp.session
 
 import no.skasti.yame.observer.YameEvent
+import no.skasti.yame.observer.YameEvents
 import no.skasti.yame.ppp.ip.Ipv4Address
 import no.skasti.yame.ppp.ip.Ipv4Cidr
 import no.skasti.yame.ppp.ip.Ipv4Packet
@@ -46,7 +47,7 @@ class PppSession(
     private val logger: (String) -> Unit = ::println,
     private val dnsLogger: (String) -> Unit = logger,
     private val transferLogger: (String) -> Unit = logger,
-    private val eventSink: (YameEvent) -> Unit = {},
+    private val diagnosticSink: (YameEvent) -> Unit = {},
     private val restartIntervalMillis: Long = DEFAULT_RESTART_INTERVAL_MILLIS,
     private val ipAddresses: PppAddresses = DEFAULT_IP_ADDRESSES,
     private val selectPeerAddress: (Ipv4Address) -> Ipv4Address = { requested ->
@@ -59,6 +60,7 @@ class PppSession(
     private val tcpHandshakeTimeoutMillis: Long = DEFAULT_TCP_HANDSHAKE_TIMEOUT_MILLIS,
     private val tcpRetransmitTimeoutMillis: Long = DEFAULT_TCP_RETRANSMIT_TIMEOUT_MILLIS,
     private val dnsConfig: PppDnsConfig = PppDnsConfig(),
+    private val sessionIdentity: PppSessionIdentity = PppSessionIdentity.create(),
 ) : Closeable {
     private data class TcpContext(
         val proxyFlow: TcpProxyFlow,
@@ -128,7 +130,9 @@ class PppSession(
     private var localIpcpConfigureRequest: PppControlPacket? = null
     private var ipcpRestartTimer: Timer? = null
 
+    @Synchronized
     private fun sessionLog(message: String) {
+        if (closed) return
         when {
             message.startsWith("DNS ") -> dnsLogger(message)
             message.startsWith("TCP ") -> transferLogger(message)
@@ -428,7 +432,7 @@ class PppSession(
         }
     }
     private fun unhandledPacket(type: String, reason: String, protocol: Int, bytes: ByteArray) {
-        emitEvent(UnhandledPacket(type, reason, protocol, bytes))
+        emitEvent(UnhandledPacket(type, reason, protocol, bytes, sessionIdentity))
     }
 
     private fun receiveIpv4(payload: ByteArray) {
@@ -564,6 +568,7 @@ class PppSession(
         val dnsKey = dnsEventKey("udp", udp.sourcePort, dnsSummary?.id)
         emitEvent(
             DnsQuery(
+                session = sessionIdentity,
                 key = dnsKey,
                 transport = DnsTransport.UDP,
                 id = dnsSummary?.id,
@@ -574,12 +579,14 @@ class PppSession(
             ),
         )
 
-        udpProxy.send(flow, udp.payload) { result ->
+        udpProxy.send(flow, udp.payload) { result -> synchronized(this) {
+            if (closed || generation != ipcpGeneration) return@send
             result.fold(
                 onSuccess = { payload ->
                     val responseSummary = summarizeDnsMessage(payload)
                     emitEvent(
                         DnsResponse(
+                            session = sessionIdentity,
                             key = dnsKey,
                             transport = DnsTransport.UDP,
                             id = responseSummary?.id ?: dnsSummary?.id,
@@ -600,6 +607,7 @@ class PppSession(
                     val reason = error.message ?: error.javaClass.simpleName
                     emitEvent(
                         DnsFailure(
+                            session = sessionIdentity,
                             key = dnsKey,
                             transport = DnsTransport.UDP,
                             message = reason,
@@ -611,7 +619,7 @@ class PppSession(
                     )
                 },
             )
-        }
+        } }
     }
 
     private fun receiveLocalTcp(packet: Ipv4Packet, rawPacket: ByteArray) {
@@ -911,6 +919,7 @@ class PppSession(
             tcpContexts[key] = context
             emitEvent(
                 TransferStarted(
+                    session = sessionIdentity,
                     flowId = flowId(key),
                     destination = "${key.remoteAddress}:${key.remotePort}",
                     via = "$connectAddress:$connectPort",
@@ -955,6 +964,7 @@ class PppSession(
                     cancelTcpHandshakeTimeout(context)
                     emitEvent(
                         TransferStateChanged(
+                            session = sessionIdentity,
                             flowId = flowId(key),
                             state = TransferState.OPEN,
                         ),
@@ -969,6 +979,7 @@ class PppSession(
                     val context = tcpContexts[key] ?: continue
                     emitEvent(
                         TransferBytes(
+                            session = sessionIdentity,
                             flowId = flowId(key),
                             direction = TransferDirection.TO_HOST,
                             bytes = event.payload.size,
@@ -994,6 +1005,7 @@ class PppSession(
                         cancelTcpHandshakeTimeout(context)
                         emitEvent(
                             TransferStateChanged(
+                                session = sessionIdentity,
                                 flowId = flowId(key),
                                 state = TransferState.CLOSED,
                             ),
@@ -1045,6 +1057,7 @@ class PppSession(
             is TcpProxyEvent.Payload -> {
                 emitEvent(
                     TransferBytes(
+                        session = sessionIdentity,
                         flowId = flowId(flow.key),
                         direction = TransferDirection.TO_PEER,
                         bytes = event.bytes.size,
@@ -1267,6 +1280,7 @@ class PppSession(
         )
         emitEvent(
             TransferStateChanged(
+                session = sessionIdentity,
                 flowId = flowId(context.proxyFlow.key),
                 state = TransferState.FAILED,
                 detail = reason,
@@ -1796,6 +1810,7 @@ class PppSession(
             if (fromPeer) {
                 emitEvent(
                     DnsQuery(
+                        session = sessionIdentity,
                         key = key,
                         transport = DnsTransport.TCP,
                         id = summary?.id,
@@ -1808,6 +1823,7 @@ class PppSession(
             } else {
                 emitEvent(
                     DnsResponse(
+                        session = sessionIdentity,
                         key = key,
                         transport = DnsTransport.TCP,
                         id = summary?.id,
@@ -1836,11 +1852,16 @@ class PppSession(
         id: Int?,
     ): String = "$protocol:$ipcpGeneration:$peerPort:${id ?: -1}"
 
-    private fun flowId(key: TcpFlowKey): String =
-        "${key.peerAddress}:${key.peerPort}->${key.remoteAddress}:${key.remotePort}"
+    private fun flowId(key: TcpFlowKey, generation: Long = ipcpGeneration): String =
+        "$generation:${key.peerAddress}:${key.peerPort}->${key.remoteAddress}:${key.remotePort}"
 
+    @Synchronized
     private fun emitEvent(event: YameEvent) {
-        runCatching { eventSink(event) }
+        if (closed && event !is PppSessionEnded) return
+        runCatching { diagnosticSink(event) }.onFailure {
+            System.err.println("YAME independent event diagnostic failed: ${it.javaClass.simpleName}")
+        }
+        YameEvents.publish(event)
     }
 
     private fun updateIpcpState() {
@@ -1858,7 +1879,8 @@ class PppSession(
             cancelTcpHandshakeTimeout(context)
             emitEvent(
                 TransferStateChanged(
-                    flowId = flowId(key),
+                    session = sessionIdentity,
+                    flowId = flowId(key, context.proxyFlow.generation),
                     state = TransferState.CLOSED,
                     detail = "IPCP renegotiated",
                 ),
@@ -1883,22 +1905,28 @@ class PppSession(
         stopIpcpRestartTimer()
     }
 
-    @Synchronized
     override fun close() {
-        if (closed) return
-        closed = true
-        lcpOpen = false
-        ipcpOpen = false
-        stopLcpRestartTimer()
-        stopIpcpRestartTimer()
-        tcpHandshakeTimer.cancel()
-        tcpRetransmitTimer.cancel()
-        icmpEchoProxy.close()
-        udpProxy.close()
-        tcpContexts.values.forEach(::cancelTcpHandshakeTimeout)
-        tcpFlowTable.clear()
-        tcpContexts.clear()
-        tcpProxy.close()
+        val ended = synchronized(this) {
+            if (closed) return
+            closed = true
+            lcpOpen = false
+            ipcpOpen = false
+            stopLcpRestartTimer()
+            stopIpcpRestartTimer()
+            tcpHandshakeTimer.cancel()
+            tcpRetransmitTimer.cancel()
+            tcpContexts.values.forEach(::cancelTcpHandshakeTimeout)
+            tcpFlowTable.clear()
+            tcpContexts.clear()
+            PppSessionEnded(sessionIdentity)
+        }
+        // Workers can call back into the session. Never await them holding its monitor.
+        try {
+            icmpEchoProxy.close()
+            udpProxy.close()
+            tcpProxy.close()
+            check(tcpProxy.awaitQuiescence(java.time.Duration.ofSeconds(2))) { "PPP proxy producers did not quiesce" }
+        } finally { emitEvent(ended) }
     }
 
     companion object {

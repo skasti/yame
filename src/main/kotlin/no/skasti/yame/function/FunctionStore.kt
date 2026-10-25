@@ -27,6 +27,6 @@ class FunctionStore {
         return registration.function(argument)
     }
 
-    fun invoke(key: FunctionKey<Unit, Unit>) = invoke(key, Unit)
+    fun <R> invoke(key: FunctionKey<Unit, R>): R = invoke(key, Unit)
     fun keys(): List<FunctionKey<*, *>> = synchronized(lock) { entries.values.map { it.key } }
 }

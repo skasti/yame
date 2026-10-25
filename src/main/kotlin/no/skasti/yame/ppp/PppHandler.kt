@@ -7,6 +7,7 @@ import no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig
 import no.skasti.yame.ppp.proxy.SystemRoutingTcpProxy
 import no.skasti.yame.ppp.proxy.YameRegistries
 import no.skasti.yame.ppp.session.PppSession
+import no.skasti.yame.ppp.session.PppSessionIdentity
 import java.io.Closeable
 import java.io.OutputStream
 import kotlin.time.Duration.Companion.milliseconds
@@ -20,11 +21,12 @@ interface PppHandler : Closeable {
 }
 
 internal class RetroPppHandler(
+    private val connectionId: Long = 0,
     private val logger: (String) -> Unit = ::println,
     private val dnsLogger: (String) -> Unit = logger,
     private val transferLogger: (String) -> Unit = logger,
     private val proxyLogger: (String) -> Unit = logger,
-    private val eventSink: (YameEvent) -> Unit = {},
+    private val diagnosticSink: (YameEvent) -> Unit = {},
     private val ipConfig: PppIpConfig = PppIpConfig(),
     private val dnsConfig: PppDnsConfig = PppDnsConfig(),
     private val transformerSettings: (() -> no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings)? = null,
@@ -57,11 +59,12 @@ internal class RetroPppHandler(
         logger("PPP IP local=${addresses.localAddress} peer=${addresses.peerAddress}")
 
         session = PppSession(
+            sessionIdentity = PppSessionIdentity.create(connectionId),
             sendFrame = ::sendFrame,
             logger = logger,
             dnsLogger = dnsLogger,
             transferLogger = transferLogger,
-            eventSink = eventSink,
+            diagnosticSink = diagnosticSink,
             ipAddresses = addresses,
             selectPeerAddress = addressResolver::selectPeerAddress,
             dnsConfig = dnsConfig,
@@ -69,7 +72,7 @@ internal class RetroPppHandler(
                 httpConfig = httpCompatibilityConfig,
                 transformerSettings = transformerSettings,
                 logger = proxyLogger,
-                eventSink = eventSink,
+                diagnosticSink = diagnosticSink,
                 resourceGraphs = resourceGraphs,
             ),
         )
@@ -139,7 +142,6 @@ internal class RetroPppHandler(
     }
 
     override fun close() {
-        session?.close()
-        session = null
+        try { session?.close() } finally { session = null }
     }
 }

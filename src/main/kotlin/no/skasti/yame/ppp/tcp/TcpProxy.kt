@@ -63,6 +63,9 @@ interface TcpProxy : Closeable {
     fun invalidateBefore(generation: Long) = Unit
 
     override fun close() = Unit
+
+    /** After close, await producer/diagnostic quiescence outside protocol locks. */
+    fun awaitQuiescence(timeout: java.time.Duration): Boolean = true
 }
 
 class SystemTcpProxy(
@@ -376,6 +379,12 @@ class SystemTcpProxy(
         writeExecutor.shutdownNow()
         runCatching { readExecutor.awaitTermination(CLOSE_JOIN_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS) }
         runCatching { writeExecutor.awaitTermination(CLOSE_JOIN_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS) }
+    }
+
+    override fun awaitQuiescence(timeout: java.time.Duration): Boolean {
+        val deadline = System.nanoTime() + timeout.toNanos()
+        return readExecutor.awaitTermination(timeout.toNanos(), TimeUnit.NANOSECONDS) &&
+            writeExecutor.awaitTermination((deadline - System.nanoTime()).coerceAtLeast(0), TimeUnit.NANOSECONDS)
     }
 
     private fun daemonThreadFactory(prefix: String): ThreadFactory =

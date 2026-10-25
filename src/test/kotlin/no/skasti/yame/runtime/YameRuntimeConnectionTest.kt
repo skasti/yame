@@ -1,6 +1,7 @@
 package no.skasti.yame.runtime
 
 import com.github.ajalt.mordant.terminal.Terminal
+import no.skasti.yame.logging.DiagnosticMessage
 import no.skasti.yame.observer.YameEvent
 import no.skasti.yame.observer.YameEvents
 import no.skasti.yame.observer.EventBroker
@@ -95,12 +96,13 @@ class YameRuntimeConnectionTest {
                 firstEntered.countDown()
                 check(releaseFirst.await(5, TimeUnit.SECONDS))
             }, onClose = { firstClosed.countDown() })
+            val readySubscription = YameEvents.subscribe("ready-test", { it is DiagnosticMessage }) {
+                val message = (it as DiagnosticMessage).message
+                messages += message
+                if (message.contains("YAME ready on COM1 at 57600 baud")) secondReady.countDown()
+            }
             YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
                 YameRuntime(
-                    observer = object : RuntimeObserver { override fun onLog(message: String) {
-                        messages += message
-                        if (message.contains("YAME ready on COM1 at 57600 baud")) secondReady.countDown()
-                    } },
                     configStore = store, functions = functions, logManager = logs,
                     resourceGraphs = NavigationResourceRegistry(),
                     portProvider = { listOf(SerialPortDescriptor("COM1", "test port")) },
@@ -132,6 +134,7 @@ class YameRuntimeConnectionTest {
                     assertTrue(failures.isEmpty(), failures.toString())
                 }
             }
+            readySubscription.close()
         } finally { directory.toFile().deleteRecursively() }
     }
 
@@ -148,7 +151,6 @@ class YameRuntimeConnectionTest {
                 val messages = mutableListOf<String>()
                 YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
                     YameRuntime(
-                        observer = object : RuntimeObserver { override fun onLog(message: String) { messages += message } },
                         configStore = store, functions = functions, logManager = logs,
                         resourceGraphs = NavigationResourceRegistry(),
                         portProvider = { emptyList() }, failFastStartup = true,
@@ -160,7 +162,8 @@ class YameRuntimeConnectionTest {
                     ).use { runtime ->
                         assertSame(failure, assertFailsWith<IOException> { runtime.run() })
                         assertEquals(1, attempts)
-                        assertTrue(messages.any { it.contains("Could not open invalid") })
+                        broker.drain().await(Duration.ofSeconds(5))
+                        assertTrue(resourceEvents.filterIsInstance<DiagnosticMessage>().any { it.message.contains("Could not open invalid") })
                         if (!constructionFails) assertTrue(port.closed)
                     }
                 }
@@ -182,7 +185,7 @@ class YameRuntimeConnectionTest {
             store.onChange.subscribe { events++ }.use {
                 YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
                     YameRuntime(
-                        observer = object : RuntimeObserver {}, configStore = store,
+                        configStore = store,
                         functions = functions, logManager = logs,
                         resourceGraphs = NavigationResourceRegistry(), portProvider = { ports },
                         connectionFactory = { port, baud, flow, _ ->
@@ -285,7 +288,6 @@ class YameRuntimeConnectionTest {
 
             YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
                 val runtime = YameRuntime(
-                    observer = object : RuntimeObserver {},
                     configStore = store,
                     functions = functions,
                     logManager = logs,

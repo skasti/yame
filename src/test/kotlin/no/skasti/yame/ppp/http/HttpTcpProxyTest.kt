@@ -408,10 +408,12 @@ class HttpTcpProxyTest {
 
         assertTrue(elapsedMillis < 500, "close should remain bounded; took ${elapsedMillis}ms")
         assertEquals(1L, handlerClosed.count)
+        assertTrue(!proxy.awaitQuiescence(java.time.Duration.ZERO))
         assertTrue(!handlerClosedAfterWorker.get())
 
         release.countDown()
         assertTrue(handlerClosed.await(2, TimeUnit.SECONDS))
+        assertTrue(proxy.awaitQuiescence(java.time.Duration.ofSeconds(2)))
         assertTrue(handlerClosedAfterWorker.get())
     }
 
