@@ -4,8 +4,10 @@ import no.skasti.yame.observer.EventBroker
 import no.skasti.yame.observer.BrokerWaitResult
 import no.skasti.yame.observer.YameEvents
 import java.time.Duration
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -16,13 +18,21 @@ internal class ApplicationEventLifecycle(
     private val sealFacade: () -> Unit = YameEvents::shutdown,
     private val report: (String) -> Unit = System.err::println,
     private val terminate: (Int) -> Unit = { Runtime.getRuntime().halt(it) },
+    // Narrow shutdown-operation seams allow failure tests without changing EventBroker.
+    private val closeBroker: () -> Unit = broker::close,
+    private val awaitBrokerClosed: (Duration) -> BrokerWaitResult = broker::awaitClosed,
 ) : AutoCloseable {
     private val producers = CopyOnWriteArrayList<AutoCloseable>()
     private val consumers = CopyOnWriteArrayList<AutoCloseable>()
     private val registrationLock = Any()
     private val closing = AtomicBoolean()
     private val fatalReported = AtomicBoolean()
-    private val fatalReportComplete = CountDownLatch(1)
+    // One writer and a bounded best-effort backlog; reporting never runs on cleanup.
+    private val diagnostics = ThreadPoolExecutor(
+        1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue(16),
+        { task -> Thread(task, "yame-event-diagnostics").apply { isDaemon = true } },
+        ThreadPoolExecutor.AbortPolicy(),
+    )
     @Volatile private var deadlineNanos = Long.MAX_VALUE
     private val failed = AtomicBoolean()
     private val completed = CountDownLatch(1)
@@ -45,9 +55,7 @@ internal class ApplicationEventLifecycle(
 
     private fun finish(fatalMessage: String?) {
         if (fatalMessage != null && fatalReported.compareAndSet(false, true)) {
-            Thread({
-                try { report(fatalMessage) } finally { fatalReportComplete.countDown() }
-            }, "yame-event-fatal-report").apply { isDaemon = true; start() }
+            reportFailure(fatalMessage)
         }
         val startCleanup = synchronized(registrationLock) {
             closing.compareAndSet(false, true).also { first ->
@@ -59,35 +67,61 @@ internal class ApplicationEventLifecycle(
             // caller retains the deadline and can halt without those threads or hooks.
             Thread({
                 try {
+                    var producersQuiesced = true
                     producers.reversed().forEach { producer ->
-                        try { producer.close() } catch (error: Throwable) {
-                            failed.set(true)
-                            report("YAME producer shutdown failed: ${error.message}")
+                        if (!attempt("producer shutdown", producer::close)) producersQuiesced = false
+                    }
+                    attempt("broker close", closeBroker)
+                    attempt("broker drain") {
+                        check(awaitBrokerClosed(Duration.ofNanos(remainingNanos())) == BrokerWaitResult.COMPLETED) {
+                            "event dispatcher did not finish"
                         }
                     }
-                    broker.close()
-                    if (broker.awaitClosed(timeout) != BrokerWaitResult.COMPLETED) {
-                        error("event dispatcher did not finish")
+                    // A failed wait does not prove the dispatcher is still active (or stopped).
+                    // Inspect actual termination before releasing resources its callbacks use.
+                    val brokerStopped = broker.status.terminated
+                    if (brokerStopped) {
+                        consumers.reversed().forEach { consumer -> attempt("consumer shutdown", consumer::close) }
+                    } else {
+                        reportFailure("YAME consumer shutdown skipped: event dispatcher has not terminated")
                     }
-                    consumers.reversed().forEach { it.close() }
-                    sealFacade()
+                    if (producersQuiesced && brokerStopped) {
+                        attempt("facade shutdown", sealFacade)
+                    } else {
+                        reportFailure("YAME facade shutdown skipped: producer or broker shutdown is incomplete")
+                    }
                 } catch (error: Throwable) {
-                    failed.set(true)
-                    runCatching { report("YAME incomplete event shutdown: ${error.message}") }
+                    reportFailure("YAME incomplete event shutdown: ${error.message}")
                 } finally {
                     completed.countDown()
                 }
             }, "yame-event-cleanup").apply { isDaemon = true; start() }
         }
-        fun remaining() = (deadlineNanos - System.nanoTime()).coerceAtLeast(0)
         val done = try {
-            val cleanedUp = completed.await(remaining(), TimeUnit.NANOSECONDS)
-            if (fatalReported.get()) fatalReportComplete.await(remaining(), TimeUnit.NANOSECONDS)
-            cleanedUp
+            val cleanedUp = completed.await(remainingNanos(), TimeUnit.NANOSECONDS)
+            diagnostics.shutdown()
+            val reported = diagnostics.awaitTermination(remainingNanos(), TimeUnit.NANOSECONDS)
+            cleanedUp && reported
         } catch (_: InterruptedException) { Thread.currentThread().interrupt(); false }
+        finally { diagnostics.shutdown() }
         if (!done || failed.get() || broker.status.failure != null) {
             // Do not let a blocked stderr/file writer or shutdown hook prevent failure exit.
             terminate(1)
         }
+    }
+
+    private fun remainingNanos() = (deadlineNanos - System.nanoTime()).coerceAtLeast(0)
+
+    private fun attempt(operation: String, action: () -> Unit): Boolean = try {
+        action()
+        true
+    } catch (error: Throwable) {
+        reportFailure("YAME $operation failed: ${error.message}")
+        false
+    }
+
+    private fun reportFailure(message: String) {
+        failed.set(true) // Diagnostic rejection, exceptions or blocking cannot conceal this.
+        runCatching { diagnostics.execute { runCatching { report(message) } } }
     }
 }

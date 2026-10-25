@@ -67,6 +67,187 @@ class ApplicationEventLifecycleTest {
         assertEquals(1, broker.status.subscriberFailures)
     }
 
+    @Test fun `failed producer preserves reverse cleanup order and prevents premature facade sealing`() {
+        val broker = EventBroker()
+        val order = CopyOnWriteArrayList<String>()
+        val exits = mutableListOf<Int>()
+        val owner = ApplicationEventLifecycle(broker, sealFacade = { order += "seal" },
+            report = {}, terminate = exits::add)
+        owner.producer(AutoCloseable { order += "producer-first" })
+        owner.producer(AutoCloseable { order += "producer-failed"; error("producer failed") })
+        owner.producer(AutoCloseable { order += "producer-last" })
+        owner.consumer(AutoCloseable { order += "consumer-first" })
+        owner.consumer(AutoCloseable { order += "consumer-last" })
+
+        owner.close()
+
+        assertEquals(listOf("producer-last", "producer-failed", "producer-first", "consumer-last", "consumer-first"), order.toList())
+        assertTrue(broker.status.terminated)
+        assertEquals(listOf(1), exits)
+    }
+
+    @Test fun `failed consumer does not prevent remaining consumers or safe facade sealing`() {
+        val broker = EventBroker()
+        val order = CopyOnWriteArrayList<String>()
+        val exits = mutableListOf<Int>()
+        val owner = ApplicationEventLifecycle(broker, sealFacade = { order += "seal" },
+            report = {}, terminate = exits::add)
+        owner.producer(AutoCloseable { order += "producer" })
+        owner.consumer(AutoCloseable { order += "consumer-first" })
+        owner.consumer(AutoCloseable { order += "consumer-failed"; error("consumer failed") })
+        owner.consumer(AutoCloseable { order += "consumer-last" })
+
+        owner.close()
+
+        assertEquals(listOf("producer", "consumer-last", "consumer-failed", "consumer-first", "seal"), order.toList())
+        assertEquals(listOf(1), exits)
+        owner.close()
+        assertEquals(listOf(1, 1), exits, "cleanup failure remains latched after repeated close")
+    }
+
+    @Test fun `throwing reporter cannot interrupt cleanup or conceal its failures`() {
+        val broker = EventBroker()
+        val order = CopyOnWriteArrayList<String>()
+        val reports = java.util.concurrent.atomic.AtomicInteger()
+        val exits = mutableListOf<Int>()
+        val owner = ApplicationEventLifecycle(broker, sealFacade = { order += "seal" },
+            report = { reports.incrementAndGet(); error("report failed") }, terminate = exits::add)
+        owner.producer(AutoCloseable { order += "producer-first" })
+        owner.producer(AutoCloseable { order += "producer-failed"; error("original producer failure") })
+        owner.consumer(AutoCloseable { order += "consumer-first" })
+        owner.consumer(AutoCloseable { order += "consumer-failed"; error("original consumer failure") })
+
+        owner.close()
+
+        assertEquals(listOf("producer-failed", "producer-first", "consumer-failed", "consumer-first"), order.toList())
+        assertTrue(reports.get() >= 2, "a reporter exception must not disable subsequent diagnostic attempts")
+        assertTrue(broker.status.terminated)
+        assertEquals(listOf(1), exits)
+    }
+
+    @Test fun `broker close and wait exceptions still allow cleanup when termination is confirmed`() {
+        for (failureAt in listOf("close", "wait")) {
+            val broker = EventBroker()
+            val order = CopyOnWriteArrayList<String>()
+            val exits = mutableListOf<Int>()
+            val owner = ApplicationEventLifecycle(broker, sealFacade = { order += "seal" },
+                report = {}, terminate = exits::add,
+                closeBroker = {
+                    order += "broker-close"
+                    broker.close()
+                    if (failureAt == "close") error("close failed after stopping admission")
+                },
+                awaitBrokerClosed = { timeout ->
+                    order += "broker-wait"
+                    val result = broker.awaitClosed(timeout)
+                    if (failureAt == "wait") {
+                        check(result == BrokerWaitResult.COMPLETED)
+                        error("wait failed after termination")
+                    }
+                    result
+                })
+            owner.producer(AutoCloseable { order += "producer" })
+            owner.consumer(AutoCloseable { order += "consumer" })
+
+            owner.close()
+
+            assertEquals(listOf("producer", "broker-close", "broker-wait", "consumer", "seal"), order.toList(), failureAt)
+            assertTrue(broker.status.terminated, failureAt)
+            assertEquals(listOf(1), exits, failureAt)
+        }
+    }
+
+    @Test fun `unconfirmed broker termination skips consumer resources and facade sealing`() {
+        val broker = EventBroker()
+        val order = CopyOnWriteArrayList<String>()
+        val reports = CopyOnWriteArrayList<String>()
+        val exits = mutableListOf<Int>()
+        val owner = ApplicationEventLifecycle(broker, sealFacade = { order += "seal" },
+            report = reports::add, terminate = exits::add,
+            closeBroker = { error("close failed before stopping admission") },
+            awaitBrokerClosed = { BrokerWaitResult.TIMED_OUT })
+        owner.producer(AutoCloseable { order += "producer" })
+        owner.consumer(AutoCloseable { order += "consumer" })
+        try {
+            owner.close()
+            assertEquals(listOf("producer"), order.toList())
+            assertFalse(broker.status.closing)
+            assertEquals(listOf(1), exits)
+            assertTrue(reports.any { it.contains("consumer shutdown skipped") })
+            assertTrue(reports.any { it.contains("facade shutdown skipped") })
+        } finally {
+            broker.close()
+            assertEquals(BrokerWaitResult.COMPLETED, broker.awaitClosed(Duration.ofSeconds(5)))
+        }
+    }
+
+    @Test fun `facade sealing failure preserves cleanup failure status`() {
+        val broker = EventBroker()
+        val order = CopyOnWriteArrayList<String>()
+        val exits = mutableListOf<Int>()
+        val owner = ApplicationEventLifecycle(broker, sealFacade = { order += "seal"; error("seal failed") },
+            report = { error("report failed") }, terminate = exits::add)
+        owner.producer(AutoCloseable { order += "producer" })
+        owner.consumer(AutoCloseable { order += "consumer" })
+
+        owner.close()
+
+        assertEquals(listOf("producer", "consumer", "seal"), order.toList())
+        assertTrue(broker.status.terminated)
+        assertEquals(listOf(1), exits)
+    }
+
+    @Test fun `blocked reporting and a full diagnostic backlog cannot delay remaining cleanup`() {
+        val broker = EventBroker()
+        val reportEntered = CountDownLatch(1)
+        val releaseReport = CountDownLatch(1)
+        val closedConsumers = java.util.concurrent.atomic.AtomicInteger()
+        val exits = mutableListOf<Int>()
+        val owner = ApplicationEventLifecycle(broker, timeout = Duration.ofMillis(200), sealFacade = {},
+            report = { reportEntered.countDown(); releaseReport.await(5, TimeUnit.SECONDS) }, terminate = exits::add)
+        // Exceed the bounded diagnostic backlog while its sole writer is blocked.
+        repeat(40) { owner.consumer(AutoCloseable { closedConsumers.incrementAndGet(); error("consumer failed") }) }
+        try {
+            owner.close()
+            assertTrue(reportEntered.await(2, TimeUnit.SECONDS))
+            assertEquals(40, closedConsumers.get())
+            assertTrue(broker.status.terminated)
+            assertEquals(listOf(1), exits)
+        } finally { releaseReport.countDown() }
+    }
+
+    @Test fun `blocked producer cannot prevent deadline enforcement or cause premature sealing`() {
+        val broker = EventBroker()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val sealed = CountDownLatch(1)
+        val closedConsumer = CountDownLatch(1)
+        val cleanupThread = java.util.concurrent.atomic.AtomicReference<Thread>()
+        val exits = mutableListOf<Int>()
+        val owner = ApplicationEventLifecycle(broker, timeout = Duration.ofMillis(200),
+            sealFacade = { sealed.countDown() }, report = {}, terminate = exits::add)
+        owner.producer(AutoCloseable {
+            cleanupThread.set(Thread.currentThread())
+            entered.countDown()
+            release.await(5, TimeUnit.SECONDS)
+        })
+        owner.consumer(AutoCloseable { closedConsumer.countDown() })
+        try {
+            owner.close()
+            assertTrue(entered.await(2, TimeUnit.SECONDS))
+            assertEquals(listOf(1), exits)
+            assertEquals(1L, closedConsumer.count)
+            assertEquals(1L, sealed.count)
+            assertFalse(broker.status.closing)
+        } finally {
+            release.countDown()
+            // The injected terminate callback returns; let its cleanup thread finish.
+            cleanupThread.get()?.join(5_000)
+            assertFalse(cleanupThread.get()?.isAlive == true)
+            assertEquals(BrokerWaitResult.COMPLETED, broker.awaitClosed(Duration.ofSeconds(5)))
+        }
+    }
+
     @Test fun `blocked cleanup or diagnostic reporting cannot prevent bounded fatal exit`() {
         val broker = EventBroker(EventBrokerConfig(capacity = 1, publishTimeout = Duration.ZERO))
         val release = CountDownLatch(1)

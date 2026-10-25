@@ -178,6 +178,18 @@ frontend, configuration installation and logging/capture resources. Finally it
 seals the facade. An incomplete shutdown is a failure; it never claims a
 successful drain or closes a still-dispatching frontend.
 
+Producer and consumer cleanup exceptions are isolated per registration, in reverse
+order. Broker close and wait failures are isolated too: confirmed dispatcher
+termination still allows consumer cleanup. Consumer resources remain open when
+termination is unconfirmed; facade sealing requires both successful producer
+quiescence and confirmed broker termination, but does not require every consumer
+close to succeed. Any cleanup failure remains latched and causes nonzero exit.
+Diagnostics use one daemon writer with at most 16 pending messages. Reporting
+exceptions or a full diagnostic backlog are best-effort losses, not cleanup
+failures being cleared; a blocked writer cannot hold up cleanup. Cleanup and
+diagnostic completion share the original global deadline. A cleanup operation
+that never returns can leave later operations unattempted before forced exit.
+
 ## Runtime observations and queries
 
 - `ConnectionStateChanged` carries a process-monotonic connection ID, state and
