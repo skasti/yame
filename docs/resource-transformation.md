@@ -67,9 +67,11 @@ captured at the registry transition, before publication or consumer handling.
 The registry publishes directly through `YameEvents`; tests install an isolated
 real broker and record through a subscriber. Application composition registers
 consumers early, supervises fatal overload and coordinates shutdown.
-The TUI proxy projection still uses registry hooks until
-[#103](https://github.com/skasti/yame/issues/103). See the
-[event contract](yame-events.md#event-contract) for payload and ordering details.
+The TUI consumes these observations incrementally through its existing event
+subscriber, without hooks or registry reads. Its independent projection retains
+graph lifetime, resource and fetch identity, associations and domain usage values.
+See the [projection behavior and limits](yame-events.md#proxy-dashboard-projection)
+and [event contract](yame-events.md#event-contract).
 
 Reconnect never resets or replaces the process registry. If an explicit reset is
 needed, its contract is to clear retained data in place, preserve registry

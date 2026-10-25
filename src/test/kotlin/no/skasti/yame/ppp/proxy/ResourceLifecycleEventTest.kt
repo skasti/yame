@@ -118,6 +118,26 @@ class ResourceLifecycleEventTest {
     }
 
     @Test
+    fun `repeated discovery reports one resource admission and cumulative graph use`() {
+        val registry = NavigationResourceRegistry()
+        val request = URI("http://legacy.test/page")
+        val graph = registry.startNavigation(request)
+        val child = URI("http://cdn.test/shared.gif")
+        repeat(2) {
+            registry.discover(graph, request, child, URI("https://cdn.test/shared.gif"),
+                ResourceRelation.IMG_SRC, ResourceKind.IMAGE)
+        }
+        val observed = observedEvents()
+        val resources = observed.filterIsInstance<ResourceLifecycleEvent>()
+        assertEquals(listOf(request), resources.filter { it.change == ResourceLifecycleChange.ADMITTED }
+            .map { it.resourceLegacyUri })
+        assertEquals(listOf(child), resources.filter { it.change == ResourceLifecycleChange.DISCOVERED }
+            .map { it.resourceLegacyUri })
+        assertEquals(listOf(1L, 2L, 3L), observed.filterIsInstance<ResourceGraphLifecycleEvent>()
+            .filter { it.change == ResourceGraphChange.USED }.map { it.usageCount })
+    }
+
+    @Test
     fun `fetch retry has a new identity and can return to fetching after ready`() {
         val registry = NavigationResourceRegistry()
         val graph = registry.startNavigation(URI("http://legacy.test/root"))

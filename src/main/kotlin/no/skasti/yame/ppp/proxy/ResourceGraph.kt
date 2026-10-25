@@ -69,74 +69,12 @@ internal data class NavigationResourceGraphSnapshot(
     val edges: List<ResourceEdgeSnapshot>,
 )
 
-internal data class ResourceRegistryRoot(
-    val graphId: Long,
-    val rootLegacyUri: URI,
-)
-
-internal data class ResourceRegistryResource(
-    val graphId: Long,
-    val rootLegacyUri: URI,
-    val canonicalResourceKey: String,
-    val resourceLegacyUri: URI,
-    val upstreamUri: URI?,
-    val role: ReferenceRole,
-    val state: ResourceState,
-    val kind: ResourceKind,
-    val contentBase: URI?,
-    val prefetched: Boolean = false,
-    val transformations: List<ResourceTransformationSummary> = emptyList(),
-    val fetchAttemptId: Long? = null,
-    val fetchAttemptNumber: Long? = null,
-    val associations: List<ResourceEdgeSnapshot> = emptyList(),
-    val graphUsageCount: Long = 0,
-    val graphLastUsedAt: Instant? = null,
-)
-
 internal data class ResourceFetchAttempt(
     val graphId: Long,
     val legacyUri: URI,
     val id: Long,
     val attemptNumber: Long,
 )
-
-internal class ResourceRegistryEvent<T>(
-    private val dispatch: ((() -> Unit) -> Unit),
-) {
-    private val handlers = linkedSetOf<(T) -> Unit>()
-
-    @Synchronized
-    operator fun plusAssign(handler: (T) -> Unit) {
-        handlers += handler
-    }
-
-    @Synchronized
-    operator fun minusAssign(handler: (T) -> Unit) {
-        handlers -= handler
-    }
-
-    fun fire(value: T) {
-        val snapshot = synchronized(this) { handlers.toList() }
-        snapshot.forEach { handler ->
-            runCatching {
-                dispatch {
-                    runCatching { handler(value) }
-                }
-            }
-        }
-    }
-}
-
-internal class ResourceRegistryHooks(
-    private val dispatch: ((() -> Unit) -> Unit) = { task -> task() },
-) {
-    val onRootAdded = ResourceRegistryEvent<ResourceRegistryRoot>(dispatch)
-    val onRootRemoved = ResourceRegistryEvent<ResourceRegistryRoot>(dispatch)
-    val onRootUsed = ResourceRegistryEvent<ResourceRegistryRoot>(dispatch)
-    val onResourceAdded = ResourceRegistryEvent<ResourceRegistryResource>(dispatch)
-    val onResourceUpdated = ResourceRegistryEvent<ResourceRegistryResource>(dispatch)
-    val onResourceRemoved = ResourceRegistryEvent<ResourceRegistryResource>(dispatch)
-}
 
 internal class NavigationResourceGraph(
     val id: Long,
@@ -414,37 +352,12 @@ internal class NavigationResourceRegistry(
     private val maxContexts: Int = 512,
     private val maxNodesPerHost: Int = 4_096,
     private val maxEdgesPerContext: Int = 2_048,
-    val hooks: ResourceRegistryHooks = ResourceRegistryHooks(),
     private val clock: Clock = Clock.systemUTC(),
 ) {
     init {
         require(maxContexts > 0) { "Navigation context limit must be positive" }
         require(maxNodesPerHost > 0) { "Resource graph node limit per host must be positive" }
         require(maxEdgesPerContext > 0) { "Resource graph edge limit must be positive" }
-    }
-
-    private sealed interface PendingEvent {
-        val event: YameEvent
-        fun fire(hooks: ResourceRegistryHooks)
-
-        data class RootAdded(val value: ResourceRegistryRoot, override val event: YameEvent) : PendingEvent {
-            override fun fire(hooks: ResourceRegistryHooks) = hooks.onRootAdded.fire(value)
-        }
-        data class RootRemoved(val value: ResourceRegistryRoot, override val event: YameEvent) : PendingEvent {
-            override fun fire(hooks: ResourceRegistryHooks) = hooks.onRootRemoved.fire(value)
-        }
-        data class RootUsed(val value: ResourceRegistryRoot, override val event: YameEvent) : PendingEvent {
-            override fun fire(hooks: ResourceRegistryHooks) = hooks.onRootUsed.fire(value)
-        }
-        data class ResourceAdded(val value: ResourceRegistryResource, override val event: YameEvent) : PendingEvent {
-            override fun fire(hooks: ResourceRegistryHooks) = hooks.onResourceAdded.fire(value)
-        }
-        data class ResourceUpdated(val value: ResourceRegistryResource, override val event: YameEvent) : PendingEvent {
-            override fun fire(hooks: ResourceRegistryHooks) = hooks.onResourceUpdated.fire(value)
-        }
-        data class ResourceRemoved(val value: ResourceRegistryResource, override val event: YameEvent) : PendingEvent {
-            override fun fire(hooks: ResourceRegistryHooks) = hooks.onResourceRemoved.fire(value)
-        }
     }
 
     private val lock = Any()
@@ -471,7 +384,7 @@ internal class NavigationResourceRegistry(
         resourceRoot: URI,
         associatedResource: URI,
     ): NavigationResourceGraph {
-        val pending = mutableListOf<PendingEvent>()
+        val pending = mutableListOf<YameEvent>()
         val graph =
             synchronized(lock) {
                 val rootKey = LegacyHttpUrl.requestObservableKey(resourceRoot)
@@ -481,11 +394,7 @@ internal class NavigationResourceRegistry(
                     touchLocked(existing.id)
                     existing.recordUse(occurredAt)
                     admitAssociatedResourceLocked(existing, associatedResource, occurredAt, pending)
-                    val root = ResourceRegistryRoot(existing.id, existing.rootLegacyUri)
-                    pending += PendingEvent.RootUsed(
-                        root,
-                        graphLifecycleEvent(existing, ResourceGraphChange.USED, occurredAt),
-                    )
+                    pending += graphLifecycleEvent(existing, ResourceGraphChange.USED, occurredAt)
                     existing
                 } else {
                     while (graphs.size >= maxContexts) evictLeastRecentlyUsedLocked(pending)
@@ -501,20 +410,13 @@ internal class NavigationResourceRegistry(
                         associateLocked(resourceRoot, created.id)
                         created.recordUse(occurredAt)
                         admitAssociatedResourceLocked(created, associatedResource, occurredAt, pending)
-                        val root = ResourceRegistryRoot(created.id, resourceRoot)
-                        pending += PendingEvent.RootAdded(
-                            root,
-                            graphLifecycleEvent(
-                                created,
-                                ResourceGraphChange.CREATED,
-                                occurredAt,
-                                includeInitialResources = true,
-                            ),
+                        pending += graphLifecycleEvent(
+                            created,
+                            ResourceGraphChange.CREATED,
+                            occurredAt,
+                            includeInitialResources = true,
                         )
-                        pending += PendingEvent.RootUsed(
-                            root,
-                            graphLifecycleEvent(created, ResourceGraphChange.USED, occurredAt),
-                        )
+                        pending += graphLifecycleEvent(created, ResourceGraphChange.USED, occurredAt)
                     }
                 }
             }
@@ -526,7 +428,7 @@ internal class NavigationResourceRegistry(
         graph: NavigationResourceGraph,
         resource: URI,
         occurredAt: Instant,
-        pending: MutableList<PendingEvent>,
+        pending: MutableList<YameEvent>,
     ) {
         val wasKnown = graph.contains(resource)
         if (!graph.ensureDirectResource(resource)) return
@@ -534,36 +436,10 @@ internal class NavigationResourceRegistry(
         if (!wasKnown && LegacyHttpUrl.requestObservableKey(resource) !=
             LegacyHttpUrl.requestObservableKey(graph.rootLegacyUri)
         ) {
-            resourceAddedEvent(graph, resource, ResourceLifecycleChange.ADMITTED, occurredAt)
+            resourceLifecycleEvent(graph, resource, ResourceLifecycleChange.ADMITTED, occurredAt)
                 ?.let(pending::add)
         }
     }
-
-    private fun registryResource(
-        graph: NavigationResourceGraph,
-        legacyUri: URI,
-    ): ResourceRegistryResource? =
-        graph.nodeSnapshot(legacyUri)?.let { node ->
-            val (usageCount, lastUsedAt) = graph.usageSnapshot()
-            ResourceRegistryResource(
-                graphId = graph.id,
-                rootLegacyUri = graph.rootLegacyUri,
-                canonicalResourceKey = LegacyHttpUrl.requestObservableKey(node.legacyUri),
-                resourceLegacyUri = node.legacyUri,
-                upstreamUri = node.upstreamUri,
-                role = node.role,
-                state = node.state,
-                kind = node.kind,
-                contentBase = node.contentBase,
-                prefetched = node.prefetched,
-                transformations = node.transformations,
-                fetchAttemptId = node.fetchAttemptId,
-                fetchAttemptNumber = node.fetchAttemptNumber,
-                associations = graph.associationsFor(node.legacyUri),
-                graphUsageCount = usageCount,
-                graphLastUsedAt = lastUsedAt,
-            )
-        }
 
     private fun graphLifecycleEvent(
         graph: NavigationResourceGraph,
@@ -575,9 +451,7 @@ internal class NavigationResourceRegistry(
         val initialResources =
             if (includeInitialResources) {
                 graph.snapshot().nodes.mapNotNull { node ->
-                    registryResource(graph, node.legacyUri)?.let { resource ->
-                        resourceLifecycleEvent(ResourceLifecycleChange.ADMITTED, resource, occurredAt)
-                    }
+                    resourceLifecycleEvent(graph, node.legacyUri, ResourceLifecycleChange.ADMITTED, occurredAt)
                 }
             } else {
                 emptyList()
@@ -594,16 +468,18 @@ internal class NavigationResourceRegistry(
     }
 
     private fun resourceLifecycleEvent(
+        graph: NavigationResourceGraph,
+        legacyUri: URI,
         change: ResourceLifecycleChange,
-        resource: ResourceRegistryResource,
         occurredAt: Instant,
-    ): ResourceLifecycleEvent =
+    ): ResourceLifecycleEvent? = graph.nodeSnapshot(legacyUri)?.let { resource ->
+        val (usageCount, lastUsedAt) = graph.usageSnapshot()
         ResourceLifecycleEvent(
             change = change,
-            graphId = resource.graphId,
-            rootLegacyUri = resource.rootLegacyUri,
-            canonicalResourceKey = resource.canonicalResourceKey,
-            resourceLegacyUri = resource.resourceLegacyUri,
+            graphId = graph.id,
+            rootLegacyUri = graph.rootLegacyUri,
+            canonicalResourceKey = LegacyHttpUrl.requestObservableKey(resource.legacyUri),
+            resourceLegacyUri = resource.legacyUri,
             upstreamUri = resource.upstreamUri,
             role = resource.role,
             kind = resource.kind,
@@ -612,31 +488,12 @@ internal class NavigationResourceRegistry(
             prefetched = resource.prefetched,
             fetchAttemptId = resource.fetchAttemptId,
             fetchAttemptNumber = resource.fetchAttemptNumber,
-            associations = resource.associations,
+            associations = graph.associationsFor(legacyUri),
             transformations = resource.transformations,
-            graphUsageCount = resource.graphUsageCount,
-            graphLastUsedAt = resource.graphLastUsedAt,
+            graphUsageCount = usageCount,
+            graphLastUsedAt = lastUsedAt,
             occurredAt = occurredAt,
         )
-
-    private fun resourceAddedEvent(
-        graph: NavigationResourceGraph,
-        legacyUri: URI,
-        change: ResourceLifecycleChange,
-        occurredAt: Instant,
-    ): PendingEvent.ResourceAdded? {
-        val resource = registryResource(graph, legacyUri) ?: return null
-        return PendingEvent.ResourceAdded(resource, resourceLifecycleEvent(change, resource, occurredAt))
-    }
-
-    private fun resourceUpdatedEvent(
-        graph: NavigationResourceGraph,
-        legacyUri: URI,
-        change: ResourceLifecycleChange,
-        occurredAt: Instant,
-    ): PendingEvent.ResourceUpdated? {
-        val resource = registryResource(graph, legacyUri) ?: return null
-        return PendingEvent.ResourceUpdated(resource, resourceLifecycleEvent(change, resource, occurredAt))
     }
 
     fun contextsFor(legacyUri: URI): List<NavigationResourceGraph> =
@@ -658,7 +515,7 @@ internal class NavigationResourceRegistry(
         relation: ResourceRelation,
         kind: ResourceKind,
     ) {
-        val pending = mutableListOf<PendingEvent>()
+        val pending = mutableListOf<YameEvent>()
         synchronized(lock) {
             if (graphs[graph.id] !== graph) return
             val previous = graph.nodeSnapshot(childLegacyUri)
@@ -668,24 +525,21 @@ internal class NavigationResourceRegistry(
                 touchLocked(graph.id)
                 graph.recordUse(occurredAt)
                 associateLocked(childLegacyUri, graph.id)
-                pending += PendingEvent.RootUsed(
-                    ResourceRegistryRoot(graph.id, graph.rootLegacyUri),
-                    graphLifecycleEvent(graph, ResourceGraphChange.USED, occurredAt),
-                )
+                pending += graphLifecycleEvent(graph, ResourceGraphChange.USED, occurredAt)
                 val resource = graph.nodeSnapshot(childLegacyUri)
                 val associations = graph.associationsFor(childLegacyUri)
                 if (previous == null) {
-                    resourceAddedEvent(graph, childLegacyUri, ResourceLifecycleChange.DISCOVERED, occurredAt)
+                    resourceLifecycleEvent(graph, childLegacyUri, ResourceLifecycleChange.DISCOVERED, occurredAt)
                         ?.let(pending::add)
                 } else if (resource != null && associations != previousAssociations) {
-                    resourceUpdatedEvent(
+                    resourceLifecycleEvent(
                         graph,
                         childLegacyUri,
                         ResourceLifecycleChange.ASSOCIATION_ADDED,
                         occurredAt,
                     )?.let(pending::add)
                 } else if (resource != previous) {
-                    resourceUpdatedEvent(graph, childLegacyUri, ResourceLifecycleChange.UPDATED, occurredAt)
+                    resourceLifecycleEvent(graph, childLegacyUri, ResourceLifecycleChange.UPDATED, occurredAt)
                         ?.let(pending::add)
                 }
             }
@@ -700,7 +554,7 @@ internal class NavigationResourceRegistry(
         contentBase: URI?,
         prefetched: Boolean = false,
     ): ResourceFetchAttempt? {
-        val pending = mutableListOf<PendingEvent>()
+        val pending = mutableListOf<YameEvent>()
         val attempt =
             synchronized(lock) {
                 if (graphs[graph.id] !== graph) return@synchronized null
@@ -729,10 +583,10 @@ internal class NavigationResourceRegistry(
                     prefetched,
                 )
                 if (previous == null) {
-                    resourceAddedEvent(graph, legacyUri, ResourceLifecycleChange.ADMITTED, occurredAt)
+                    resourceLifecycleEvent(graph, legacyUri, ResourceLifecycleChange.ADMITTED, occurredAt)
                         ?.let(pending::add)
                 }
-                resourceUpdatedEvent(
+                resourceLifecycleEvent(
                     graph,
                     legacyUri,
                     if (created.attemptNumber == 1L) {
@@ -756,7 +610,7 @@ internal class NavigationResourceRegistry(
         contentBase: URI?,
         state: ResourceState,
     ): Boolean {
-        val pending = mutableListOf<PendingEvent>()
+        val pending = mutableListOf<YameEvent>()
         val changed =
             synchronized(lock) {
                 if (graphs[graph.id] !== graph) return@synchronized false
@@ -778,7 +632,7 @@ internal class NavigationResourceRegistry(
                     return@synchronized false
                 }
                 touchLocked(graph.id)
-                resourceUpdatedEvent(
+                resourceLifecycleEvent(
                     graph,
                     legacyUri,
                     if (state == ResourceState.READY || state == ResourceState.FAILED) {
@@ -801,7 +655,7 @@ internal class NavigationResourceRegistry(
         legacyUri: URI,
         transformations: List<ResourceTransformationSummary>,
     ) {
-        val pending = mutableListOf<PendingEvent>()
+        val pending = mutableListOf<YameEvent>()
         val snapshot = immutableSnapshotList(transformations)
         synchronized(lock) {
             contextByLegacyUri[LegacyHttpUrl.requestObservableKey(legacyUri)]
@@ -810,7 +664,7 @@ internal class NavigationResourceRegistry(
                 .forEach { graph ->
                     val occurredAt = clock.instant()
                     if (graph.setTransformations(legacyUri, snapshot)) {
-                        resourceUpdatedEvent(
+                        resourceLifecycleEvent(
                             graph,
                             legacyUri,
                             ResourceLifecycleChange.TRANSFORMATIONS_UPDATED,
@@ -827,12 +681,12 @@ internal class NavigationResourceRegistry(
         legacyUri: URI,
         kind: ResourceKind,
     ) {
-        val pending = mutableListOf<PendingEvent>()
+        val pending = mutableListOf<YameEvent>()
         synchronized(lock) {
             if (graphs[graph.id] !== graph) return
             val occurredAt = clock.instant()
             if (graph.updateKind(legacyUri, kind)) {
-                resourceUpdatedEvent(
+                resourceLifecycleEvent(
                     graph,
                     legacyUri,
                     ResourceLifecycleChange.KIND_UPDATED,
@@ -854,68 +708,22 @@ internal class NavigationResourceRegistry(
         graphs[graphId] = graph
     }
 
-    /** Preserve the existing TUI hooks while publishing immutable domain events outside the registry lock. */
-    private fun deliver(pending: List<PendingEvent>) {
-        pending.forEach { it.fire(hooks) }
-        pending.forEach { YameEvents.publish(it.event) }
+    /** Stage immutable observations under the lock; broker admission/fatal failures propagate outside it. */
+    private fun deliver(pending: List<YameEvent>) {
+        pending.forEach { YameEvents.publish(it) }
     }
 
-    private fun evictLeastRecentlyUsedLocked(pending: MutableList<PendingEvent>) {
+    private fun evictLeastRecentlyUsedLocked(pending: MutableList<YameEvent>) {
         if (graphs.isEmpty()) return
         val occurredAt = clock.instant()
         val oldestId = graphs.keys.first()
         val removed = graphs.remove(oldestId) ?: return
         graphByRootLegacyUri.remove(LegacyHttpUrl.requestObservableKey(removed.rootLegacyUri))
         val snapshot = removed.snapshot()
-        val (usageCount, lastUsedAt) = removed.usageSnapshot()
-        val root = ResourceRegistryRoot(snapshot.id, snapshot.rootLegacyUri)
-        pending += PendingEvent.RootRemoved(
-            root,
-            ResourceGraphLifecycleEvent(
-                change = ResourceGraphChange.REMOVED,
-                graphId = snapshot.id,
-                rootLegacyUri = snapshot.rootLegacyUri,
-                occurredAt = occurredAt,
-                usageCount = usageCount,
-                lastUsedAt = lastUsedAt,
-            ),
-        )
+        pending += graphLifecycleEvent(removed, ResourceGraphChange.REMOVED, occurredAt)
         snapshot.nodes.forEach { resource ->
-            val canonicalKey = LegacyHttpUrl.requestObservableKey(resource.legacyUri)
-            val associations = immutableSnapshotList(
-                snapshot.edges.filter { edge ->
-                    LegacyHttpUrl.requestObservableKey(edge.parentLegacyUri) == canonicalKey ||
-                        LegacyHttpUrl.requestObservableKey(edge.childLegacyUri) == canonicalKey
-                },
-            )
-            val value =
-                ResourceRegistryResource(
-                    graphId = snapshot.id,
-                    rootLegacyUri = snapshot.rootLegacyUri,
-                    canonicalResourceKey = canonicalKey,
-                    resourceLegacyUri = resource.legacyUri,
-                    upstreamUri = resource.upstreamUri,
-                    role = resource.role,
-                    state = resource.state,
-                    kind = resource.kind,
-                    contentBase = resource.contentBase,
-                    prefetched = resource.prefetched,
-                    transformations = immutableSnapshotList(resource.transformations),
-                    fetchAttemptId = resource.fetchAttemptId,
-                    fetchAttemptNumber = resource.fetchAttemptNumber,
-                    associations = associations,
-                    graphUsageCount = usageCount,
-                    graphLastUsedAt = lastUsedAt,
-                )
-            pending +=
-                PendingEvent.ResourceRemoved(
-                    value,
-                    resourceLifecycleEvent(
-                        ResourceLifecycleChange.REMOVED,
-                        value,
-                        occurredAt,
-                    ),
-                )
+            resourceLifecycleEvent(removed, resource.legacyUri, ResourceLifecycleChange.REMOVED, occurredAt)
+                ?.let(pending::add)
         }
         val iterator = contextByLegacyUri.entries.iterator()
         while (iterator.hasNext()) {

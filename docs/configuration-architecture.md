@@ -146,8 +146,9 @@ Runtime observations remain separate from settings and functions. The proxy
 resource registry now emits its producer-owned lifecycle contract; production
 consumer registration, fatal supervision and broker shutdown are implemented
 by application composition. Runtime connection, transfer and log observations
-also use YameEvents. The proxy dashboard projection migration remains tracked by
-[#103](https://github.com/skasti/yame/issues/103).
+also use YameEvents. The proxy dashboard incrementally consumes public lifecycle
+payloads through that same subscriber, with no registry hooks or snapshot reads;
+see [proxy projection](yame-events.md#proxy-dashboard-projection).
 
 ## Functions
 

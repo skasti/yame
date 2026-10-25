@@ -17,7 +17,8 @@ import no.skasti.yame.ppp.session.TransferDirection
 import no.skasti.yame.ppp.session.TransferKind
 import no.skasti.yame.ppp.session.TransferState
 import no.skasti.yame.ppp.proxy.HttpProxyAction
-import no.skasti.yame.ppp.proxy.NavigationResourceGraphSnapshot
+import no.skasti.yame.ppp.proxy.ResourceGraphLifecycleEvent
+import no.skasti.yame.ppp.proxy.ResourceLifecycleEvent
 
 import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.config.SettingKey
@@ -52,6 +53,7 @@ import no.skasti.yame.ppp.proxy.transform.ResourceTransformationSummary
 import no.skasti.yame.serial.SerialPortDescriptor
 import no.skasti.yame.serial.SerialFlowControl
 import java.net.URI
+import java.time.Instant
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
@@ -99,18 +101,12 @@ class TuiYameObserver(
     private val pendingTransfers = linkedMapOf<String, MutableList<YameEvent>>()
     private var pendingTransferCount = 0
 
-    private data class HttpGraphState(
-        val rootLegacyUri: URI,
-        val resources: LinkedHashMap<URI, DashboardHttpResource> = linkedMapOf(),
-        var useCount: Long = 0,
-        var lastUsedNanos: Long = 0,
-    )
     private data class HttpSelectionRow(
         val host: String,
         val resourceUrl: String?,
     )
 
-    private val httpGraphs = linkedMapOf<Long, HttpGraphState>()
+    private val httpGraphs = HttpGraphProjection()
     private val expandedHttpHosts = linkedSetOf<String>()
     private var selectedHttpHost: String? = null
     private var selectedHttpResourceUrl: String? = null
@@ -270,6 +266,7 @@ class TuiYameObserver(
         try { applyObservation(event) } catch (error: Throwable) {
             observationFailure = error
             appendLog("Runtime observation failed; dashboard may be incomplete")
+            runCatching { render() } // Keep the original projection failure if the terminal also fails.
             throw error
         }
     }
@@ -416,6 +413,10 @@ class TuiYameObserver(
                 )
             }
 
+            is ResourceGraphLifecycleEvent, is ResourceLifecycleEvent -> {
+                httpGraphs.accept(event)
+                normalizeHttpHostSelection()
+            }
             is HttpProxyAction -> return
             else -> return // Unknown observations do not change this projection.
         }
@@ -438,78 +439,46 @@ class TuiYameObserver(
     internal fun connectedSnapshot(): Boolean = connected
 
     @Synchronized
-    internal fun synchronizeResourceGraphs(snapshots: List<NavigationResourceGraphSnapshot>) {
-        val retainedIds = snapshots.mapTo(mutableSetOf()) { it.id }
-        httpGraphs.keys.retainAll(retainedIds)
-        snapshots.forEach(::synchronizeResourceGraph)
-        normalizeHttpHostSelection()
-        render()
-    }
-
-    @Synchronized
-    internal fun synchronizeResourceGraph(
-        graphId: Long,
-        snapshot: NavigationResourceGraphSnapshot?,
-        rootUsed: Boolean = false,
-    ) {
-        if (snapshot == null) {
-            httpGraphs.remove(graphId)
-        } else {
-            synchronizeResourceGraph(snapshot)
-            if (rootUsed) touchHttpGraph(graphId)
-        }
-        normalizeHttpHostSelection()
-        render()
-    }
-
-    private fun synchronizeResourceGraph(snapshot: NavigationResourceGraphSnapshot) {
-        val graph =
-            httpGraphs.getOrPut(snapshot.id) {
-                HttpGraphState(rootLegacyUri = snapshot.rootLegacyUri)
-            }
-        graph.resources.clear()
-        snapshot.nodes.forEach { node ->
-            graph.resources[node.legacyUri] =
-                DashboardHttpResource(
-                    url = node.legacyUri.toString(),
-                    state = node.state,
-                    kind = node.kind,
-                    prefetched = node.prefetched,
-                    transformations = node.transformations,
-                )
-        }
-    }
-
-    @Synchronized
     internal fun resourceGraphProjectionSnapshot(): Map<Long, Map<URI, DashboardHttpResource>> =
-        httpGraphs.mapValues { (_, graph) -> graph.resources.toMap() }
+        httpGraphs.graphSnapshot().mapValues { (_, graph) ->
+            graph.resources.values.associate { it.resourceLegacyUri to it.dashboardResource() }
+        }
 
-    private fun touchHttpGraph(graphId: Long): Boolean {
-        val graph = httpGraphs[graphId] ?: return false
-        graph.useCount++
-        graph.lastUsedNanos = System.nanoTime()
-        return true
-    }
+    @Synchronized
+    internal fun httpHostProjectionSnapshot(): List<DashboardHttpHost> = httpHostSnapshots()
+
+    @Synchronized
+    internal fun proxyProjectionStatus(): String? = httpGraphs.status
+
+    @Synchronized
+    internal fun httpSelectionSnapshot(): Pair<String?, String?> = selectedHttpHost to selectedHttpResourceUrl
+
+    private fun ResourceLifecycleEvent.dashboardResource() = DashboardHttpResource(
+        url = resourceLegacyUri.toString(), state = state, kind = kind,
+        prefetched = prefetched, transformations = transformations,
+    )
 
     private fun httpHostSnapshots(): List<DashboardHttpHost> {
         data class Aggregate(
-            val resources: LinkedHashMap<String, DashboardHttpResource> = linkedMapOf(),
+            val resources: LinkedHashMap<String, ResourceLifecycleEvent> = linkedMapOf(),
             var useCount: Long = 0,
-            var lastUsedNanos: Long = 0,
+            var lastUsedAt: Instant? = null,
         )
 
         val hosts = linkedMapOf<String, Aggregate>()
-        httpGraphs.values.forEach { graph ->
+        // Graph IDs break equal-time cross-graph ties deterministically, independent of delivery.
+        httpGraphs.graphSnapshot().toSortedMap().values.forEach { graph ->
             val graphHosts = linkedSetOf<String>()
-            graph.resources.forEach { (uri, resource) ->
-                val host = uri.host?.lowercase() ?: return@forEach
+            graph.resources.forEach { (key, event) ->
+                val host = event.resourceLegacyUri.host?.lowercase() ?: return@forEach
                 val aggregate = hosts.getOrPut(host) { Aggregate() }
-                aggregate.resources[uri.toString()] = resource
-                aggregate.lastUsedNanos = maxOf(aggregate.lastUsedNanos, graph.lastUsedNanos)
+                val existing = aggregate.resources[key]
+                if (existing == null || event.occurredAt >= existing.occurredAt) aggregate.resources[key] = event
+                aggregate.lastUsedAt = listOfNotNull(aggregate.lastUsedAt, graph.lastUsedAt).maxOrNull()
                 graphHosts += host
             }
             graphHosts.forEach { host ->
-                hosts.getValue(host).useCount += graph.useCount
+                hosts.getValue(host).useCount += graph.usageCount
             }
         }
 
@@ -517,14 +486,14 @@ class TuiYameObserver(
             .map { (host, aggregate) ->
                 DashboardHttpHost(
                     host = host,
-                    resources = aggregate.resources.values.toList(),
+                    resources = aggregate.resources.values.map { it.dashboardResource() },
                     expanded = host in expandedHttpHosts,
                     useCount = aggregate.useCount,
-                    lastUsedNanos = aggregate.lastUsedNanos,
+                    lastUsedAt = aggregate.lastUsedAt,
                 )
             }
             .sortedWith(
-                compareByDescending<DashboardHttpHost> { it.lastUsedNanos }
+                compareByDescending<DashboardHttpHost> { it.lastUsedAt }
                     .thenByDescending { it.useCount }
                     .thenBy { it.host },
             )
@@ -1106,6 +1075,7 @@ class TuiYameObserver(
                     dnsLookups = dnsLookups.toList(),
                     transfers = transfers.values.toList(),
                     httpHosts = httpHosts,
+                    proxyStatus = httpGraphs.status,
                     selectedHttpHostIndex = httpHosts
                         .indexOfFirst { it.host == selectedHttpHost }
                         .coerceAtLeast(0),
@@ -1203,7 +1173,7 @@ internal data class DashboardHttpHost(
     val resources: List<DashboardHttpResource>,
     val expanded: Boolean,
     val useCount: Long = 0,
-    val lastUsedNanos: Long = 0,
+    val lastUsedAt: Instant? = null,
     val savedBytes: Long =
         resources.sumOf { resource ->
             resource.transformations.sumOf { it.savedBytes.toLong() }
@@ -1262,6 +1232,7 @@ internal data class DashboardState(
     val commandPalette: TuiCommandPalette?,
     val activeDetailPanel: DashboardDetailPanel = DashboardDetailPanel.PROXY,
     val headerElapsedNanos: Long = 0,
+    val proxyStatus: String? = null,
 )
 
 internal enum class DashboardDetailPanel(val title: String) {
@@ -1412,6 +1383,7 @@ internal object YameDashboardRenderer {
                     state.selectedHttpResourceUrl,
                     lowerHeight - 2,
                     rightWidth - 4,
+                    state.proxyStatus,
                 ),
                 styles = styles,
             )
@@ -1479,6 +1451,7 @@ internal object YameDashboardRenderer {
                         state.selectedHttpResourceUrl,
                         detailHeight - 2,
                         width - 4,
+                        state.proxyStatus,
                     ),
                     styles = styles,
                 )
@@ -1641,7 +1614,12 @@ internal object YameDashboardRenderer {
         selectedResourceUrl: String?,
         visibleRows: Int,
         contentWidth: Int,
+        status: String? = null,
     ): List<DashboardLine> {
+        if (status != null) return listOf(DashboardLine(clip(status, contentWidth), DashboardTone.WARNING)) +
+            if (visibleRows > 1) httpHostLines(hosts, selectedHostIndex, selectedResourceUrl,
+                visibleRows - 1, contentWidth) else emptyList()
+
         if (hosts.isEmpty()) {
             return listOf(DashboardLine("(no compatibility proxy hosts yet)", DashboardTone.MUTED))
         }
