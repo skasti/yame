@@ -549,6 +549,37 @@ bash scripts/dosbox-network-integration-test.sh
 YAME_DOSBOX_DOWNLOAD_CACHE="$HOME/.cache/yame/dosbox-network" bash scripts/dosbox-network-integration-test.sh
 ```
 
+The binary integrity mode additionally downloads 628,991-byte and 1,259,448-byte
+binary fixtures through the HTTP compatibility proxy, plus the larger fixture
+through the raw TCP proxy as a control:
+
+```shell
+bash scripts/dosbox-network-integration-test.sh binary-integrity
+# Replay two locally downloaded originals instead of generated fixtures:
+bash scripts/dosbox-network-integration-test.sh binary-integrity /path/to/WINZIP95.EXE /path/to/wz32v800.exe
+```
+
+This starts the normal YAME executable and its jSerialComm serial connection,
+with DOSBox's emulated COM2 connected through a virtual nullmodem and a host PTY.
+LSppp negotiates PPP, and mTCP HTGet saves each downloaded file to the DOS drive.
+The host then compares every byte and SHA-256 digest against independent source
+files outside that drive. Generated sources include all byte values, PPP escape
+and flow-control bytes, URL-like text and nonrepeating data. The mode uses 115200
+baud and a ten-minute transfer deadline; ordinary compatibility tests retain
+19200 baud and their shorter deadline. CI runs this mode as a required test.
+The DOS client uses `HTTP_PROXY` to connect to YAME's intercepted port 80 while
+requesting the local fixture on port 18080. The raw TCP control disables that
+setting. Binary mode therefore needs no privileged host ports or system-wide
+network setting changes; the ordinary PPP/DNS/TCP suite still tests DNS separately.
+On a headless host without Xvfb, set `SDL_VIDEODRIVER=dummy` and
+`SDL_AUDIODRIVER=dummy` to use DOSBox's SDL dummy display/audio drivers.
+
+Logs, source sizes/digests and mismatch offsets are retained under
+`build/reports/dosbox-network/binary-integrity/`, including on failure. The
+downloaded data files are removed after verification.
+This exercises serial I/O through the OS and an independent DOS TCP/PPP stack;
+it does not validate physical UARTs, USB adapters, cables or hardware RTS/CTS.
+
 CI caches the test-only LSppp and mTCP archives outside the suite's temporary
 working directory. Every use checks the pinned SHA-1 digest, including cache
 hits; missing or invalid archives are downloaded again with bounded retries

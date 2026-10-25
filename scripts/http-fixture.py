@@ -2,6 +2,8 @@
 """Deterministic HTTP server used by the DOSBox TCP integration test."""
 
 import socket
+import os
+from pathlib import Path
 
 LISTEN_ADDRESS = "0.0.0.0"
 LISTEN_PORT = 18080
@@ -9,6 +11,8 @@ EXPECTED_PATH = "/test.txt"
 COMPAT_PATH = "/compat.txt"
 COMPAT_BODY = b"YAME HTTP compatibility OK\r\n"
 BODY = b"YAME TCP integration OK\r\n" + (b"x" * 20000) + b"\r\nYAME TCP window OK\r\n"
+BINARY_DIRECTORY = os.environ.get("YAME_BINARY_FIXTURE_DIR")
+BINARY_PATHS = {"/binary-small.bin": "BINA.BIN", "/binary-large.bin": "BINB.BIN"}
 
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -32,12 +36,17 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
 
             parts = first_line.split(" ")
             path = parts[1] if len(parts) >= 2 else ""
+            content_type = b"text/plain"
             if path == EXPECTED_PATH:
                 status = b"HTTP/1.1 200 OK\r\n"
                 body = BODY
             elif path == COMPAT_PATH:
                 status = b"HTTP/1.1 200 OK\r\n"
                 body = COMPAT_BODY
+            elif BINARY_DIRECTORY and path in BINARY_PATHS:
+                status = b"HTTP/1.1 200 OK\r\n"
+                body = (Path(BINARY_DIRECTORY) / BINARY_PATHS[path]).read_bytes()
+                content_type = b"application/octet-stream"
             else:
                 status = b"HTTP/1.1 404 Not Found\r\n"
                 body = b"not found\r\n"
@@ -45,7 +54,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
             response = (
                 status
                 + f"Content-Length: {len(body)}\r\n".encode("ascii")
-                + b"Content-Type: text/plain\r\n"
+                + b"Content-Type: " + content_type + b"\r\n"
                 + b"Connection: close\r\n"
                 + b"\r\n"
                 + body

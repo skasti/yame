@@ -18,20 +18,30 @@ MTCP_ZIP="$DOWNLOAD_DIR/mtcp.zip"
 DEPENDENCIES_READY=false
 PORT=50453
 HTTP_PORT=18080
-BAUD=19200
 MODE="${1:-integration}"
-if [[ $# -gt 1 || ( "$MODE" != "integration" && "$MODE" != "external-smoke" ) ]]; then
-    echo "Usage: $0 [integration|external-smoke]" >&2
+if [[ ( "$MODE" != "integration" && "$MODE" != "external-smoke" && "$MODE" != "binary-integrity" ) ||
+      ( $# -gt 1 && ( "$MODE" != "binary-integrity" || $# -ne 3 ) ) ]]; then
+    echo "Usage: $0 [integration|external-smoke|binary-integrity [SMALL_FILE LARGE_FILE]]" >&2
     exit 2
 fi
+BAUD=19200
+TEST_TIMEOUT=75
+BINARY_FIXTURE_DIR="$WORK_DIR/binary-sources"
+REPORT_DIR="$ROOT/build/reports/dosbox-network/$MODE"
 
-if [[ "$MODE" == "external-smoke" ]]; then
+if [[ "$MODE" == "binary-integrity" ]]; then
+    RESULT_FILE="$DOS_DRIVE/BINARY.OK"
+    DOS_BATCH_ARGS="binary"
+    EXTERNAL_HTTP_SMOKE=0
+    BAUD=115200
+    TEST_TIMEOUT=600
+elif [[ "$MODE" == "external-smoke" ]]; then
     RESULT_FILE="$DOS_DRIVE/SMOKE.OK"
     DOS_BATCH_ARGS="smoke"
     EXTERNAL_HTTP_SMOKE=1
 else
     RESULT_FILE="$DOS_DRIVE/SUITE.OK"
-    DOS_BATCH_ARGS=""
+    DOS_BATCH_ARGS="integration"
     EXTERNAL_HTTP_SMOKE=0
 fi
 
@@ -56,6 +66,23 @@ cleanup() {
         sudo sysctl -w \
             "net.ipv4.ip_unprivileged_port_start=$ORIGINAL_UNPRIVILEGED_PORT_START" \
             >/dev/null || true
+    fi
+
+    if [[ "$MODE" == "binary-integrity" && "$DEPENDENCIES_READY" == true ]]; then
+        mkdir -p "$REPORT_DIR"
+        for log in "$YAME_LOG" "$DOSBOX_LOG" "$SOCAT_LOG" "$DNS_FIXTURE_LOG" "$HTTP_FIXTURE_LOG" "$HTTP_COMPAT_LOG"; do
+            if [[ -f "$log" ]]; then
+                cp "$log" "$REPORT_DIR/" || true
+            fi
+        done
+        if [[ -f "$BINARY_FIXTURE_DIR/sources.json" ]]; then
+            cp "$BINARY_FIXTURE_DIR/sources.json" "$REPORT_DIR/" || true
+            if [[ ! -f "$REPORT_DIR/integrity.json" ]]; then
+                python3 "$ROOT/scripts/dosbox_binary_integrity.py" verify \
+                    "$BINARY_FIXTURE_DIR" "$DOS_DRIVE" --report "$REPORT_DIR/integrity.json" || status=1
+            fi
+        fi
+        echo "Binary integrity diagnostics: $REPORT_DIR"
     fi
 
     if [[ $status -ne 0 && "$DEPENDENCIES_READY" == true ]]; then
@@ -85,6 +112,7 @@ cleanup() {
             "$DOS_DRIVE/TCP.OK" \
             "$DOS_DRIVE/HTTP.OK" \
             "$DOS_DRIVE/SMOKE.OK" \
+            "$DOS_DRIVE/BINARY.OK" \
             "$DOS_DRIVE/SUITE.OK" \
             "$DOS_DRIVE/DNS.OUT" \
             "$DOS_DRIVE/TCP.OUT" \
@@ -100,12 +128,16 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-for command in curl dosbox python3 sha1sum socat xvfb-run; do
+for command in curl dosbox python3 sha1sum socat; do
     if ! command -v "$command" >/dev/null 2>&1; then
         echo "Required command not found: $command" >&2
         exit 2
     fi
 done
+if [[ "${SDL_VIDEODRIVER:-}" != "dummy" ]] && ! command -v xvfb-run >/dev/null 2>&1; then
+    echo "Required command not found: xvfb-run (or set SDL_VIDEODRIVER=dummy)" >&2
+    exit 2
+fi
 
 mkdir -p "$DOS_DRIVE"
 cp "$ROOT/scripts/dos/YAMETEST.BAT" "$DOS_DRIVE/YAMETEST.BAT"
@@ -116,6 +148,11 @@ if ! bash "$ROOT/scripts/dosbox-network-downloads.sh" "$DOWNLOAD_DIR"; then
     exit 2
 fi
 DEPENDENCIES_READY=true
+if [[ "$MODE" == "binary-integrity" ]]; then
+    mkdir -p "$REPORT_DIR"
+    rm -f "$REPORT_DIR/integrity.json"
+    python3 "$ROOT/scripts/dosbox_binary_integrity.py" prepare "$BINARY_FIXTURE_DIR" "${@:2}"
+fi
 
 extract_executable() {
     local archive=$1
@@ -149,7 +186,12 @@ extract_executable "$MTCP_ZIP" "HTGET.EXE" "$DOS_DRIVE/HTGET.EXE"
 "$ROOT/gradlew" --no-daemon installDist >/dev/null
 YAME="$ROOT/build/install/yame/bin/yame"
 
-HOST_ADDRESS="$(python3 - <<'PY'
+if [[ "$MODE" == "binary-integrity" ]]; then
+    # YAME opens the fixture socket on the host; the DOS peer reaches it via PPP.
+    # No external route/address discovery is needed for the isolated binary test.
+    HOST_ADDRESS=127.0.0.1
+else
+    HOST_ADDRESS="$(python3 - <<'PY'
 import socket
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -160,6 +202,7 @@ finally:
     sock.close()
 PY
 )"
+fi
 
 if [[ -z "$HOST_ADDRESS" || "$HOST_ADDRESS" == "0.0.0.0" ]]; then
     echo "Could not determine the host IPv4 address for the TCP fixture" >&2
@@ -180,17 +223,18 @@ serial2=nullmodem server:127.0.0.1 port:$PORT transparent:1
 @echo off
 mount c "$DOS_DRIVE"
 c:
-YAMETEST.BAT $HOST_ADDRESS $DOS_BATCH_ARGS
+YAMETEST.BAT $HOST_ADDRESS $DOS_BATCH_ARGS $BAUD
 EOF
 
 # Permit the unprivileged fixture process to bind the standard DNS port.
 current_unprivileged_port_start="$(sysctl -n net.ipv4.ip_unprivileged_port_start)"
-if [[ "$current_unprivileged_port_start" -gt 53 ]]; then
+if [[ "$MODE" != "binary-integrity" && "$current_unprivileged_port_start" -gt 53 ]]; then
     ORIGINAL_UNPRIVILEGED_PORT_START="$current_unprivileged_port_start"
     sudo sysctl -w net.ipv4.ip_unprivileged_port_start=53 >/dev/null
 fi
 
-python3 "$ROOT/scripts/http-fixture.py" >"$HTTP_FIXTURE_LOG" 2>&1 &
+YAME_BINARY_FIXTURE_DIR="$BINARY_FIXTURE_DIR" \
+    python3 "$ROOT/scripts/http-fixture.py" >"$HTTP_FIXTURE_LOG" 2>&1 &
 HTTP_FIXTURE_PID=$!
 
 for _ in $(seq 1 50); do
@@ -211,30 +255,34 @@ if ! grep -Fq "HTTP fixture listening" "$HTTP_FIXTURE_LOG" 2>/dev/null; then
     exit 1
 fi
 
-# Exercise the port-80 compatibility proxy against the same local fixture.
-socat TCP-LISTEN:80,bind="$HOST_ADDRESS",reuseaddr,fork TCP:127.0.0.1:"$HTTP_PORT" >"$HTTP_COMPAT_LOG" 2>&1 &
-HTTP_COMPAT_PID=$!
+# Binary mode uses mTCP's HTTP_PROXY to reach YAME's intercepted port 80
+# with an absolute upstream URL on 18080, so it needs no privileged host ports.
+if [[ "$MODE" != "binary-integrity" ]]; then
+    # Exercise the port-80 compatibility proxy against the same local fixture.
+    socat TCP-LISTEN:80,bind="$HOST_ADDRESS",reuseaddr,fork TCP:127.0.0.1:"$HTTP_PORT" >"$HTTP_COMPAT_LOG" 2>&1 &
+    HTTP_COMPAT_PID=$!
 
-YAME_TCP_FIXTURE_ADDRESS="$HOST_ADDRESS" YAME_EXTERNAL_HTTP_SMOKE="$EXTERNAL_HTTP_SMOKE" \
-    python3 "$ROOT/scripts/dns-fixture.py" >"$DNS_FIXTURE_LOG" 2>&1 &
-DNS_FIXTURE_PID=$!
+    YAME_TCP_FIXTURE_ADDRESS="$HOST_ADDRESS" YAME_EXTERNAL_HTTP_SMOKE="$EXTERNAL_HTTP_SMOKE" \
+        python3 "$ROOT/scripts/dns-fixture.py" >"$DNS_FIXTURE_LOG" 2>&1 &
+    DNS_FIXTURE_PID=$!
 
-for _ in $(seq 1 50); do
-    if grep -Fq "DNS fixture listening" "$DNS_FIXTURE_LOG" 2>/dev/null; then
-        break
-    fi
-    if ! kill -0 "$DNS_FIXTURE_PID" 2>/dev/null; then
-        wait "$DNS_FIXTURE_PID" || true
-        DNS_FIXTURE_PID=""
-        echo "DNS fixture exited before becoming ready" >&2
+    for _ in $(seq 1 50); do
+        if grep -Fq "DNS fixture listening" "$DNS_FIXTURE_LOG" 2>/dev/null; then
+            break
+        fi
+        if ! kill -0 "$DNS_FIXTURE_PID" 2>/dev/null; then
+            wait "$DNS_FIXTURE_PID" || true
+            DNS_FIXTURE_PID=""
+            echo "DNS fixture exited before becoming ready" >&2
+            exit 1
+        fi
+        sleep 0.1
+    done
+
+    if ! grep -Fq "DNS fixture listening" "$DNS_FIXTURE_LOG" 2>/dev/null; then
+        echo "DNS fixture did not become ready" >&2
         exit 1
     fi
-    sleep 0.1
-done
-
-if ! grep -Fq "DNS fixture listening" "$DNS_FIXTURE_LOG" 2>/dev/null; then
-    echo "DNS fixture did not become ready" >&2
-    exit 1
 fi
 
 socat -d -d PTY,link="$PTY_LINK",raw,echo=0 TCP-LISTEN:$PORT,reuseaddr >"$SOCAT_LOG" 2>&1 &
@@ -261,6 +309,8 @@ SERIAL_PORT="$(readlink -f "$PTY_LINK")"
 "$YAME" \
     --port "$SERIAL_PORT" \
     --baud "$BAUD" \
+    --config "$WORK_DIR/yame.ini" \
+    --ui plain \
     --pickup-time 0ms \
     --dial-tone-time 0ms \
     --handshake-profile none \
@@ -287,10 +337,14 @@ if ! grep -Fq "YAME ready" "$YAME_LOG" 2>/dev/null; then
     exit 1
 fi
 
-xvfb-run -a dosbox -conf "$DOSBOX_CONF" >"$DOSBOX_LOG" 2>&1 &
+if [[ "${SDL_VIDEODRIVER:-}" == "dummy" ]]; then
+    dosbox -conf "$DOSBOX_CONF" >"$DOSBOX_LOG" 2>&1 &
+else
+    xvfb-run -a dosbox -conf "$DOSBOX_CONF" >"$DOSBOX_LOG" 2>&1 &
+fi
 DOSBOX_PID=$!
 
-deadline=$((SECONDS + 75))
+deadline=$((SECONDS + TEST_TIMEOUT))
 while [[ $SECONDS -lt $deadline ]]; do
     if [[ -f "$RESULT_FILE" ]]; then
         result="$(tr -d '\r\n' < "$RESULT_FILE")"
@@ -317,7 +371,7 @@ while [[ $SECONDS -lt $deadline ]]; do
         exit 1
     fi
 
-    if ! kill -0 "$DNS_FIXTURE_PID" 2>/dev/null; then
+    if [[ -n "$DNS_FIXTURE_PID" ]] && ! kill -0 "$DNS_FIXTURE_PID" 2>/dev/null; then
         wait "$DNS_FIXTURE_PID" || true
         DNS_FIXTURE_PID=""
         echo "DNS fixture exited before the compatibility suite completed" >&2
@@ -331,7 +385,7 @@ while [[ $SECONDS -lt $deadline ]]; do
         exit 1
     fi
 
-    if ! kill -0 "$HTTP_COMPAT_PID" 2>/dev/null; then
+    if [[ -n "$HTTP_COMPAT_PID" ]] && ! kill -0 "$HTTP_COMPAT_PID" 2>/dev/null; then
         wait "$HTTP_COMPAT_PID" || true
         HTTP_COMPAT_PID=""
         echo "HTTP compatibility forwarder exited before the suite completed" >&2
@@ -352,6 +406,24 @@ if [[ ! -f "$RESULT_FILE" ]] ||
     [[ "$(tr -d '\r\n' < "$RESULT_FILE")" != "OK" ]]; then
     echo "Timed out waiting for the DOSBox $MODE result" >&2
     exit 1
+fi
+
+if [[ "$MODE" == "binary-integrity" ]]; then
+    python3 "$ROOT/scripts/dosbox_binary_integrity.py" verify \
+        "$BINARY_FIXTURE_DIR" "$DOS_DRIVE" --report "$REPORT_DIR/integrity.json"
+    for expected in \
+        "MODEM dialing 1" "AT => CONNECT $BAUD" "LCP open" \
+        "IPCP open: local=10.64.0.1 peer=10.64.0.2" \
+        "HTTP compatibility => GET http://$HOST_ADDRESS:$HTTP_PORT/binary-small.bin" \
+        "HTTP compatibility => GET http://$HOST_ADDRESS:$HTTP_PORT/binary-large.bin" \
+        "TCP host connected $HOST_ADDRESS:$HTTP_PORT"; do
+        if ! grep -Fq "$expected" "$YAME_LOG"; then
+            echo "Binary test did not exercise the expected production path: $expected" >&2
+            exit 1
+        fi
+    done
+    echo "DOSBox serial binary integrity passed: actual DOS files match all source bytes and SHA-256 digests"
+    exit 0
 fi
 
 if [[ "$MODE" == "external-smoke" ]]; then

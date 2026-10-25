@@ -9,22 +9,29 @@ del TCP.OUT >NUL 2>NUL
 del HTTP.OUT >NUL 2>NUL
 del SMOKE.OK >NUL 2>NUL
 del SMOKE.OUT >NUL 2>NUL
+del BINARY.OK >NUL 2>NUL
+del BINA.OUT >NUL 2>NUL
+del BINB.OUT >NUL 2>NUL
+del BINRAW.OUT >NUL 2>NUL
+set TESTBAUD=%3
+if "%TESTBAUD%"=="" set TESTBAUD=19200
 
 rem DOSBox's transparent nullmodem carries bytes but not DCD.  Let LSppp
 rem perform the real Hayes dial first; after CONNECT it exits because it
 rem cannot observe carrier, leaving YAME in connected data mode.
 echo Dialing YAME with LSppp...
-LSPPP.EXE /d:1 /n:2 /B:19200 /V:60 /S:10.64.0.2 /D:5,1,0
+LSPPP.EXE /d:1 /n:2 /B:%TESTBAUD% /V:60 /S:10.64.0.2 /D:5,1,0
 
 rem Continue on the already-connected serial line in LSppp local mode.
 rem This skips modem control only; LCP/IPCP are still negotiated normally.
 echo Starting PPP on connected serial line...
-LSPPP.EXE /l /n:2 /B:19200 /V:60 /S:10.64.0.2 /N:10.64.0.1
+LSPPP.EXE /l /n:2 /B:%TESTBAUD% /V:60 /S:10.64.0.2 /N:10.64.0.1
 if errorlevel 1 goto ppp_failed
 echo OK>PPP.OK
 
 set MTCPCFG=C:\MTCP.CFG
 if "%2"=="smoke" goto smoke
+if "%2"=="binary" goto binary
 
 echo Resolving ci.yame.test through YAME...
 DNSTEST.EXE -name ci.yame.test -timeout 10 > DNS.OUT
@@ -64,24 +71,53 @@ goto done
 echo FAIL>SMOKE.OK
 goto done
 
+:binary
+rem Files are saved by the real DOS HTTP client, then verified on the host.
+rem Connect to YAME's intercepted port 80 but fetch the local upstream on 18080.
+rem This needs no privileged host listener, DNS fixture or system-wide sysctl.
+set HTTP_PROXY=%1:80
+echo Fetching small binary through HTTP compatibility...
+HTGET.EXE -quiet -o BINA.OUT http://%1:18080/binary-small.bin
+if errorlevel 22 goto binary_failed
+if not errorlevel 21 goto binary_failed
+echo Fetching large binary through HTTP compatibility...
+HTGET.EXE -quiet -o BINB.OUT http://%1:18080/binary-large.bin
+if errorlevel 22 goto binary_failed
+if not errorlevel 21 goto binary_failed
+echo Fetching large binary through the raw TCP proxy...
+set HTTP_PROXY=
+HTGET.EXE -quiet -o BINRAW.OUT http://%1:18080/binary-large.bin
+if errorlevel 22 goto binary_failed
+if not errorlevel 21 goto binary_failed
+echo OK>BINARY.OK
+goto done
+
+:binary_failed
+echo FAIL>BINARY.OK
+goto done
+
 :ppp_failed
 echo FAIL>PPP.OK
 if "%2"=="smoke" goto smoke_failed
+if "%2"=="binary" goto binary_failed
 echo FAIL>SUITE.OK
 goto done
 
 :dns_failed
 echo FAIL>DNS.OK
+if "%2"=="binary" goto binary_failed
 echo FAIL>SUITE.OK
 goto done
 
 :tcp_failed
 echo FAIL>TCP.OK
+if "%2"=="binary" goto binary_failed
 echo FAIL>SUITE.OK
 goto done
 
 :http_failed
 echo FAIL>HTTP.OK
+if "%2"=="binary" goto binary_failed
 echo FAIL>SUITE.OK
 
 :done
