@@ -131,7 +131,6 @@ fun main(args: Array<String>) {
         ApplicationBootstrap(events).run(
             createPresentation = {
                 if (useTui) InteractiveYameApplication(
-                    configStore = runtimeConfigStore,
                     terminal = if (options.uiMode == UiMode.AUTO) {
                         detectedTerminal
                     } else {
@@ -141,7 +140,6 @@ fun main(args: Array<String>) {
             },
             createRuntime = {
                 YameRuntime(
-                    runtimeConfigStore,
                     logManager = logManager, failFastStartup = !useTui,
                 )
             },

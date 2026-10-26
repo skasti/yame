@@ -4,7 +4,8 @@
 - Decision date: 2026-10-26
 - Decision owner: repository maintainer
 - Related work: [#125](https://github.com/skasti/yame/issues/125)
-- Compatible with [ADR 0007](0007-lazy-global-event-broker.md)
+- Compatible with [ADR 0007](0007-lazy-global-event-broker.md) and
+  [ADR 0009](0009-lazy-global-function-store.md)
 
 ## Context
 
@@ -17,10 +18,20 @@ require subscribers to be ready before runtime construction can publish.
 ## Decision
 
 Application bootstrap owns runtime composition independently of presentation.
-After shared configuration, functions, logging and event supervision are ready,
+After process configuration is installed and logging/event supervision are ready,
 bootstrap constructs the selected presentation and its subscriptions, constructs
 the runtime, starts presentation workers without blocking, and runs the runtime.
 Core functions exist before input is enabled. A presentation is optional.
+
+Production factories use constructor defaults for store access:
+`ConfigStore.current` resolves the explicitly installed process configuration,
+while `FunctionStore.current` is the lazy process-owned registry defined by
+ADR 0009. Main neither creates nor propagates a function store. Runtime and TUI
+constructors still accept explicit stores, bypassing each default independently.
+Internal operations and composed children retain the supplied instances; they
+must not look up globals in place of injected dependencies. Function registration
+handles belong to the runtime and are released on shutdown; the shared function
+store itself is never installed, replaced or reset.
 
 Presentations use ConfigStore, FunctionStore and typed YameEvents as appropriate.
 They own subscriptions and presentation workers, and have no runtime or resource

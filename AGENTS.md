@@ -181,8 +181,13 @@ unbounded buffering.
   Hold the returned installation handle for the application's lifetime and close it
   after runtime/frontends stop. A second installation is rejected. Multiple
   frontends share the existing store; they never install a replacement.
-- Runtime and presentation constructors receive the shared stores, not duplicate
-  initial setting values or the persistent application configuration tree.
+- Runtime and presentation constructors default to `ConfigStore.current` and
+  the lazy process-owned `FunctionStore.current` ([ADR 0009](docs/adrs/0009-lazy-global-function-store.md)).
+  Production bootstrap installs configuration but creates no function store.
+  Explicit stores bypass their respective defaults and must be used consistently
+  for internal operations and composed children. Never add function-store
+  installation, replacement or reset. Do not duplicate initial setting values or
+  pass the persistent application configuration tree to components.
 - `ConfigStore` is the single authoritative source of configuration values.
   Components read settings directly through typed keys; multi-key read snapshots
   are intentionally unsupported. YAME accepts the negligible possibility that a

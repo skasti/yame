@@ -1,6 +1,7 @@
 package no.skasti.yame.lifecycle
 
 import com.github.ajalt.mordant.terminal.Terminal
+import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.logging.DiagnosticMessage
 import no.skasti.yame.logging.YameLogManager
@@ -12,6 +13,7 @@ import no.skasti.yame.presentation.PlainPresentation
 import no.skasti.yame.presentation.Presentation
 import no.skasti.yame.runtime.YameRuntime
 import no.skasti.yame.serial.ConnectionFunctions
+import no.skasti.yame.serial.SerialPortDescriptor
 import no.skasti.yame.ui.InteractiveYameApplication
 import java.net.URI
 import java.nio.file.Files
@@ -43,11 +45,17 @@ class ApplicationPresentationTest {
 
     @Test fun `core runs with no presentation`() = runMode("none")
 
-    private fun runMode(mode: String) {
+    @Test fun `production TUI factories use shared stores and preserve startup ordering`() =
+        runMode("tui", sharedStores = true)
+
+    @Test fun `production plain factory releases shared registrations on shutdown`() =
+        runMode("plain", sharedStores = true)
+
+    private fun runMode(mode: String, sharedStores: Boolean = false) {
         val directory = Files.createTempDirectory("yame-bootstrap")
         val lifecycle = ApplicationEventLifecycle(broker, sealFacade = {},
             report = { fail(it) }, terminate = { fail("unexpected exit $it") })
-        val functions = FunctionStore()
+        val functions = if (sharedStores) FunctionStore.current else FunctionStore()
         val store = applicationConfigStore(YameConfiguration())
         val registry = NavigationResourceRegistry()
         val output = CopyOnWriteArrayList<String>()
@@ -59,11 +67,17 @@ class ApplicationPresentationTest {
         try {
             val logs = YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory)
             lifecycle.consumer(logs)
+            if (sharedStores) lifecycle.consumer(ConfigStore.install(store))
             ApplicationBootstrap(lifecycle).run(
                 createPresentation = {
                     val presentation = when (mode) {
-                        "tui" -> InteractiveYameApplication(store, functions, Terminal(interactive = false))
-                            .also { tui = it }
+                        "tui" -> (if (sharedStores) InteractiveYameApplication(terminal = Terminal(interactive = false))
+                            else InteractiveYameApplication(store, functions, Terminal(interactive = false)))
+                            .also {
+                                assertSame(store, it.configStore)
+                                assertSame(functions, it.functions)
+                                tui = it
+                            }
                         "plain" -> PlainPresentation(output::add)
                         else -> null
                     }
@@ -88,19 +102,29 @@ class ApplicationPresentationTest {
                     val graph = registry.startNavigation(URI("http://early.test/"))
                     assertEquals(BrokerWaitResult.COMPLETED, broker.drain().await(Duration.ofSeconds(5)))
                     tui?.let { assertEquals(setOf(graph.id), it.resourceGraphProjectionSnapshot().keys) }
-                    YameRuntime(store, functions, logs, resourceGraphs = registry, portProvider = {
+                    val ports: () -> List<SerialPortDescriptor> = {
                         scannedAfterStart = started
                         scanned = true
                         functions.invoke(ApplicationFunctions.Quit)
                         YameEvents.publish(DiagnosticMessage("running"))
                         emptyList()
-                    })
+                    }
+                    (if (sharedStores) YameRuntime(logManager = logs, resourceGraphs = registry, portProvider = ports)
+                    else YameRuntime(store, functions, logs, resourceGraphs = registry, portProvider = ports))
+                        .also {
+                            assertSame(store, it.configStore)
+                            assertSame(functions, it.functions)
+                        }
                 },
             )
             assertTrue(scanned)
             assertTrue(scannedAfterStart, "runtime must not block presentation startup")
             assertTrue(closed)
             assertTrue(functions.keys().isEmpty())
+            if (sharedStores) {
+                assertSame(functions, FunctionStore.current)
+                assertFailsWith<IllegalStateException> { ConfigStore.current }
+            }
             assertEquals(0L, broker.status.subscriberFailures, broker.status.lastSubscriberFailure.toString())
             if (mode == "plain") assertEquals(listOf("constructing", "running"), output.toList())
             else assertTrue(output.isEmpty())

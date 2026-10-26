@@ -1,7 +1,9 @@
 package no.skasti.yame.function
 
 import com.github.ajalt.mordant.terminal.Terminal
+import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.logging.YameLogManager
+import no.skasti.yame.modem.ModemSettings
 import no.skasti.yame.observer.*
 import no.skasti.yame.persistence.YameConfiguration
 import no.skasti.yame.persistence.applicationConfigStore
@@ -25,6 +27,7 @@ class FunctionStoreDefaultsTest {
             it.get(null) as Lazy<*>
         }
         assertFalse(delegate.isInitialized())
+        assertFailsWith<IllegalStateException> { ConfigStore.current }
         val first = FunctionStore()
         val second = FunctionStore()
         assertNotSame(first, second)
@@ -38,16 +41,25 @@ class FunctionStoreDefaultsTest {
         val directory = Files.createTempDirectory("yame-function-defaults")
         try {
             val config = applicationConfigStore(YameConfiguration())
+            val otherConfig = applicationConfigStore(YameConfiguration())
             val terminal = Terminal(interactive = false)
             YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
                 YameRuntime(config, first, logs, NavigationResourceRegistry(), { emptyList() }).use {
                     assertSame(first, it.functions)
-                    TuiYameObserver(config, first, terminal).use { observer -> observer.refreshPorts() }
+                    assertSame(config, it.configStore)
+                    TuiYameObserver(config, first, terminal).use { observer ->
+                        observer.refreshPorts()
+                        observer.command("/tone off")
+                    }
                 }
-                InteractiveYameApplication(config, second, terminal).use {
+                assertFalse(config[ModemSettings.Tone])
+                assertTrue(otherConfig[ModemSettings.Tone])
+                InteractiveYameApplication(otherConfig, second, terminal).use {
                     assertSame(second, it.functions)
+                    assertSame(otherConfig, it.configStore)
                 }
                 assertFalse(delegate.isInitialized(), "explicit component injection must bypass current")
+                assertFailsWith<IllegalStateException> { ConfigStore.current }
 
                 val pool = Executors.newFixedThreadPool(8)
                 val start = CountDownLatch(1)
@@ -63,21 +75,78 @@ class FunctionStoreDefaultsTest {
                 } finally { start.countDown(); pool.shutdownNow() }
                 assertTrue(delegate.isInitialized())
                 assertSame(shared, FunctionStore.current)
+                assertNotSame(first, shared)
+                assertNotSame(second, shared)
 
-                var refreshes = 0
+                // Explicit configuration with default functions works before
+                // any process configuration has been installed.
+                var explicitConfigRefreshes = 0
                 YameRuntime(configStore = config, logManager = logs,
-                    resourceGraphs = NavigationResourceRegistry(), portProvider = { refreshes++; emptyList() }).use {
-                    assertSame(shared, it.functions)
-                    TuiYameObserver(configStore = config, terminal = terminal).use { observer ->
-                        observer.refreshPorts()
-                        assertEquals(1, refreshes)
+                    resourceGraphs = NavigationResourceRegistry(),
+                    portProvider = { explicitConfigRefreshes++; emptyList() }).use { runtime ->
+                    assertSame(config, runtime.configStore)
+                    assertSame(shared, runtime.functions)
+                    TuiYameObserver(configStore = config, terminal = terminal).use { it.refreshPorts() }
+                    assertEquals(1, explicitConfigRefreshes)
+                    InteractiveYameApplication(configStore = config, terminal = terminal).use {
+                        assertSame(config, it.configStore)
+                        assertSame(shared, it.functions)
                     }
-                    assertTrue(first.keys().isEmpty())
-                    assertTrue(second.keys().isEmpty())
                 }
                 assertTrue(shared.keys().isEmpty())
-                InteractiveYameApplication(configStore = config, terminal = terminal).use { assertSame(shared, it.functions) }
+                assertFailsWith<IllegalStateException> { ConfigStore.current }
+
+                val processConfig = applicationConfigStore(YameConfiguration())
+                var refreshes = 0
+                ConfigStore.install(processConfig).use {
+                    YameRuntime(logManager = logs, resourceGraphs = NavigationResourceRegistry(),
+                        portProvider = { refreshes++; emptyList() }).use { runtime ->
+                        assertSame(processConfig, runtime.configStore)
+                        assertSame(shared, runtime.functions)
+                        TuiYameObserver(terminal = terminal).use { observer ->
+                            observer.refreshPorts()
+                            observer.command("/tone off")
+                            assertEquals(1, refreshes)
+                        }
+                        assertFalse(processConfig[ModemSettings.Tone])
+                        InteractiveYameApplication(terminal = terminal).use {
+                            assertSame(processConfig, it.configStore)
+                            assertSame(runtime.functions, it.functions)
+                        }
+
+                        // Injected runtime/frontend must keep their own identity even
+                        // when defaults exist and hold the same operation paths.
+                        var isolatedRefreshes = 0
+                        YameRuntime(config, first, logs, NavigationResourceRegistry(),
+                            { isolatedRefreshes++; emptyList() }).use { isolated ->
+                            assertSame(config, isolated.configStore)
+                            assertSame(first, isolated.functions)
+                            TuiYameObserver(config, first, terminal).use { observer ->
+                                observer.refreshPorts()
+                                observer.command("/tone on")
+                            }
+                            assertEquals(1, isolatedRefreshes)
+                            assertEquals(1, refreshes)
+                            assertTrue(config[ModemSettings.Tone])
+                            assertFalse(processConfig[ModemSettings.Tone])
+                            assertTrue(otherConfig[ModemSettings.Tone])
+                            InteractiveYameApplication(otherConfig, second, terminal).use {
+                                assertSame(second, it.functions)
+                                assertSame(otherConfig, it.configStore)
+                            }
+                        }
+                        assertTrue(first.keys().isEmpty())
+                        assertTrue(second.keys().isEmpty())
+                        assertTrue(shared.keys().isNotEmpty(), "isolated shutdown must preserve shared registrations")
+                    }
+                    assertTrue(shared.keys().isEmpty(), "runtime must release shared registrations")
+                    // A later runtime can register the same paths on the same shared instance.
+                    YameRuntime(logManager = logs, resourceGraphs = NavigationResourceRegistry(),
+                        portProvider = { emptyList() }).use { assertSame(shared, it.functions) }
+                }
                 assertTrue(shared.keys().isEmpty())
+                assertSame(shared, FunctionStore.current)
+                assertFailsWith<IllegalStateException> { ConfigStore.current }
             }
         } finally {
             broker.close()
@@ -88,7 +157,11 @@ class FunctionStoreDefaultsTest {
     }
 
     private fun TuiYameObserver.refreshPorts() {
-        "/refresh-ports".forEach { handleKey(it.toString()) }
+        command("/refresh-ports")
+    }
+
+    private fun TuiYameObserver.command(value: String) {
+        value.forEach { handleKey(it.toString()) }
         handleKey("Enter")
     }
 }

@@ -3,15 +3,14 @@
 Each YAME process owns one `ConfigStore` and one `FunctionStore`. `YameRuntime`
 owns serial/modem behavior, registers its operations, and observes committed
 configuration. Application bootstrap composes this same runtime for plain mode
-and the TUI. Stores,
-keys, functions and runtime have no presentation imports. A second frontend can
-use the same instances; each TUI owns its own command palette. An external client
+and the TUI. Stores, keys, functions and runtime have no presentation imports.
+A second frontend can use the same instances; each TUI owns its own command palette. An external client
 needs a separate transport/authentication bridge module, not a different core API.
 
 ## Application startup and shutdown
 
-`Main` loads configuration, applies CLI overrides, installs the process store,
-and creates shared logging, functions and event supervision. It selects the
+`Main` loads configuration, applies CLI overrides, explicitly installs the process
+`ConfigStore`, and creates shared logging and event supervision. It selects the
 presentation using the existing `--ui auto|tui|plain` terminal policy. Both normal
 modes use `ApplicationBootstrap` with the same runtime factory:
 
@@ -24,6 +23,15 @@ modes use `ApplicationBootstrap` with the same runtime factory:
    close and drain the broker, then close presentation subscriptions/workers,
    release the configuration installation and close logging. A shutdown hook and
    fatal-event supervisor use that same idempotent owner.
+
+The production presentation/runtime factories omit both stores. Constructors for
+`InteractiveYameApplication`, `TuiYameObserver` and `YameRuntime` default to
+`ConfigStore.current` (the explicitly installed process store) and
+`FunctionStore.current` (the lazy process-owned registry from
+[ADR 0009](adrs/0009-lazy-global-function-store.md)). Main creates no function
+store. Explicit constructor arguments bypass the defaults independently; a
+component retains those instances for its operations and passes them to children
+when composing them. It never replaces an injected store with a global lookup.
 
 `InteractiveYameApplication` owns only `TuiYameObserver` and its subscription.
 Neither the TUI nor plain diagnostics owns a runtime or resource registry.

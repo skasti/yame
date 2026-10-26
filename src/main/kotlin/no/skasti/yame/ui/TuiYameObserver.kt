@@ -59,7 +59,7 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
 class TuiYameObserver(
-    private val configStore: ConfigStore,
+    private val configStore: ConfigStore = ConfigStore.current,
     private val functions: FunctionStore = FunctionStore.current,
     private val terminal: Terminal = Terminal(interactive = true),
 ) : AutoCloseable {

@@ -35,7 +35,7 @@ import no.skasti.yame.logging.diagnosticLogger
 import java.util.Collections
 
 internal class YameRuntime(
-    val configStore: ConfigStore,
+    val configStore: ConfigStore = ConfigStore.current,
     val functions: FunctionStore = FunctionStore.current,
     private val logManager: YameLogManager,
     private val resourceGraphs: NavigationResourceRegistry =

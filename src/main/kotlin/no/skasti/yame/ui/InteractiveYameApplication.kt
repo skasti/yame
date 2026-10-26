@@ -8,7 +8,7 @@ import no.skasti.yame.presentation.Presentation
 
 /** TUI presentation only; application bootstrap owns runtime and shared stores. */
 class InteractiveYameApplication(
-    val configStore: ConfigStore,
+    val configStore: ConfigStore = ConfigStore.current,
     val functions: FunctionStore = FunctionStore.current,
     terminal: Terminal,
 ) : Presentation {
