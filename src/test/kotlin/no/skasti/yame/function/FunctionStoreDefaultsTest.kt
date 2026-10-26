@@ -44,13 +44,9 @@ class FunctionStoreDefaultsTest {
                     assertSame(first, it.functions)
                     TuiYameObserver(config, first, terminal).use { observer -> observer.refreshPorts() }
                 }
-                InteractiveYameApplication(config, second, terminal, logs,
-                    NavigationResourceRegistry(), { emptyList() }).use {
+                InteractiveYameApplication(config, second, terminal).use {
                     assertSame(second, it.functions)
                 }
-                // Exercise the public constructor as well as the internal registry-injection overload.
-                InteractiveYameApplication(config, second, terminal, logs,
-                    portProvider = { emptyList() }).use { assertSame(second, it.functions) }
                 assertFalse(delegate.isInitialized(), "explicit component injection must bypass current")
 
                 val pool = Executors.newFixedThreadPool(8)
@@ -80,12 +76,7 @@ class FunctionStoreDefaultsTest {
                     assertTrue(second.keys().isEmpty())
                 }
                 assertTrue(shared.keys().isEmpty())
-                InteractiveYameApplication(configStore = config, terminal = terminal, logManager = logs,
-                    portProvider = { emptyList() }).use { assertSame(shared, it.functions) }
-                InteractiveYameApplication(configStore = config, terminal = terminal, logManager = logs,
-                    resourceGraphs = NavigationResourceRegistry(), portProvider = { emptyList() }).use {
-                    assertSame(shared, it.functions)
-                }
+                InteractiveYameApplication(configStore = config, terminal = terminal).use { assertSame(shared, it.functions) }
                 assertTrue(shared.keys().isEmpty())
             }
         } finally {

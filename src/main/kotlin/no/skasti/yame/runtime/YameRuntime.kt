@@ -46,7 +46,7 @@ internal class YameRuntime(
         SerialConnection::availablePortDescriptors,
     private val failFastStartup: Boolean = false,
     private val connectionFactory: (String, Int, SerialFlowControl, (String) -> Unit) -> SerialTransport = ::SerialConnection,
-) : AutoCloseable {
+) : RuntimeSession {
     private val lock = java.lang.Object()
     private val closed = java.util.concurrent.atomic.AtomicBoolean()
     private var pendingTransitions = 0
@@ -65,12 +65,17 @@ internal class YameRuntime(
 
     private val selectedPortName: String? get() = configStore[SerialSettings.Port]
 
-    private val functionRegistrations = listOf(
-        functions.register(ApplicationFunctions.Quit) { running = false; autoConnectEnabled = false },
-        functions.register(ConnectionFunctions.Disconnect) { runtimeOperation { disconnect() } },
-        functions.register(ConnectionFunctions.Reconnect) { runtimeOperation { reconnect() } },
-        functions.register(ConnectionFunctions.RefreshPorts) { runtimeOperation { refreshPorts() } ?: emptyList() },
-    )
+    private val functionRegistrations = buildList {
+        try {
+            add(functions.register(ApplicationFunctions.Quit) { running = false; autoConnectEnabled = false })
+            add(functions.register(ConnectionFunctions.Disconnect) { runtimeOperation { disconnect() } })
+            add(functions.register(ConnectionFunctions.Reconnect) { runtimeOperation { reconnect() } })
+            add(functions.register(ConnectionFunctions.RefreshPorts) { runtimeOperation { refreshPorts() } ?: emptyList() })
+        } catch (error: Throwable) {
+            forEach(AutoCloseable::close)
+            throw error
+        }
+    }
     private var generation = 0
     private var connectionId = 0L
     private var lastPorts: List<SerialPortDescriptor>? = null
@@ -79,7 +84,7 @@ internal class YameRuntime(
     private var activeModem: HayesModem? = null
     private var monitorThread: Thread? = null
 
-    fun run() {
+    override fun run() {
         if (closed.get()) return
         started = true
         refreshPorts()

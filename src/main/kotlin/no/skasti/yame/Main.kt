@@ -13,6 +13,7 @@ import no.skasti.yame.logging.YameLogLevel
 import no.skasti.yame.logging.YameLogManager
 import no.skasti.yame.logging.YameLogModule
 import no.skasti.yame.lifecycle.ApplicationEventLifecycle
+import no.skasti.yame.lifecycle.ApplicationBootstrap
 import no.skasti.yame.observer.YameEvents
 import no.skasti.yame.logging.DiagnosticMessage
 import no.skasti.yame.logging.diagnosticLogger
@@ -27,6 +28,8 @@ import no.skasti.yame.serial.SerialFlowControl
 import no.skasti.yame.tone.DialString
 import no.skasti.yame.tone.HandshakeProfile
 import no.skasti.yame.ui.InteractiveYameApplication
+import no.skasti.yame.presentation.PlainPresentation
+import no.skasti.yame.runtime.YameRuntime
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.time.Duration
@@ -66,9 +69,7 @@ fun main(args: Array<String>) {
     Runtime.getRuntime().addShutdownHook(shutdownHook)
     try {
         if (options.testNumber != null) {
-            events.consumer(YameEvents.subscribe("plain-diagnostics", { it is DiagnosticMessage }) {
-                println((it as DiagnosticMessage).message)
-            })
+            events.consumer(PlainPresentation())
             val modemConsoleLogger = diagnosticLogger(logManager.logger(YameLogModule.MODEM))
             val modem = HayesModem(
                 baudRate = options.baudRate,
@@ -87,9 +88,7 @@ fun main(args: Array<String>) {
                     "dial tone: ${options.modemConfig.dialToneTime}, " +
                     "handshake: ${options.modemConfig.handshakeProfile})...",
             )
-            modem.use {
-                it.dial(options.testNumber)
-            }
+            modem.dial(options.testNumber)
             YameEvents.publish(DiagnosticMessage("Tone test complete."))
             return
         }
@@ -124,43 +123,33 @@ fun main(args: Array<String>) {
         )
         applyCliOverrides(runtimeConfigStore, savedConfiguration, effectiveConfiguration)
         events.consumer(no.skasti.yame.config.ConfigStore.install(runtimeConfigStore))
-        run {
-            if (useTui) {
-                val application = InteractiveYameApplication(
+        if (!useTui && options.portName == null) {
+            printUsage()
+            return
+        }
+
+        ApplicationBootstrap(events).run(
+            createPresentation = {
+                if (useTui) InteractiveYameApplication(
                     configStore = runtimeConfigStore,
-                    logManager = logManager,
                     terminal = if (options.uiMode == UiMode.AUTO) {
                         detectedTerminal
                     } else {
                         Terminal(interactive = true)
                     },
+                ) else PlainPresentation()
+            },
+            createRuntime = {
+                YameRuntime(
+                    runtimeConfigStore,
+                    logManager = logManager, failFastStartup = !useTui,
                 )
-                events.producer(AutoCloseable(application::stop))
-                events.consumer(application)
-                application.run()
-                return
-            }
-
-            if (options.portName == null) {
-                printUsage()
-                return
-            }
-
-            events.consumer(YameEvents.subscribe("plain-diagnostics", { it is DiagnosticMessage }) {
-                println((it as DiagnosticMessage).message)
-            })
-            val runtime = no.skasti.yame.runtime.YameRuntime(
-                runtimeConfigStore,
-                logManager = logManager, failFastStartup = true,
-            )
-            events.producer(runtime)
-            runtime.run()
-        }
+            },
+        )
     } finally {
         events.close()
         coordinatedShutdown.close()
         runCatching { Runtime.getRuntime().removeShutdownHook(shutdownHook) }
-        logManager.close()
     }
 }
 

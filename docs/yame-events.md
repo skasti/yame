@@ -173,7 +173,7 @@ reads, and waits for connection attempts and proxy producers outside protocol
 monitors. Session closure fences late UDP/ICMP callbacks. Proxy close remains
 bounded, with a separate `awaitQuiescence` boundary used by the PPP owner to
 verify actual worker/handler completion. It then closes and awaits the broker,
-drains the existing resource UI executor, removes subscriptions and closes the
+removes subscriptions and closes the
 frontend, configuration installation and logging/capture resources. Finally it
 seals the facade. An incomplete shutdown is a failure; it never claims a
 successful drain or closes a still-dispatching frontend.
@@ -192,12 +192,19 @@ that never returns can leave later operations unattempted before forced exit.
 
 ## Proxy dashboard projection
 
-`InteractiveYameApplication` registers `TuiYameObserver.onEvent` before constructing
-its runtime. The same subscriber handles runtime and proxy observations; there is
+`ApplicationBootstrap` constructs the selected presentation before constructing
+or starting the runtime. `InteractiveYameApplication` registers
+`TuiYameObserver.onEvent` during that presentation initialization, and its
+nonblocking `start()` enables rendering/input after core functions are available.
+It owns no runtime or registry. The same subscriber handles runtime and proxy observations; there is
 no registry hook, snapshot synchronization, per-event registry read, or proxy UI
-executor. Registry-instance injection and the lazy shared production registry are
-preserved. Immutable observations are staged while holding registry locks and
+executor. Registry-instance injection stays at runtime/core boundaries; the lazy
+shared production registry is resolved there and survives reconnects. Immutable observations are staged while holding registry locks and
 published after releasing them; broker admission/fatal failures still propagate.
+The plain diagnostic presentation installs its subscription at the same bootstrap
+stage. Shutdown stops core producers and drains events before releasing either
+presentation and its subscriptions. See
+[application composition](configuration-architecture.md#application-startup-and-shutdown).
 
 The TUI-owned `HttpGraphProjection` incrementally applies public graph/resource
 payloads. `CREATED.initialResources` seeds only that lifetime's initial members;

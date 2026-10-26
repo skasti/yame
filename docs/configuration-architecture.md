@@ -2,10 +2,42 @@
 
 Each YAME process owns one `ConfigStore` and one `FunctionStore`. `YameRuntime`
 owns serial/modem behavior, registers its operations, and observes committed
-configuration. Both plain mode and the TUI compose this same runtime. Stores,
+configuration. Application bootstrap composes this same runtime for plain mode
+and the TUI. Stores,
 keys, functions and runtime have no presentation imports. A second frontend can
 use the same instances; each TUI owns its own command palette. An external client
 needs a separate transport/authentication bridge module, not a different core API.
+
+## Application startup and shutdown
+
+`Main` loads configuration, applies CLI overrides, installs the process store,
+and creates shared logging, functions and event supervision. It selects the
+presentation using the existing `--ui auto|tui|plain` terminal policy. Both normal
+modes use `ApplicationBootstrap` with the same runtime factory:
+
+1. Construct the selected `Presentation`, installing its event subscriptions.
+2. Construct `YameRuntime`, registering core functions and configuration listeners.
+3. Call the presentation's nonblocking `start()`, then run the core on the calling
+   thread. The TUI owns its render timer and input thread; plain diagnostics need
+   no loop. Bootstrap also supports a runtime with no presentation.
+4. On return or failure, use `ApplicationEventLifecycle` to stop runtime producers,
+   close and drain the broker, then close presentation subscriptions/workers,
+   release the configuration installation and close logging. A shutdown hook and
+   fatal-event supervisor use that same idempotent owner.
+
+`InteractiveYameApplication` owns only `TuiYameObserver` and its subscription.
+Neither the TUI nor plain diagnostics owns a runtime or resource registry.
+Presentation initialization cannot start runtime producers; input is enabled only
+after runtime functions exist. Core construction/startup failures release already
+created components. A component whose lifecycle registration loses a shutdown
+race is closed immediately, rather than escaping ownership. See
+[ADR 0008](adrs/0008-presentation-independent-bootstrap.md).
+
+`YameRuntime` and lower-level core components retain explicit registry injection.
+Their production defaults resolve the lazy, thread-safe process registry through
+`YameRegistries`; reconnects retain that instance and its contents. No registry
+resolution passes through presentation. Tone test remains a standalone modem
+path with plain diagnostics, and plain mode without a port still prints usage.
 
 ## Typed settings and ownership
 
@@ -204,8 +236,9 @@ loaded from its separate INI file; runtime writes use the repository.
 | `ppp.proxy.transform` | HTML switches, element rules/INI, transformation policy and implementation |
 | `persistence` | Generic INI repository and legacy CLI/DTO adapters; feature definitions own mappings |
 | `Main` | Load file, apply transient CLI precedence, create/install the configuration store, choose frontend and startup retry policy |
+| `ApplicationBootstrap`, `ApplicationEventLifecycle` | Subscribe presentation before core construction, start presentation workers and runtime, supervise and order shutdown |
 | `YameRuntime` | Construct component configs from direct store reads, observe committed batches, own connections and registered functions |
-| TUI | Derive presentation caches from the store; display runtime observations separately; invoke core functions |
+| Presentations | Own subscriptions/output/input workers; TUI derives caches from the store, projects event payloads and invokes core functions |
 
 The CLI reads serial, modem, PPP, DNS, proxy enabled, and logging defaults for
 normal startup; tone test uses serial, modem, and logging. Neither mode requests

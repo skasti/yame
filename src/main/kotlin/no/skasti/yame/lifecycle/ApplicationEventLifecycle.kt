@@ -48,8 +48,21 @@ internal class ApplicationEventLifecycle(
         }
     }, "yame-event-supervisor").apply { isDaemon = true; start() }
 
-    fun producer(value: AutoCloseable) = synchronized(registrationLock) { check(!closing.get()); producers += value }
-    fun consumer(value: AutoCloseable) = synchronized(registrationLock) { check(!closing.get()); consumers += value }
+    fun producer(value: AutoCloseable) = register(value, producers)
+    fun consumer(value: AutoCloseable) = register(value, consumers)
+
+    private fun register(value: AutoCloseable, owners: MutableList<AutoCloseable>) {
+        val accepted = synchronized(registrationLock) {
+            if (closing.get()) false else { owners += value; true }
+        }
+        if (!accepted) {
+            // Shutdown may win while a factory is constructing a component.
+            // The rejected component never entered the cleanup lists.
+            val error = IllegalStateException("Application is shutting down")
+            try { value.close() } catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
+            throw error
+        }
+    }
 
     override fun close() = finish(null)
 

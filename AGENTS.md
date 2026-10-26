@@ -71,6 +71,10 @@ and consumer-owned ordering follow
 follows [ADR 0001](docs/adrs/0001-fatal-event-queue-saturation.md). The lazy
 global event facade and lifecycle follow
 [ADR 0007](docs/adrs/0007-lazy-global-event-broker.md).
+Presentation-independent application composition follows
+[ADR 0008](docs/adrs/0008-presentation-independent-bootstrap.md): subscribe the
+selected presentation before constructing/starting core producers, enable input
+after core functions exist, and keep runtime/registry ownership out of presentation.
 
 - Record architectural decisions in `docs/adrs/<sequence>-<topic>.md`, using the
   next repository-wide four-digit sequence and a lowercase hyphenated topic.
