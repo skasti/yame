@@ -13,7 +13,6 @@ import no.skasti.yame.logging.YameLogLevel
 import no.skasti.yame.logging.YameLogManager
 import no.skasti.yame.logging.YameLogModule
 import no.skasti.yame.lifecycle.ApplicationEventLifecycle
-import no.skasti.yame.lifecycle.ApplicationBootstrap
 import no.skasti.yame.observer.YameEvents
 import no.skasti.yame.logging.DiagnosticMessage
 import no.skasti.yame.logging.diagnosticLogger
@@ -29,6 +28,7 @@ import no.skasti.yame.tone.DialString
 import no.skasti.yame.tone.HandshakeProfile
 import no.skasti.yame.ui.InteractiveYameApplication
 import no.skasti.yame.presentation.PlainPresentation
+import no.skasti.yame.presentation.Presentation
 import no.skasti.yame.runtime.YameRuntime
 import java.nio.file.Files
 import java.nio.file.Path
@@ -36,7 +36,13 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
-fun main(args: Array<String>) {
+fun main(args: Array<String>) = main(args) { useTui, terminal ->
+    if (useTui) InteractiveYameApplication(terminal = terminal) else PlainPresentation()
+}
+
+// A presentation-construction seam lets tests exercise this actual startup and
+// finally block. Runtime construction and lifecycle ownership are never replaced.
+internal fun main(args: Array<String>, createPresentation: (Boolean, Terminal) -> Presentation) {
     val configPath = configurationPath(args)
     val fileStore = YameConfigurationStore(configPath)
     val runtimeConfigStore = lazyApplicationConfigStore(configPath)
@@ -128,22 +134,14 @@ fun main(args: Array<String>) {
             return
         }
 
-        ApplicationBootstrap(events).run(
-            createPresentation = {
-                if (useTui) InteractiveYameApplication(
-                    terminal = if (options.uiMode == UiMode.AUTO) {
-                        detectedTerminal
-                    } else {
-                        Terminal(interactive = true)
-                    },
-                ) else PlainPresentation()
-            },
-            createRuntime = {
-                YameRuntime(
-                    logManager = logManager, failFastStartup = !useTui,
-                )
-            },
-        )
+        val terminal = if (useTui && options.uiMode == UiMode.TUI) Terminal(interactive = true) else detectedTerminal
+        val presentation = createPresentation(useTui, terminal).also(events::consumer)
+        presentation.start()
+
+        val runtime = YameRuntime(
+            logManager = logManager, failFastStartup = !useTui,
+        ).also(events::producer)
+        runtime.run()
     } finally {
         events.close()
         coordinatedShutdown.close()

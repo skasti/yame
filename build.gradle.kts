@@ -42,6 +42,7 @@ val eventFacadeTest by tasks.registering(Test::class) {
     group = "verification"
     testClassesDirs = sourceSets.test.get().output.classesDirs
     classpath = sourceSets.test.get().runtimeClasspath
+    systemProperty("yame.test.runtimeClasspath", sourceSets.test.get().runtimeClasspath.asPath)
     include("**/ResourceLifecycleEventTest.class", "**/YameRuntimeConnectionTest.class", "**/YameEventsLazyTest.class", "**/RuntimeObservationIntegrationTest.class", "**/InteractiveYameApplicationTest.class", "**/FunctionStoreDefaultsTest.class", "**/ApplicationPresentationTest.class")
     forkEvery = 1
     maxParallelForks = 1

@@ -2,7 +2,7 @@
 
 Each YAME process owns one `ConfigStore` and one `FunctionStore`. `YameRuntime`
 owns serial/modem behavior, registers its operations, and observes committed
-configuration. Application bootstrap composes this same runtime for plain mode
+configuration. `Main` composes this same runtime for plain mode
 and the TUI. Stores, keys, functions and runtime have no presentation imports.
 A second frontend can use the same instances; each TUI owns its own command palette. An external client
 needs a separate transport/authentication bridge module, not a different core API.
@@ -12,19 +12,22 @@ needs a separate transport/authentication bridge module, not a different core AP
 `Main` loads configuration, applies CLI overrides, explicitly installs the process
 `ConfigStore`, and creates shared logging and event supervision. It selects the
 presentation using the existing `--ui auto|tui|plain` terminal policy. Both normal
-modes use `ApplicationBootstrap` with the same runtime factory:
+modes follow the same direct sequence in `Main`, without an additional bootstrap
+abstraction:
 
-1. Construct the selected `Presentation`, installing its event subscriptions.
-2. Construct `YameRuntime`, registering core functions and configuration listeners.
-3. Call the presentation's nonblocking `start()`, then run the core on the calling
-   thread. The TUI owns its render timer and input thread; plain diagnostics need
-   no loop. Bootstrap also supports a runtime with no presentation.
+1. Construct the selected `Presentation`, installing its event subscriptions, and
+   register it as a lifecycle consumer before calling its nonblocking `start()`.
+   The TUI owns its render timer and input thread; plain diagnostics need no loop.
+2. Construct `YameRuntime`, which registers core functions and configuration
+   listeners, and immediately register it as a lifecycle producer.
+3. Run the runtime on the calling thread. Core components also remain usable
+   without a presentation.
 4. On return or failure, use `ApplicationEventLifecycle` to stop runtime producers,
    close and drain the broker, then close presentation subscriptions/workers,
    release the configuration installation and close logging. A shutdown hook and
    fatal-event supervisor use that same idempotent owner.
 
-The production presentation/runtime factories omit both stores. Constructors for
+Production presentation/runtime construction omits both stores. Constructors for
 `InteractiveYameApplication`, `TuiYameObserver` and `YameRuntime` default to
 `ConfigStore.current` (the explicitly installed process store) and
 `FunctionStore.current` (the lazy process-owned registry from
@@ -35,8 +38,13 @@ when composing them. It never replaces an injected store with a global lookup.
 
 `InteractiveYameApplication` owns only `TuiYameObserver` and its subscription.
 Neither the TUI nor plain diagnostics owns a runtime or resource registry.
-Presentation initialization cannot start runtime producers; input is enabled only
-after runtime functions exist. Core construction/startup failures release already
+Presentation initialization cannot start runtime producers. Input is enabled
+before runtime construction, with no readiness barrier. Unavailable functions
+still throw from `FunctionStore.invoke`; the TUI catches command failures for
+palette actions and shortcuts, reports them locally, and keeps accepting input.
+A failed quit leaves input enabled so a later user action can succeed. Palette
+population remains unchanged; dynamic store-driven population is future work.
+Core construction/startup failures release already
 created components. A component whose lifecycle registration loses a shutdown
 race is closed immediately, rather than escaping ownership. See
 [ADR 0008](adrs/0008-presentation-independent-bootstrap.md).
@@ -243,8 +251,8 @@ loaded from its separate INI file; runtime writes use the repository.
 | `serial`, `modem`, `ppp`, `ppp.dns`, `ppp.proxy`, `logging` | Their own keys, groups, value validation and immutable component configs |
 | `ppp.proxy.transform` | HTML switches, element rules/INI, transformation policy and implementation |
 | `persistence` | Generic INI repository and legacy CLI/DTO adapters; feature definitions own mappings |
-| `Main` | Load file, apply transient CLI precedence, create/install the configuration store, choose frontend and startup retry policy |
-| `ApplicationBootstrap`, `ApplicationEventLifecycle` | Subscribe presentation before core construction, start presentation workers and runtime, supervise and order shutdown |
+| `Main` | Load file, apply CLI precedence, install configuration, construct/register/start presentation before constructing/registering/running runtime; close the lifecycle owner in its outer finally |
+| `ApplicationEventLifecycle` | Supervise fatal broker failure, own registered producers/consumers and order shutdown |
 | `YameRuntime` | Construct component configs from direct store reads, observe committed batches, own connections and registered functions |
 | Presentations | Own subscriptions/output/input workers; TUI derives caches from the store, projects event payloads and invokes core functions |
 

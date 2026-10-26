@@ -10,6 +10,42 @@ import java.util.concurrent.TimeUnit
 import kotlin.test.*
 
 class ApplicationEventLifecycleTest {
+    @Test fun `concurrent shutdown closes each owner once and rejects newly created components safely`() {
+        val broker = EventBroker()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val producersClosed = java.util.concurrent.atomic.AtomicInteger()
+        val consumersClosed = java.util.concurrent.atomic.AtomicInteger()
+        val rejectedClosed = java.util.concurrent.atomic.AtomicInteger()
+        val owner = ApplicationEventLifecycle(broker, sealFacade = {},
+            report = { fail(it) }, terminate = { fail("unexpected exit $it") })
+        owner.producer(AutoCloseable {
+            producersClosed.incrementAndGet()
+            entered.countDown()
+            check(release.await(3, TimeUnit.SECONDS))
+        })
+        owner.consumer(AutoCloseable { consumersClosed.incrementAndGet() })
+        val failures = CopyOnWriteArrayList<Throwable>()
+        val closers = (1..4).map {
+            Thread { try { owner.close() } catch (error: Throwable) { failures += error } }.apply { start() }
+        }
+        try {
+            assertTrue(entered.await(2, TimeUnit.SECONDS))
+            assertFailsWith<IllegalStateException> { owner.consumer(AutoCloseable { rejectedClosed.incrementAndGet() }) }
+            assertFailsWith<IllegalStateException> { owner.producer(AutoCloseable { rejectedClosed.incrementAndGet() }) }
+        } finally {
+            release.countDown()
+            closers.forEach { it.join(3_000) }
+        }
+        assertTrue(closers.none { it.isAlive })
+        assertTrue(failures.isEmpty(), failures.toString())
+        owner.close()
+        assertEquals(1, producersClosed.get())
+        assertEquals(1, consumersClosed.get())
+        assertEquals(2, rejectedClosed.get(), "components rejected during shutdown must be closed")
+        assertTrue(broker.status.terminated)
+    }
+
     @Test fun `normal shutdown stops producers before draining and releases consumers last`() {
         val broker = EventBroker()
         val order = CopyOnWriteArrayList<String>()

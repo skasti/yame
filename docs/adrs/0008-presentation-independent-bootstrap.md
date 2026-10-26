@@ -17,13 +17,22 @@ require subscribers to be ready before runtime construction can publish.
 
 ## Decision
 
-Application bootstrap owns runtime composition independently of presentation.
+`Main.kt` directly owns application startup independently of presentation.
 After process configuration is installed and logging/event supervision are ready,
-bootstrap constructs the selected presentation and its subscriptions, constructs
-the runtime, starts presentation workers without blocking, and runs the runtime.
-Core functions exist before input is enabled. A presentation is optional.
+Main constructs the selected presentation and its subscriptions, registers it with
+`ApplicationEventLifecycle`, and starts its workers without blocking. It then
+constructs the runtime, registers it with the same lifecycle owner, and runs it.
+The existing outer `try/finally` in Main closes the lifecycle owner. No additional
+bootstrap abstraction is needed.
 
-Production factories use constructor defaults for store access:
+Presentation starts before runtime functions exist. An early unavailable operation
+remains an exception from `FunctionStore.invoke`; the TUI handles it as a local
+command failure without stopping input or preventing a later user action. There
+is no readiness barrier, polling, automatic retry or registration synchronization.
+Dynamic Command Palette population and new store notifications are outside this
+decision; existing palette behavior is retained.
+
+Production constructors use their defaults for store access:
 `ConfigStore.current` resolves the explicitly installed process configuration,
 while `FunctionStore.current` is the lazy process-owned registry defined by
 ADR 0009. Main neither creates nor propagates a function store. Runtime and TUI
@@ -39,10 +48,10 @@ registry dependency. Registry resolution and explicit test injection remain in
 runtime/core components; the existing lazy process-wide production registry and
 retention/reconnection semantics are unchanged.
 
-One application lifecycle coordinates normal and partial-startup cleanup: stop
+`ApplicationEventLifecycle` coordinates normal and partial-startup cleanup: stop
 producers, close/drain the broker, release presentation subscriptions/workers,
 then shared infrastructure. Repeated shutdown does not close components twice.
-Factories clean up partial construction; rejected lifecycle registrations close
+Constructors clean up partial construction; rejected lifecycle registrations close
 their unowned component if shutdown won the registration race.
 
 ## Alternatives considered
@@ -51,7 +60,9 @@ their unowned component if shutdown won the registration race.
 | --- | --- |
 | Keep runtime ownership in each frontend | Duplicates lifecycle and makes optional UI responsible for core behavior. |
 | Start runtime before constructing presentation | Loses early non-replayed observations. |
-| Run a blocking UI loop before runtime startup | Prevents runtime startup and leaves core functions unavailable to input. |
+| Additional bootstrap class wrapping startup factories | Adds indirection to the sequence already owned by Main. |
+| Require core functions before starting presentation | Couples presentation startup to runtime initialization without a necessary invariant. |
+| Run a blocking UI loop before runtime startup | Prevents runtime startup; presentation starts its own workers and returns. |
 | Convert internal core collaboration to events | Does not address bootstrap ownership and unnecessarily changes core contracts. |
 
 ## Consequences

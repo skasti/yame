@@ -46,7 +46,7 @@ internal class YameRuntime(
         SerialConnection::availablePortDescriptors,
     private val failFastStartup: Boolean = false,
     private val connectionFactory: (String, Int, SerialFlowControl, (String) -> Unit) -> SerialTransport = ::SerialConnection,
-) : RuntimeSession {
+) : AutoCloseable {
     private val lock = java.lang.Object()
     private val closed = java.util.concurrent.atomic.AtomicBoolean()
     private var pendingTransitions = 0
@@ -84,7 +84,7 @@ internal class YameRuntime(
     private var activeModem: HayesModem? = null
     private var monitorThread: Thread? = null
 
-    override fun run() {
+    fun run() {
         if (closed.get()) return
         started = true
         refreshPorts()

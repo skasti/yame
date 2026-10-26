@@ -192,10 +192,12 @@ that never returns can leave later operations unattempted before forced exit.
 
 ## Proxy dashboard projection
 
-`ApplicationBootstrap` constructs the selected presentation before constructing
-or starting the runtime. `InteractiveYameApplication` registers
+`Main` constructs, registers and starts the selected presentation before
+constructing or running the runtime. `InteractiveYameApplication` registers
 `TuiYameObserver.onEvent` during that presentation initialization, and its
-nonblocking `start()` enables rendering/input after core functions are available.
+nonblocking `start()` enables rendering/input independently of core function
+registration. The TUI reports unavailable operations as command failures and
+keeps accepting input; the function store still throws for unavailable functions.
 It owns no runtime or registry. The same subscriber handles runtime and proxy observations; there is
 no registry hook, snapshot synchronization, per-event registry read, or proxy UI
 executor. Registry-instance injection stays at runtime/core boundaries; the lazy
