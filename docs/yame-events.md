@@ -178,6 +178,14 @@ frontend, configuration installation and logging/capture resources. Finally it
 seals the facade. An incomplete shutdown is a failure; it never claims a
 successful drain or closes a still-dispatching frontend.
 
+Runtime shutdown attempts each subscription/function handle, monitor interruption,
+serial/modem release, transition wait and monitor join independently. It retains
+the first cleanup exception and suppresses later ones before signalling shared
+close completion. A detached connection emits logical disconnection even when
+physical cleanup fails, without claiming successful physical shutdown. Publication
+failure is also retained, and transition accounting always finishes; stale reader
+callbacks and later shutdown do not release or disconnect that detached IO again.
+
 Producer and consumer cleanup exceptions are isolated per registration, in reverse
 order. Broker close and wait failures are isolated too: confirmed dispatcher
 termination still allows consumer cleanup. Consumer resources remain open when

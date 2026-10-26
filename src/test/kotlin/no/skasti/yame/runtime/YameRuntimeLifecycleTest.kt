@@ -11,6 +11,7 @@ import java.io.ByteArrayOutputStream
 import java.nio.file.Files
 import java.time.Duration
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -37,9 +38,10 @@ class YameRuntimeLifecycleTest {
         val opens = AtomicInteger()
         val reads = AtomicInteger()
         val closes = AtomicInteger()
+        val carrierDrops = AtomicInteger()
         @Volatile var stopped: ((Throwable?) -> Unit)? = null
         override fun open() { opens.incrementAndGet(); opening() }
-        override fun setCarrierPresent(carrierPresent: Boolean) = Unit
+        override fun setCarrierPresent(carrierPresent: Boolean) { if (!carrierPresent) carrierDrops.incrementAndGet() }
         override fun startReading(onBytes: (ByteArray) -> Unit, onStopped: (Throwable?) -> Unit) {
             stopped = onStopped
             reads.incrementAndGet()
@@ -60,21 +62,44 @@ class YameRuntimeLifecycleTest {
         val ports = RuntimeTestPorts(source)
         val runtime = YameRuntime(store, functions, logs, NavigationResourceRegistry(), ports::scan,
             connectionFactory = { _, _, _, _ -> factory() })
+        var expectedCloseFailure: Throwable? = null
         fun run() = RuntimeTestRun(runtime, ports)
         override fun close() {
             ports.releaseStartup()
-            try { runtime.close() } finally { logs.close(); directory.toFile().deleteRecursively() }
+            try {
+                val expected = expectedCloseFailure
+                if (expected == null) runtime.close() else assertSame(expected, assertFails { runtime.close() })
+            } finally { logs.close(); directory.toFile().deleteRecursively() }
         }
     }
 
     private class Worker(action: () -> Unit) {
         private val failure = AtomicReference<Throwable>()
         private val worker = thread { try { action() } catch (error: Throwable) { failure.set(error) } }
+        fun interrupt() = worker.interrupt()
         fun finish(): Throwable? {
             worker.join(5_000)
             assertFalse(worker.isAlive, "operation deadlocked")
             return failure.get()
         }
+    }
+
+    // The concrete stores return non-throwing handles. Decorate the owned handles
+    // only in tests, without adding failure-injection APIs to runtime or the stores.
+    private fun decorateSubscription(runtime: YameRuntime, decorate: (AutoCloseable) -> AutoCloseable) {
+        val field = YameRuntime::class.java.getDeclaredField("configurationSubscription").apply { isAccessible = true }
+        field.set(runtime, decorate(field.get(runtime) as AutoCloseable))
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun decorateRegistration(runtime: YameRuntime, index: Int, decorate: (AutoCloseable) -> AutoCloseable) {
+        val field = YameRuntime::class.java.getDeclaredField("functionRegistrations").apply { isAccessible = true }
+        val registrations = field.get(runtime) as MutableList<AutoCloseable>
+        registrations[index] = decorate(registrations[index])
+    }
+
+    private fun closingSignal(runtime: YameRuntime): CountDownLatch = CountDownLatch(1).also { signal ->
+        decorateRegistration(runtime, 3) { original -> AutoCloseable { original.close(); signal.countDown() } }
     }
 
     @Test fun `startup registers once and registered commands validate quitting state`() {
@@ -161,19 +186,17 @@ class YameRuntimeLifecycleTest {
             f.run().use {
                 val refresh = Worker { f.functions.invoke(ConnectionFunctions.RefreshPorts) }
                 assertTrue(entered.await(5, TimeUnit.SECONDS))
-                val closing = CountDownLatch(1)
-                broker.subscribe("closing-refresh", { it is ConnectionStateChanged }) { closing.countDown() }.use {
-                    val closed = CountDownLatch(1)
-                    val closer = Worker { f.runtime.close(); closed.countDown() }
-                    try {
-                        assertTrue(closing.await(5, TimeUnit.SECONDS))
-                        assertTrue(f.functions.keys().isEmpty())
-                        assertEquals(1L, closed.count, "refresh still owns OS enumeration")
-                    } finally { f.ports.releaseStartup(); resume.countDown() }
-                    assertIs<IllegalStateException>(refresh.finish())
-                    assertNull(closer.finish())
-                    assertEquals(0L, closed.count)
-                }
+                val closing = closingSignal(f.runtime)
+                val closed = CountDownLatch(1)
+                val closer = Worker { f.runtime.close(); closed.countDown() }
+                try {
+                    assertTrue(closing.await(5, TimeUnit.SECONDS))
+                    assertTrue(f.functions.keys().isEmpty())
+                    assertEquals(1L, closed.count, "refresh still owns OS enumeration")
+                } finally { f.ports.releaseStartup(); resume.countDown() }
+                assertIs<IllegalStateException>(refresh.finish())
+                assertNull(closer.finish())
+                assertEquals(0L, closed.count)
             }
         }
     }
@@ -247,22 +270,20 @@ class YameRuntimeLifecycleTest {
                 f.functions.invoke(ConnectionFunctions.Reconnect)
                 val change = Worker { f.store.set(SerialSettings.Baud to 57_600) }
                 assertTrue(entered.await(5, TimeUnit.SECONDS))
-                val closing = CountDownLatch(1)
-                broker.subscribe("closing-detached", { it is ConnectionStateChanged }) { closing.countDown() }.use {
-                    val finished = CountDownLatch(1)
-                    val closer = Worker { f.runtime.close(); finished.countDown() }
-                    try {
-                        assertTrue(closing.await(5, TimeUnit.SECONDS))
-                        assertEquals(1L, finished.count, "detached serial cleanup is still in flight")
-                    } finally { f.ports.releaseStartup(); resume.countDown() }
-                    assertNull(change.finish())
-                    assertNull(closer.finish())
-                    assertEquals(1, factories.get())
-                    assertEquals(1, port.closes.get())
-                    port.stopped?.invoke(null)
-                    f.store.set(SerialSettings.Baud to 115_200)
-                    assertEquals(1, factories.get())
-                }
+                val closing = closingSignal(f.runtime)
+                val finished = CountDownLatch(1)
+                val closer = Worker { f.runtime.close(); finished.countDown() }
+                try {
+                    assertTrue(closing.await(5, TimeUnit.SECONDS))
+                    assertEquals(1L, finished.count, "detached serial cleanup is still in flight")
+                } finally { f.ports.releaseStartup(); resume.countDown() }
+                assertNull(change.finish())
+                assertNull(closer.finish())
+                assertEquals(1, factories.get())
+                assertEquals(1, port.closes.get())
+                port.stopped?.invoke(null)
+                f.store.set(SerialSettings.Baud to 115_200)
+                assertEquals(1, factories.get())
             }
         }
     }
@@ -310,6 +331,205 @@ class YameRuntimeLifecycleTest {
             }
             port.stopped?.invoke(null)
             assertEquals(1, port.closes.get())
+            assertTrue(f.functions.keys().isEmpty())
+        }
+    }
+
+    @Test fun `early cleanup failures still stop monitor and release IO before all closers receive the same failure`() {
+        val subscriptionFailure = IllegalStateException("subscription cleanup")
+        val firstRegistrationFailure = IllegalStateException("first registration cleanup")
+        val nextRegistrationFailure = IllegalStateException("next registration cleanup")
+        val serialFailure = IllegalStateException("serial cleanup")
+        val monitorEntered = CountDownLatch(1)
+        val monitorReleased = CountDownLatch(1)
+        val monitorInterrupted = CountDownLatch(1)
+        val monitor = AtomicReference<Thread>()
+        val serialClosing = CountDownLatch(1)
+        val releaseSerial = CountDownLatch(1)
+        val port = Port(closing = {
+            serialClosing.countDown()
+            check(releaseSerial.await(5, TimeUnit.SECONDS))
+            throw serialFailure
+        })
+        val observed = CopyOnWriteArrayList<ConnectionStateChanged>()
+        broker.subscribeTyped<ConnectionStateChanged>("cleanup-failures") { observed += it }.use {
+            Fixture(source = {
+                if (Thread.currentThread().name == "yame-port-monitor") {
+                    monitor.set(Thread.currentThread())
+                    monitorEntered.countDown()
+                    try { check(monitorReleased.await(5, TimeUnit.SECONDS)) }
+                    catch (error: InterruptedException) { monitorInterrupted.countDown(); throw error }
+                }
+                emptyList()
+            }, factory = { port }, config = YameConfiguration()).use { f ->
+                val runner = Worker { f.runtime.run() }
+                f.ports.awaitStartup()
+                f.ports.releaseStartup()
+                assertTrue(monitorEntered.await(5, TimeUnit.SECONDS))
+                // The monitor is now inside an admitted port scan. Connect on this
+                // thread so shutdown must independently clean both resource owners.
+                f.store.set(SerialSettings.Port to "COM1")
+                assertEquals(1, port.reads.get())
+                decorateSubscription(f.runtime) { original -> AutoCloseable { original.close(); throw subscriptionFailure } }
+                decorateRegistration(f.runtime, 0) { original -> AutoCloseable { original.close(); throw firstRegistrationFailure } }
+                decorateRegistration(f.runtime, 1) { original -> AutoCloseable { original.close(); throw nextRegistrationFailure } }
+                f.expectedCloseFailure = subscriptionFailure
+                val first = Worker {
+                    val failure = assertFails { f.runtime.close() }
+                    assertSame(subscriptionFailure, failure)
+                    // Even the original closing thread must see the latched result
+                    // on a later close, rather than appearing to succeed.
+                    assertSame(failure, assertFails { f.runtime.close() })
+                    throw failure
+                }
+                assertTrue(serialClosing.await(5, TimeUnit.SECONDS))
+                val secondEntered = CountDownLatch(1)
+                val secondDone = CountDownLatch(1)
+                val secondInterrupted = AtomicReference<Boolean>()
+                val second = Worker {
+                    secondEntered.countDown()
+                    try { f.runtime.close() } finally {
+                        secondInterrupted.set(Thread.currentThread().isInterrupted)
+                        secondDone.countDown()
+                    }
+                }
+                try {
+                    assertTrue(secondEntered.await(5, TimeUnit.SECONDS))
+                    assertTrue(monitorInterrupted.await(5, TimeUnit.SECONDS), "monitor interruption was skipped")
+                    assertTrue(f.functions.keys().isEmpty(), "every registration must be released")
+                    second.interrupt()
+                    assertEquals(1L, secondDone.count, "physical cleanup has not completed")
+                } finally { releaseSerial.countDown(); monitorReleased.countDown() }
+                assertSame(subscriptionFailure, first.finish())
+                assertSame(subscriptionFailure, second.finish())
+                assertEquals(true, secondInterrupted.get())
+                assertSame(subscriptionFailure, runner.finish())
+                assertEquals(listOf(firstRegistrationFailure, nextRegistrationFailure, serialFailure),
+                    subscriptionFailure.suppressed.toList())
+                assertFalse(monitor.get().isAlive)
+                assertEquals(1, port.closes.get())
+                assertEquals(2, port.carrierDrops.get(), "modem close follows failed serial close")
+                port.stopped?.invoke(null)
+                assertEquals(1, port.closes.get(), "late serial callbacks cannot reclaim detached IO")
+                val level = f.logs.level(YameLogModule.MODEM)
+                f.store.set(LogSettings.Levels.getValue(YameLogModule.MODEM) to YameLogLevel.DEBUG)
+                assertEquals(level, f.logs.level(YameLogModule.MODEM), "configuration subscription was released")
+                assertEquals(BrokerWaitResult.COMPLETED, broker.drain().await(Duration.ofSeconds(5)))
+                val identity = observed.single { it.state == ConnectionState.CONNECTED }.connectionId
+                assertEquals(1, observed.count { it.connectionId == identity && it.state == ConnectionState.DISCONNECTED })
+            }
+        }
+    }
+
+    @Test fun `failed serial disconnect closes modem and publishes logical disconnection only once`() {
+        val failure = IllegalStateException("serial close failed")
+        val port = Port(closing = { throw failure })
+        val observed = CopyOnWriteArrayList<YameEvent>()
+        broker.subscribe("failed-disconnect") { observed += it }.use {
+            Fixture(factory = { port }).use { f ->
+                f.run().use {
+                    f.functions.invoke(ConnectionFunctions.Reconnect)
+                    assertSame(failure, assertFails { f.functions.invoke(ConnectionFunctions.Disconnect) })
+                    assertEquals(2, port.carrierDrops.get())
+                    port.stopped?.invoke(null)
+                    assertEquals(1, port.closes.get())
+                }
+                assertTrue(f.functions.keys().isEmpty())
+                assertEquals(BrokerWaitResult.COMPLETED, broker.drain().await(Duration.ofSeconds(5)))
+                val states = observed.filterIsInstance<ConnectionStateChanged>()
+                val identity = states.single { it.state == ConnectionState.CONNECTED }.connectionId
+                assertEquals(1, states.count { it.connectionId == identity && it.state == ConnectionState.DISCONNECTED })
+                assertFalse(observed.filterIsInstance<DiagnosticMessage>().any { it.message == "Serial connection closed" },
+                    "failed physical cleanup must not be reported as successful")
+            }
+        }
+    }
+
+    @Test fun `disconnect publication failure completes its transition and permits subsequent shutdown`() {
+        val port = Port()
+        Fixture(factory = { port }).use { f ->
+            f.run().use {
+                f.functions.invoke(ConnectionFunctions.Reconnect)
+                broker.close() // Reject publication through the real broker, without a runtime event seam.
+                assertFailsWith<BrokerClosedException> { f.functions.invoke(ConnectionFunctions.Disconnect) }
+                assertEquals(1, port.closes.get())
+                assertEquals(2, port.carrierDrops.get())
+                port.stopped?.invoke(null)
+            }
+            assertTrue(f.functions.keys().isEmpty())
+            assertEquals(1, port.closes.get(), "shutdown must not reclaim the already detached connection")
+        }
+    }
+
+    @Test fun `serial and publication failures retain primary error and do not strand transition accounting`() {
+        val failure = IllegalStateException("physical close failed")
+        val port = Port(closing = { throw failure })
+        Fixture(factory = { port }).use { f ->
+            f.run().use {
+                f.functions.invoke(ConnectionFunctions.Reconnect)
+                broker.close()
+                assertSame(failure, assertFails { f.functions.invoke(ConnectionFunctions.Disconnect) })
+                assertIs<BrokerClosedException>(failure.suppressed.single())
+                assertEquals(2, port.carrierDrops.get())
+            }
+            assertTrue(f.functions.keys().isEmpty())
+            assertEquals(1, port.closes.get())
+        }
+    }
+
+    @Test fun `shutdown publication failure is shared after connection and startup transitions finish`() {
+        val port = Port()
+        Fixture(factory = { port }).use { f ->
+            val runner = Worker { f.runtime.run() }
+            f.ports.awaitStartup()
+            f.functions.invoke(ConnectionFunctions.Reconnect)
+            val closing = closingSignal(f.runtime)
+            broker.close()
+            val closer = Worker { f.runtime.close() }
+            try { assertTrue(closing.await(5, TimeUnit.SECONDS)) } finally { f.ports.releaseStartup() }
+            val failure = closer.finish()
+            assertIs<BrokerClosedException>(failure)
+            f.expectedCloseFailure = failure
+            assertSame(failure, runner.finish())
+            assertSame(failure, assertFails { f.runtime.close() })
+            assertTrue(f.functions.keys().isEmpty())
+            assertEquals(1, port.closes.get())
+            assertEquals(2, port.carrierDrops.get())
+        }
+    }
+
+    @Test fun `interrupted cleanup still waits for owned IO and restores interruption after shutdown`() {
+        Fixture().use { f ->
+            val runner = Worker { f.runtime.run() }
+            f.ports.awaitStartup()
+            val closing = CountDownLatch(1)
+            val releaseHandle = CountDownLatch(1)
+            val interruptedHandle = CountDownLatch(1)
+            decorateRegistration(f.runtime, 0) { original -> AutoCloseable {
+                original.close()
+                closing.countDown()
+                try { check(releaseHandle.await(5, TimeUnit.SECONDS)) }
+                catch (error: InterruptedException) { interruptedHandle.countDown(); throw error }
+            } }
+            val done = CountDownLatch(1)
+            val wasInterrupted = AtomicReference<Boolean>()
+            val closer = Worker {
+                try { f.runtime.close() } finally {
+                    wasInterrupted.set(Thread.currentThread().isInterrupted)
+                    done.countDown()
+                }
+            }
+            try {
+                assertTrue(closing.await(5, TimeUnit.SECONDS))
+                closer.interrupt()
+                assertTrue(interruptedHandle.await(5, TimeUnit.SECONDS))
+                assertEquals(1L, done.count, "initial scan still owns a resource transition")
+            } finally { releaseHandle.countDown(); f.ports.releaseStartup() }
+            val failure = closer.finish()
+            assertIs<InterruptedException>(failure)
+            f.expectedCloseFailure = failure
+            assertSame(failure, runner.finish())
+            assertEquals(true, wasInterrupted.get())
             assertTrue(f.functions.keys().isEmpty())
         }
     }

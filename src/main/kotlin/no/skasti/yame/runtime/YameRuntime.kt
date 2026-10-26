@@ -34,6 +34,7 @@ import no.skasti.yame.logging.DiagnosticMessage
 import no.skasti.yame.logging.diagnosticLogger
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 internal class YameRuntime(
     val configStore: ConfigStore = ConfigStore.current,
@@ -109,7 +110,7 @@ internal class YameRuntime(
             throw error
         } finally {
             try { close() } catch (cleanup: Throwable) {
-                if (failure == null) throw cleanup else failure.addSuppressed(cleanup)
+                if (failure == null) throw cleanup else if (failure !== cleanup) failure.addSuppressed(cleanup)
             }
         }
     }
@@ -413,14 +414,15 @@ internal class YameRuntime(
     }
 
     private data class DetachedConnection(
-        val connection: SerialTransport?, val modem: HayesModem?, val ended: ConnectionStateChanged,
+        val connection: SerialTransport?, val modem: HayesModem?, val ended: ConnectionStateChanged?,
     )
 
     /** Called with lock held: exactly one thread takes ownership of detached IO. */
     private fun detachConnection(): DetachedConnection {
         generation++
         val previous = DetachedConnection(activeConnection, activeModem,
-            ConnectionStateChanged(connectionId, ConnectionState.DISCONNECTED))
+            if (activeConnection != null || activeModem != null || connectionAttemptGeneration != null)
+                ConnectionStateChanged(connectionId, ConnectionState.DISCONNECTED) else null)
         activeConnection = null
         activeModem = null
         connectionAttemptGeneration = null
@@ -430,8 +432,13 @@ internal class YameRuntime(
 
     private fun releaseConnection(previous: DetachedConnection, message: String? = null) {
         try {
-            closeConnection(previous.connection, previous.modem)
-            YameEvents.publish(previous.ended)
+            var failure: Throwable? = null
+            try { closeConnection(previous.connection, previous.modem) } catch (error: Throwable) { failure = error }
+            // Detachment is logical disconnection even when physical cleanup fails.
+            try { previous.ended?.let { YameEvents.publish(it) } } catch (error: Throwable) {
+                if (failure == null) failure = error else if (failure !== error) failure.addSuppressed(error)
+            }
+            failure?.let { throw it }
             if (message != null) observeLog(message)
         } finally { finishTransition() }
     }
@@ -441,7 +448,7 @@ internal class YameRuntime(
         // Stop/join the reader before releasing the modem it calls.
         try { connection?.close() } catch (error: Throwable) { failure = error }
         try { modem?.close() } catch (error: Throwable) {
-            if (failure == null) failure = error else failure.addSuppressed(error)
+            if (failure == null) failure = error else if (failure !== error) failure.addSuppressed(error)
         }
         failure?.let { throw it }
     }
@@ -483,31 +490,53 @@ internal class YameRuntime(
         }
         if (!first) {
             // A cleanup callback must not wait for the owner that is waiting for it.
-            if (Thread.currentThread() === closingThread || transitionDepth.get() > 0) return
-            closeCompleted.await()
+            if ((Thread.currentThread() === closingThread && closeCompleted.count > 0) || transitionDepth.get() > 0) return
+            var interrupted = false
+            while (true) {
+                try { closeCompleted.await(); break } catch (_: InterruptedException) { interrupted = true }
+            }
+            if (interrupted) Thread.currentThread().interrupt()
             closeFailure?.let { throw it }
             return
         }
-        try {
-            configurationSubscription.close()
-            functionRegistrations.forEach(AutoCloseable::close)
-            monitorThread?.interrupt()
-            val previous = synchronized(lock) { if (started) detachConnection() else null }
-            try { previous?.let { releaseConnection(it) } } finally {
-                synchronized(lock) {
-                    while (pendingTransitions > 0) lock.wait()
+        var failure: Throwable? = null
+        var interrupted = false
+        fun attempt(cleanup: () -> Unit) {
+            try { cleanup() } catch (error: Throwable) {
+                if (error is InterruptedException) {
+                    interrupted = true
+                    Thread.interrupted() // Finish quiescence before restoring the interrupt.
                 }
-                if (Thread.currentThread() !== monitorThread) {
-                    monitorThread?.join(THREAD_JOIN_MILLIS)
-                    check(monitorThread?.isAlive != true) { "Port monitor did not stop" }
+                if (failure == null) failure = error else if (failure !== error) failure!!.addSuppressed(error)
+            }
+        }
+        try {
+            attempt { configurationSubscription.close() }
+            functionRegistrations.forEach { registration -> attempt { registration.close() } }
+            attempt { monitorThread?.interrupt() }
+            attempt {
+                synchronized(lock) { if (started) detachConnection() else null }?.let { releaseConnection(it) }
+            }
+            synchronized(lock) {
+                while (pendingTransitions > 0) attempt { lock.wait() }
+            }
+            monitorThread?.let { monitor ->
+                if (Thread.currentThread() !== monitor) {
+                    val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(THREAD_JOIN_MILLIS)
+                    while (monitor.isAlive) {
+                        val remaining = deadline - System.nanoTime()
+                        if (remaining <= 0) break
+                        attempt { TimeUnit.NANOSECONDS.timedJoin(monitor, remaining) }
+                    }
+                    attempt { check(!monitor.isAlive) { "Port monitor did not stop" } }
                 }
             }
-        } catch (error: Throwable) {
-            closeFailure = error
-            throw error
         } finally {
+            closeFailure = failure
             closeCompleted.countDown()
+            if (interrupted) Thread.currentThread().interrupt()
         }
+        failure?.let { throw it }
     }
 
     private companion object {

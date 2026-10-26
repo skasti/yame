@@ -62,6 +62,11 @@ finishes and a current generation accepts the handoff. Close fences generations,
 rejects new commands, unregisters functions and waits for those resource owners.
 Concurrent close callers share completion; tracked IO callbacks cannot initiate
 a self-waiting close. Application supervision retains its existing shutdown deadline.
+Independent runtime cleanup steps are all attempted before close completes. The
+first failure is retained with later failures suppressed, and repeated/concurrent
+callers observe that same result. Detachment publishes logical disconnection even
+if physical serial/modem cleanup fails; publication failure is preserved alongside
+cleanup failure. Already detached IO is not disconnected or released a second time.
 
 Presentations use ConfigStore, FunctionStore and typed YameEvents as appropriate.
 They own subscriptions and presentation workers, and have no runtime or resource
