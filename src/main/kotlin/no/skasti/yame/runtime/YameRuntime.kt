@@ -36,7 +36,7 @@ import java.util.Collections
 
 internal class YameRuntime(
     val configStore: ConfigStore,
-    val functions: FunctionStore,
+    val functions: FunctionStore = FunctionStore.current,
     private val logManager: YameLogManager,
     private val resourceGraphs: NavigationResourceRegistry =
         YameRegistries.navigationResources(

@@ -152,6 +152,16 @@ see [proxy projection](yame-events.md#proxy-dashboard-projection).
 
 ## Functions
 
+`FunctionStore.current` is a shared process default, created on first access using
+Kotlin's synchronized `lazy`. Runtime and TUI constructors use it when no store is
+supplied; `Main` does not create or thread a function store through startup.
+Explicitly supplied stores bypass the global default, and `FunctionStore()` creates
+an independent registry for tests or isolated callers. There is no installation,
+replacement, or reset API. Components still own and close their registrations.
+Unlike the explicitly installed `ConfigStore.current`, this in-memory default needs
+no external initialization. Configuration and event lifecycles are unchanged.
+See [ADR 0009](adrs/0009-lazy-global-function-store.md).
+
 `FunctionKey<A, R>` gives a stable path with typed arguments/results.
 `register(key) { argument -> result }` returns an idempotent cleanup handle and
 rejects duplicate paths. `invoke` checks key identity, selects the operation under
@@ -193,7 +203,7 @@ loaded from its separate INI file; runtime writes use the repository.
 | `serial`, `modem`, `ppp`, `ppp.dns`, `ppp.proxy`, `logging` | Their own keys, groups, value validation and immutable component configs |
 | `ppp.proxy.transform` | HTML switches, element rules/INI, transformation policy and implementation |
 | `persistence` | Generic INI repository and legacy CLI/DTO adapters; feature definitions own mappings |
-| `Main` | Load file, apply transient CLI precedence, create/install shared stores, choose frontend and startup retry policy |
+| `Main` | Load file, apply transient CLI precedence, create/install the configuration store, choose frontend and startup retry policy |
 | `YameRuntime` | Construct component configs from direct store reads, observe committed batches, own connections and registered functions |
 | TUI | Derive presentation caches from the store; display runtime observations separately; invoke core functions |
 
