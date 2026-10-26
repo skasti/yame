@@ -65,17 +65,6 @@ internal class YameRuntime(
 
     private val selectedPortName: String? get() = configStore[SerialSettings.Port]
 
-    private val functionRegistrations = buildList {
-        try {
-            add(functions.register(ApplicationFunctions.Quit) { running = false; autoConnectEnabled = false })
-            add(functions.register(ConnectionFunctions.Disconnect) { runtimeOperation { disconnect() } })
-            add(functions.register(ConnectionFunctions.Reconnect) { runtimeOperation { reconnect() } })
-            add(functions.register(ConnectionFunctions.RefreshPorts) { runtimeOperation { refreshPorts() } ?: emptyList() })
-        } catch (error: Throwable) {
-            forEach(AutoCloseable::close)
-            throw error
-        }
-    }
     private var generation = 0
     private var connectionId = 0L
     private var lastPorts: List<SerialPortDescriptor>? = null
@@ -172,6 +161,22 @@ internal class YameRuntime(
                 autoConnectEnabled = true
                 restartConnection()
             }
+        }
+    }
+
+    private val functionRegistrations = mutableListOf<AutoCloseable>()
+
+    init {
+        // Input is already active. Initialize all runtime state and listeners
+        // before publishing callbacks that another thread can invoke at once.
+        try {
+            functionRegistrations += functions.register(ApplicationFunctions.Quit) { running = false; autoConnectEnabled = false }
+            functionRegistrations += functions.register(ConnectionFunctions.Disconnect) { runtimeOperation { disconnect() } }
+            functionRegistrations += functions.register(ConnectionFunctions.Reconnect) { runtimeOperation { reconnect() } }
+            functionRegistrations += functions.register(ConnectionFunctions.RefreshPorts) { runtimeOperation { refreshPorts() } ?: emptyList() }
+        } catch (error: Throwable) {
+            try { close() } catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
+            throw error
         }
     }
 

@@ -48,6 +48,10 @@ Core construction/startup failures release already
 created components. A component whose lifecycle registration loses a shutdown
 race is closed immediately, rather than escaping ownership. See
 [ADR 0008](adrs/0008-presentation-independent-bootstrap.md).
+Runtime state and configuration listeners are initialized before command callbacks
+are registered, because TUI input may invoke each callback as soon as it appears.
+Partial registration failure closes the runtime, including its listeners and any
+in-flight command work, while preserving the constructor failure.
 
 `YameRuntime` and lower-level core components retain explicit registry injection.
 Their production defaults resolve the lazy, thread-safe process registry through

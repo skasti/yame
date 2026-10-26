@@ -10,6 +10,28 @@ import java.nio.file.Files
 import kotlin.test.*
 
 class YameRuntimeStoreTest {
+    @Test fun `failed registration releases earlier operations and configuration subscription`() {
+        val directory = Files.createTempDirectory("yame-runtime-constructor")
+        val store = applicationConfigStore(YameConfiguration())
+        val functions = FunctionStore()
+        try {
+            functions.register(ConnectionFunctions.Disconnect) {}.use {
+                YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
+                    assertFailsWith<IllegalArgumentException> {
+                        YameRuntime(store, functions, logs, NavigationResourceRegistry(), { emptyList() })
+                    }
+                    assertEquals(listOf(ConnectionFunctions.Disconnect), functions.keys())
+                    val previousLevel = logs.level(YameLogModule.MODEM)
+                    val nextLevel = if (previousLevel == YameLogLevel.DEBUG) YameLogLevel.ERROR else YameLogLevel.DEBUG
+                    store.set(LogSettings.Levels.getValue(YameLogModule.MODEM) to nextLevel)
+                    assertEquals(previousLevel, logs.level(YameLogModule.MODEM),
+                        "a failed constructor must not leave a live settings subscription")
+                }
+            }
+            assertTrue(functions.keys().isEmpty())
+        } finally { directory.toFile().deleteRecursively() }
+    }
+
     @Test fun `headless runtime observes logging settings and releases functions and subscriptions on close`() {
         val directory = Files.createTempDirectory("yame-runtime-test")
         try {
