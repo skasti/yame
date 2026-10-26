@@ -60,7 +60,7 @@ import java.time.format.DateTimeFormatter
 
 class TuiYameObserver(
     private val configStore: ConfigStore,
-    private val functions: FunctionStore,
+    private val functions: FunctionStore = FunctionStore.current,
     private val terminal: Terminal = Terminal(interactive = true),
 ) : AutoCloseable {
     private val paletteRegistry = CommandPalette()

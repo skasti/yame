@@ -125,11 +125,9 @@ fun main(args: Array<String>) {
         applyCliOverrides(runtimeConfigStore, savedConfiguration, effectiveConfiguration)
         events.consumer(no.skasti.yame.config.ConfigStore.install(runtimeConfigStore))
         run {
-            val functions = no.skasti.yame.function.FunctionStore()
             if (useTui) {
                 val application = InteractiveYameApplication(
                     configStore = runtimeConfigStore,
-                    functions = functions,
                     logManager = logManager,
                     terminal = if (options.uiMode == UiMode.AUTO) {
                         detectedTerminal
@@ -152,7 +150,7 @@ fun main(args: Array<String>) {
                 println((it as DiagnosticMessage).message)
             })
             val runtime = no.skasti.yame.runtime.YameRuntime(
-                runtimeConfigStore, functions,
+                runtimeConfigStore,
                 logManager = logManager, failFastStartup = true,
             )
             events.producer(runtime)

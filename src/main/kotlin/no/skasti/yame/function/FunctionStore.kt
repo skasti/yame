@@ -4,6 +4,15 @@ class FunctionKey<A, R>(val path: String)
 
 /** Typed synchronous operations. Exceptions propagate to the invoking adapter. */
 class FunctionStore {
+    companion object {
+        /**
+         * Shared process default, created on first access with synchronized lazy initialization.
+         * Unlike ConfigStore, this in-memory registry needs no installation or replacement.
+         * Pass FunctionStore() explicitly when an independent registry is needed.
+         */
+        val current: FunctionStore by lazy { FunctionStore() }
+    }
+
     private val lock = Any()
     private class Registration<A, R>(val key: FunctionKey<A, R>, val function: (A) -> R)
     private val entries = linkedMapOf<String, Registration<*, *>>()

@@ -14,7 +14,7 @@ import no.skasti.yame.serial.*
 /** Presentation composition root; runtime and stores are also usable without the TUI. */
 class InteractiveYameApplication internal constructor(
     val configStore: ConfigStore,
-    val functions: FunctionStore,
+    val functions: FunctionStore = FunctionStore.current,
     terminal: Terminal,
     logManager: YameLogManager,
     resourceGraphs: NavigationResourceRegistry,
@@ -22,7 +22,7 @@ class InteractiveYameApplication internal constructor(
 ) : AutoCloseable {
     constructor(
         configStore: ConfigStore,
-        functions: FunctionStore,
+        functions: FunctionStore = FunctionStore.current,
         terminal: Terminal,
         logManager: YameLogManager,
         portProvider: () -> List<SerialPortDescriptor> = SerialConnection::availablePortDescriptors,
