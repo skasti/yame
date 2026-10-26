@@ -33,6 +33,7 @@ import no.skasti.yame.observer.YameEvents
 import no.skasti.yame.logging.DiagnosticMessage
 import no.skasti.yame.logging.diagnosticLogger
 import java.util.Collections
+import java.util.concurrent.CountDownLatch
 
 internal class YameRuntime(
     val configStore: ConfigStore = ConfigStore.current,
@@ -49,10 +50,15 @@ internal class YameRuntime(
 ) : AutoCloseable {
     private val lock = java.lang.Object()
     private val closed = java.util.concurrent.atomic.AtomicBoolean()
+    private val closeCompleted = CountDownLatch(1)
+    private var closingThread: Thread? = null
+    @Volatile private var closeFailure: Throwable? = null
+    // Resource work only: port scans, connection initialization and detached cleanup.
     private var pendingTransitions = 0
+    private val transitionDepth = ThreadLocal.withInitial { 0 }
 
     @Volatile
-    private var running = true
+    private var running = false
 
     @Volatile
     private var started = false
@@ -72,30 +78,56 @@ internal class YameRuntime(
     private var activeConnection: SerialTransport? = null
     private var activeModem: HayesModem? = null
     private var monitorThread: Thread? = null
+    private val functionRegistrations = mutableListOf<AutoCloseable>()
 
     fun run() {
-        if (closed.get()) return
-        started = true
-        refreshPorts()
-        maybeAutoConnect(failFast = failFastStartup)
-        startMonitor()
-        while (running) Thread.sleep(APP_POLL_MILLIS)
-        monitorThread?.join(THREAD_JOIN_MILLIS)
+        synchronized(lock) {
+            check(!started && !closed.get()) { "Runtime has already started or closed" }
+            started = true
+            running = true
+        }
+        var failure: Throwable? = null
+        try {
+            synchronized(lock) {
+                if (closed.get()) return
+                try {
+                    functionRegistrations += functions.register(ApplicationFunctions.Quit) { quit() }
+                    functionRegistrations += functions.register(ConnectionFunctions.Disconnect) { disconnect() }
+                    functionRegistrations += functions.register(ConnectionFunctions.Reconnect) { reconnect() }
+                    functionRegistrations += functions.register(ConnectionFunctions.RefreshPorts) { refreshPorts() }
+                } catch (error: Throwable) {
+                    running = false
+                    throw error
+                }
+            }
+            scanPorts()
+            maybeAutoConnect(failFast = failFastStartup)
+            startMonitor()
+            while (running) Thread.sleep(APP_POLL_MILLIS)
+        } catch (error: Throwable) {
+            failure = error
+            throw error
+        } finally {
+            try { close() } catch (cleanup: Throwable) {
+                if (failure == null) throw cleanup else failure.addSuppressed(cleanup)
+            }
+        }
     }
 
-    private fun startMonitor() {
-        if (monitorThread != null) return
+    private fun startMonitor() = synchronized(lock) {
+        if (!running || closed.get() || monitorThread != null) return@synchronized
         monitorThread = Thread(
             {
                 while (running) {
                     try {
                         if (!connectionIsActive()) {
-                            refreshPorts()
+                            scanPorts()
                             maybeAutoConnect()
                         }
                     } catch (_: Exception) {
                         // Serial enumeration is advisory. Keep the dashboard alive.
                     }
+                    if (!running) return@Thread
                     try { Thread.sleep(PORT_SCAN_MILLIS) } catch (_: InterruptedException) { return@Thread }
                 }
             },
@@ -106,22 +138,60 @@ internal class YameRuntime(
         }
     }
 
-    private fun refreshPorts(): List<SerialPortDescriptor> = synchronized(lock) {
-        if (closed.get()) return@synchronized lastPorts ?: emptyList()
-        val ports = Collections.unmodifiableList(ArrayList(runCatching(portProvider).getOrDefault(emptyList())))
-        if (ports != lastPorts) {
-            lastPorts = ports
-            YameEvents.publish(AvailablePortsChanged(ports))
+    private fun refreshPorts(): List<SerialPortDescriptor> {
+        synchronized(lock) { checkCommandState() }
+        return checkNotNull(scanPorts()) { "Runtime stopped during port enumeration" }
+    }
+
+    /** Internal cancellation is ordinary shutdown; external refresh reports it as an error. */
+    private fun scanPorts(): List<SerialPortDescriptor>? {
+        synchronized(lock) {
+            if (!running || closed.get()) return null
+            beginTransition()
         }
-        ports
+        try {
+            // Enumeration may perform OS IO or call an injected provider. Never hold the runtime lock.
+            val ports = Collections.unmodifiableList(ArrayList(runCatching(portProvider).getOrDefault(emptyList())))
+            return synchronized(lock) {
+                if (!running || closed.get()) return@synchronized null
+                if (ports != lastPorts) {
+                    lastPorts = ports
+                    YameEvents.publish(AvailablePortsChanged(ports))
+                }
+                ports
+            }
+        } finally { finishTransition() }
+    }
+
+    private fun checkCommandState() {
+        check(started && running && !closed.get()) { "Runtime is not running" }
+    }
+
+    private fun quit() = synchronized(lock) {
+        checkCommandState()
+        running = false
+        autoConnectEnabled = false
+    }
+
+    private fun reconnect() {
+        val previous = synchronized(lock) {
+            checkCommandState()
+            autoConnectEnabled = true
+            detachConnection()
+        }
+        releaseConnection(previous)
+        maybeAutoConnect()
     }
 
     private fun maybeAutoConnect(failFast: Boolean = false) {
         if (!running || !autoConnectEnabled || connectionIsActive()) return
 
-        val ports = refreshPorts()
+        val ports = scanPorts() ?: return
 
-        val desired = selectedPortName
+        val desired = synchronized(lock) {
+            if (!running || closed.get()) return
+            selectedPortName
+        }
         val candidate = when {
             desired != null ->
                 ports.firstOrNull {
@@ -137,100 +207,84 @@ internal class YameRuntime(
             return
         }
 
-        if (selectedPortName == null) {
-            configStore.setTransient(SerialSettings.Port to candidate)
-            observeLog("Auto-selected serial port $candidate")
-        }
-
         startConnection(candidate, failFast)
     }
 
     private val configurationSubscription = configStore.onChange.subscribe(initial = true) { changes ->
-        runtimeOperation {
-            synchronized(lock) {
-                changes[ModemSettings.Tone]?.let { activeModem?.updateToneSimulationEnabled(it.value) }
-                changes[ModemSettings.Login]?.let { login ->
-                    activeModem?.updateLoginCredentials(login.value.username, login.value.password)
-                }
-                LogSettings.Levels.forEach { (module, key) -> changes[key]?.let { logManager.setLevel(module, it.value) } }
-                LogSettings.CaptureLimits.forEach { (kind, key) -> changes[key]?.let { logManager.setCaptureLimit(kind, it.value) } }
+        val restart = synchronized(lock) {
+            if (closed.get()) return@subscribe
+            changes[ModemSettings.Tone]?.let { activeModem?.updateToneSimulationEnabled(it.value) }
+            changes[ModemSettings.Login]?.let { login ->
+                activeModem?.updateLoginCredentials(login.value.username, login.value.password)
             }
-            if (started && changes.any { it.key.group == SerialSettings.Group || it.key === DnsSettings.Upstream ||
+            LogSettings.Levels.forEach { (module, key) -> changes[key]?.let { logManager.setLevel(module, it.value) } }
+            LogSettings.CaptureLimits.forEach { (kind, key) -> changes[key]?.let { logManager.setCaptureLimit(kind, it.value) } }
+            val restart = started && running && changes.any { it.key.group == SerialSettings.Group || it.key === DnsSettings.Upstream ||
                     it.key === ProxySettings.Enabled || it.key === PppSettings.Subnet ||
-                    it.key === ModemSettings.PickupTime || it.key === ModemSettings.DialToneTime || it.key === ModemSettings.Handshake }) {
-                autoConnectEnabled = true
-                restartConnection()
-            }
+                    it.key === ModemSettings.PickupTime || it.key === ModemSettings.DialToneTime || it.key === ModemSettings.Handshake }
+            if (restart) autoConnectEnabled = true
+            restart
         }
-    }
-
-    private val functionRegistrations = mutableListOf<AutoCloseable>()
-
-    init {
-        // Input is already active. Initialize all runtime state and listeners
-        // before publishing callbacks that another thread can invoke at once.
-        try {
-            functionRegistrations += functions.register(ApplicationFunctions.Quit) { running = false; autoConnectEnabled = false }
-            functionRegistrations += functions.register(ConnectionFunctions.Disconnect) { runtimeOperation { disconnect() } }
-            functionRegistrations += functions.register(ConnectionFunctions.Reconnect) { runtimeOperation { reconnect() } }
-            functionRegistrations += functions.register(ConnectionFunctions.RefreshPorts) { runtimeOperation { refreshPorts() } ?: emptyList() }
-        } catch (error: Throwable) {
-            try { close() } catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
-            throw error
-        }
-    }
-
-    private fun reconnect() {
-        if (closed.get()) return
-        autoConnectEnabled = true
-        restartConnection()
+        if (restart) restartConnection()
     }
 
     private fun restartConnection() {
-        stopActiveConnection()
+        val previous = synchronized(lock) {
+            if (!running || closed.get()) return
+            detachConnection()
+        }
+        releaseConnection(previous)
         maybeAutoConnect()
     }
 
     private fun disconnect() {
-        if (closed.get()) return
-        autoConnectEnabled = false
-        stopActiveConnection()
-        observeConnection(ConnectionState.DISCONNECTED)
-        observeLog("Serial connection closed")
+        val previous = synchronized(lock) {
+            checkCommandState()
+            autoConnectEnabled = false
+            detachConnection()
+        }
+        releaseConnection(previous, "Serial connection closed")
     }
 
     private fun startConnection(portName: String, failFast: Boolean) {
-        if (!running || !autoConnectEnabled) return
-
-        val observedGeneration = synchronized(lock) { generation }
-        val baud = configStore[SerialSettings.Baud]
-        val flowControl = configStore[SerialSettings.FlowControl]
-        val config = HayesModemConfig.fromConfigStore(configStore)
-        val ipConfig = PppIpConfig.fromConfigStore(configStore)
-        val dnsConfig = PppDnsConfig.fromConfigStore(configStore)
-        val httpConfig = PppHttpCompatibilityConfig.fromConfigStore(configStore)
-
-        val connectionGeneration: Int
-        val connectionIdentity: Long
-        synchronized(lock) {
-            if (
-                !running || generation != observedGeneration ||
-                activeConnection != null ||
-                activeModem != null ||
-                connectionAttemptGeneration != null
-            ) {
-                return
-            }
-            generation++
-            connectionGeneration = generation
-            connectionIdentity = ConnectionIds.next()
-            connectionId = connectionIdentity
-            YameEvents.publish(ConnectionStateChanged(connectionIdentity, ConnectionState.CONNECTING))
-            connectionAttemptGeneration = connectionGeneration
-            pendingTransitions++
+        val observedGeneration = synchronized(lock) {
+            if (!running || closed.get() || !autoConnectEnabled || activeConnection != null ||
+                activeModem != null || connectionAttemptGeneration != null) return
+            beginTransition()
+            generation
         }
 
+        var claimedGeneration: Int? = null
+        var claimedIdentity: Long? = null
+        var modem: HayesModem? = null
+        var connection: SerialTransport? = null
+        var handedOff = false
         try {
+            // Store notifications can synchronously restart connection work.
+            // Let that work win, then reject this attempt by its old generation.
+            if (selectedPortName == null) {
+                configStore.setTransient(SerialSettings.Port to portName)
+                observeLog("Auto-selected serial port $portName")
+            }
+            val attempt = synchronized(lock) {
+                if (!running || closed.get() || !autoConnectEnabled || generation != observedGeneration ||
+                    activeConnection != null || connectionAttemptGeneration != null) return
+                generation++
+                connectionId = ConnectionIds.next()
+                connectionAttemptGeneration = generation
+                claimedGeneration = generation
+                claimedIdentity = connectionId
+                YameEvents.publish(ConnectionStateChanged(connectionId, ConnectionState.CONNECTING))
+                generation to connectionId
+            }
+            val connectionGeneration = attempt.first
+            val connectionIdentity = attempt.second
+            val baud = configStore[SerialSettings.Baud]
+            val flowControl = configStore[SerialSettings.FlowControl]
+            val config = HayesModemConfig.fromConfigStore(configStore)
+            val ipConfig = PppIpConfig.fromConfigStore(configStore)
+            val dnsConfig = PppDnsConfig.fromConfigStore(configStore)
+            val httpConfig = PppHttpCompatibilityConfig.fromConfigStore(configStore)
             val modemLogger = diagnosticLogger(logManager.logger(YameLogModule.MODEM))
             val pppLogger = diagnosticLogger(logManager.logger(YameLogModule.PPP))
             val dnsLogger = diagnosticLogger(logManager.debugLogger(YameLogModule.DNS))
@@ -239,115 +293,93 @@ internal class YameRuntime(
             val serialLogger = diagnosticLogger(logManager.logger(YameLogModule.SERIAL))
             val pppHandler = RetroPppHandler(
                 connectionId = connectionIdentity,
-                logger = pppLogger,
-                dnsLogger = dnsLogger,
-                transferLogger = transferLogger,
-                proxyLogger = proxyLogger,
-                diagnosticSink = logManager::eventSink,
-                resourceGraphs = resourceGraphs,
-                ipConfig = ipConfig,
-                dnsConfig = dnsConfig,
+                logger = pppLogger, dnsLogger = dnsLogger, transferLogger = transferLogger,
+                proxyLogger = proxyLogger, diagnosticSink = logManager::eventSink,
+                resourceGraphs = resourceGraphs, ipConfig = ipConfig, dnsConfig = dnsConfig,
                 httpCompatibilityConfig = httpConfig,
                 transformerSettings = { HtmlTransformerSettings.fromConfigStore(configStore) },
             )
-            val modem = HayesModem(
-                baudRate = baud,
-                config = config,
-                logger = modemLogger,
-                pppLogger = pppLogger,
-                dnsLogger = dnsLogger,
-                transferLogger = transferLogger,
-                proxyLogger = proxyLogger,
-                diagnosticSink = logManager::eventSink,
-                pppHandler = pppHandler,
-            )
-            var connection: SerialTransport? = null
-            try {
-                val opened = connectionFactory(portName, baud, flowControl, serialLogger)
-                connection = opened
-                opened.open()
-                modem.attachOutput(opened.output)
-                modem.attachCarrierPresent(opened::setCarrierPresent)
-
-                var connectedObservation: ConnectionStateChanged? = null
-                val current = synchronized(lock) {
-                    val isCurrent =
-                        running &&
-                            generation == connectionGeneration &&
-                            connectionAttemptGeneration == connectionGeneration
-
-                    if (isCurrent) {
-                        val latestConfig = HayesModemConfig.fromConfigStore(configStore)
-                        modem.updateLoginCredentials(latestConfig.username, latestConfig.password)
-                        modem.updateToneSimulationEnabled(latestConfig.toneSimulationEnabled)
-                        activeModem = modem
-                        activeConnection = opened
-                        connectionAttemptGeneration = null
-                        connectedObservation = ConnectionStateChanged(connectionIdentity, ConnectionState.CONNECTED)
-                    }
-                    isCurrent
-                }
-
-                if (!current) {
-                    runCatching { modem.close() }
-                    runCatching { opened.close() }
-                    synchronized(lock) {
-                        if (connectionAttemptGeneration == connectionGeneration) {
-                            connectionAttemptGeneration = null
-                        }
-                    }
-                    return
-                }
-
-                YameEvents.publish(requireNotNull(connectedObservation))
-                observeLog("YAME ready on $portName at $baud baud")
-
-                opened.startReading(
-                    onBytes = modem::receive,
-                    onStopped = { error ->
-                        serialReaderStopped(
-                            connectionGeneration = connectionGeneration,
-                            connectionIdentity = connectionIdentity,
-                            connection = opened,
-                            modem = modem,
-                            error = error,
-                        )
-                    },
+            val createdModem = try {
+                HayesModem(
+                    baudRate = baud, config = config, logger = modemLogger, pppLogger = pppLogger,
+                    dnsLogger = dnsLogger, transferLogger = transferLogger, proxyLogger = proxyLogger,
+                    diagnosticSink = logManager::eventSink, pppHandler = pppHandler,
                 )
-            } catch (error: Exception) {
-                runCatching { modem.close() }
-                runCatching { connection?.close() }
-
-                val current = synchronized(lock) {
-                    val ownsAttempt =
-                        connectionAttemptGeneration == connectionGeneration
-                    val ownsActiveConnection =
-                        activeConnection === connection &&
-                            activeModem === modem
-                    val isCurrent =
-                        generation == connectionGeneration &&
-                            (ownsAttempt || ownsActiveConnection)
-
-                    if (ownsAttempt) {
-                        connectionAttemptGeneration = null
-                    }
-                    if (ownsActiveConnection) {
-                        activeModem = null
-                        activeConnection = null
-                    }
-                    isCurrent
-                }
-
-                if (current) {
-                    YameEvents.publish(ConnectionStateChanged(connectionIdentity, ConnectionState.DISCONNECTED))
-                    observeLog(
-                        "Could not open $portName: ${error.message ?: error.javaClass.simpleName}",
-                    )
-                    if (failFast) throw error
-                }
+            } catch (error: Throwable) {
+                try { pppHandler.close() } catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
+                throw error
             }
+            modem = createdModem
+            val opened = connectionFactory(portName, baud, flowControl, serialLogger)
+            connection = opened
+            opened.open()
+            synchronized(lock) {
+                if (!running || closed.get() || generation != connectionGeneration) return
+            }
+            createdModem.attachOutput(opened.output)
+            createdModem.attachCarrierPresent(opened::setCarrierPresent)
+
+            var initialized = false
+            var stoppedDuringInitialization = false
+            var initializationFailure: Throwable? = null
+            opened.startReading(
+                onBytes = createdModem::receive,
+                onStopped = { error ->
+                    val starting = synchronized(lock) {
+                        if (!initialized) {
+                            stoppedDuringInitialization = true
+                            initializationFailure = error
+                            true
+                        } else false
+                    }
+                    if (!starting) serialReaderStopped(connectionGeneration, connectionIdentity, opened, createdModem, error)
+                },
+            )
+            synchronized(lock) {
+                initialized = true
+                if (stoppedDuringInitialization) {
+                    throw initializationFailure ?: IllegalStateException("Serial reader stopped during initialization")
+                }
+                if (!running || closed.get() || generation != connectionGeneration ||
+                    connectionAttemptGeneration != connectionGeneration) return
+                val latestConfig = HayesModemConfig.fromConfigStore(configStore)
+                createdModem.updateLoginCredentials(latestConfig.username, latestConfig.password)
+                createdModem.updateToneSimulationEnabled(latestConfig.toneSimulationEnabled)
+                // No initializer uses the resources after this ownership transfer.
+                activeConnection = opened
+                activeModem = createdModem
+                connectionAttemptGeneration = null
+                handedOff = true
+                YameEvents.publish(ConnectionStateChanged(connectionIdentity, ConnectionState.CONNECTED))
+                observeLog("YAME ready on $portName at $baud baud")
+            }
+        } catch (error: Throwable) {
+            val current = synchronized(lock) {
+                val current = generation == (claimedGeneration ?: observedGeneration) && !closed.get()
+                if (handedOff && activeConnection === connection && activeModem === modem) {
+                    // Reclaim ownership if publication failed; other cleanup owners
+                    // have already cleared these slots when they won the race.
+                    activeConnection = null
+                    activeModem = null
+                    handedOff = false
+                }
+                if (connectionAttemptGeneration == claimedGeneration) connectionAttemptGeneration = null
+                if (current) {
+                    YameEvents.publish(ConnectionStateChanged(claimedIdentity ?: connectionId, ConnectionState.DISCONNECTED))
+                    observeLog("Could not open $portName: ${error.message ?: error.javaClass.simpleName}")
+                }
+                current
+            }
+            if (error !is Exception || (current && failFast)) throw error
         } finally {
-            synchronized(lock) { pendingTransitions--; lock.notifyAll() }
+            try {
+                if (!handedOff) closeConnection(connection, modem)
+            } finally {
+                synchronized(lock) {
+                    if (connectionAttemptGeneration == claimedGeneration) connectionAttemptGeneration = null
+                }
+                finishTransition()
+            }
         }
     }
 
@@ -368,47 +400,50 @@ internal class YameRuntime(
             } else {
                 activeConnection = null
                 activeModem = null
-                pendingTransitions++
+                beginTransition()
                 true
             }
         }
         if (!current) return
 
-        try {
-            runCatching { modem.close() }
-            runCatching { connection.close() }
-            YameEvents.publish(ConnectionStateChanged(connectionIdentity, ConnectionState.DISCONNECTED))
-            if (error != null) {
-                observeLog(
-                    "Serial connection lost: ${error.message ?: error.javaClass.simpleName}",
-                )
-            } else if (running && autoConnectEnabled) {
-                observeLog("Serial connection stopped")
-            }
-        } finally {
-            synchronized(lock) { pendingTransitions--; lock.notifyAll() }
-        }
+        val message = if (error != null) "Serial connection lost: ${error.message ?: error.javaClass.simpleName}"
+            else if (running && autoConnectEnabled) "Serial connection stopped" else null
+        releaseConnection(DetachedConnection(connection, modem,
+            ConnectionStateChanged(connectionIdentity, ConnectionState.DISCONNECTED)), message)
     }
 
-    private fun stopActiveConnection() {
-        val connection: SerialTransport?
-        val modem: HayesModem?
-        val ended: ConnectionStateChanged
-        synchronized(lock) {
-            generation++
-            ended = ConnectionStateChanged(connectionId, ConnectionState.DISCONNECTED)
-            connection = activeConnection
-            modem = activeModem
-            activeConnection = null
-            activeModem = null
-            connectionAttemptGeneration = null
-        }
+    private data class DetachedConnection(
+        val connection: SerialTransport?, val modem: HayesModem?, val ended: ConnectionStateChanged,
+    )
 
-        var cleanupFailure: Throwable? = null
-        try { connection?.close() } catch (error: Throwable) { cleanupFailure = error }
-        try { modem?.close() } catch (error: Throwable) { cleanupFailure = cleanupFailure ?: error }
-        YameEvents.publish(ended)
-        cleanupFailure?.let { throw it }
+    /** Called with lock held: exactly one thread takes ownership of detached IO. */
+    private fun detachConnection(): DetachedConnection {
+        generation++
+        val previous = DetachedConnection(activeConnection, activeModem,
+            ConnectionStateChanged(connectionId, ConnectionState.DISCONNECTED))
+        activeConnection = null
+        activeModem = null
+        connectionAttemptGeneration = null
+        beginTransition()
+        return previous
+    }
+
+    private fun releaseConnection(previous: DetachedConnection, message: String? = null) {
+        try {
+            closeConnection(previous.connection, previous.modem)
+            YameEvents.publish(previous.ended)
+            if (message != null) observeLog(message)
+        } finally { finishTransition() }
+    }
+
+    private fun closeConnection(connection: SerialTransport?, modem: HayesModem?) {
+        var failure: Throwable? = null
+        // Stop/join the reader before releasing the modem it calls.
+        try { connection?.close() } catch (error: Throwable) { failure = error }
+        try { modem?.close() } catch (error: Throwable) {
+            if (failure == null) failure = error else failure.addSuppressed(error)
+        }
+        failure?.let { throw it }
     }
 
     private fun connectionIsActive(): Boolean =
@@ -417,38 +452,61 @@ internal class YameRuntime(
                 (activeConnection != null && activeModem != null)
         }
 
-    private fun <T> runtimeOperation(action: () -> T): T? {
-        synchronized(lock) {
-            if (closed.get()) return null
-            pendingTransitions++
-        }
-        try { return action() } finally {
-            synchronized(lock) { pendingTransitions--; lock.notifyAll() }
-        }
+    private fun beginTransition() {
+        pendingTransitions++
+        transitionDepth.set(transitionDepth.get() + 1)
+    }
+
+    private fun finishTransition() = synchronized(lock) {
+        pendingTransitions--
+        val depth = transitionDepth.get() - 1
+        if (depth == 0) transitionDepth.remove() else transitionDepth.set(depth)
+        lock.notifyAll()
     }
 
     private fun observeLog(message: String) { YameEvents.publish(DiagnosticMessage(message)) }
 
     private fun observeConnection(state: ConnectionState) = synchronized(lock) {
-        YameEvents.publish(ConnectionStateChanged(connectionId, state))
+        if (running && !closed.get()) YameEvents.publish(ConnectionStateChanged(connectionId, state))
     }
 
     override fun close() {
-        if (!closed.compareAndSet(false, true)) return
-        running = false
-        autoConnectEnabled = false
-        configurationSubscription.close()
-        functionRegistrations.forEach(AutoCloseable::close)
-        monitorThread?.interrupt()
-        if (Thread.currentThread() !== monitorThread) monitorThread?.join(THREAD_JOIN_MILLIS)
-        try { stopActiveConnection() } finally {
-            synchronized(lock) {
-                while (pendingTransitions > 0) lock.wait()
+        val first = synchronized(lock) {
+            if (closed.get()) false else {
+                check(transitionDepth.get() == 0) { "Close runtime outside its own IO callbacks" }
+                closed.set(true)
+                closingThread = Thread.currentThread()
+                running = false
+                autoConnectEnabled = false
+                true
             }
-            if (Thread.currentThread() !== monitorThread) {
-                monitorThread?.join(THREAD_JOIN_MILLIS)
-                check(monitorThread?.isAlive != true) { "Port monitor did not stop" }
+        }
+        if (!first) {
+            // A cleanup callback must not wait for the owner that is waiting for it.
+            if (Thread.currentThread() === closingThread || transitionDepth.get() > 0) return
+            closeCompleted.await()
+            closeFailure?.let { throw it }
+            return
+        }
+        try {
+            configurationSubscription.close()
+            functionRegistrations.forEach(AutoCloseable::close)
+            monitorThread?.interrupt()
+            val previous = synchronized(lock) { if (started) detachConnection() else null }
+            try { previous?.let { releaseConnection(it) } } finally {
+                synchronized(lock) {
+                    while (pendingTransitions > 0) lock.wait()
+                }
+                if (Thread.currentThread() !== monitorThread) {
+                    monitorThread?.join(THREAD_JOIN_MILLIS)
+                    check(monitorThread?.isAlive != true) { "Port monitor did not stop" }
+                }
             }
+        } catch (error: Throwable) {
+            closeFailure = error
+            throw error
+        } finally {
+            closeCompleted.countDown()
         }
     }
 

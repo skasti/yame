@@ -198,6 +198,9 @@ constructing or running the runtime. `InteractiveYameApplication` registers
 nonblocking `start()` enables rendering/input independently of core function
 registration. The TUI reports unavailable operations as command failures and
 keeps accepting input; the function store still throws for unavailable functions.
+Runtime functions appear during `run()` startup, not construction. Successful
+lookup does not guarantee executable component state; selected commands may fail
+while runtime stops, and the TUI handles that failure at the input boundary.
 It owns no runtime or registry. The same subscriber handles runtime and proxy observations; there is
 no registry hook, snapshot synchronization, per-event registry read, or proxy UI
 executor. Registry-instance injection stays at runtime/core boundaries; the lazy

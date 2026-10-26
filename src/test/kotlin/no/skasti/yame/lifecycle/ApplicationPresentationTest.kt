@@ -29,7 +29,7 @@ class ApplicationPresentationTest {
     @Test fun `Main plain execution failure cleans up runtime and diagnostics`() = scenario("plain")
     @Test fun `Main cleans up shared infrastructure if presentation construction fails`() = scenario("construct")
     @Test fun `Main owns presentation before its startup can fail`() = scenario("start")
-    @Test fun `Main closes started presentation if core construction fails`() = scenario("runtime")
+    @Test fun `Main closes started presentation if core startup fails`() = scenario("runtime")
 
     private fun scenario(name: String) {
         // Main seals YameEvents at process exit. Test the real entry point in a
@@ -80,8 +80,11 @@ class ApplicationPresentationTest {
         val config = applicationConfigStore(YameConfiguration())
         try {
             YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
-                YameRuntime(config, functions, logs, NavigationResourceRegistry(), { emptyList() }).use {
+                YameRuntime(config, functions, logs, NavigationResourceRegistry(), {
                     functions.invoke(ApplicationFunctions.Quit)
+                    emptyList()
+                }).use {
+                    assertTrue(functions.keys().isEmpty())
                     it.run()
                 }
             }

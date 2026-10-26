@@ -260,6 +260,13 @@ unbounded buffering.
   and plain mode use that same runtime, ConfigStore, and FunctionStore.
 - A user selecting unchanged serial settings expresses a reconnect action through
   FunctionStore; do not manufacture a configuration event for a no-op write.
+- Runtime construction does not expose functions. Register them once during
+  `run()` startup and release them during close, including partial startup failure.
+  Registration exposes an operation, not guaranteed executability: its owning
+  component validates lifecycle state and callers handle failures. Commands may
+  reject stopping/closed state; internal cancellation and stale callbacks may
+  stop quietly. Keep shutdown coordination at resource ownership boundaries,
+  including connection initialization, detached cleanup and port enumeration.
 - Protocol aggregators (`HayesModem`'s default PPP handler and `RetroPppHandler`)
   have ordinary standalone child defaults. Application composition explicitly
   injects each configured dependency. Supplying an explicit modem config must not

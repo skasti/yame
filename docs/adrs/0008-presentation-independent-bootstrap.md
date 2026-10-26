@@ -22,6 +22,11 @@ After process configuration is installed and logging/event supervision are ready
 Main constructs the selected presentation and its subscriptions, registers it with
 `ApplicationEventLifecycle`, and starts its workers without blocking. It then
 constructs the runtime, registers it with the same lifecycle owner, and runs it.
+Construction does not register runtime functions. `run()` claims startup once,
+registers functions before beginning discovery/IO, and closes the runtime on
+return or failure. Partial registration is released by the same cleanup;
+registration and close share the runtime's ownership lock. A repeated/concurrent
+run fails without starting a second loop or closing the first one.
 The existing outer `try/finally` in Main closes the lifecycle owner. No additional
 bootstrap abstraction is needed.
 
@@ -41,6 +46,22 @@ Internal operations and composed children retain the supplied instances; they
 must not look up globals in place of injected dependencies. Function registration
 handles belong to the runtime and are released on shutdown; the shared function
 store itself is never installed, replaced or reset.
+
+Registration exposes an operation without guaranteeing that it is executable in
+every lifecycle state. The owning component validates state and the caller handles
+failures. Runtime commands delegate directly to methods that reject stopping or
+closed state with `IllegalStateException`; the FunctionStore lookup contract is
+unchanged. Internal cancellation, monitoring and stale callbacks remain ordinary
+shutdown behavior and need not throw.
+
+There is no generic command-operation wrapper. Targeted transition accounting
+belongs to port enumeration, connection initialization and detached IO cleanup.
+It keeps shutdown from releasing resources or sealing observations while that
+work is in flight. Connection initialization retains ownership until reader setup
+finishes and a current generation accepts the handoff. Close fences generations,
+rejects new commands, unregisters functions and waits for those resource owners.
+Concurrent close callers share completion; tracked IO callbacks cannot initiate
+a self-waiting close. Application supervision retains its existing shutdown deadline.
 
 Presentations use ConfigStore, FunctionStore and typed YameEvents as appropriate.
 They own subscriptions and presentation workers, and have no runtime or resource

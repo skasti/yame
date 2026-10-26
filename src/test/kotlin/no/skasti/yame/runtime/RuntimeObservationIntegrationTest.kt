@@ -63,7 +63,7 @@ class RuntimeObservationIntegrationTest {
                         assertEquals(listOf(emptyList(), second), events.map { it.ports })
                         assertFailsWith<UnsupportedOperationException> { (events.last().ports as MutableList).clear() }
                     } finally {
-                        functions.invoke(ApplicationFunctions.Quit)
+                        runtime.close()
                         worker.join(5_000)
                         assertFalse(worker.isAlive)
                     }

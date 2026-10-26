@@ -9,6 +9,8 @@ import no.skasti.yame.persistence.YameConfiguration
 import no.skasti.yame.persistence.applicationConfigStore
 import no.skasti.yame.ppp.proxy.NavigationResourceRegistry
 import no.skasti.yame.runtime.YameRuntime
+import no.skasti.yame.runtime.RuntimeTestPorts
+import no.skasti.yame.runtime.RuntimeTestRun
 import no.skasti.yame.ui.InteractiveYameApplication
 import no.skasti.yame.ui.TuiYameObserver
 import java.nio.file.Files
@@ -44,12 +46,16 @@ class FunctionStoreDefaultsTest {
             val otherConfig = applicationConfigStore(YameConfiguration())
             val terminal = Terminal(interactive = false)
             YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
-                YameRuntime(config, first, logs, NavigationResourceRegistry(), { emptyList() }).use {
-                    assertSame(first, it.functions)
-                    assertSame(config, it.configStore)
-                    TuiYameObserver(config, first, terminal).use { observer ->
-                        observer.refreshPorts()
-                        observer.command("/tone off")
+                val injectedPorts = RuntimeTestPorts()
+                YameRuntime(config, first, logs, NavigationResourceRegistry(), injectedPorts::scan).use { runtime ->
+                    assertSame(first, runtime.functions)
+                    assertSame(config, runtime.configStore)
+                    assertTrue(first.keys().isEmpty())
+                    RuntimeTestRun(runtime, injectedPorts).use {
+                        TuiYameObserver(config, first, terminal).use { observer ->
+                            observer.refreshPorts()
+                            observer.command("/tone off")
+                        }
                     }
                 }
                 assertFalse(config[ModemSettings.Tone])
@@ -81,16 +87,20 @@ class FunctionStoreDefaultsTest {
                 // Explicit configuration with default functions works before
                 // any process configuration has been installed.
                 var explicitConfigRefreshes = 0
+                val explicitPorts = RuntimeTestPorts { explicitConfigRefreshes++; emptyList() }
                 YameRuntime(configStore = config, logManager = logs,
                     resourceGraphs = NavigationResourceRegistry(),
-                    portProvider = { explicitConfigRefreshes++; emptyList() }).use { runtime ->
+                    portProvider = explicitPorts::scan).use { runtime ->
                     assertSame(config, runtime.configStore)
                     assertSame(shared, runtime.functions)
-                    TuiYameObserver(configStore = config, terminal = terminal).use { it.refreshPorts() }
-                    assertEquals(1, explicitConfigRefreshes)
-                    InteractiveYameApplication(configStore = config, terminal = terminal).use {
-                        assertSame(config, it.configStore)
-                        assertSame(shared, it.functions)
+                    assertTrue(shared.keys().isEmpty())
+                    RuntimeTestRun(runtime, explicitPorts).use {
+                        TuiYameObserver(configStore = config, terminal = terminal).use { it.refreshPorts() }
+                        assertEquals(1, explicitConfigRefreshes)
+                        InteractiveYameApplication(configStore = config, terminal = terminal).use {
+                            assertSame(config, it.configStore)
+                            assertSame(shared, it.functions)
+                        }
                     }
                 }
                 assertTrue(shared.keys().isEmpty())
@@ -98,51 +108,62 @@ class FunctionStoreDefaultsTest {
 
                 val processConfig = applicationConfigStore(YameConfiguration())
                 var refreshes = 0
+                val sharedPorts = RuntimeTestPorts { refreshes++; emptyList() }
                 ConfigStore.install(processConfig).use {
                     YameRuntime(logManager = logs, resourceGraphs = NavigationResourceRegistry(),
-                        portProvider = { refreshes++; emptyList() }).use { runtime ->
+                        portProvider = sharedPorts::scan).use { runtime ->
                         assertSame(processConfig, runtime.configStore)
                         assertSame(shared, runtime.functions)
-                        TuiYameObserver(terminal = terminal).use { observer ->
-                            observer.refreshPorts()
-                            observer.command("/tone off")
-                            assertEquals(1, refreshes)
-                        }
-                        assertFalse(processConfig[ModemSettings.Tone])
-                        InteractiveYameApplication(terminal = terminal).use {
-                            assertSame(processConfig, it.configStore)
-                            assertSame(runtime.functions, it.functions)
-                        }
-
-                        // Injected runtime/frontend must keep their own identity even
-                        // when defaults exist and hold the same operation paths.
-                        var isolatedRefreshes = 0
-                        YameRuntime(config, first, logs, NavigationResourceRegistry(),
-                            { isolatedRefreshes++; emptyList() }).use { isolated ->
-                            assertSame(config, isolated.configStore)
-                            assertSame(first, isolated.functions)
-                            TuiYameObserver(config, first, terminal).use { observer ->
+                        assertTrue(shared.keys().isEmpty())
+                        RuntimeTestRun(runtime, sharedPorts).use {
+                            TuiYameObserver(terminal = terminal).use { observer ->
                                 observer.refreshPorts()
-                                observer.command("/tone on")
+                                observer.command("/tone off")
+                                assertEquals(1, refreshes)
                             }
-                            assertEquals(1, isolatedRefreshes)
-                            assertEquals(1, refreshes)
-                            assertTrue(config[ModemSettings.Tone])
                             assertFalse(processConfig[ModemSettings.Tone])
-                            assertTrue(otherConfig[ModemSettings.Tone])
-                            InteractiveYameApplication(otherConfig, second, terminal).use {
-                                assertSame(second, it.functions)
-                                assertSame(otherConfig, it.configStore)
+                            InteractiveYameApplication(terminal = terminal).use {
+                                assertSame(processConfig, it.configStore)
+                                assertSame(runtime.functions, it.functions)
                             }
+
+                            // Injected runtime/frontend must keep their own identity even
+                            // when defaults exist and hold the same operation paths.
+                            var isolatedRefreshes = 0
+                            val isolatedPorts = RuntimeTestPorts { isolatedRefreshes++; emptyList() }
+                            YameRuntime(config, first, logs, NavigationResourceRegistry(),
+                                isolatedPorts::scan).use { isolated ->
+                                assertSame(config, isolated.configStore)
+                                assertSame(first, isolated.functions)
+                                RuntimeTestRun(isolated, isolatedPorts).use {
+                                    TuiYameObserver(config, first, terminal).use { observer ->
+                                        observer.refreshPorts()
+                                        observer.command("/tone on")
+                                    }
+                                    assertEquals(1, isolatedRefreshes)
+                                    assertEquals(1, refreshes)
+                                    assertTrue(config[ModemSettings.Tone])
+                                    assertFalse(processConfig[ModemSettings.Tone])
+                                    assertTrue(otherConfig[ModemSettings.Tone])
+                                    InteractiveYameApplication(otherConfig, second, terminal).use {
+                                        assertSame(second, it.functions)
+                                        assertSame(otherConfig, it.configStore)
+                                    }
+                                }
+                            }
+                            assertTrue(first.keys().isEmpty())
+                            assertTrue(second.keys().isEmpty())
+                            assertTrue(shared.keys().isNotEmpty(), "isolated shutdown must preserve shared registrations")
                         }
-                        assertTrue(first.keys().isEmpty())
-                        assertTrue(second.keys().isEmpty())
-                        assertTrue(shared.keys().isNotEmpty(), "isolated shutdown must preserve shared registrations")
                     }
                     assertTrue(shared.keys().isEmpty(), "runtime must release shared registrations")
                     // A later runtime can register the same paths on the same shared instance.
+                    val laterPorts = RuntimeTestPorts()
                     YameRuntime(logManager = logs, resourceGraphs = NavigationResourceRegistry(),
-                        portProvider = { emptyList() }).use { assertSame(shared, it.functions) }
+                        portProvider = laterPorts::scan).use {
+                        assertSame(shared, it.functions)
+                        RuntimeTestRun(it, laterPorts).use { assertTrue(shared.keys().isNotEmpty()) }
+                    }
                 }
                 assertTrue(shared.keys().isEmpty())
                 assertSame(shared, FunctionStore.current)
