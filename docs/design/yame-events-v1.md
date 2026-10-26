@@ -5,8 +5,9 @@ This document describes the decided v1 design for
 The broker infrastructure is implemented in [#106](https://github.com/skasti/yame/pull/106),
 and the proxy resource event contract and producer are implemented in #100.
 Runtime observations, early consumer registration, fatal supervision and shutdown
-integration are implemented in #102. A dedicated TUI worker (#101) and proxy
-dashboard event projection (#103) remain separate follow-ups. Decided design does not imply implemented behavior: the
+integration are implemented in #102. The incremental proxy dashboard projection
+and hook removal are implemented in #103. A dedicated TUI worker (#101) remains
+a separate follow-up. Decided design does not imply implemented behavior: the
 [current broker architecture](../yame-events.md) documents verified code.
 
 Decision rationale, alternatives and consequences belong in
@@ -100,9 +101,10 @@ silently drop events.
 
 The [historical inventory](../.history/yame-events-a37ac65.md) records the
 migration starting point. Tests for #100 cover immutable payloads, real
-transitions and sufficient correlation. A test-only consumer exercises bounded
-buffering and stale-event handling under deliberately reordered delivery;
-the production TUI projection migration remains in #103.
+transitions and sufficient correlation. The production TUI projection exercises
+bounded buffering and stale-event handling under deliberately reordered delivery. An independent recording consumer also
+reconstructs a resource view from public payloads alone. See the
+[projection behavior and limits](../yame-events.md#proxy-dashboard-projection).
 
 ### Broker admission, delivery and subscriptions
 
@@ -291,8 +293,8 @@ current runtime and consumer boundaries are documented in [yame-events.md](../ya
 | [#97: inventory and contract](https://github.com/skasti/yame/issues/97) | None | Source-grounded historical inventory; startup/bootstrap restriction and diagnostic independence; valid documentation links. |
 | [#98: broker and facade](https://github.com/skasti/yame/issues/98) | #97; [ADR 0001](../adrs/0001-fatal-event-queue-saturation.md) | Verify count-bounded queue admission, a 10 ms default timeout and independent fatal supervision. Checks: FIFO with multiple producers, blocked subscriber and full queue, bounded waiting and wakeup, safe status reads, filtering/failure/reentrant publication, concurrent subscribe/remove, idle wakeup, drain high-water mark, publish/close race and close from worker. Verify fatal signalling independent of worker progress and caught exceptions, with no recovery. |
 | [#99: registry lifetime](https://github.com/skasti/yame/issues/99) | None | Runtime-level serial/handler replacement retains graph identity and LRU limits; stale fetch attempts remain fenced. Define limit changes without session-teardown eviction. |
-| [#100: proxy event contract and publication](https://github.com/skasti/yame/issues/100) | #97, #98, #99 | Immutable event snapshots and occurrence time; sufficient graph/resource/fetch correlation, including eviction and legitimate refetch; no producer-imposed root-first or cross-producer ordering. Existing hooks remain usable until #103. |
-| [#101: TUI processing boundary](https://github.com/skasti/yame/issues/101) | #97 | Blocking terminal/render work cannot hold up admission; bounded local backlog, independent fatal escalation on overflow, consistent observation order, drain and close behavior. Works with existing events/hooks before broker wiring. |
+| [#100: proxy event contract and publication](https://github.com/skasti/yame/issues/100) | #97, #98, #99 | Immutable event snapshots and occurrence time; sufficient graph/resource/fetch correlation, including eviction and legitimate refetch; no producer-imposed root-first or cross-producer ordering. Publication occurs outside registry locks; the old outbound hooks were removed in #103. |
+| [#101: TUI processing boundary](https://github.com/skasti/yame/issues/101) | #97 | Blocking terminal/render work cannot hold up admission; bounded local backlog, independent fatal escalation on overflow, consistent observation order, drain and close behavior. Uses the existing event observation path. |
 | [#102: runtime composition and migration](https://github.com/skasti/yame/issues/102) | #97, #98; #101 is independent | Implemented: early Plain/TUI consumers, typed port query and automatic change events, independent single-write diagnostics/captures, session correlation and bounded shutdown/fatal supervision. Interim TUI rendering runs on the broker worker and may saturate the queue; no broker-worker module-file writes. |
 | [#103: proxy dashboard migration and hook removal](https://github.com/skasti/yame/issues/103) | #99, #100, #102 | Existing hosts/unique URLs/states/transforms/sort/selection/expansion remain correct; reconnect and eviction work; no outbound registry hook plumbing remains; an independent early consumer reconstructs an equivalent view. |
 

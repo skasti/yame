@@ -12,8 +12,8 @@ This can block **broker dispatch**, while producers continue to enqueue until
 capacity is exhausted. A full queue waits at most the configured publication
 timeout (10 ms by default), then fails fatally. A dedicated TUI worker remains
 an independent follow-up in [#101](https://github.com/skasti/yame/issues/101).
-The proxy dashboard still uses its registry hooks and executor until
-[#103](https://github.com/skasti/yame/issues/103).
+The proxy dashboard incrementally consumes typed observations on this same path,
+without registry hooks or a separate executor.
 The [v1 design](design/yame-events-v1.md) distinguishes these implemented boundaries
 from the future TUI worker; the [historical inventory](.history/yame-events-a37ac65.md)
 records the starting point.
@@ -68,8 +68,8 @@ composition subscribes and starts independent supervision before producers.
 ## Event occurrence and ordering responsibilities
 
 **Implementation status:** Proxy resource producers, runtime/frontend observations
-and application lifecycle wiring are implemented. Proxy TUI projection migration
-remains tracked by #103. New domain transition
+and application lifecycle wiring, including the incremental proxy TUI projection,
+are implemented. New domain transition
 events expose an occurrence timestamp (normally `occurredAt`),
 captured when authoritative state changes, not when they enter the broker.
 Producers publish truthful immutable observations and sufficient entity,
@@ -189,6 +189,69 @@ exceptions or a full diagnostic backlog are best-effort losses, not cleanup
 failures being cleared; a blocked writer cannot hold up cleanup. Cleanup and
 diagnostic completion share the original global deadline. A cleanup operation
 that never returns can leave later operations unattempted before forced exit.
+
+## Proxy dashboard projection
+
+`InteractiveYameApplication` registers `TuiYameObserver.onEvent` before constructing
+its runtime. The same subscriber handles runtime and proxy observations; there is
+no registry hook, snapshot synchronization, per-event registry read, or proxy UI
+executor. Registry-instance injection and the lazy shared production registry are
+preserved. Immutable observations are staged while holding registry locks and
+published after releasing them; broker admission/fatal failures still propagate.
+
+The TUI-owned `HttpGraphProjection` incrementally applies public graph/resource
+payloads. `CREATED.initialResources` seeds only that lifetime's initial members;
+subsequent events change individual members. Canonical resource keys deduplicate
+URLs within a graph and across the displayed hosts. Per-graph memberships and
+incident relationship edges remain separate, including shared resources and
+multiple parents. Host usage sums each contributing graph's authoritative use
+count once. Its recency comes from domain last-use times. Counts, not receipt
+time, select the latest use even if the clock moves backwards. Cross-graph
+representations of a shared URL use the latest occurrence time, with graph ID as
+a stable tie breaker. Selection and expansion remain presentation-owned.
+
+The projection uses fetch-attempt number/identity and within-attempt state
+progress before occurrence time when rejecting delayed full resource observations.
+A retry can legitimately return to `FETCHING`. Associations and prefetch/navigation
+promotion resolve some equal-time cases; conflicting terminal states, identities,
+or equal-time metadata without causal evidence expose a local failure instead of
+using last-delivery-wins. Graph removal dominates all delayed events for that
+lifetime; a new graph at the same URL has its own identity. Removed membership
+cannot be resurrected within that lifetime. Exact retired IDs are compacted into
+contiguous ranges, never an assumed high-water mark; at most 1024 disjoint ranges
+are retained. Exhaustion is an explicit local failure.
+
+A resource or use observation before `CREATED` is deferred privately (at most 256
+distinct dependencies), without another queue worker or polling. Repeated
+observations of a pending member/use coalesce using the same domain semantics. While unresolved, the
+proxy panel shows an **incomplete** status; it does not invent a graph from a
+resource payload. Creation resolves that graph's dependencies, and removal discards
+them. If the bound is exceeded or observations are ambiguous, the proxy view is
+cleared and marked **unavailable** until restart. `observationFailure` and broker
+subscriber diagnostics retain the failure. Other runtime observations continue.
+An intentionally late subscriber receives no replay or bootstrap.
+
+Until [#101](https://github.com/skasti/yame/issues/101), this TUI subscriber can
+update/render synchronously on the broker worker. A slow render delays all broker
+dispatch and sustained load can cause fatal queue saturation. Serial/PPP/proxy
+producer threads only publish; they never invoke this subscriber or render the
+terminal. Latch-based tests cover this interim boundary and saturation.
+
+The integration tests register an independent `RecordingResourceView` before the
+fixture registry publishes. Controlled clocks and broker drain checkpoints compare
+both consumers' graph identity/root, resource metadata, incident associations,
+cumulative usage, last-use time and host sorting. The trace covers repeated
+discovery, usage-only graph reuse, shared resources, duplicate delivery, eviction
+and recreation at the same URL. The recorder uses only public typed payloads;
+read-only TUI inspection methods supply the comparison side, without registry reads.
+
+The current registry emits resource `REMOVED` only as part of graph eviction; it
+has no individual membership-removal operation. A separate explicit public-payload
+sequence, published through the real broker, verifies individual removal cleans
+incoming/outgoing associations while preserving other members. The recorder is a
+small controlled-trace test consumer, not a second general ordering engine. The
+public contract still provides no total ordering for conflicting equal-time
+metadata and no replay/bootstrap for late subscribers.
 
 ## Runtime observations and queries
 

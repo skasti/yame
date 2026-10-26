@@ -112,6 +112,7 @@ graph eviction, without making root-first enqueue order a producer requirement.
 - The broker remains fast and generic; its FIFO/admission/failure guarantees,
   and ADR 0004's event ownership, payload immutability and schema-versioning
   decisions remain unchanged.
-- This is a **decided design**, not a claim that proxy event migration is already
-  implemented. Producer events and the consumer projection remain tracked by
-  #100 and #103; startup wiring remains #102.
+- Producer events (#100), startup wiring (#102), and the incremental consumer
+  projection (#103) implement this design. The unified TUI worker remains #101;
+  [current projection behavior](../yame-events.md#proxy-dashboard-projection)
+  documents the interim threading limitation and consumer failure policy.
