@@ -2,10 +2,88 @@
 
 Each YAME process owns one `ConfigStore` and one `FunctionStore`. `YameRuntime`
 owns serial/modem behavior, registers its operations, and observes committed
-configuration. Both plain mode and the TUI compose this same runtime. Stores,
-keys, functions and runtime have no presentation imports. A second frontend can
-use the same instances; each TUI owns its own command palette. An external client
+configuration. `Main` composes this same runtime for plain mode
+and the TUI. Stores, keys, functions and runtime have no presentation imports.
+A second frontend can use the same instances; each TUI owns its own command palette. An external client
 needs a separate transport/authentication bridge module, not a different core API.
+
+## Application startup and shutdown
+
+`Main` loads configuration, applies CLI overrides, explicitly installs the process
+`ConfigStore`, and creates shared logging and event supervision. It selects the
+presentation using the existing `--ui auto|tui|plain` terminal policy. Both normal
+modes follow the same direct sequence in `Main`, without an additional bootstrap
+abstraction:
+
+1. Construct the selected `Presentation`, installing its event subscriptions, and
+   register it as a lifecycle consumer before calling its nonblocking `start()`.
+   The TUI owns its render timer and input thread; plain diagnostics need no loop.
+2. Construct `YameRuntime`, which observes configuration but exposes no runtime
+   functions, and immediately register it as a lifecycle producer.
+3. Call `run()`, which claims startup once and registers the runtime functions
+   before port discovery, connection attempts and monitoring. Repeated or
+   concurrent `run()` calls fail without disturbing the first invocation.
+   Core components also remain usable
+   without a presentation.
+4. On return or failure, use `ApplicationEventLifecycle` to stop runtime producers,
+   close and drain the broker, then close presentation subscriptions/workers,
+   release the configuration installation and close logging. A shutdown hook and
+   fatal-event supervisor use that same idempotent owner.
+
+Production presentation/runtime construction omits both stores. Constructors for
+`InteractiveYameApplication`, `TuiYameObserver` and `YameRuntime` default to
+`ConfigStore.current` (the explicitly installed process store) and
+`FunctionStore.current` (the lazy process-owned registry from
+[ADR 0009](adrs/0009-lazy-global-function-store.md)). Main creates no function
+store. Explicit constructor arguments bypass the defaults independently; a
+component retains those instances for its operations and passes them to children
+when composing them. It never replaces an injected store with a global lookup.
+
+`InteractiveYameApplication` owns only `TuiYameObserver` and its subscription.
+Neither the TUI nor plain diagnostics owns a runtime or resource registry.
+Presentation initialization cannot start runtime producers. Input is enabled
+before runtime construction, with no readiness barrier. Unavailable functions
+still throw from `FunctionStore.invoke`; the TUI catches command failures for
+palette actions and shortcuts, reports them locally, and keeps accepting input.
+A failed quit leaves input enabled so a later user action can succeed. Palette
+population remains unchanged; dynamic store-driven population is future work.
+Core construction/startup failures release already
+created components. A component whose lifecycle registration loses a shutdown
+race is closed immediately, rather than escaping ownership. See
+[ADR 0008](adrs/0008-presentation-independent-bootstrap.md).
+`run()` closes the runtime on return or failure. Partial function registration
+is rolled back by that same cleanup, including the configuration subscription.
+Concurrent startup/shutdown serializes registration with closing, so no handles
+can be added after shutdown has removed them.
+
+Runtime commands delegate directly to their implementations. Those methods
+validate component state and reject external calls when runtime is stopping or
+closed. `runtimeOperation` is removed. Internal monitoring, stale callbacks and
+cancelled connection work instead stop quietly during normal shutdown.
+
+`pendingTransitions` counts resource work: OS port enumeration, connection
+initialization and detached serial/modem cleanup. These owners claim work under
+the runtime lock, perform IO outside it, and release their count after cleanup and
+publication. A connection stays local to its initializer through reader startup;
+only a current generation may hand it to the runtime. Reader callbacks record
+early termination during initialization or take ownership of active cleanup,
+and stale callbacks cannot reclaim already detached resources. Serial readers
+are stopped before their modem is released.
+
+Close rejects new commands, removes function/configuration registrations, fences
+connection generations, detaches active IO, and waits for resource work and the
+monitor to quiesce. Concurrent external close callers await the same completion.
+A tracked IO callback cannot initiate close and wait for itself; that invocation
+fails explicitly. Reentrant cleanup callbacks during an existing close return
+without blocking its owner. The application supervisor's existing deadline still
+bounds shutdown if external IO never completes; shared consumers are not released
+while runtime cleanup is still waiting.
+
+`YameRuntime` and lower-level core components retain explicit registry injection.
+Their production defaults resolve the lazy, thread-safe process registry through
+`YameRegistries`; reconnects retain that instance and its contents. No registry
+resolution passes through presentation. Tone test remains a standalone modem
+path with plain diagnostics, and plain mode without a port still prints usage.
 
 ## Typed settings and ownership
 
@@ -169,7 +247,14 @@ the registry lock, and executes outside it. Function exceptions propagate to the
 adapter. A function may call `ConfigStore.set` for a multi-setting transaction.
 Unregistering removes future invocations; an already selected operation may finish.
 
-The runtime registers disconnect, reconnect, refresh-ports and quit. Refresh-ports
+Function registration exposes an operation; it does not guarantee execution in
+every lifecycle state. The owning component validates its state, and the caller
+handles failures. A selected runtime command can therefore throw
+`IllegalStateException` while shutdown proceeds, even though lookup succeeded.
+An unregistered function retains the ordinary `FunctionStore` lookup exception.
+
+At the beginning of `run()`, the runtime registers disconnect, reconnect,
+refresh-ports and quit. Construction registers none. Refresh-ports
 returns an unmodifiable `List<SerialPortDescriptor>` snapshot used directly by the
 existing port selector. Changed automatic observations independently publish
 `AvailablePortsChanged`; unchanged lists are suppressed. Quit requests producer
@@ -203,9 +288,10 @@ loaded from its separate INI file; runtime writes use the repository.
 | `serial`, `modem`, `ppp`, `ppp.dns`, `ppp.proxy`, `logging` | Their own keys, groups, value validation and immutable component configs |
 | `ppp.proxy.transform` | HTML switches, element rules/INI, transformation policy and implementation |
 | `persistence` | Generic INI repository and legacy CLI/DTO adapters; feature definitions own mappings |
-| `Main` | Load file, apply transient CLI precedence, create/install the configuration store, choose frontend and startup retry policy |
+| `Main` | Load file, apply CLI precedence, install configuration, construct/register/start presentation before constructing/registering/running runtime; close the lifecycle owner in its outer finally |
+| `ApplicationEventLifecycle` | Supervise fatal broker failure, own registered producers/consumers and order shutdown |
 | `YameRuntime` | Construct component configs from direct store reads, observe committed batches, own connections and registered functions |
-| TUI | Derive presentation caches from the store; display runtime observations separately; invoke core functions |
+| Presentations | Own subscriptions/output/input workers; TUI derives caches from the store, projects event payloads and invokes core functions |
 
 The CLI reads serial, modem, PPP, DNS, proxy enabled, and logging defaults for
 normal startup; tone test uses serial, modem, and logging. Neither mode requests

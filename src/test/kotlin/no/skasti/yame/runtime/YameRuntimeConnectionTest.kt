@@ -127,7 +127,7 @@ class YameRuntimeConnectionTest {
                         assertTrue(messages.none { it.contains("YAME ready on COM1 at 38400 baud") })
                     } finally {
                         releaseFirst.countDown()
-                        functions.invoke(ApplicationFunctions.Quit)
+                        runtime.close()
                         worker.join(5_000)
                         assertFalse(worker.isAlive)
                     }
@@ -184,26 +184,29 @@ class YameRuntimeConnectionTest {
             val opened = mutableListOf<Triple<String, Int, SerialFlowControl>>()
             store.onChange.subscribe { events++ }.use {
                 YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
+                    val testPorts = RuntimeTestPorts { ports }
                     YameRuntime(
                         configStore = store,
                         functions = functions, logManager = logs,
-                        resourceGraphs = NavigationResourceRegistry(), portProvider = { ports },
+                        resourceGraphs = NavigationResourceRegistry(), portProvider = testPorts::scan,
                         connectionFactory = { port, baud, flow, _ ->
                             opened += Triple(port, baud, flow)
                             Port()
                         },
-                    ).use {
-                        TuiYameObserver(store, functions, Terminal(interactive = false)).use { ui ->
-                            ui.updateAvailablePorts(ports)
-                            for (command in listOf("/port", "/baud", "/flow-control")) {
-                                functions.invoke(ConnectionFunctions.Disconnect)
-                                command.forEach { ui.handleKey(it.toString()) }
-                                ui.handleKey("Enter")
-                                ui.handleKey("Enter")
+                    ).use { runtime ->
+                        RuntimeTestRun(runtime, testPorts).use {
+                            TuiYameObserver(store, functions, Terminal(interactive = false)).use { ui ->
+                                ui.updateAvailablePorts(ports)
+                                for (command in listOf("/port", "/baud", "/flow-control")) {
+                                    functions.invoke(ConnectionFunctions.Disconnect)
+                                    command.forEach { ui.handleKey(it.toString()) }
+                                    ui.handleKey("Enter")
+                                    ui.handleKey("Enter")
+                                }
+                                assertEquals(List(3) { Triple("COM1", 38400, SerialFlowControl.DISABLED) }, opened)
+                                assertEquals(0, saves)
+                                assertEquals(0, events)
                             }
-                            assertEquals(List(3) { Triple("COM1", 38400, SerialFlowControl.DISABLED) }, opened)
-                            assertEquals(0, saves)
-                            assertEquals(0, events)
                         }
                     }
                 }
@@ -287,17 +290,19 @@ class YameRuntimeConnectionTest {
             val ports = listOf(SerialPortDescriptor("COM1", "test port"))
 
             YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
+                val testPorts = RuntimeTestPorts { ports }
                 val runtime = YameRuntime(
                     configStore = store,
                     functions = functions,
                     logManager = logs,
                     resourceGraphs = registry,
-                    portProvider = { ports },
+                    portProvider = testPorts::scan,
                     connectionFactory = { _, _, _, _ ->
                         attempts++
                         Port(onReadingStarted = { readingStarted++ })
                     },
                 )
+                val run = RuntimeTestRun(runtime, testPorts)
                 try {
                     functions.invoke(ConnectionFunctions.Reconnect)
                     assertEquals(1, readingStarted)
@@ -364,7 +369,7 @@ class YameRuntimeConnectionTest {
                         registry.snapshots().single().nodes.single { it.legacyUri == image }.state,
                     )
                 } finally {
-                    runtime.close()
+                    run.close()
                 }
             }
         } finally {

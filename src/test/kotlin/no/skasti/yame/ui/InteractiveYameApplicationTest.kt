@@ -2,7 +2,6 @@ package no.skasti.yame.ui
 
 import com.github.ajalt.mordant.terminal.Terminal
 import no.skasti.yame.function.FunctionStore
-import no.skasti.yame.logging.YameLogManager
 import no.skasti.yame.observer.*
 import no.skasti.yame.persistence.YameConfiguration
 import no.skasti.yame.persistence.applicationConfigStore
@@ -10,7 +9,6 @@ import no.skasti.yame.ppp.proxy.*
 import no.skasti.yame.ppp.proxy.transform.ResourceTransformationSummary
 import no.skasti.yame.recording.RecordingResourceView
 import java.net.URI
-import java.nio.file.Files
 import java.time.Duration
 import java.time.Clock
 import java.time.Instant
@@ -39,18 +37,11 @@ class InteractiveYameApplicationTest {
         assertNull(broker.status.failure)
     }
 
-    private fun withApp(registry: NavigationResourceRegistry, test: (InteractiveYameApplication) -> Unit) {
-        val directory = Files.createTempDirectory("yame-tui-events")
-        try {
-            YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
-                InteractiveYameApplication(
-                    configStore = applicationConfigStore(YameConfiguration(portName = "COM1")),
-                    functions = FunctionStore(), terminal = Terminal(interactive = false),
-                    logManager = logs, resourceGraphs = registry, portProvider = { emptyList() },
-                ).use(test)
-            }
-        } finally { directory.toFile().deleteRecursively() }
-    }
+    private fun withApp(test: (InteractiveYameApplication) -> Unit) =
+        InteractiveYameApplication(
+            configStore = applicationConfigStore(YameConfiguration(portName = "COM1")),
+            functions = FunctionStore(), terminal = Terminal(interactive = false),
+        ).use(test)
 
     @Test fun `early independent consumer matches complete TUI graph and host views from published events`() {
         val clock = ControlledClock()
@@ -58,7 +49,7 @@ class InteractiveYameApplicationTest {
         val recorder = RecordingResourceView()
         val published = mutableListOf<YameEvent>()
         broker.subscribe("independent-view") { event -> published += event; recorder.accept(event) }.use {
-            withApp(registry) { app ->
+            withApp { app ->
                 val root = URI("http://alpha.test/page")
                 val image = URI("http://cdn.test/shared.gif")
                 val upstream = URI("https://cdn.test/shared.gif")
@@ -165,7 +156,7 @@ class InteractiveYameApplicationTest {
     @Test fun `public resource removal cleans all incident associations without removing shared host survivors`() {
         val recorder = RecordingResourceView()
         broker.subscribe("independent-removal", handler = recorder::accept).use {
-            withApp(NavigationResourceRegistry()) { app ->
+            withApp { app ->
                 val clock = ControlledClock()
                 val root = URI("http://removal.test/")
                 val removed = URI("http://cdn.test/removed.gif")
@@ -264,7 +255,7 @@ class InteractiveYameApplicationTest {
         val registry = NavigationResourceRegistry()
         registry.startNavigation(URI("http://already-held.test/page"))
         drain()
-        withApp(registry) { app ->
+        withApp { app ->
             drain()
             assertTrue(app.resourceGraphProjectionSnapshot().isEmpty())
             // Newly created graph lifetimes still project normally.
@@ -283,7 +274,7 @@ class InteractiveYameApplicationTest {
         }.use {
             try {
                 val registry = NavigationResourceRegistry()
-                withApp(registry) { app ->
+                withApp { app ->
                     registry.startNavigation(URI("http://tui-shutdown.test/page"))
                     assertTrue(entered.await(5, TimeUnit.SECONDS))
                     app.close()

@@ -27,13 +27,22 @@ import no.skasti.yame.serial.SerialFlowControl
 import no.skasti.yame.tone.DialString
 import no.skasti.yame.tone.HandshakeProfile
 import no.skasti.yame.ui.InteractiveYameApplication
+import no.skasti.yame.presentation.PlainPresentation
+import no.skasti.yame.presentation.Presentation
+import no.skasti.yame.runtime.YameRuntime
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
-fun main(args: Array<String>) {
+fun main(args: Array<String>) = main(args) { useTui, terminal ->
+    if (useTui) InteractiveYameApplication(terminal = terminal) else PlainPresentation()
+}
+
+// A presentation-construction seam lets tests exercise this actual startup and
+// finally block. Runtime construction and lifecycle ownership are never replaced.
+internal fun main(args: Array<String>, createPresentation: (Boolean, Terminal) -> Presentation) {
     val configPath = configurationPath(args)
     val fileStore = YameConfigurationStore(configPath)
     val runtimeConfigStore = lazyApplicationConfigStore(configPath)
@@ -66,9 +75,7 @@ fun main(args: Array<String>) {
     Runtime.getRuntime().addShutdownHook(shutdownHook)
     try {
         if (options.testNumber != null) {
-            events.consumer(YameEvents.subscribe("plain-diagnostics", { it is DiagnosticMessage }) {
-                println((it as DiagnosticMessage).message)
-            })
+            events.consumer(PlainPresentation())
             val modemConsoleLogger = diagnosticLogger(logManager.logger(YameLogModule.MODEM))
             val modem = HayesModem(
                 baudRate = options.baudRate,
@@ -87,9 +94,7 @@ fun main(args: Array<String>) {
                     "dial tone: ${options.modemConfig.dialToneTime}, " +
                     "handshake: ${options.modemConfig.handshakeProfile})...",
             )
-            modem.use {
-                it.dial(options.testNumber)
-            }
+            modem.dial(options.testNumber)
             YameEvents.publish(DiagnosticMessage("Tone test complete."))
             return
         }
@@ -124,43 +129,23 @@ fun main(args: Array<String>) {
         )
         applyCliOverrides(runtimeConfigStore, savedConfiguration, effectiveConfiguration)
         events.consumer(no.skasti.yame.config.ConfigStore.install(runtimeConfigStore))
-        run {
-            if (useTui) {
-                val application = InteractiveYameApplication(
-                    configStore = runtimeConfigStore,
-                    logManager = logManager,
-                    terminal = if (options.uiMode == UiMode.AUTO) {
-                        detectedTerminal
-                    } else {
-                        Terminal(interactive = true)
-                    },
-                )
-                events.producer(AutoCloseable(application::stop))
-                events.consumer(application)
-                application.run()
-                return
-            }
-
-            if (options.portName == null) {
-                printUsage()
-                return
-            }
-
-            events.consumer(YameEvents.subscribe("plain-diagnostics", { it is DiagnosticMessage }) {
-                println((it as DiagnosticMessage).message)
-            })
-            val runtime = no.skasti.yame.runtime.YameRuntime(
-                runtimeConfigStore,
-                logManager = logManager, failFastStartup = true,
-            )
-            events.producer(runtime)
-            runtime.run()
+        if (!useTui && options.portName == null) {
+            printUsage()
+            return
         }
+
+        val terminal = if (useTui && options.uiMode == UiMode.TUI) Terminal(interactive = true) else detectedTerminal
+        val presentation = createPresentation(useTui, terminal).also(events::consumer)
+        presentation.start()
+
+        val runtime = YameRuntime(
+            logManager = logManager, failFastStartup = !useTui,
+        ).also(events::producer)
+        runtime.run()
     } finally {
         events.close()
         coordinatedShutdown.close()
         runCatching { Runtime.getRuntime().removeShutdownHook(shutdownHook) }
-        logManager.close()
     }
 }
 

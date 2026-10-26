@@ -10,6 +10,25 @@ class ConfigurationArchitectureTest {
     private val sources = Path.of("src/main/kotlin/no/skasti/yame")
 
     @Test
+    fun `presentation and core do not own one another`() {
+        for (folder in listOf("ui", "presentation", "runtime")) {
+            Files.walk(sources.resolve(folder)).use { files ->
+                files.filter { it.toString().endsWith(".kt") }.forEach { file ->
+                    val text = Files.readString(file)
+                    if (folder == "runtime") {
+                        assertFalse(text.contains("no.skasti.yame.ui."), "$file depends on TUI")
+                        assertFalse(text.contains("no.skasti.yame.presentation."), "$file depends on presentation")
+                    } else {
+                        assertFalse(text.contains("no.skasti.yame.runtime."), "$file depends on runtime")
+                        assertFalse(text.contains("NavigationResourceRegistry"), "$file owns a resource registry")
+                        assertFalse(text.contains("YameRegistries"), "$file resolves a resource registry")
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     fun `generic stores have no feature persistence or frontend dependencies`() {
         for (folder in listOf("config", "function")) {
             Files.walk(sources.resolve(folder)).use { files ->

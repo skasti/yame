@@ -173,10 +173,18 @@ reads, and waits for connection attempts and proxy producers outside protocol
 monitors. Session closure fences late UDP/ICMP callbacks. Proxy close remains
 bounded, with a separate `awaitQuiescence` boundary used by the PPP owner to
 verify actual worker/handler completion. It then closes and awaits the broker,
-drains the existing resource UI executor, removes subscriptions and closes the
+removes subscriptions and closes the
 frontend, configuration installation and logging/capture resources. Finally it
 seals the facade. An incomplete shutdown is a failure; it never claims a
 successful drain or closes a still-dispatching frontend.
+
+Runtime shutdown attempts each subscription/function handle, monitor interruption,
+serial/modem release, transition wait and monitor join independently. It retains
+the first cleanup exception and suppresses later ones before signalling shared
+close completion. A detached connection emits logical disconnection even when
+physical cleanup fails, without claiming successful physical shutdown. Publication
+failure is also retained, and transition accounting always finishes; stale reader
+callbacks and later shutdown do not release or disconnect that detached IO again.
 
 Producer and consumer cleanup exceptions are isolated per registration, in reverse
 order. Broker close and wait failures are isolated too: confirmed dispatcher
@@ -192,12 +200,24 @@ that never returns can leave later operations unattempted before forced exit.
 
 ## Proxy dashboard projection
 
-`InteractiveYameApplication` registers `TuiYameObserver.onEvent` before constructing
-its runtime. The same subscriber handles runtime and proxy observations; there is
+`Main` constructs, registers and starts the selected presentation before
+constructing or running the runtime. `InteractiveYameApplication` registers
+`TuiYameObserver.onEvent` during that presentation initialization, and its
+nonblocking `start()` enables rendering/input independently of core function
+registration. The TUI reports unavailable operations as command failures and
+keeps accepting input; the function store still throws for unavailable functions.
+Runtime functions appear during `run()` startup, not construction. Successful
+lookup does not guarantee executable component state; selected commands may fail
+while runtime stops, and the TUI handles that failure at the input boundary.
+It owns no runtime or registry. The same subscriber handles runtime and proxy observations; there is
 no registry hook, snapshot synchronization, per-event registry read, or proxy UI
-executor. Registry-instance injection and the lazy shared production registry are
-preserved. Immutable observations are staged while holding registry locks and
+executor. Registry-instance injection stays at runtime/core boundaries; the lazy
+shared production registry is resolved there and survives reconnects. Immutable observations are staged while holding registry locks and
 published after releasing them; broker admission/fatal failures still propagate.
+The plain diagnostic presentation installs its subscription at the same bootstrap
+stage. Shutdown stops core producers and drains events before releasing either
+presentation and its subscriptions. See
+[application composition](configuration-architecture.md#application-startup-and-shutdown).
 
 The TUI-owned `HttpGraphProjection` incrementally applies public graph/resource
 payloads. `CREATED.initialResources` seeds only that lifetime's initial members;

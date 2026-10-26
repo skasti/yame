@@ -71,6 +71,12 @@ and consumer-owned ordering follow
 follows [ADR 0001](docs/adrs/0001-fatal-event-queue-saturation.md). The lazy
 global event facade and lifecycle follow
 [ADR 0007](docs/adrs/0007-lazy-global-event-broker.md).
+Presentation-independent application composition follows
+[ADR 0008](docs/adrs/0008-presentation-independent-bootstrap.md): Main directly
+constructs, registers and starts presentation before constructing/starting core
+producers. TUI input handles temporarily unavailable functions as command failures;
+it does not wait for runtime registration. Keep runtime/registry ownership out of
+presentation and use ApplicationEventLifecycle for cleanup.
 
 - Record architectural decisions in `docs/adrs/<sequence>-<topic>.md`, using the
   next repository-wide four-digit sequence and a lowercase hyphenated topic.
@@ -177,8 +183,13 @@ unbounded buffering.
   Hold the returned installation handle for the application's lifetime and close it
   after runtime/frontends stop. A second installation is rejected. Multiple
   frontends share the existing store; they never install a replacement.
-- Runtime and presentation constructors receive the shared stores, not duplicate
-  initial setting values or the persistent application configuration tree.
+- Runtime and presentation constructors default to `ConfigStore.current` and
+  the lazy process-owned `FunctionStore.current` ([ADR 0009](docs/adrs/0009-lazy-global-function-store.md)).
+  Production bootstrap installs configuration but creates no function store.
+  Explicit stores bypass their respective defaults and must be used consistently
+  for internal operations and composed children. Never add function-store
+  installation, replacement or reset. Do not duplicate initial setting values or
+  pass the persistent application configuration tree to components.
 - `ConfigStore` is the single authoritative source of configuration values.
   Components read settings directly through typed keys; multi-key read snapshots
   are intentionally unsupported. YAME accepts the negligible possibility that a
@@ -249,6 +260,13 @@ unbounded buffering.
   and plain mode use that same runtime, ConfigStore, and FunctionStore.
 - A user selecting unchanged serial settings expresses a reconnect action through
   FunctionStore; do not manufacture a configuration event for a no-op write.
+- Runtime construction does not expose functions. Register them once during
+  `run()` startup and release them during close, including partial startup failure.
+  Registration exposes an operation, not guaranteed executability: its owning
+  component validates lifecycle state and callers handle failures. Commands may
+  reject stopping/closed state; internal cancellation and stale callbacks may
+  stop quietly. Keep shutdown coordination at resource ownership boundaries,
+  including connection initialization, detached cleanup and port enumeration.
 - Protocol aggregators (`HayesModem`'s default PPP handler and `RetroPppHandler`)
   have ordinary standalone child defaults. Application composition explicitly
   injects each configured dependency. Supplying an explicit modem config must not

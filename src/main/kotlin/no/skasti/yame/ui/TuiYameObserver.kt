@@ -59,7 +59,7 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
 class TuiYameObserver(
-    private val configStore: ConfigStore,
+    private val configStore: ConfigStore = ConfigStore.current,
     private val functions: FunctionStore = FunctionStore.current,
     private val terminal: Terminal = Terminal(interactive = true),
 ) : AutoCloseable {
@@ -158,17 +158,21 @@ class TuiYameObserver(
     internal fun paletteSnapshot(): TuiCommandPalette? = commandPalette
 
     internal fun handleKey(key: String) {
-        val paletteOpen = synchronized(this) { commandPalette != null }
-        when {
-            key == "Ctrl+C" -> requestQuit()
-            paletteOpen -> handlePaletteKey(key)
-            key == "Tab" -> cycleDashboardPanel()
-            key == "/" -> openCommandPalette()
-            key.equals("q", ignoreCase = true) -> requestQuit()
-            key == "ArrowUp" -> moveHttpSelection(-1)
-            key == "ArrowDown" -> moveHttpSelection(1)
-            key == "ArrowRight" || key == "Enter" -> setSelectedHttpHostExpanded(true)
-            key == "ArrowLeft" -> setSelectedHttpHostExpanded(false)
+        try {
+            val paletteOpen = synchronized(this) { commandPalette != null }
+            when {
+                key == "Ctrl+C" -> requestQuit()
+                paletteOpen -> handlePaletteKey(key)
+                key == "Tab" -> cycleDashboardPanel()
+                key == "/" -> openCommandPalette()
+                key.equals("q", ignoreCase = true) -> requestQuit()
+                key == "ArrowUp" -> moveHttpSelection(-1)
+                key == "ArrowDown" -> moveHttpSelection(1)
+                key == "ArrowRight" || key == "Enter" -> setSelectedHttpHostExpanded(true)
+                key == "ArrowLeft" -> setSelectedHttpHostExpanded(false)
+            }
+        } catch (error: Exception) {
+            onLog("Command failed: ${error.javaClass.simpleName}")
         }
     }
 
@@ -846,9 +850,7 @@ class TuiYameObserver(
             pendingAction
         }
 
-        try { action?.invoke() } catch (error: Exception) {
-            onLog("Command failed: ${error.javaClass.simpleName}")
-        }
+        action?.invoke()
     }
 
     private fun movePaletteSelection(delta: Int) {
@@ -1063,7 +1065,14 @@ class TuiYameObserver(
                 true
             }
         }
-        if (notify) onQuit()
+        if (notify) {
+            try { onQuit() } catch (error: Exception) {
+                // An unavailable or failed quit must leave input enabled so a
+                // later user action can succeed once the runtime has registered.
+                synchronized(this) { stopRequested = false }
+                throw error
+            }
+        }
     }
 
     @Synchronized
