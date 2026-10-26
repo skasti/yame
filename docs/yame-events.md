@@ -237,6 +237,22 @@ dispatch and sustained load can cause fatal queue saturation. Serial/PPP/proxy
 producer threads only publish; they never invoke this subscriber or render the
 terminal. Latch-based tests cover this interim boundary and saturation.
 
+The integration tests register an independent `RecordingResourceView` before the
+fixture registry publishes. Controlled clocks and broker drain checkpoints compare
+both consumers' graph identity/root, resource metadata, incident associations,
+cumulative usage, last-use time and host sorting. The trace covers repeated
+discovery, usage-only graph reuse, shared resources, duplicate delivery, eviction
+and recreation at the same URL. The recorder uses only public typed payloads;
+read-only TUI inspection methods supply the comparison side, without registry reads.
+
+The current registry emits resource `REMOVED` only as part of graph eviction; it
+has no individual membership-removal operation. A separate explicit public-payload
+sequence, published through the real broker, verifies individual removal cleans
+incoming/outgoing associations while preserving other members. The recorder is a
+small controlled-trace test consumer, not a second general ordering engine. The
+public contract still provides no total ordering for conflicting equal-time
+metadata and no replay/bootstrap for late subscribers.
+
 ## Runtime observations and queries
 
 - `ConnectionStateChanged` carries a process-monotonic connection ID, state and

@@ -59,4 +59,9 @@ class InteractiveYameApplication internal constructor(
 
     internal fun resourceGraphProjectionSnapshot(): Map<Long, Map<java.net.URI, DashboardHttpResource>> =
         observer.resourceGraphProjectionSnapshot()
+
+    internal fun resourceGraphMetadataSnapshot(): Map<Long, DashboardHttpGraphMetadata> =
+        observer.resourceGraphMetadataSnapshot()
+
+    internal fun httpHostProjectionSnapshot(): List<DashboardHttpHost> = observer.httpHostProjectionSnapshot()
 }

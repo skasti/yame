@@ -19,6 +19,7 @@ import no.skasti.yame.ppp.session.TransferState
 import no.skasti.yame.ppp.proxy.HttpProxyAction
 import no.skasti.yame.ppp.proxy.ResourceGraphLifecycleEvent
 import no.skasti.yame.ppp.proxy.ResourceLifecycleEvent
+import no.skasti.yame.ppp.proxy.ResourceEdgeSnapshot
 
 import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.config.SettingKey
@@ -442,6 +443,13 @@ class TuiYameObserver(
     internal fun resourceGraphProjectionSnapshot(): Map<Long, Map<URI, DashboardHttpResource>> =
         httpGraphs.graphSnapshot().mapValues { (_, graph) ->
             graph.resources.values.associate { it.resourceLegacyUri to it.dashboardResource() }
+        }
+
+    @Synchronized
+    internal fun resourceGraphMetadataSnapshot(): Map<Long, DashboardHttpGraphMetadata> =
+        httpGraphs.graphSnapshot().mapValues { (_, graph) ->
+            DashboardHttpGraphMetadata(graph.rootLegacyUri, graph.usageCount,
+                graph.lastUsedAt, graph.associations.toSet())
         }
 
     @Synchronized
@@ -1166,6 +1174,13 @@ internal data class DashboardHttpResource(
     val kind: ResourceKind = ResourceKind.OTHER,
     val prefetched: Boolean = false,
     val transformations: List<ResourceTransformationSummary> = emptyList(),
+)
+
+internal data class DashboardHttpGraphMetadata(
+    val rootUri: URI,
+    val usageCount: Long,
+    val lastUsedAt: Instant?,
+    val associations: Set<ResourceEdgeSnapshot>,
 )
 
 internal data class DashboardHttpHost(

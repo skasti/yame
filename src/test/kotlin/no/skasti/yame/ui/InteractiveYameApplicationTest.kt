@@ -12,6 +12,10 @@ import no.skasti.yame.recording.RecordingResourceView
 import java.net.URI
 import java.nio.file.Files
 import java.time.Duration
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneId
+import java.time.ZoneOffset
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.test.*
@@ -29,7 +33,11 @@ class InteractiveYameApplicationTest {
         assertEquals(BrokerWaitResult.COMPLETED, broker.awaitClosed(timeout))
         installation.close()
     }
-    private fun drain() = assertEquals(BrokerWaitResult.COMPLETED, broker.drain().await(timeout))
+    private fun drain() {
+        assertEquals(BrokerWaitResult.COMPLETED, broker.drain().await(timeout))
+        assertEquals(0L, broker.status.subscriberFailures, "subscriber failure: ${broker.status.lastSubscriberFailure}")
+        assertNull(broker.status.failure)
+    }
 
     private fun withApp(registry: NavigationResourceRegistry, test: (InteractiveYameApplication) -> Unit) {
         val directory = Files.createTempDirectory("yame-tui-events")
@@ -44,55 +52,212 @@ class InteractiveYameApplicationTest {
         } finally { directory.toFile().deleteRecursively() }
     }
 
-    @Test fun `early TUI and independent public-payload consumer reconstruct the injected registry observations`() {
-        val registry = NavigationResourceRegistry(maxContexts = 2)
+    @Test fun `early independent consumer matches complete TUI graph and host views from published events`() {
+        val clock = ControlledClock()
+        val registry = NavigationResourceRegistry(maxContexts = 2, clock = clock)
         val recorder = RecordingResourceView()
-        broker.subscribe("independent-view", handler = recorder::accept).use {
+        val published = mutableListOf<YameEvent>()
+        broker.subscribe("independent-view") { event -> published += event; recorder.accept(event) }.use {
             withApp(registry) { app ->
-                val root = URI("http://tui-events.test/page")
-                val image = URI("http://cdn.test/image.gif")
-                val upstream = URI("https://cdn.test/image.gif")
-                val graph = registry.startNavigation(root)
-                registry.discover(graph, root, image, upstream, ResourceRelation.IMG_SRC, ResourceKind.IMAGE)
-                registry.discover(graph, URI("http://tui-events.test/frame"), image, upstream,
+                val root = URI("http://alpha.test/page")
+                val image = URI("http://cdn.test/shared.gif")
+                val upstream = URI("https://cdn.test/shared.gif")
+                val first = registry.startNavigation(root)
+                clock.at(1)
+                registry.discover(first, root, image, upstream, ResourceRelation.IMG_SRC, ResourceKind.IMAGE)
+                clock.at(2)
+                registry.discover(first, root, image, upstream, ResourceRelation.IMG_SRC, ResourceKind.IMAGE)
+                clock.at(3)
+                registry.discover(first, URI("http://alpha.test/frame"), image, upstream,
                     ResourceRelation.CSS_URL, ResourceKind.IMAGE)
-                val attempt = requireNotNull(registry.beginFetch(graph, image, upstream, upstream, prefetched = true))
-                registry.recordTransformations(image, listOf(ResourceTransformationSummary("test", 100, 25)))
-                assertTrue(registry.markFetchState(graph, attempt, image, upstream, upstream, ResourceState.READY))
-                assertEquals(graph.id, registry.startNavigation(root).id)
-                val second = registry.startNavigation(URI("http://second.test/page"))
+                clock.at(4)
+                val attempt = requireNotNull(registry.beginFetch(first, image, upstream, upstream, prefetched = true))
+                clock.at(5)
+                registry.recordTransformations(image, listOf(ResourceTransformationSummary("first", 100, 25)))
+                clock.at(6)
+                assertTrue(registry.markFetchState(first, attempt, image, upstream, upstream, ResourceState.READY))
+                drain()
+                assertEquivalentViews(recorder, app)
+                assertEquals(4L, recorder.graphs.getValue(first.id).usageCount)
+                assertEquals(clock.time(3), recorder.graphs.getValue(first.id).lastUsedAt)
+                assertEquals(setOf(
+                    ResourceEdgeSnapshot(root, image, ResourceRelation.IMG_SRC),
+                    ResourceEdgeSnapshot(URI("http://alpha.test/frame"), image, ResourceRelation.CSS_URL),
+                ), recorder.graphs.getValue(first.id).associations)
+
+                // A pure reuse emits USED without resource changes: ignoring USED must fail this checkpoint.
+                val beforeReuse = published.size
+                clock.at(8)
+                assertEquals(first.id, registry.startNavigation(root).id)
+                drain()
+                assertEquals(listOf(ResourceGraphChange.USED), published.drop(beforeReuse)
+                    .filterIsInstance<ResourceGraphLifecycleEvent>().map { it.change })
+                assertEquals(5L, recorder.graphs.getValue(first.id).usageCount)
+                assertEquals(clock.time(8), recorder.graphs.getValue(first.id).lastUsedAt)
+                assertEquivalentViews(recorder, app)
+
+                clock.at(9)
+                val second = registry.startNavigation(URI("http://beta.test/page"))
+                clock.at(10)
                 registry.discover(second, second.rootLegacyUri, image, upstream, ResourceRelation.IMG_SRC, ResourceKind.IMAGE)
-                registry.recordTransformations(image, listOf(ResourceTransformationSummary("test", 100, 25)))
+                clock.at(11)
+                val extra = URI("http://cdn.test/extra.gif")
+                registry.discover(second, second.rootLegacyUri, extra, URI("https://cdn.test/extra.gif"),
+                    ResourceRelation.IMG_SRC, ResourceKind.IMAGE)
                 drain()
-                fun verify() {
-                    val projected = app.resourceGraphProjectionSnapshot()
-                    assertEquals(recorder.resources.keys, projected.keys)
-                    recorder.resources.forEach { (id, resources) ->
-                        val ui = projected.getValue(id)
-                        assertEquals(resources.values.map { it.resourceLegacyUri }.toSet(), ui.keys)
-                        resources.values.forEach { event ->
-                            val resource = ui.getValue(event.resourceLegacyUri)
-                            assertEquals(event.state, resource.state)
-                            assertEquals(event.kind, resource.kind)
-                            assertEquals(event.prefetched, resource.prefetched)
-                            assertEquals(event.transformations, resource.transformations)
-                        }
-                    }
-                }
-                verify()
-                assertEquals(2, recorder.associations.getValue(graph.id).size)
-                assertEquals(ResourceState.READY, recorder.resources.getValue(graph.id).getValue(image.toString()).state)
-                registry.startNavigation(URI("http://third.test/page")) // evicts graph, preserves second
+                assertEquivalentViews(recorder, app)
+                assertEquals(listOf("cdn.test", "beta.test", "alpha.test"), recorder.hosts().map { it.name })
+                assertEquals(8L, recorder.hosts().first().usageCount) // Each graph once, not each CDN member.
+                assertEquals(2, recorder.hosts().first().resources.size)
+
+                // Equal recency exercises usage as the second sort key. Alpha has more uses than beta.
+                assertEquals(first.id, registry.startNavigation(root).id)
+                clock.at(12)
+                val secondAttempt = requireNotNull(registry.beginFetch(second, image, upstream, upstream, prefetched = true))
+                clock.at(13)
+                registry.recordTransformations(image, listOf(ResourceTransformationSummary("shared", 100, 20)))
+                clock.at(14)
+                assertTrue(registry.markFetchState(second, secondAttempt, image, upstream, upstream, ResourceState.READY))
                 drain()
-                verify()
-                assertFalse(recorder.resources.containsKey(graph.id))
-                assertTrue(recorder.resources.containsKey(second.id))
+                assertEquivalentViews(recorder, app)
+                assertEquals(listOf("cdn.test", "alpha.test", "beta.test"), recorder.hosts().map { it.name })
+                assertEquals(listOf(9L, 6L, 3L), recorder.hosts().map { it.usageCount })
+                assertTrue(recorder.hosts().all { it.lastUsedAt == clock.time(11) })
+                assertEquals(ResourceState.READY, recorder.hosts().first().resources.getValue(image.toString()).state)
+                assertTrue(recorder.hosts().first().resources.getValue(image.toString()).prefetched)
+
+                val expectedUsage = recorder.graphs.mapValues { (_, graph) -> graph.usageCount to graph.lastUsedAt }
+                val expectedHosts = recorder.hosts()
+                // Redeliver real observations, including old CREATED/USED/resource payloads.
+                published.toList().forEach { YameEvents.publish(it) }
+                drain()
+                assertEquivalentViews(recorder, app)
+                assertEquals(expectedUsage, recorder.graphs.mapValues { (_, graph) -> graph.usageCount to graph.lastUsedAt })
+                assertEquals(expectedHosts, recorder.hosts())
+
+                clock.at(15)
+                val third = registry.startNavigation(URI("http://gamma.test/page"))
+                drain()
+                assertEquivalentViews(recorder, app)
+                assertEquals(setOf(second.id, third.id), recorder.graphs.keys)
+                assertEquals(listOf("gamma.test", "beta.test", "cdn.test"), recorder.hosts().map { it.name })
+                assertEquals(3L, recorder.hosts().single { it.name == "cdn.test" }.usageCount)
+
+                clock.at(16)
                 val recreated = registry.startNavigation(root)
                 drain()
-                verify()
-                assertNotEquals(graph.id, recreated.id)
+                assertEquivalentViews(recorder, app)
+                assertNotEquals(first.id, recreated.id)
+                assertEquals(setOf(third.id, recreated.id), recorder.graphs.keys)
+                assertEquals(URI("http://alpha.test/"), recorder.graphs.getValue(recreated.id).rootUri)
+                assertEquals(1L, recorder.graphs.getValue(recreated.id).usageCount)
+                assertEquals(clock.time(16), recorder.graphs.getValue(recreated.id).lastUsedAt)
+                assertEquals(listOf("alpha.test", "gamma.test"), recorder.hosts().map { it.name })
+                published.toList().forEach { YameEvents.publish(it) }
+                drain()
+                assertEquivalentViews(recorder, app)
+                assertEquals(setOf(third.id, recreated.id), recorder.graphs.keys)
+                assertEquals(listOf(1L, 1L), recorder.hosts().map { it.usageCount })
             }
         }
+    }
+
+    @Test fun `public resource removal cleans all incident associations without removing shared host survivors`() {
+        val recorder = RecordingResourceView()
+        broker.subscribe("independent-removal", handler = recorder::accept).use {
+            withApp(NavigationResourceRegistry()) { app ->
+                val clock = ControlledClock()
+                val root = URI("http://removal.test/")
+                val removed = URI("http://cdn.test/removed.gif")
+                val kept = URI("http://cdn.test/kept.gif")
+                val incoming = ResourceEdgeSnapshot(root, removed, ResourceRelation.IMG_SRC)
+                val otherParent = ResourceEdgeSnapshot(URI("http://removal.test/frame"), removed, ResourceRelation.IMG_SRC)
+                val outgoing = ResourceEdgeSnapshot(removed, kept, ResourceRelation.CSS_URL)
+                val surviving = ResourceEdgeSnapshot(root, kept, ResourceRelation.IMG_SRC)
+                fun resource(uri: URI, at: Long, edges: List<ResourceEdgeSnapshot>,
+                             change: ResourceLifecycleChange = ResourceLifecycleChange.DISCOVERED) =
+                    ResourceLifecycleEvent(change, 101, root, uri.toString(), uri, null,
+                        ReferenceRole.SUBRESOURCE, ResourceKind.IMAGE, null, ResourceState.DISCOVERED,
+                        false, null, null, edges, emptyList(), 4, clock.time(0), clock.time(at))
+                // Individual node eviction has no registry API today: exercise its public removal contract explicitly.
+                val created = ResourceGraphLifecycleEvent(ResourceGraphChange.CREATED, 101, root, clock.time(0), 1, clock.time(0))
+                val rootResource = resource(root, 1, listOf(incoming, surviving))
+                val removedResource = resource(removed, 2, listOf(incoming, otherParent, outgoing))
+                val keptResource = resource(kept, 3, listOf(outgoing, surviving))
+                listOf(created, rootResource, removedResource, keptResource).forEach { YameEvents.publish(it) }
+                drain()
+                assertEquivalentViews(recorder, app)
+                assertEquals(setOf(incoming, otherParent, outgoing, surviving), recorder.graphs.getValue(101).associations)
+                val deletion = resource(removed, 4, removedResource.associations, ResourceLifecycleChange.REMOVED)
+                listOf(deletion, deletion, removedResource, keptResource).forEach { YameEvents.publish(it) }
+                drain()
+                assertEquivalentViews(recorder, app)
+                assertEquals(setOf(root.toString(), kept.toString()), recorder.graphs.getValue(101).resources.keys)
+                assertEquals(setOf(surviving), recorder.graphs.getValue(101).associations)
+                assertEquals(4L, recorder.graphs.getValue(101).usageCount)
+                assertEquals(listOf("cdn.test", "removal.test"), recorder.hosts().map { it.name }) // Name breaks equal usage/time.
+                YameEvents.publish(ResourceGraphLifecycleEvent(ResourceGraphChange.REMOVED, 101, root,
+                    clock.time(5), 4, clock.time(0)))
+                YameEvents.publish(created)
+                YameEvents.publish(keptResource)
+                drain()
+                assertEquivalentViews(recorder, app)
+                assertTrue(recorder.graphs.isEmpty())
+                assertTrue(recorder.hosts().isEmpty())
+            }
+        }
+    }
+
+    private fun assertEquivalentViews(recorder: RecordingResourceView, app: InteractiveYameApplication) {
+        val resources = app.resourceGraphProjectionSnapshot()
+        val metadata = app.resourceGraphMetadataSnapshot()
+        assertEquals(recorder.graphs.keys, resources.keys)
+        assertEquals(recorder.graphs.keys, metadata.keys)
+        recorder.graphs.forEach { (id, graph) ->
+            val actual = metadata.getValue(id)
+            assertEquals(id, graph.id)
+            assertEquals(graph.rootUri, actual.rootUri)
+            assertEquals(graph.usageCount, actual.usageCount, "graph $id usage")
+            assertEquals(graph.lastUsedAt, actual.lastUsedAt, "graph $id recency")
+            assertEquals(graph.associations, actual.associations, "graph $id associations")
+            assertEquals(graph.resources.values.map { it.resourceLegacyUri }.toSet(), resources.getValue(id).keys)
+            graph.resources.forEach { (key, event) ->
+                assertEquals(key, event.canonicalResourceKey)
+                assertEquals(id, event.graphId)
+                assertEquals(graph.rootUri, event.rootLegacyUri)
+                assertResource(event, resources.getValue(id).getValue(event.resourceLegacyUri))
+            }
+        }
+        val expectedHosts = recorder.hosts()
+        val actualHosts = app.httpHostProjectionSnapshot()
+        assertEquals(expectedHosts.map { it.name }, actualHosts.map { it.host }, "authoritative host ordering")
+        expectedHosts.zip(actualHosts).forEach { (expected, actual) ->
+            assertEquals(expected.usageCount, actual.useCount, "host ${expected.name} usage")
+            assertEquals(expected.lastUsedAt, actual.lastUsedAt, "host ${expected.name} recency")
+            assertEquals(expected.resources.values.map { it.resourceLegacyUri.toString() }.toSet(),
+                actual.resources.map { it.url }.toSet(), "host ${expected.name} unique resources")
+            assertEquals(actual.resources.size, actual.resources.map { it.url }.distinct().size)
+            expected.resources.values.forEach { event ->
+                assertResource(event, actual.resources.single { it.url == event.resourceLegacyUri.toString() })
+            }
+        }
+    }
+
+    private fun assertResource(expected: ResourceLifecycleEvent, actual: DashboardHttpResource) {
+        assertEquals(expected.resourceLegacyUri.toString(), actual.url)
+        assertEquals(expected.state, actual.state)
+        assertEquals(expected.kind, actual.kind)
+        assertEquals(expected.prefetched, actual.prefetched)
+        assertEquals(expected.transformations, actual.transformations)
+    }
+
+    private class ControlledClock : Clock() {
+        private var current = time(0)
+        fun time(seconds: Long): Instant = Instant.parse("2026-10-26T06:00:00Z").plusSeconds(seconds)
+        fun at(seconds: Long) { current = time(seconds) }
+        override fun instant(): Instant = current
+        override fun getZone(): ZoneId = ZoneOffset.UTC
+        override fun withZone(zone: ZoneId): Clock = this
     }
 
     @Test fun `intentionally late TUI receives no snapshot bootstrap`() {
