@@ -580,6 +580,65 @@ downloaded data files are removed after verification.
 This exercises serial I/O through the OS and an independent DOS TCP/PPP stack;
 it does not validate physical UARTs, USB adapters, cables or hardware RTS/CTS.
 
+To inject repeatable failures into that serial byte stream, run:
+
+```shell
+bash scripts/dosbox-network-integration-test.sh serial-faults
+# The same optional original-file arguments are supported:
+bash scripts/dosbox-network-integration-test.sh serial-faults /path/to/WINZIP95.EXE /path/to/wz32v800.exe
+```
+
+Both binary modes insert `scripts/serial_fault_relay.py` between socat (TCP
+port 50453) and DOSBox (port 50454). The baseline forwards bytes unchanged. In
+`serial-faults` mode the relay inspects PPP/IPv4/TCP headers to select faults,
+but modifies the original encoded serial bytes without repairing checksums.
+Hayes commands and PPP negotiation pass through unchanged. This drops bytes
+from the transported serial stream, not packets from its outer TCP transport
+(which would otherwise repair the loss before DOSBox saw it).
+
+Each of the three downloads receives this one-shot fault schedule. Offsets are
+relative to the start of the server's TCP response, including HTTP headers:
+
+| Direction | Response offset | Fault |
+| --- | ---: | --- |
+| YAME to DOSBox | 32,768 | Delete one wire byte |
+| YAME to DOSBox | 98,304 | Delete up to three wire bytes |
+| YAME to DOSBox | 163,840 | Flip one bit |
+| YAME to DOSBox | 229,376 | Drop a data frame |
+| YAME to DOSBox | 294,912 | Pause forwarding for two seconds |
+| YAME to DOSBox | 393,216 | Delete up to 64 wire bytes from a data frame |
+| DOSBox to YAME | ACK at/after 65,536 | Delete three wire bytes |
+| DOSBox to YAME | ACK at/after 131,072 | Flip one bit |
+| DOSBox to YAME | ACK at/after 196,608 | Drop an ACK frame |
+| DOSBox to YAME | ACK at/after 327,680 | Pause forwarding for two seconds |
+
+The fixed byte thresholds are independent of socket read boundaries. ACK
+batching, segmentation and timing can still change the exact frame selected;
+the report records the observed TCP sequence/ACK, wire position and mutation.
+Retransmissions are forwarded normally after the one-shot fault. Pauses apply
+backpressure in one direction while the reverse direction continues. Burst
+deletion models the effect of losing serial bytes; it does not emulate a
+specific UART buffer, RTS/CTS wiring or adapter driver.
+
+This is a required CI test: all three saved files must match, every planned
+fault must fire exactly once, YAME must report damaged incoming PPP frames,
+and retransmission must be observed for each damaged downstream TCP range.
+When YAME retransmits an outstanding TCP segment, it temporarily stops sending
+new stream data until the entire pre-retransmission window is acknowledged.
+This lets clients that discard out-of-order segments catch up instead of
+continually receiving new data beyond their first missing byte. Retransmission
+and peer window updates continue during this recovery interval.
+An abort or timeout fails the test too; it is not treated as successful
+integrity recovery. Custom input files must be large enough to reach every
+fault threshold. Reports under `build/reports/dosbox-network/serial-faults/`
+include `serial-faults.json`, logs and the ordinary file integrity results.
+The DOS batch records each client's return status so the integrity report
+distinguishes client success with corrupt content, reported failure, and an
+incomplete transfer. Fault injection has a fifteen-minute transfer deadline,
+allowing for the deliberately triggered retransmission timeouts; the baseline
+retains its ten-minute deadline. These tests investigate serial recovery; they do not
+identify the cause of any particular real-machine corruption by themselves.
+
 CI caches the test-only LSppp and mTCP archives outside the suite's temporary
 working directory. Every use checks the pinned SHA-1 digest, including cache
 hits; missing or invalid archives are downloaded again with bounded retries

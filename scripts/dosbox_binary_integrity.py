@@ -50,7 +50,12 @@ def verify(directory, received_directory):
         received_path = received_directory / received_name
         actual = received_path.read_bytes() if received_path.is_file() else None
         matches = actual == expected
+        status_path = received_path.with_suffix(".OK")
+        client_result = status_path.read_text().strip() if status_path.exists() else "NOT_RECORDED"
+        outcome = ("intact" if matches else "client-success-with-corruption" if client_result == "OK"
+                   else "client-reported-failure" if client_result == "FAIL" else "incomplete")
         result = {"case": case, "received_file": received_name, "ok": matches,
+                  "client_result": client_result, "outcome": outcome,
                   "expected_bytes": len(expected),
                   "expected_sha256": hashlib.sha256(expected).hexdigest(),
                   "actual_bytes": len(actual) if actual is not None else None,

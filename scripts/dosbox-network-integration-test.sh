@@ -6,6 +6,7 @@ WORK_DIR="$(mktemp -d)"
 DOS_DRIVE="$WORK_DIR/dos"
 PTY_LINK="$WORK_DIR/yame-tty"
 SOCAT_LOG="$WORK_DIR/socat.log"
+RELAY_LOG="$WORK_DIR/serial-relay.log"
 YAME_LOG="$WORK_DIR/yame.log"
 DOSBOX_LOG="$WORK_DIR/dosbox.log"
 DNS_FIXTURE_LOG="$WORK_DIR/dns-fixture.log"
@@ -17,11 +18,22 @@ LS_PPP_ZIP="$DOWNLOAD_DIR/lsppp.zip"
 MTCP_ZIP="$DOWNLOAD_DIR/mtcp.zip"
 DEPENDENCIES_READY=false
 PORT=50453
+DOSBOX_PORT=$PORT
+BINARY_MODE=false
+FAULT_PROFILE=none
 HTTP_PORT=18080
 MODE="${1:-integration}"
-if [[ ( "$MODE" != "integration" && "$MODE" != "external-smoke" && "$MODE" != "binary-integrity" ) ||
-      ( $# -gt 1 && ( "$MODE" != "binary-integrity" || $# -ne 3 ) ) ]]; then
-    echo "Usage: $0 [integration|external-smoke|binary-integrity [SMALL_FILE LARGE_FILE]]" >&2
+case "$MODE" in
+    binary-integrity|serial-faults)
+        BINARY_MODE=true
+        DOSBOX_PORT=50454
+        [[ "$MODE" == "serial-faults" ]] && FAULT_PROFILE=serial-faults
+        ;;
+    integration|external-smoke) ;;
+    *) echo "Unknown mode: $MODE" >&2; exit 2 ;;
+esac
+if [[ $# -gt 1 && ( "$BINARY_MODE" != true || $# -ne 3 ) ]]; then
+    echo "Usage: $0 [integration|external-smoke|binary-integrity|serial-faults [SMALL_FILE LARGE_FILE]]" >&2
     exit 2
 fi
 BAUD=19200
@@ -29,12 +41,16 @@ TEST_TIMEOUT=75
 BINARY_FIXTURE_DIR="$WORK_DIR/binary-sources"
 REPORT_DIR="$ROOT/build/reports/dosbox-network/$MODE"
 
-if [[ "$MODE" == "binary-integrity" ]]; then
+if [[ "$BINARY_MODE" == true ]]; then
     RESULT_FILE="$DOS_DRIVE/BINARY.OK"
     DOS_BATCH_ARGS="binary"
     EXTERNAL_HTTP_SMOKE=0
     BAUD=115200
     TEST_TIMEOUT=600
+    # Thirty deliberate faults add multiple serial retransmission timeouts.
+    if [[ "$MODE" == "serial-faults" ]]; then
+        TEST_TIMEOUT=900
+    fi
 elif [[ "$MODE" == "external-smoke" ]]; then
     RESULT_FILE="$DOS_DRIVE/SMOKE.OK"
     DOS_BATCH_ARGS="smoke"
@@ -49,6 +65,7 @@ DNS_FIXTURE_PID=""
 HTTP_FIXTURE_PID=""
 HTTP_COMPAT_PID=""
 SOCAT_PID=""
+RELAY_PID=""
 YAME_PID=""
 DOSBOX_PID=""
 ORIGINAL_UNPRIVILEGED_PORT_START=""
@@ -56,7 +73,7 @@ ORIGINAL_UNPRIVILEGED_PORT_START=""
 cleanup() {
     local status=$?
 
-    for pid in "$DOSBOX_PID" "$YAME_PID" "$SOCAT_PID" "$HTTP_COMPAT_PID" "$HTTP_FIXTURE_PID" "$DNS_FIXTURE_PID"; do
+    for pid in "$DOSBOX_PID" "$YAME_PID" "$SOCAT_PID" "$RELAY_PID" "$HTTP_COMPAT_PID" "$HTTP_FIXTURE_PID" "$DNS_FIXTURE_PID"; do
         if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
             kill "$pid" 2>/dev/null || true
         fi
@@ -68,9 +85,9 @@ cleanup() {
             >/dev/null || true
     fi
 
-    if [[ "$MODE" == "binary-integrity" && "$DEPENDENCIES_READY" == true ]]; then
+    if [[ "$BINARY_MODE" == true && "$DEPENDENCIES_READY" == true ]]; then
         mkdir -p "$REPORT_DIR"
-        for log in "$YAME_LOG" "$DOSBOX_LOG" "$SOCAT_LOG" "$DNS_FIXTURE_LOG" "$HTTP_FIXTURE_LOG" "$HTTP_COMPAT_LOG"; do
+        for log in "$YAME_LOG" "$DOSBOX_LOG" "$SOCAT_LOG" "$DNS_FIXTURE_LOG" "$HTTP_FIXTURE_LOG" "$HTTP_COMPAT_LOG" "$RELAY_LOG"; do
             if [[ -f "$log" ]]; then
                 cp "$log" "$REPORT_DIR/" || true
             fi
@@ -148,9 +165,9 @@ if ! bash "$ROOT/scripts/dosbox-network-downloads.sh" "$DOWNLOAD_DIR"; then
     exit 2
 fi
 DEPENDENCIES_READY=true
-if [[ "$MODE" == "binary-integrity" ]]; then
+if [[ "$BINARY_MODE" == true ]]; then
     mkdir -p "$REPORT_DIR"
-    rm -f "$REPORT_DIR/integrity.json"
+    rm -f "$REPORT_DIR/integrity.json" "$REPORT_DIR/serial-faults.json"
     python3 "$ROOT/scripts/dosbox_binary_integrity.py" prepare "$BINARY_FIXTURE_DIR" "${@:2}"
 fi
 
@@ -186,7 +203,7 @@ extract_executable "$MTCP_ZIP" "HTGET.EXE" "$DOS_DRIVE/HTGET.EXE"
 "$ROOT/gradlew" --no-daemon installDist >/dev/null
 YAME="$ROOT/build/install/yame/bin/yame"
 
-if [[ "$MODE" == "binary-integrity" ]]; then
+if [[ "$BINARY_MODE" == true ]]; then
     # YAME opens the fixture socket on the host; the DOS peer reaches it via PPP.
     # No external route/address discovery is needed for the isolated binary test.
     HOST_ADDRESS=127.0.0.1
@@ -217,7 +234,7 @@ fullscreen=false
 nosound=true
 
 [serial]
-serial2=nullmodem server:127.0.0.1 port:$PORT transparent:1
+serial2=nullmodem server:127.0.0.1 port:$DOSBOX_PORT transparent:1
 
 [autoexec]
 @echo off
@@ -228,7 +245,7 @@ EOF
 
 # Permit the unprivileged fixture process to bind the standard DNS port.
 current_unprivileged_port_start="$(sysctl -n net.ipv4.ip_unprivileged_port_start)"
-if [[ "$MODE" != "binary-integrity" && "$current_unprivileged_port_start" -gt 53 ]]; then
+if [[ "$BINARY_MODE" != true && "$current_unprivileged_port_start" -gt 53 ]]; then
     ORIGINAL_UNPRIVILEGED_PORT_START="$current_unprivileged_port_start"
     sudo sysctl -w net.ipv4.ip_unprivileged_port_start=53 >/dev/null
 fi
@@ -257,7 +274,7 @@ fi
 
 # Binary mode uses mTCP's HTTP_PROXY to reach YAME's intercepted port 80
 # with an absolute upstream URL on 18080, so it needs no privileged host ports.
-if [[ "$MODE" != "binary-integrity" ]]; then
+if [[ "$BINARY_MODE" != true ]]; then
     # Exercise the port-80 compatibility proxy against the same local fixture.
     socat TCP-LISTEN:80,bind="$HOST_ADDRESS",reuseaddr,fork TCP:127.0.0.1:"$HTTP_PORT" >"$HTTP_COMPAT_LOG" 2>&1 &
     HTTP_COMPAT_PID=$!
@@ -302,6 +319,25 @@ done
 if [[ ! -e "$PTY_LINK" ]]; then
     echo "socat did not create the pseudo-terminal" >&2
     exit 1
+fi
+
+if [[ "$BINARY_MODE" == true ]]; then
+    python3 "$ROOT/scripts/serial_fault_relay.py" \
+        --listen "$DOSBOX_PORT" --upstream "$PORT" --profile "$FAULT_PROFILE" \
+        --report "$REPORT_DIR/serial-faults.json" >"$RELAY_LOG" 2>&1 &
+    RELAY_PID=$!
+    for _ in $(seq 1 100); do
+        grep -Fq "Serial fault relay listening" "$RELAY_LOG" && break
+        if ! kill -0 "$RELAY_PID" 2>/dev/null; then
+            cat "$RELAY_LOG" >&2
+            exit 1
+        fi
+        sleep 0.05
+    done
+    if ! grep -Fq "Serial fault relay listening" "$RELAY_LOG"; then
+        echo "Serial fault relay did not become ready" >&2
+        exit 1
+    fi
 fi
 
 SERIAL_PORT="$(readlink -f "$PTY_LINK")"
@@ -371,6 +407,12 @@ while [[ $SECONDS -lt $deadline ]]; do
         exit 1
     fi
 
+    if [[ -n "$RELAY_PID" ]] && ! kill -0 "$RELAY_PID" 2>/dev/null; then
+        echo "Serial fault relay exited before the binary suite completed" >&2
+        cat "$RELAY_LOG" >&2
+        exit 1
+    fi
+
     if [[ -n "$DNS_FIXTURE_PID" ]] && ! kill -0 "$DNS_FIXTURE_PID" 2>/dev/null; then
         wait "$DNS_FIXTURE_PID" || true
         DNS_FIXTURE_PID=""
@@ -408,7 +450,7 @@ if [[ ! -f "$RESULT_FILE" ]] ||
     exit 1
 fi
 
-if [[ "$MODE" == "binary-integrity" ]]; then
+if [[ "$BINARY_MODE" == true ]]; then
     python3 "$ROOT/scripts/dosbox_binary_integrity.py" verify \
         "$BINARY_FIXTURE_DIR" "$DOS_DRIVE" --report "$REPORT_DIR/integrity.json"
     for expected in \
@@ -422,6 +464,14 @@ if [[ "$MODE" == "binary-integrity" ]]; then
             exit 1
         fi
     done
+    if [[ "$MODE" == "serial-faults" ]]; then
+        python3 "$ROOT/scripts/serial_fault_relay.py" --verify \
+            --report "$REPORT_DIR/serial-faults.json"
+        if ! grep -Fq "PPP !! invalid frame" "$YAME_LOG"; then
+            echo "YAME did not report a damaged incoming PPP frame" >&2
+            exit 1
+        fi
+    fi
     echo "DOSBox serial binary integrity passed: actual DOS files match all source bytes and SHA-256 digests"
     exit 0
 fi

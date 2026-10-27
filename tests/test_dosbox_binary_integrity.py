@@ -65,6 +65,16 @@ class BinaryIntegrityTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertFalse(json.loads(report.read_text())[2]["ok"])
 
+    def test_client_success_with_corruption_is_distinct_from_failed_or_incomplete_transfer(self):
+        (self.received / "BINA.OUT").write_bytes(b"wrong")
+        status = self.received / "BINA.OK"
+        for marker, outcome in (("OK", "client-success-with-corruption"),
+                                ("FAIL", "client-reported-failure"), ("RUNNING", "incomplete")):
+            status.write_text(marker + "\r\n")
+            result = FIXTURE.verify(self.sources, self.received)[0]
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["outcome"], outcome)
+
     def test_user_supplied_sources_are_copied_verbatim_outside_dos_drive(self):
         inputs = [self.root / "first file.exe", self.root / "second file.exe"]
         for index, path in enumerate(inputs):

@@ -274,6 +274,49 @@ class TcpFlowTableTest {
     }
 
     @Test
+    fun `timeout recovery drains the outstanding window before sending new data`() {
+        // DOS clients can discard all data after a gap. Refilling each small
+        // newly ACKed slice perpetuates that gap and forces every later byte
+        // through the retransmission timer, even after a single lost frame.
+        for (initial in listOf(5000u, UInt.MAX_VALUE - 3u)) {
+            var now = 0L
+            val table = TcpFlowTable(initialSequenceNumber = { initial }, nanoTime = { now })
+            table.receive(key, peerPacket(sequence = 1000u, flags = TcpPacket.SYN))
+            fun acknowledge(offset: UInt, window: Int = 8) {
+                table.receive(key, peerPacket(sequence = 1001u,
+                    acknowledgment = initial + 1u + offset,
+                    flags = TcpPacket.ACK, windowSize = window))
+            }
+            acknowledge(0u)
+            val segments = List(2) { index ->
+                requireNotNull(table.send(key, ByteArray(4) { index.toByte() }))
+                    .also { table.markSent(key, it) }
+            }
+            assertEquals(0, table.snapshot(key)?.availableSendWindow)
+            assertNull(table.retransmissionDue(key, 1000))
+            now = 1_000_000_000L
+            val retry = requireNotNull(table.retransmissionDue(key, 1000))
+            assertEquals(segments[0].sequenceNumber, retry.sequenceNumber)
+            table.markSent(key, retry)
+            acknowledge(4u)
+            assertEquals(0, table.snapshot(key)?.availableSendWindow)
+            assertNull(table.send(key, byteArrayOf(9)))
+            acknowledge(4u, window = 8192) // Duplicate ACK/window update cannot end recovery.
+            assertNull(table.send(key, byteArrayOf(9)))
+            val nextRetry = requireNotNull(table.retransmissionDue(key, 1000))
+            assertEquals(segments[1].sequenceNumber, nextRetry.sequenceNumber)
+            table.markSent(key, nextRetry)
+            acknowledge(6u) // Partial ACK of the second segment still leaves a gap.
+            assertNull(table.send(key, byteArrayOf(9)))
+            acknowledge(8u, window = 0)
+            assertNull(table.send(key, byteArrayOf(9)))
+            acknowledge(8u)
+            assertEquals(8, table.snapshot(key)?.availableSendWindow)
+            assertEquals(initial + 9u, requireNotNull(table.send(key, byteArrayOf(9))).sequenceNumber)
+        }
+    }
+
+    @Test
     fun `local receive window can shrink and reopen without advancing peer sequence`() {
         val table = table()
         establish(table)

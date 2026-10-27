@@ -13,6 +13,9 @@ del BINARY.OK >NUL 2>NUL
 del BINA.OUT >NUL 2>NUL
 del BINB.OUT >NUL 2>NUL
 del BINRAW.OUT >NUL 2>NUL
+del BINA.OK >NUL 2>NUL
+del BINB.OK >NUL 2>NUL
+del BINRAW.OK >NUL 2>NUL
 set TESTBAUD=%3
 if "%TESTBAUD%"=="" set TESTBAUD=19200
 
@@ -77,22 +80,32 @@ rem Connect to YAME's intercepted port 80 but fetch the local upstream on 18080.
 rem This needs no privileged host listener, DNS fixture or system-wide sysctl.
 set HTTP_PROXY=%1:80
 echo Fetching small binary through HTTP compatibility...
+set BINRESULT=BINA.OK
+echo RUNNING>%BINRESULT%
 HTGET.EXE -quiet -o BINA.OUT http://%1:18080/binary-small.bin
 if errorlevel 22 goto binary_failed
 if not errorlevel 21 goto binary_failed
+echo OK>%BINRESULT%
 echo Fetching large binary through HTTP compatibility...
+set BINRESULT=BINB.OK
+echo RUNNING>%BINRESULT%
 HTGET.EXE -quiet -o BINB.OUT http://%1:18080/binary-large.bin
 if errorlevel 22 goto binary_failed
 if not errorlevel 21 goto binary_failed
+echo OK>%BINRESULT%
 echo Fetching large binary through the raw TCP proxy...
 set HTTP_PROXY=
+set BINRESULT=BINRAW.OK
+echo RUNNING>%BINRESULT%
 HTGET.EXE -quiet -o BINRAW.OUT http://%1:18080/binary-large.bin
 if errorlevel 22 goto binary_failed
 if not errorlevel 21 goto binary_failed
+echo OK>%BINRESULT%
 echo OK>BINARY.OK
 goto done
 
 :binary_failed
+if not "%BINRESULT%"=="" echo FAIL>%BINRESULT%
 echo FAIL>BINARY.OK
 goto done
 
