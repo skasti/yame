@@ -31,7 +31,7 @@ internal fun ResourceRepresentation.supportsImageContentType(
 private fun ResourceRepresentation.firstImageHeader(name: String): String? =
     headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value?.firstOrNull()
 
-internal fun ResourceTransformationState.withOptimizedImage(
+internal fun ResourceTransformationState.withImageOutput(
     context: ResourceTransformationContext,
     transformerId: String,
     sourceDimensions: ImageDimensions,

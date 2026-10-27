@@ -26,6 +26,7 @@ import no.skasti.yame.ppp.proxy.transform.sourceFingerprint
 import no.skasti.yame.ppp.proxy.transform.ResourceTransformationContext
 import no.skasti.yame.ppp.proxy.transform.ResourceTransformationPipeline
 import no.skasti.yame.ppp.proxy.transform.defaultResourceTransformationPipeline
+import no.skasti.yame.ppp.proxy.transform.PngCompatibilityMode
 import no.skasti.yame.ppp.proxy.transform.ResourceTransformationSettings
 import no.skasti.yame.ppp.tcp.TcpProxyFlow
 import java.io.ByteArrayOutputStream
@@ -518,7 +519,8 @@ internal class SystemHttpCompatibilityHandler(
             val responseType = firstHeader(legacyHeaders, "content-type")
                 ?.substringBefore(';')?.trim()?.lowercase(Locale.ROOT)
             if (transformerSettings != null &&
-                (preparedResource.transformed != null || responseType in DYNAMIC_TRANSFORM_CONTENT_TYPES)) {
+                (preparedResource.transformed != null ||
+                    (responseType != null && responseType in DYNAMIC_TRANSFORM_CONTENT_TYPES))) {
                 // Re-fetch transformable resources after live setting changes; keep source validators intact.
                 legacyHeaders = legacyHeaders.filterKeys {
                     it.lowercase(Locale.ROOT) !in setOf("cache-control", "expires")
@@ -645,7 +647,15 @@ internal class SystemHttpCompatibilityHandler(
                     body = body,
                 ),
             )
-        if (statusCode == 206) return source
+        if (statusCode == 206) {
+            val contentType = headers.entries.firstOrNull { it.key.equals("content-type", ignoreCase = true) }
+                ?.value?.firstOrNull()?.substringBefore(';')?.trim()
+            if (contentType.equals("image/png", ignoreCase = true) &&
+                transformationSettings.pngCompatibilityMode == PngCompatibilityMode.REQUIRE_LEGACY_FORMAT) {
+                logger("PNG legacy-format conversion skipped for $upstreamUri: partial 206 responses are not transformed")
+            }
+            return source
+        }
 
         val context =
             ResourceTransformationContext(
