@@ -38,10 +38,13 @@ internal class ApplicationEventLifecycle(
     private val completed = CountDownLatch(1)
     private val supervisor = Thread({
         while (completed.count != 0L) {
-            val failure = broker.awaitFatal(Duration.ofMillis(100))
+            val brokerFailure = broker.awaitFatal(Duration.ofMillis(100))
+            val failure = brokerFailure
+                ?: consumers.filterIsInstance<FatalFailureSource>().firstNotNullOfOrNull { it.fatalFailure }
             if (failure != null) {
                 failed.set(true)
-                finish("YAME fatal event broker failure: $failure")
+                finish(if (brokerFailure != null) "YAME fatal event broker failure: $failure"
+                    else "YAME fatal presentation failure: $failure")
                 return@Thread
             }
             if (broker.status.terminated) return@Thread

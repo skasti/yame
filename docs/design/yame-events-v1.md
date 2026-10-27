@@ -1,13 +1,12 @@
 # YameEvents v1 design
 
 This document describes the decided v1 design for
-[#92](https://github.com/skasti/yame/issues/92). **Implementation status: partial.**
+[#92](https://github.com/skasti/yame/issues/92). **Implementation status: implemented.**
 The broker infrastructure is implemented in [#106](https://github.com/skasti/yame/pull/106),
 and the proxy resource event contract and producer are implemented in #100.
 Runtime observations, early consumer registration, fatal supervision and shutdown
 integration are implemented in #102. The incremental proxy dashboard projection
-and hook removal are implemented in #103. A dedicated TUI worker (#101) remains
-a separate follow-up. Decided design does not imply implemented behavior: the
+and hook removal are implemented in #103. A dedicated bounded TUI worker and independent fatal supervision are implemented in #101. Decided design does not imply implemented behavior: the
 [current broker architecture](../yame-events.md) documents verified code.
 
 Decision rationale, alternatives and consequences belong in
@@ -119,10 +118,8 @@ One worker takes accepted events in FIFO order and blocks on a condition/queue
 while idle. For each event it snapshots eligible registrations in registration
 order, releases broker synchronization, evaluates their filters and calls matching
 handlers sequentially. Reentrant publication appends through ordinary admission;
-it never dispatches recursively. Filters and handlers should return quickly. As an explicitly accepted interim
-exception, the TUI may render synchronously until #101; this delays dispatch and
-can eventually trigger fatal queue saturation, without directly invoking the TUI
-on serial/PPP/proxy producer threads.
+it never dispatches recursively. Filters and handlers should return quickly. The TUI subscriber hands off to its own bounded FIFO worker; admission waits at
+most 50 ms, then saturation is independently fatal. Rendering holds no admission lock.
 Subscribers that publish new observations must guard against direct or indirect
 feedback loops, including A → B → A chains. Publish only meaningful state changes,
 with deduplication or state-change detection where needed. A full queue cannot be
@@ -220,8 +217,7 @@ The tone-test path and plain mode use the same policy where applicable.
 
 This deliberately preserves existing synchronous module-log I/O before broker
 admission. `publish` performs no I/O. Module files are never written by broker subscribers.
-The interim TUI subscriber may render synchronously on the broker worker; #101
-will move this work to a dedicated worker. This design does not claim to remove
+The TUI subscriber admits work to its dedicated bounded worker. This design does not claim to remove
 existing file-system latency from all producer code. Packet
 capture I/O already runs on the recorder's bounded executor. The recorder may
 already reject captures at its own limits; the broker must not add a new source
@@ -255,8 +251,8 @@ rejected after it; closed/faulted publication never starts a new worker.
 An explicit `awaitClosed(timeout)` may be used outside the worker. It returns
 `TimedOut` honestly if a callback is still blocked; calls from the worker return
 a would-deadlock result immediately. No forced interruption or guaranteed
-termination of arbitrary user handlers is promised. The interim TUI consumer may render synchronously. It can delay dispatcher
-completion and eventually cause fatal saturation; #101 will isolate TUI work.
+termination of arbitrary user handlers is promised. The TUI consumer hands off before broker completion. Normal application shutdown
+then drains accepted TUI work before terminal teardown.
 Tests release intentionally blocked handlers in cleanup.
 
 Normal application shutdown follows this order:
@@ -295,7 +291,7 @@ current runtime and consumer boundaries are documented in [yame-events.md](../ya
 | [#99: registry lifetime](https://github.com/skasti/yame/issues/99) | None | Runtime-level serial/handler replacement retains graph identity and LRU limits; stale fetch attempts remain fenced. Define limit changes without session-teardown eviction. |
 | [#100: proxy event contract and publication](https://github.com/skasti/yame/issues/100) | #97, #98, #99 | Immutable event snapshots and occurrence time; sufficient graph/resource/fetch correlation, including eviction and legitimate refetch; no producer-imposed root-first or cross-producer ordering. Publication occurs outside registry locks; the old outbound hooks were removed in #103. |
 | [#101: TUI processing boundary](https://github.com/skasti/yame/issues/101) | #97 | Blocking terminal/render work cannot hold up admission; bounded local backlog, independent fatal escalation on overflow, consistent observation order, drain and close behavior. Uses the existing event observation path. |
-| [#102: runtime composition and migration](https://github.com/skasti/yame/issues/102) | #97, #98; #101 is independent | Implemented: early Plain/TUI consumers, typed port query and automatic change events, independent single-write diagnostics/captures, session correlation and bounded shutdown/fatal supervision. Interim TUI rendering runs on the broker worker and may saturate the queue; no broker-worker module-file writes. |
+| [#102: runtime composition and migration](https://github.com/skasti/yame/issues/102) | #97, #98; #101 is independent | Implemented: early Plain/TUI consumers, typed port query and automatic change events, independent single-write diagnostics/captures, session correlation and bounded shutdown/fatal supervision. TUI rendering runs on a dedicated bounded worker; no broker-worker module-file writes. |
 | [#103: proxy dashboard migration and hook removal](https://github.com/skasti/yame/issues/103) | #99, #100, #102 | Existing hosts/unique URLs/states/transforms/sort/selection/expansion remain correct; reconnect and eviction work; no outbound registry hook plumbing remains; an independent early consumer reconstructs an equivalent view. |
 
 Use latches, barriers, controllable executors and explicit drain boundaries, with

@@ -10,6 +10,33 @@ import java.util.concurrent.TimeUnit
 import kotlin.test.*
 
 class ApplicationEventLifecycleTest {
+    @Test fun `caught TUI admission failure is supervised independently of blocked TUI worker`() {
+        val broker = EventBroker()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val exits = LinkedBlockingQueue<Int>()
+        val queue = no.skasti.yame.ui.TuiWorkQueue(capacity = 1, admissionWait = Duration.ZERO)
+        val owner = ApplicationEventLifecycle(broker, timeout = Duration.ofMillis(200),
+            sealFacade = {}, report = {}, terminate = { exits.offer(it) })
+        owner.consumer(queue)
+        broker.subscribe("tui") { queue.submit {} }
+        try {
+            queue.submit { entered.countDown(); release.await() }
+            assertTrue(entered.await(2, TimeUnit.SECONDS))
+            queue.submit {}
+            broker.publish(DiagnosticMessage("overflow"))
+            assertEquals(1, exits.poll(2, TimeUnit.SECONDS))
+            assertNotNull(queue.fatalFailure)
+            assertNull(broker.status.failure)
+            assertEquals(1, broker.status.subscriberFailures)
+        } finally {
+            release.countDown()
+            runCatching { queue.close() }
+            broker.close()
+            broker.awaitClosed(Duration.ofSeconds(2))
+        }
+    }
+
     @Test fun `concurrent shutdown closes each owner once and rejects newly created components safely`() {
         val broker = EventBroker()
         val entered = CountDownLatch(1)

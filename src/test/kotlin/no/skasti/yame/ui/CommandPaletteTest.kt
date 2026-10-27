@@ -80,25 +80,25 @@ class CommandPaletteTest {
             observer(configStore = store).use { observer ->
                 observer.type("/transformers")
                 assertEquals(listOf("/transformers"), observer.paletteSnapshot()?.options?.map { it.value })
-                observer.handleKey("Enter")
+                observer.handleKeyAndAwait("Enter")
                 assertEquals("/transformers", observer.paletteSnapshot()?.palettePath)
                 observer.type("style-remover")
-                observer.handleKey("Enter")
+                observer.handleKeyAndAwait("Enter")
                 assertEquals("/transformers/style-remover", observer.paletteSnapshot()?.palettePath)
-                observer.handleKey("Escape")
+                observer.handleKeyAndAwait("Escape")
                 assertEquals("/transformers", observer.paletteSnapshot()?.palettePath)
                 observer.type("/style-remover off")
-                observer.handleKey("Enter")
+                observer.handleKeyAndAwait("Enter")
                 assertFalse(store[no.skasti.yame.ppp.proxy.transform.TransformerSettings.Style])
                 assertNull(observer.paletteSnapshot())
                 observer.type("/transformers/style-remover/on")
-                observer.handleKey("Enter")
+                observer.handleKeyAndAwait("Enter")
                 assertTrue(store[no.skasti.yame.ppp.proxy.transform.TransformerSettings.Style])
                 observer.type("/transformers")
-                observer.handleKey("Enter")
-                observer.handleKey("Backspace")
+                observer.handleKeyAndAwait("Enter")
+                observer.handleKeyAndAwait("Backspace")
                 assertEquals("/", observer.paletteSnapshot()?.palettePath)
-                observer.handleKey("Escape")
+                observer.handleKeyAndAwait("Escape")
                 assertNull(observer.paletteSnapshot())
             }
         }
@@ -111,15 +111,15 @@ class CommandPaletteTest {
             var login: Pair<String, String>? = null
             observer(onTone = { tone = it }, onLogin = { user, password -> login = user to password }).use { observer ->
                 observer.type("/tone off")
-                observer.handleKey("Enter")
+                observer.handleKeyAndAwait("Enter")
                 assertEquals(false, tone)
                 observer.type("/baud")
-                observer.handleKey("Enter")
+                observer.handleKeyAndAwait("Enter")
                 assertEquals(TuiPaletteMode.BAUD, observer.paletteSnapshot()?.mode)
-                observer.handleKey("Escape")
+                observer.handleKeyAndAwait("Escape")
                 observer.type("/login user:secret")
                 assertEquals(TuiPaletteMode.LOGIN, observer.paletteSnapshot()?.mode)
-                observer.handleKey("Enter")
+                observer.handleKeyAndAwait("Enter")
                 assertEquals("user" to "secret", login)
             }
         }
@@ -140,5 +140,5 @@ class CommandPaletteTest {
         )
     }
 
-    private fun TuiYameObserver.type(text: String) { text.forEach { handleKey(it.toString()) } }
+    private fun TuiYameObserver.type(text: String) { text.forEach { handleKeyAndAwait(it.toString()) } }
 }

@@ -1,5 +1,6 @@
 package no.skasti.yame.runtime
 
+import no.skasti.yame.ui.handleKeyAndAwait
 import com.github.ajalt.mordant.terminal.Terminal
 import no.skasti.yame.logging.DiagnosticMessage
 import no.skasti.yame.observer.YameEvent
@@ -199,9 +200,9 @@ class YameRuntimeConnectionTest {
                                 ui.updateAvailablePorts(ports)
                                 for (command in listOf("/port", "/baud", "/flow-control")) {
                                     functions.invoke(ConnectionFunctions.Disconnect)
-                                    command.forEach { ui.handleKey(it.toString()) }
-                                    ui.handleKey("Enter")
-                                    ui.handleKey("Enter")
+                                    command.forEach { ui.handleKeyAndAwait(it.toString()) }
+                                    ui.handleKeyAndAwait("Enter")
+                                    ui.handleKeyAndAwait("Enter")
                                 }
                                 assertEquals(List(3) { Triple("COM1", 38400, SerialFlowControl.DISABLED) }, opened)
                                 assertEquals(0, saves)

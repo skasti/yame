@@ -4,6 +4,7 @@ import com.github.ajalt.mordant.terminal.Terminal
 import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.observer.YameEvents
+import no.skasti.yame.lifecycle.FatalFailureSource
 import no.skasti.yame.presentation.Presentation
 
 /** TUI presentation only; application bootstrap owns runtime and shared stores. */
@@ -11,7 +12,7 @@ class InteractiveYameApplication(
     val configStore: ConfigStore = ConfigStore.current,
     val functions: FunctionStore = FunctionStore.current,
     terminal: Terminal,
-) : Presentation {
+) : Presentation, FatalFailureSource {
     private val observer = TuiYameObserver(configStore, functions, terminal)
     private val observations = try {
         YameEvents.subscribe("tui-runtime", handler = observer::onEvent)
@@ -19,6 +20,8 @@ class InteractiveYameApplication(
         observer.close()
         throw error
     }
+
+    override val fatalFailure: Throwable? get() = observer.fatalFailure
 
     override fun start() = observer.start()
 

@@ -15,8 +15,8 @@ class StoreFrontendTest {
         terminal = Terminal(interactive = false), configStore = store, functions = functions,
     )
     private fun TuiYameObserver.command(value: String) {
-        value.forEach { handleKey(it.toString()) }
-        handleKey("Enter")
+        value.forEach { handleKeyAndAwait(it.toString()) }
+        handleKeyAndAwait("Enter")
     }
 
     @Test fun `multiple frontends share configuration while owning independent palettes`() {

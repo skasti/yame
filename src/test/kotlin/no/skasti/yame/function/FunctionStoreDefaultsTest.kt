@@ -1,5 +1,6 @@
 package no.skasti.yame.function
 
+import no.skasti.yame.ui.handleKeyAndAwait
 import com.github.ajalt.mordant.terminal.Terminal
 import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.logging.YameLogManager
@@ -178,11 +179,12 @@ class FunctionStoreDefaultsTest {
     }
 
     private fun TuiYameObserver.refreshPorts() {
-        command("/refresh-ports")
+        command("/port")
+        handleKeyAndAwait("Escape")
     }
 
     private fun TuiYameObserver.command(value: String) {
-        value.forEach { handleKey(it.toString()) }
-        handleKey("Enter")
+        value.forEach { handleKeyAndAwait(it.toString()) }
+        handleKeyAndAwait("Enter")
     }
 }
