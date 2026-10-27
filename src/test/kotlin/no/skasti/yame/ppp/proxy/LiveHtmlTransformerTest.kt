@@ -3,6 +3,7 @@ package no.skasti.yame.ppp.proxy
 import com.sun.net.httpserver.HttpServer
 import no.skasti.yame.ppp.proxy.transform.HtmlTransformer
 import no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings
+import no.skasti.yame.ppp.proxy.transform.ResourceTransformationSettings
 import no.skasti.yame.ppp.http.HttpConnection
 import no.skasti.yame.ppp.http.HttpRequest
 import no.skasti.yame.ppp.http.HttpResponse
@@ -19,7 +20,6 @@ import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.io.TempDir
 import no.skasti.yame.ppp.proxy.transform.ElementSimplifierSettings
@@ -39,7 +39,7 @@ class LiveHtmlTransformerTest {
         val server = server {}
         val handler = SystemHttpCompatibilityHandler(
             config = PppHttpCompatibilityConfig.fromConfigStore(store),
-            transformerSettings = { HtmlTransformerSettings.fromConfigStore(store) },
+            transformerSettings = { ResourceTransformationSettings.fromConfigStore(store) },
         )
         try {
             val request = request(server)
@@ -63,7 +63,7 @@ class LiveHtmlTransformerTest {
         run {
             val store = no.skasti.yame.persistence.applicationConfigStore(no.skasti.yame.persistence.YameConfiguration())
             val handler = SystemHttpCompatibilityHandler(config = PppHttpCompatibilityConfig(),
-                transformerSettings = { HtmlTransformerSettings.fromConfigStore(store) })
+                transformerSettings = { ResourceTransformationSettings.fromConfigStore(store) })
             try {
                 val request = request(server).copy(headers = request(server).headers + listOf(
                     "If-None-Match" to "\"source\"", "If-Modified-Since" to "Tue, 29 Sep 2026 12:00:00 GMT",
@@ -83,7 +83,7 @@ class LiveHtmlTransformerTest {
                 for (response in listOf(first, second, third)) {
                     assertEquals(200, response.statusCode)
                     assertEquals("no-store", header(response, "Cache-Control"))
-                    assertNull(header(response, "ETag"))
+                    assertEquals("\"source\"", header(response, "ETag"))
                     assertEquals(response.body.size.toString(), header(response, "Content-Length"))
                 }
             } finally { handler.close(); server.stop(0) }
@@ -101,7 +101,7 @@ class LiveHtmlTransformerTest {
         run {
             val store = no.skasti.yame.persistence.applicationConfigStore(no.skasti.yame.persistence.YameConfiguration())
             val handler = SystemHttpCompatibilityHandler(config = PppHttpCompatibilityConfig(),
-                transformerSettings = { HtmlTransformerSettings.fromConfigStore(store) })
+                transformerSettings = { ResourceTransformationSettings.fromConfigStore(store) })
             try {
                 val response = CompletableFuture.supplyAsync { handler.handle(connection(), request(server)) }
                 assertTrue(entered.await(5, TimeUnit.SECONDS))

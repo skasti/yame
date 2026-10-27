@@ -145,6 +145,129 @@ class PngResourceTransformerTest {
         assertEquals("image/gif", candidate.contentType)
         assertTrue(candidate.bytes.size >= source.size)
         assertPassthrough(source)
+
+        val forced = transform(source, mode = PngCompatibilityMode.REQUIRE_LEGACY_FORMAT)
+        val representation = requireNotNull(forced.resource.transformed).representation
+        assertEquals(listOf("image/gif"), representation.headers["Content-Type"])
+        assertTrue(representation.body.size > source.size)
+        assertEquals(image.width, ImageIO.read(ByteArrayInputStream(representation.body)).width)
+        assertSame(source, forced.resource.source.body)
+    }
+
+    @Test
+    fun `compatibility output exceeding the encoded byte budget is passed through with a reason`() {
+        val image = BufferedImage(16, 16, BufferedImage.TYPE_INT_RGB)
+        for (y in 0 until 16) {
+            for (x in 0 until 16) image.setRGB(x, y, (x shl 16) or (y shl 8) or (x + y))
+        }
+        val source = png(image)
+        val diagnostics = mutableListOf<String>()
+        val policy = ImageOptimizationPolicy(maxEncodedBytes = source.size)
+        val pipeline = ResourceTransformationPipeline(
+            listOf(PngResourceTransformer(policy, diagnostics::add)),
+        )
+        val context = context().copy(pngCompatibilityMode = PngCompatibilityMode.REQUIRE_LEGACY_FORMAT)
+        val result = pipeline.transform(context, Resource(context.upstreamUri, representation(source)))
+
+        assertNull(result.resource.transformed)
+        assertContentEquals(source, result.resource.representation.body)
+        assertTrue(diagnostics.single().contains("encoded output exceeds ${source.size} byte limit"))
+    }
+
+    @Test
+    fun `compatibility mode flattens partial alpha onto white and emits gif`() {
+        val image = BufferedImage(12, 8, BufferedImage.TYPE_INT_ARGB)
+        image.setRGB(1, 1, 0x80ff0000.toInt())
+        image.setRGB(2, 1, 0x00000000)
+        image.setRGB(3, 1, 0xff0000ff.toInt())
+        val source = png(image, uncompressed = true)
+
+        val result = transform(source, mode = PngCompatibilityMode.REQUIRE_LEGACY_FORMAT)
+        val output = ImageIO.read(ByteArrayInputStream(requireNotNull(result.resource.transformed).representation.body))
+
+        assertEquals("image/gif", result.resource.representation.headers["Content-Type"]?.single())
+        assertEquals(255, output.getRGB(2, 1) ushr 24)
+        assertEquals(0xffffffff.toInt(), output.getRGB(2, 1))
+        val blended = output.getRGB(1, 1)
+        assertEquals(255, blended ushr 24)
+        assertTrue(kotlin.math.abs(((blended ushr 16) and 255) - 255) <= 1)
+        assertTrue(kotlin.math.abs(((blended ushr 8) and 255) - 127) <= 1)
+        assertTrue(kotlin.math.abs((blended and 255) - 127) <= 1)
+    }
+
+    @Test
+    fun `compatibility mode quantizes overfull binary transparency deterministically`() {
+        val source = png(paletteBoundary(opaqueColors = 256), uncompressed = true)
+        val first = transform(source, mode = PngCompatibilityMode.REQUIRE_LEGACY_FORMAT)
+        val second = transform(source, mode = PngCompatibilityMode.REQUIRE_LEGACY_FORMAT)
+        val firstRepresentation = requireNotNull(first.resource.transformed).representation
+        val secondRepresentation = requireNotNull(second.resource.transformed).representation
+        val output = ImageIO.read(ByteArrayInputStream(firstRepresentation.body))
+
+        assertEquals("image/gif", firstRepresentation.headers["Content-Type"]?.single())
+        assertContentEquals(firstRepresentation.body, secondRepresentation.body)
+        assertEquals(setOf(0, 255), (0 until output.height).flatMap { y ->
+            (0 until output.width).map { x -> output.getRGB(x, y) ushr 24 }
+        }.toSet())
+    }
+
+    @Test
+    fun `compatibility mode uses baseline jpeg for opaque high color png despite optimizer fidelity guard`() {
+        val noisy = BufferedImage(240, 160, BufferedImage.TYPE_INT_RGB)
+        val random = Random(37)
+        for (y in 0 until noisy.height) {
+            for (x in 0 until noisy.width) noisy.setRGB(x, y, random.nextInt() and 0xffffff)
+        }
+        val source = png(noisy)
+        val optimized = transform(source)
+        val forced = transform(source, mode = PngCompatibilityMode.REQUIRE_LEGACY_FORMAT)
+
+        assertNull(optimized.resource.transformed)
+        val bytes = requireNotNull(forced.resource.transformed).representation.body
+        assertEquals("image/jpeg", forced.resource.representation.headers["Content-Type"]?.single())
+        assertTrue(hasJpegMarker(bytes, 0xc0))
+        assertTrue(!hasJpegMarker(bytes, 0xc2))
+    }
+
+    @Test
+    fun `compatibility passthroughs report a reason for unsafe pngs`() {
+        val diagnostics = mutableListOf<String>()
+        val pipeline = ResourceTransformationPipeline(
+            listOf(PngResourceTransformer(diagnostic = diagnostics::add)),
+        )
+        val source = byteArrayOf(1, 2, 3)
+        val compatibilityContext = context().copy(pngCompatibilityMode = PngCompatibilityMode.REQUIRE_LEGACY_FORMAT)
+        val result = pipeline.transform(compatibilityContext, Resource(compatibilityContext.upstreamUri, representation(source)))
+
+        assertNull(result.resource.transformed)
+        assertEquals(source.toList(), result.resource.representation.body.toList())
+        assertTrue(diagnostics.single().contains("malformed, truncated, or animated PNG"))
+        assertTrue(diagnostics.single().contains("https://modern.test/image.png"))
+    }
+
+    @Test
+    fun `compatibility mode reports animated encoded and over-limit inputs`() {
+        val source = png(artwork(120, 80), uncompressed = true)
+        val context = context().copy(pngCompatibilityMode = PngCompatibilityMode.REQUIRE_LEGACY_FORMAT)
+        val diagnostics = mutableListOf<String>()
+        fun run(input: ResourceRepresentation, policy: ImageOptimizationPolicy = ImageOptimizationPolicy()) {
+            val pipeline = ResourceTransformationPipeline(listOf(PngResourceTransformer(policy, diagnostics::add)))
+            val result = pipeline.transform(context, Resource(context.upstreamUri, input))
+            assertNull(result.resource.transformed)
+            assertContentEquals(input.body, result.resource.representation.body)
+        }
+
+        run(representation(withAnimationControl(source)))
+        assertTrue(diagnostics.last().contains("APNG is unsupported"))
+        run(representation(source).copy(headers = mapOf(
+            "Content-Type" to listOf("image/png"),
+            "Content-Encoding" to listOf("gzip"),
+        )))
+        assertTrue(diagnostics.last().contains("unsupported Content-Encoding"))
+        run(representation(source), ImageOptimizationPolicy(maxEncodedBytes = source.size - 1))
+        assertTrue(diagnostics.last().contains("encoded input exceeds"))
+        run(representation(source), ImageOptimizationPolicy(maxDecodedPixels = 9_599))
+        assertTrue(diagnostics.last().contains("decode limits were exceeded"))
     }
 
     @Test
@@ -239,7 +362,7 @@ class PngResourceTransformerTest {
                 .transform(context(), Resource(context().upstreamUri, representation(bytes)))
             assertContentEquals(standalone.resource.representation.body, result.resource.representation.body)
             assertEquals(
-                listOf("legacy-png-optimization"),
+                listOf("legacy-png-transcoder"),
                 requireNotNull(result.resource.transformed).transformations.map { it.transformerId },
             )
         }
@@ -249,7 +372,11 @@ class PngResourceTransformerTest {
         bytes: ByteArray,
         policy: ImageOptimizationPolicy = ImageOptimizationPolicy(),
         contentType: String = "image/png",
-    ): ResourceTransformationState = pipeline(policy).transform(context(), Resource(context().upstreamUri, representation(bytes, contentType)))
+        mode: PngCompatibilityMode = PngCompatibilityMode.OPTIMIZE,
+    ): ResourceTransformationState {
+        val context = context().copy(pngCompatibilityMode = mode)
+        return pipeline(policy).transform(context, Resource(context.upstreamUri, representation(bytes, contentType)))
+    }
 
     private fun pipeline(policy: ImageOptimizationPolicy) = ResourceTransformationPipeline(listOf(PngResourceTransformer(policy)))
 

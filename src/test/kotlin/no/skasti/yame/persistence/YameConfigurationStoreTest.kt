@@ -12,6 +12,7 @@ import no.skasti.yame.ppp.dns.PppDnsConfig
 import no.skasti.yame.ppp.ip.Ipv4Address
 import no.skasti.yame.ppp.ip.Ipv4Cidr
 import no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig
+import no.skasti.yame.ppp.proxy.transform.PngCompatibilityMode
 import no.skasti.yame.serial.SerialFlowControl
 import no.skasti.yame.tone.HandshakeProfile
 import java.io.IOException
@@ -58,7 +59,10 @@ class YameConfigurationStoreTest {
             ),
             pppIpConfig = PppIpConfig(Ipv4Cidr.parse("10.10.0.0/30")),
             pppDnsConfig = PppDnsConfig(Ipv4Address.parse("1.1.1.1")),
-            pppHttpCompatibilityConfig = PppHttpCompatibilityConfig(enabled = false),
+            pppHttpCompatibilityConfig = PppHttpCompatibilityConfig(
+                enabled = false,
+                pngCompatibilityMode = PngCompatibilityMode.REQUIRE_LEGACY_FORMAT,
+            ),
             logLevels = YameLogModule.entries.associateWith { YameLogLevel.DEBUG },
             captureLimits = PacketCaptureLimits(maxPerType = 20, maxTotal = 500),
         )

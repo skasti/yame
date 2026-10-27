@@ -141,6 +141,9 @@ class YameConfigurationStore(private val path: Path) {
                 htmlTransformers = HtmlTransformer.entries.fold(loadedDefaults.pppHttpCompatibilityConfig.htmlTransformers) { settings, transformer ->
                     settings.withEnabled(transformer, boolean(properties, "transformers.${transformer.command}.enabled", settings.enabled(transformer)))
                 },
+                pngCompatibilityMode = properties.getProperty("transformers.png-compatibility-mode")
+                    ?.let(PngCompatibilityMode::parse)
+                    ?: loadedDefaults.pppHttpCompatibilityConfig.pngCompatibilityMode,
             ),
             logLevels = logLevels,
             captureLimits = captureLimits,

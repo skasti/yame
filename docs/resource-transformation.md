@@ -15,11 +15,10 @@ Transformers must never mutate or replace the source representation. This lets l
 Within one YAME process the transformation pipeline is treated as stable. Therefore, if an upstream resource reports the same validator (or returns `304 Not Modified`), YAME assumes the same source representation and consequently the same transformed representation for the same transformation profile.
 
 Live transformer controls are an exception to the stable-profile assumption:
-the TUI's HTTP handler marks HTML responses `Cache-Control: no-store` and omits
-their source validators. It also suppresses upstream conditional GET headers
-while live controls are active, so browser-cached HTML from a previous switch
-combination cannot be reused through a `304` response. Static handlers retain
-the existing source-validator behavior.
+the HTTP handler marks transformable responses `Cache-Control: no-store` and
+suppresses upstream conditional GET headers while live controls are active, so
+browser-cached output from a previous profile cannot be reused through a `304`
+response. It preserves `ETag` and `Last-Modified` as upstream/source validators.
 
 Byte-specific metadata is different. `Content-Length`, content digests and encodings that no longer describe the emitted representation must be removed or regenerated after transformation.
 
@@ -128,14 +127,19 @@ stable-pipeline assumption for source validators and cached transformed output.
 The bundled INI file is the single source of default mappings. See the README
 for the format and editing behavior.
 
-Live on/off settings are separate from the immutable INI rules. The HTTP handler
-uses an injected store-backed provider to construct one immutable
-`HtmlTransformerSettings` object for each request before fetching upstream. Its transformation
-profile and transformed-cache/in-flight-work keys include the four effective switch
-values. Element simplification requires both the rule file's general `enabled`
-setting and the `/transformers` switch. The same source bytes under different settings never share transformed
-output. Source acquisition may still be coalesced because it is independent of
-the transformation profile. Already-running requests retain their settings object.
+Live on/off and PNG compatibility settings are separate from the immutable INI
+rules. At the start of each HTTP request, the handler reads feature-owned keys
+through its explicitly injected `ConfigStore` and builds one immutable
+`ResourceTransformationSettings` value. The store intentionally has no atomic
+multi-key snapshot API; a concurrent commit may land between individual reads.
+Once built, the request retains its settings value. Its transformation profile and
+transformed-cache/in-flight-work keys include the HTML switches and PNG mode.
+Element simplification requires both the rule file's general `enabled` setting
+and the `/transformers` switch. The same source bytes under different settings
+never share transformed output. Source acquisition may still be coalesced
+because it is independent of the transformation profile. A setting change
+normally applies to later requests; a request whose settings were already
+constructed keeps those values.
 
 Mappings affect only explicitly configured tags, including matching closing
 tags. Generated style values are escaped as attributes. Expansion is limited
@@ -172,51 +176,62 @@ Tests should cover the boundary/negative paths explicitly, not only the happy pa
 `JpegResourceTransformer`, which handles JPEG. Both are registered as separate
 optimization stages in the resource pipeline and share `LegacyImageCodec` for
 in-memory ImageIO decoding and resizing. They use the same `600x400` canvas,
-no upscaling, a 16-million decoded-pixel limit, and a 48 MiB estimated decoded-raster limit.
-Before full decode, the image reader's default output sample layout (element size and elements
-per pixel) is used to estimate raster memory; images exceeding either limit pass through.
-This bounds the expected main raster allocation, not every temporary decoder buffer or
-aggregate memory use across simultaneous requests. An encoded-input limit is checked before
-parsing/decoding: the proxy supplies its existing `maxResponseBytes` budget
-(default 16 MiB); standalone image policies default to 32 MiB. Output uses the
-existing source/transformed representation cache and preserves source validators.
-JPEG optimization runs before PNG optimization so PNG-to-JPEG candidates are
-not recompressed by the JPEG stage.
+never upscales, and enforces a 16-million decoded-pixel limit and a 48 MiB
+estimated decoded-raster limit. Before full decode, the image reader's default
+output sample layout estimates raster memory; images exceeding either limit
+pass through. This bounds the expected main raster allocation, not every
+temporary decoder buffer or aggregate memory across simultaneous requests. The
+encoded-input limit is the proxy's `maxResponseBytes` budget (16 MiB by default;
+standalone image policies default to 32 MiB). Compatibility mode applies the
+same byte limit to output. JPEG optimization runs before PNG conversion so
+PNG-to-JPEG candidates are not recompressed.
 
-Changing format updates `Content-Type` and removes source byte lengths/digests;
-the HTTP boundary calculates the final `Content-Length`.
+Changing format updates `Content-Type` and removes source byte lengths and
+digests. The HTTP boundary calculates `Content-Length` from the client-visible
+body and sends finite HTTP/1.0 framing. Upstream `ETag` and `Last-Modified`
+remain source validators.
 
 Netscape Navigator 4.08 can display PNG, but ignores PNG transparency
 ([PNG: The Definitive Guide, browser support table](https://www.libpng.org/pub/png/book/chapter02.html)).
-The deterministic policy is:
+The feature-owned setting in `[transformers]` of `yame.ini` is
+`png-compatibility-mode`. Its values are `optimize` (the default) and
+`require-legacy-format`. Every HTTP request builds one immutable settings
+value, and the transformation profile includes the mode so cached output from
+one mode cannot be reused in the other.
 
-- Images fitting an exact 256-entry palette become a non-interlaced GIF. No
-  color quantization is applied. Binary alpha uses one palette entry, allowing
-  up to 255 opaque colors. RGB values of fully transparent pixels are ignored;
-  an opaque black pixel stays distinct from a transparent black pixel.
-- Palette artwork and binary-transparent images use nearest-neighbor reduction,
-  preserving colors and binary alpha. Opaque high-color images use bilinear
-  reduction. All resizing preserves aspect ratio within the shared canvas.
-- Opaque high-color PNGs may become non-progressive baseline JPEG at the shared
-  JPEG quality (default 0.55). A round-trip comparison against the resized RGB
-  image requires channel RMS error at most 12 on the 0–255 scale and at most
-  1% of pixels with any channel error above 48. This is a conservative numeric
-  guard against compression damage, not a guarantee of perceptual equivalence.
-- Partial alpha and binary-transparent images exceeding GIF palette capacity
-  pass through unchanged. There is no alpha threshold, lossy palette reduction
-  or guessed page-background matte. APNG also passes through; the stock PNG
-  decoder would otherwise silently discard its animation.
-- Malformed data, a mismatch between declared format and decoder format,
-  encoded bodies and images exceeding the resource limits remain unchanged.
-- Every candidate must be strictly smaller than the current representation.
-  The original headers and bytes remain intact on all fallback paths.
+In `optimize` mode, each replacement must remain strictly smaller than the
+source. Exact palettes become non-interlaced GIF without quantization. Binary
+alpha uses one transparent palette slot, allowing up to 255 opaque colors.
+Palette and binary-transparent images use nearest-neighbor reduction; opaque
+high-color images use bilinear reduction. Opaque high-color PNGs may become
+non-progressive baseline JPEG at quality 0.55 only when a round-trip check
+passes: channel RMS error at most 12 and at most 1% of pixels with any channel
+error above 48. Partial alpha and images with too many transparent palette
+colors remain PNG in this mode.
 
-Passthrough is deliberate: partial-alpha images and other unsupported cases
-retain Netscape's original PNG transparency limitation. Full-alpha rendering on
-an arbitrary page background is outside this policy. Even an exact transparent
-GIF is declined if it would increase transfer size. Tests generate deterministic
-fixtures and verify format, pixels/alpha, size, limits, HTTP framing and cached
-identical-source reuse without relying on external image downloads.
+`require-legacy-format` prioritizes the client's supported formats over output
+size and the optimizer's JPEG fidelity guard. Safely decoded static PNGs use
+these deterministic choices:
+
+- Exact palettes fitting GIF become GIF. Binary transparency is preserved
+  exactly when the colors fit.
+- Binary-transparent images exceeding GIF's 256-entry palette are quantized to
+  a fixed 6x7x6 (252-color) RGB palette plus one transparent entry. Fully
+  transparent pixels do not consume a color slot.
+- Partial-alpha images are composited against white. The result uses an exact
+  GIF palette when it fits, otherwise the same fixed palette; alpha is not
+  retained after compositing.
+- Opaque high-color images become baseline JPEG at quality 0.55, even when the
+  optimizer's fidelity guard rejects that candidate.
+- Resizing preserves aspect ratio within the shared canvas and never enlarges.
+
+Malformed or truncated PNGs, APNG, non-identity content encodings, decoder
+failures, and inputs or outputs beyond byte, pixel or raster limits remain
+unchanged. YAME logs a reason whenever the requested conversion cannot be
+performed. The stock PNG decoder would otherwise silently discard APNG
+animation. Tests use deterministic fixtures to verify format, pixels/alpha,
+safety limits, output headers, source validators, HTTP framing and cache
+separation without external image downloads.
 
 ## Visual image transformation examples
 

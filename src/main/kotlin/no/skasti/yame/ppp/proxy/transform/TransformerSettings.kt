@@ -8,6 +8,13 @@ object TransformerSettings : Settings("transformers") {
     val Style = SettingKey<Boolean>("style-remover-enabled", Group, default = { true })
     val Attributes = SettingKey<Boolean>("attribute-cleaner-enabled", Group, default = { true })
     val Elements = SettingKey<Boolean>("element-simplifier-enabled", Group, default = { true })
+    val PngCompatibility = SettingKey<String>(
+        "png-compatibility-mode",
+        Group,
+        validateValue = { PngCompatibilityMode.parse(it) },
+        default = { PngCompatibilityMode.OPTIMIZE.configValue },
+    )
+
     fun key(transformer: HtmlTransformer): SettingKey<Boolean> = when (transformer) {
         HtmlTransformer.SCRIPT_REMOVER -> Script
         HtmlTransformer.STYLE_REMOVER -> Style

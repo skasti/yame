@@ -8,6 +8,7 @@ import no.skasti.yame.ppp.PppSettings
 import no.skasti.yame.ppp.dns.DnsSettings
 import no.skasti.yame.ppp.proxy.ProxySettings
 import no.skasti.yame.ppp.proxy.transform.ElementSimplifierSettings
+import no.skasti.yame.ppp.proxy.transform.PngCompatibilityMode
 import no.skasti.yame.ppp.proxy.transform.TransformerSettings
 import no.skasti.yame.logging.LogSettings
 
@@ -57,6 +58,15 @@ internal object YameConfigurationBindings {
             { c, v -> c.copy(pppHttpCompatibilityConfig = c.pppHttpCompatibilityConfig.copy(enabled = v)) }),
     )
     val transformerSettings: List<ConfigurationBinding<*>> = listOf(
+        ConfigurationBinding(
+            TransformerSettings.PngCompatibility,
+            { c -> c.pppHttpCompatibilityConfig.pngCompatibilityMode.configValue },
+            { c, v -> c.copy(
+                pppHttpCompatibilityConfig = c.pppHttpCompatibilityConfig.copy(
+                    pngCompatibilityMode = PngCompatibilityMode.parse(v),
+                ),
+            ) },
+        ),
         ConfigurationBinding(ElementSimplifierSettings.Rules,
             { c -> c.pppHttpCompatibilityConfig.elementSimplifier },
             { c, v -> c.copy(pppHttpCompatibilityConfig = c.pppHttpCompatibilityConfig.copy(elementSimplifier = v)) }),
