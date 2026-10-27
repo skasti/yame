@@ -113,6 +113,6 @@ graph eviction, without making root-first enqueue order a producer requirement.
   and ADR 0004's event ownership, payload immutability and schema-versioning
   decisions remain unchanged.
 - Producer events (#100), startup wiring (#102), and the incremental consumer
-  projection (#103) implement this design. The unified TUI worker remains #101;
+  projection (#103) and unified TUI worker (#101) implement this design;
   [current projection behavior](../yame-events.md#proxy-dashboard-projection)
-  documents the interim threading limitation and consumer failure policy.
+  documents the bounded handoff and consumer failure policy.

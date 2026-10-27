@@ -19,13 +19,13 @@ class TuiStartupTest {
             ui.start()
             assertTrue(functions.keys().isEmpty(), "starting UI must not create runtime functions")
             for (key in listOf("q", "Ctrl+C")) {
-                ui.handleKey(key)
+                ui.handleKeyAndAwait(key)
                 assertFalse(ui.stopRequested, "unavailable quit must keep input alive")
-                ui.handleKey("/")
+                ui.handleKeyAndAwait("/")
                 assertNotNull(ui.paletteSnapshot())
-                ui.handleKey("Escape")
+                ui.handleKeyAndAwait("Escape")
             }
-            for (command in listOf("/quit", "/disconnect", "/reconnect", "/refresh-ports", "/port")) {
+            for (command in listOf("/quit", "/disconnect", "/reconnect", "/port")) {
                 ui.command(command)
                 assertFalse(ui.stopRequested)
             }
@@ -48,7 +48,8 @@ class TuiStartupTest {
                 functions.register(ApplicationFunctions.Quit) { quits++ },
             )
             try {
-                ui.command("/refresh-ports")
+                ui.command("/port")
+                ui.handleKeyAndAwait("Escape")
                 ui.command("/disconnect")
                 ui.command("/reconnect")
                 assertEquals(1, refreshes)
@@ -65,7 +66,7 @@ class TuiStartupTest {
     }
 
     private fun TuiYameObserver.command(value: String) {
-        value.forEach { handleKey(it.toString()) }
-        handleKey("Enter")
+        value.forEach { handleKeyAndAwait(it.toString()) }
+        handleKeyAndAwait("Enter")
     }
 }

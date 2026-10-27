@@ -164,8 +164,8 @@ class HttpGraphProjectionTest {
         observer().use { ui ->
             ui.onEvent(graph())
             ui.onEvent(resource())
-            ui.handleKey("Enter")
-            ui.handleKey("ArrowDown")
+            ui.handleKeyAndAwait("Enter")
+            ui.handleKeyAndAwait("ArrowDown")
             ui.onEvent(ConnectionStateChanged(1, ConnectionState.CONNECTED))
             ui.onEvent(PppSessionEnded(PppSessionIdentity(1, 1)))
             ui.onEvent(ConnectionStateChanged(1, ConnectionState.DISCONNECTED))
@@ -186,11 +186,14 @@ class HttpGraphProjectionTest {
     }
 
     @Test fun `unresolved dependencies fail visibly at the bound and stop displaying an invalid proxy view`() {
-        observer().use { ui ->
-            repeat(256) { ui.onEvent(resource(id = it + 1L)) }
-            assertContains(ui.proxyProjectionStatus()!!, "incomplete")
-            assertFailsWith<IllegalStateException> { ui.onEvent(resource(id = 257)) }
+        val ui = observer()
+        repeat(256) { ui.onEvent(resource(id = it + 1L)) }
+        assertContains(ui.proxyProjectionStatus()!!, "incomplete")
+        ui.onEvent(resource(id = 257))
+        assertFailsWith<IllegalStateException> { ui.close() }
+        run {
             assertNotNull(ui.observationFailure)
+            assertNotNull(ui.fatalFailure)
             assertContains(ui.proxyProjectionStatus()!!, "unavailable")
             ui.onEvent(graph())
             assertTrue(ui.resourceGraphProjectionSnapshot().isEmpty())
@@ -206,7 +209,7 @@ class HttpGraphProjectionTest {
         assertTrue(projection.graphSnapshot().isEmpty())
     }
 
-    @Test fun `proxy subscriber runs on broker worker and a blocked TUI can cause fatal saturation`() {
+    @Test fun `observer monitor ownership cannot block broker admission or presentation processing`() {
         val broker = EventBroker(EventBrokerConfig(capacity = 1, publishTimeout = Duration.ZERO))
         val locked = CountDownLatch(1)
         val entered = CountDownLatch(1)
@@ -226,10 +229,11 @@ class HttpGraphProjectionTest {
                 broker.publish(graph())
                 assertTrue(entered.await(5, TimeUnit.SECONDS))
                 assertNotSame(Thread.currentThread(), callbackThread.get())
+                assertEquals(BrokerWaitResult.COMPLETED, broker.drain().await(Duration.ofSeconds(2)))
                 broker.publish(resource())
-                assertEquals(1, broker.status.queuedEvents)
-                assertFailsWith<QueueFullException> { broker.publish(resource()) }
-                assertNotNull(broker.status.failure)
+                assertEquals(BrokerWaitResult.COMPLETED, broker.drain().await(Duration.ofSeconds(2)))
+                assertNull(broker.status.failure)
+                assertEquals(1, ui.resourceGraphProjectionSnapshot().size)
             } finally {
                 resume.countDown()
                 holder.join(5_000)

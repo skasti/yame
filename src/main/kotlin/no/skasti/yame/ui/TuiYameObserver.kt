@@ -31,6 +31,8 @@ import no.skasti.yame.modem.LoginCredentials
 import no.skasti.yame.ppp.dns.DnsSettings
 import no.skasti.yame.ppp.proxy.ProxySettings
 import no.skasti.yame.logging.LogSettings
+import no.skasti.yame.lifecycle.FatalFailureSource
+import no.skasti.yame.lifecycle.DeadlineCloseable
 import no.skasti.yame.lifecycle.ApplicationFunctions
 import com.github.ajalt.mordant.animation.textAnimation
 import com.github.ajalt.mordant.rendering.TextColors.Companion.gray
@@ -62,7 +64,7 @@ class TuiYameObserver(
     private val configStore: ConfigStore = ConfigStore.current,
     private val functions: FunctionStore = FunctionStore.current,
     private val terminal: Terminal = Terminal(interactive = true),
-) : AutoCloseable {
+) : DeadlineCloseable, FatalFailureSource {
     private val paletteRegistry = CommandPalette()
     private val onPortSelected: (String) -> Unit = { value -> selectConnectionSetting(SerialSettings.Port, value) }
     private val onBaudSelected: (Int) -> Unit = { value -> selectConnectionSetting(SerialSettings.Baud, value) }
@@ -73,7 +75,7 @@ class TuiYameObserver(
     private val onQuit: () -> Unit = { functions.invoke(ApplicationFunctions.Quit) }
     private val onDisconnect: () -> Unit = { functions.invoke(ConnectionFunctions.Disconnect) }
     private val onReconnect: () -> Unit = { functions.invoke(ConnectionFunctions.Reconnect) }
-    private val onRefreshPorts: () -> Unit = { updateAvailablePorts(functions.invoke(ConnectionFunctions.RefreshPorts)) }
+    private fun refreshAvailablePorts() = updateAvailablePorts(functions.invoke(ConnectionFunctions.RefreshPorts))
     private val onCaptureLimitSelected: (PacketCaptureLimitKind, Int) -> Unit = { kind, value -> configStore.set(LogSettings.CaptureLimits.getValue(kind) to value) }
     private val onLogLevelSelected: (YameLogModule, YameLogLevel) -> Unit = { module, level -> configStore.set(LogSettings.Levels.getValue(module) to level) }
     private val onLoginAdded: (String, String) -> Unit = { username, password -> configStore.set(ModemSettings.Login to LoginCredentials(username, password)) }
@@ -132,8 +134,12 @@ class TuiYameObserver(
         private set
 
     private val commandRegistrations = registerCommands() + registerTransformerCommands(configStore, paletteRegistry)
+    private val work = TuiWorkQueue(teardown = ::teardown)
+    override val fatalFailure: Throwable? get() = work.fatalFailure
+    internal fun awaitIdle() = work.read { Unit }
+
     private val configurationSubscription = configStore.onChange.subscribe(initial = true) { changes ->
-        synchronized(this) {
+        work.submitRequired {
             changes[SerialSettings.Port]?.let { portName = it.value }
             changes[SerialSettings.Baud]?.let { baud = it.value }
             changes[SerialSettings.FlowControl]?.let { flowControl = it.value }
@@ -154,12 +160,15 @@ class TuiYameObserver(
         if (unchanged) functions.invoke(ConnectionFunctions.Reconnect)
     }
 
-    @Synchronized
-    internal fun paletteSnapshot(): TuiCommandPalette? = commandPalette
+    internal fun paletteSnapshot(): TuiCommandPalette? = work.read {
+        commandPalette?.let { it.copy(options = it.options.toList()) }
+    }
 
-    internal fun handleKey(key: String) {
+    internal fun handleKey(key: String) { work.submitRequired { applyKey(key) } }
+
+    private fun applyKey(key: String) {
         try {
-            val paletteOpen = synchronized(this) { commandPalette != null }
+            val paletteOpen = commandPalette != null
             when {
                 key == "Ctrl+C" -> requestQuit()
                 paletteOpen -> handlePaletteKey(key)
@@ -172,30 +181,30 @@ class TuiYameObserver(
                 key == "ArrowLeft" -> setSelectedHttpHostExpanded(false)
             }
         } catch (error: Exception) {
+            if (work.fatalFailure != null) throw error
             onLog("Command failed: ${error.javaClass.simpleName}")
         }
     }
 
-    @Synchronized
-    fun start() {
+    fun start() { work.submitRequired { startScreen() } }
+
+    private fun startScreen() {
         if (closed || screenStarted) return
         screenStarted = true
         headerStartedNanos = System.nanoTime()
         headerTimer.scheduleAtFixedRate(
-            { render() }, 5, 5, java.util.concurrent.TimeUnit.SECONDS,
+            { work.submitRequired { render() } }, 5, 5, java.util.concurrent.TimeUnit.SECONDS,
         )
         enterScreen()
         render()
         startInputLoop()
     }
 
-    @Synchronized
     private fun updateConnected(value: Boolean) {
         connected = value
         render()
     }
 
-    @Synchronized
     private fun closeActiveTransfers(detail: String?) {
         if (transfers.isEmpty()) return
         val now = System.nanoTime()
@@ -216,8 +225,12 @@ class TuiYameObserver(
         render()
     }
 
-    @Synchronized
     internal fun updateAvailablePorts(ports: List<SerialPortDescriptor>) {
+        if (!work.isWorker) {
+            val snapshot = ports.toList()
+            work.submitRequired { updateAvailablePorts(snapshot) }
+            return
+        }
         val previousPalette = commandPalette
         val selectedValue = previousPalette
             ?.takeIf { it.mode == TuiPaletteMode.PORTS }
@@ -225,7 +238,7 @@ class TuiYameObserver(
             ?.getOrNull(previousPalette.selectedIndex)
             ?.value
 
-        availablePorts = ports
+        availablePorts = ports.toList()
 
         if (previousPalette?.mode == TuiPaletteMode.PORTS) {
             val options = portPaletteOptions()
@@ -249,8 +262,8 @@ class TuiYameObserver(
         render()
     }
 
-    @Synchronized
     fun onLog(message: String) {
+        if (!work.isWorker) { work.submitRequired { onLog(message) }; return }
         appendLog(message)
         render()
     }
@@ -266,8 +279,12 @@ class TuiYameObserver(
     @Volatile internal var observationFailure: Throwable? = null
         private set
 
-    @Synchronized
     fun onEvent(event: YameEvent) {
+        // Production events already own immutable payloads at the publication boundary.
+        work.submitRequired { processEvent(event) }
+    }
+
+    private fun processEvent(event: YameEvent) {
         try { applyObservation(event) } catch (error: Throwable) {
             observationFailure = error
             appendLog("Runtime observation failed; dashboard may be incomplete")
@@ -390,7 +407,7 @@ class TuiYameObserver(
                 trimTransfers()
                 pendingTransfers.remove(key)?.let { pending ->
                     pendingTransferCount -= pending.size
-                    pending.forEach(::onEvent)
+                    pending.forEach(::processEvent)
                 }
             }
 
@@ -437,33 +454,38 @@ class TuiYameObserver(
         pendingTransferCount++
     }
 
-    @Synchronized
-    internal fun transferProjectionSnapshot(): List<DashboardTransfer> = transfers.values.toList()
+    internal fun transferProjectionSnapshot(): List<DashboardTransfer> = work.read {
+        transfers.values.toList()
+    }
 
-    @Synchronized
-    internal fun connectedSnapshot(): Boolean = connected
+    internal fun connectedSnapshot(): Boolean = work.read {
+        connected
+    }
 
-    @Synchronized
-    internal fun resourceGraphProjectionSnapshot(): Map<Long, Map<URI, DashboardHttpResource>> =
+    internal fun resourceGraphProjectionSnapshot(): Map<Long, Map<URI, DashboardHttpResource>> = work.read {
         httpGraphs.graphSnapshot().mapValues { (_, graph) ->
             graph.resources.values.associate { it.resourceLegacyUri to it.dashboardResource() }
         }
+    }
 
-    @Synchronized
-    internal fun resourceGraphMetadataSnapshot(): Map<Long, DashboardHttpGraphMetadata> =
+    internal fun resourceGraphMetadataSnapshot(): Map<Long, DashboardHttpGraphMetadata> = work.read {
         httpGraphs.graphSnapshot().mapValues { (_, graph) ->
             DashboardHttpGraphMetadata(graph.rootLegacyUri, graph.usageCount,
                 graph.lastUsedAt, graph.associations.toSet())
         }
+    }
 
-    @Synchronized
-    internal fun httpHostProjectionSnapshot(): List<DashboardHttpHost> = httpHostSnapshots()
+    internal fun httpHostProjectionSnapshot(): List<DashboardHttpHost> = work.read {
+        httpHostSnapshots()
+    }
 
-    @Synchronized
-    internal fun proxyProjectionStatus(): String? = httpGraphs.status
+    internal fun proxyProjectionStatus(): String? = work.read {
+        httpGraphs.status
+    }
 
-    @Synchronized
-    internal fun httpSelectionSnapshot(): Pair<String?, String?> = selectedHttpHost to selectedHttpResourceUrl
+    internal fun httpSelectionSnapshot(): Pair<String?, String?> = work.read {
+        selectedHttpHost to selectedHttpResourceUrl
+    }
 
     private fun ResourceLifecycleEvent.dashboardResource() = DashboardHttpResource(
         url = resourceLegacyUri.toString(), state = state, kind = kind,
@@ -527,7 +549,6 @@ class TuiYameObserver(
             }
     }
 
-    @Synchronized
     private fun moveHttpSelection(delta: Int) {
         val hosts = httpHostSnapshots()
         if (hosts.isEmpty()) return
@@ -553,7 +574,6 @@ class TuiYameObserver(
         render()
     }
 
-    @Synchronized
     private fun setSelectedHttpHostExpanded(expanded: Boolean) {
         val host = selectedHttpHost ?: return
         if (expanded) expandedHttpHosts += host else expandedHttpHosts -= host
@@ -591,58 +611,34 @@ class TuiYameObserver(
 
     private fun startInputLoop() {
         if (!terminal.terminalInfo.inputInteractive || inputThread != null) return
-
-        inputThread = Thread(
-            {
-                try {
-                    JLineKeyboardInput.open().use { keyboard ->
-                        synchronized(this) {
-                            keyboardInput = keyboard
-                        }
-                        try {
-                            while (!closed && !stopRequested) {
-                                val key = keyboard.readKey(INPUT_POLL_MILLIS)
-                                    ?: continue
-                                handleKey(key)
-                            }
-                        } finally {
-                            synchronized(this) {
-                                if (keyboardInput === keyboard) {
-                                    keyboardInput = null
-                                }
-                            }
-                        }
-                    }
-                } catch (error: Exception) {
-                    if (!closed && !stopRequested) {
-                        onLog(
-                            "Keyboard input unavailable: " +
-                                (error.message ?: error.javaClass.simpleName),
-                        )
-                    }
-                }
-            },
-            "yame-tui-input",
-        ).apply {
-            isDaemon = true
-            start()
+        val keyboard = try { JLineKeyboardInput.open() } catch (error: Exception) {
+            onLog("Keyboard input unavailable: ${error.message ?: error.javaClass.simpleName}")
+            return
         }
+        keyboardInput = keyboard
+        inputThread = Thread({
+            try {
+                while (!closed && !stopRequested) {
+                    val key = keyboard.readKey(INPUT_POLL_MILLIS) ?: continue
+                    handleKey(key)
+                }
+            } catch (error: Exception) {
+                if (!closed && !stopRequested) onLog("Keyboard input unavailable: ${error.message ?: error.javaClass.simpleName}")
+            }
+        }, "yame-tui-input").apply { isDaemon = true; start() }
     }
 
-    @Synchronized
     private fun cycleDashboardPanel() {
         if (terminal.size.width > WIDE_DASHBOARD_THRESHOLD) return
         activeDashboardPanel = activeDashboardPanel.next()
         render()
     }
 
-    @Synchronized
     private fun openCommandPalette() {
         commandPalette = commandPaletteFor("/")
         render()
     }
 
-    @Synchronized
     private fun openPortPalette() {
         val options = portPaletteOptions()
         commandPalette = TuiCommandPalette(
@@ -666,7 +662,6 @@ class TuiYameObserver(
             )
         }
 
-    @Synchronized
     private fun openBaudPalette() {
         val rates = baudPaletteRates(baud)
         commandPalette = TuiCommandPalette(
@@ -685,7 +680,6 @@ class TuiYameObserver(
         render()
     }
 
-    @Synchronized
     private fun openDnsPalette() {
         commandPalette = TuiCommandPalette(
             mode = TuiPaletteMode.DNS,
@@ -697,7 +691,6 @@ class TuiYameObserver(
         render()
     }
 
-    @Synchronized
     private fun openFlowControlPalette() {
         commandPalette = TuiCommandPalette(
             mode = TuiPaletteMode.FLOW_CONTROL,
@@ -715,7 +708,6 @@ class TuiYameObserver(
         render()
     }
 
-    @Synchronized
     private fun openHttpPalette() {
         commandPalette = TuiCommandPalette(
             mode = TuiPaletteMode.HTTP,
@@ -730,7 +722,6 @@ class TuiYameObserver(
         render()
     }
 
-    @Synchronized
     private fun openTonePalette() {
         commandPalette = TuiCommandPalette(
             mode = TuiPaletteMode.TONE,
@@ -745,7 +736,6 @@ class TuiYameObserver(
         render()
     }
 
-    @Synchronized
     private fun openLogLevelPalette(module: YameLogModule) {
         val current = logLevels[module] ?: YameLogLevel.INFO
         commandPalette = TuiCommandPalette(
@@ -765,7 +755,7 @@ class TuiYameObserver(
     }
 
     private fun handlePaletteKey(key: String) {
-        val action = synchronized(this) {
+        val action = run {
             val palette = commandPalette ?: return
 
             val pendingAction = when {
@@ -989,7 +979,6 @@ class TuiYameObserver(
         }
     }
 
-    @Synchronized
     private fun openLoginAddPalette() {
         commandPalette = TuiCommandPalette(
             mode = TuiPaletteMode.LOGIN,
@@ -1021,7 +1010,7 @@ class TuiYameObserver(
             handles += paletteRegistry.add(PaletteChoice(command, { description }, action))
         }
         try {
-            add("/port", "Select serial port") { onRefreshPorts(); openPortPalette() }
+            add("/port", "Select serial port") { refreshAvailablePorts(); openPortPalette() }
             add("/baud", "Select baud rate", ::openBaudPalette)
             add("/flow-control", "Select serial flow control", ::openFlowControlPalette)
             add("/dns-upstream", "Change upstream resolver and reconnect", ::openDnsPalette)
@@ -1030,7 +1019,7 @@ class TuiYameObserver(
             add(TUI_LOGIN_COMMAND, "Set terminal login credentials", ::openLoginAddPalette)
             PacketCaptureLimitKind.entries.forEach { kind ->
                 add("/${kind.commandName}", "Maximum packet captures") {
-                    synchronized(this) {
+                    run {
                         commandPalette = TuiCommandPalette(
                             mode = TuiPaletteMode.CAPTURE_LIMIT,
                             input = "/${kind.commandName} ",
@@ -1046,8 +1035,7 @@ class TuiYameObserver(
             }
             add("/reconnect", "Open the selected serial port", onReconnect)
             add("/disconnect", "Close the current serial port", onDisconnect)
-            add("/refresh-ports", "Rescan serial ports", onRefreshPorts)
-            add("/clear-log", "Clear dashboard log history") { synchronized(this) { logs.clear(); render() } }
+            add("/clear-log", "Clear dashboard log history") { run { logs.clear(); render() } }
             add("/quit", "Quit YAME", ::requestQuit)
             return handles
         } catch (error: Exception) {
@@ -1057,7 +1045,7 @@ class TuiYameObserver(
     }
 
     private fun requestQuit() {
-        val notify = synchronized(this) {
+        val notify = run {
             if (stopRequested) {
                 false
             } else {
@@ -1069,14 +1057,20 @@ class TuiYameObserver(
             try { onQuit() } catch (error: Exception) {
                 // An unavailable or failed quit must leave input enabled so a
                 // later user action can succeed once the runtime has registered.
-                synchronized(this) { stopRequested = false }
+                stopRequested = false
                 throw error
             }
         }
     }
 
-    @Synchronized
     private fun render() {
+        try { renderFrame() } catch (error: Throwable) {
+            work.fail(error)
+            throw error
+        }
+    }
+
+    private fun renderFrame() {
         if (closed || !screenStarted) return
         val frame = YameDashboardRenderer.render(
             state = httpHostSnapshots().let { httpHosts ->
@@ -1111,19 +1105,24 @@ class TuiYameObserver(
         animation.update(frame)
     }
 
-    @Synchronized
     override fun close() {
-        if (closed) return
-        closed = true
         configurationSubscription.close()
-        commandRegistrations.forEach(AutoCloseable::close)
+        work.close()
+    }
+
+    override fun closeBefore(deadlineNanos: Long) {
+        configurationSubscription.close()
+        work.closeBefore(deadlineNanos)
+    }
+
+    private fun teardown() {
+        closed = true
         headerTimer.shutdownNow()
+        commandRegistrations.forEach(AutoCloseable::close)
         keyboardInput?.close()
         keyboardInput = null
         animation.stop()
-        if (screenStarted) {
-            leaveScreen()
-        }
+        if (screenStarted) leaveScreen()
     }
 
     private companion object {

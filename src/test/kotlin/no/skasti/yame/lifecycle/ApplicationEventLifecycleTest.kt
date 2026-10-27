@@ -10,6 +10,67 @@ import java.util.concurrent.TimeUnit
 import kotlin.test.*
 
 class ApplicationEventLifecycleTest {
+    @Test fun `interrupted required handoff cannot be hidden by broker subscriber exception isolation`() {
+        val broker = EventBroker()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val restored = java.util.concurrent.atomic.AtomicBoolean()
+        val exits = LinkedBlockingQueue<Int>()
+        val queue = no.skasti.yame.ui.TuiWorkQueue(capacity = 1, admissionWait = Duration.ofDays(1))
+        val owner = ApplicationEventLifecycle(broker, timeout = Duration.ofMillis(200),
+            sealFacade = {}, report = {}, terminate = { exits.offer(it) })
+        owner.consumer(queue)
+        broker.subscribe("tui") {
+            Thread.currentThread().interrupt()
+            try { queue.submitRequired { fail("rejected observation executed") } }
+            finally { restored.set(Thread.currentThread().isInterrupted); Thread.interrupted() }
+        }
+        try {
+            queue.submit { entered.countDown(); release.await() }
+            assertTrue(entered.await(2, TimeUnit.SECONDS))
+            queue.submit {}
+            broker.publish(DiagnosticMessage("interrupted"))
+            assertEquals(BrokerWaitResult.COMPLETED, broker.drain().await(Duration.ofSeconds(2)))
+            assertTrue(restored.get())
+            assertIs<InterruptedException>(queue.fatalFailure)
+            assertEquals(1, broker.status.subscriberFailures)
+            assertNull(broker.status.failure)
+            assertEquals(1, exits.poll(2, TimeUnit.SECONDS))
+            assertEquals(1L, release.count, "supervision must not require the TUI worker")
+        } finally {
+            release.countDown()
+            assertFailsWith<IllegalStateException> { queue.close() }
+            broker.close(); broker.awaitClosed(Duration.ofSeconds(2))
+        }
+    }
+
+    @Test fun `caught TUI admission failure is supervised independently of blocked TUI worker`() {
+        val broker = EventBroker()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val exits = LinkedBlockingQueue<Int>()
+        val queue = no.skasti.yame.ui.TuiWorkQueue(capacity = 1, admissionWait = Duration.ZERO)
+        val owner = ApplicationEventLifecycle(broker, timeout = Duration.ofMillis(200),
+            sealFacade = {}, report = {}, terminate = { exits.offer(it) })
+        owner.consumer(queue)
+        broker.subscribe("tui") { queue.submit {} }
+        try {
+            queue.submit { entered.countDown(); release.await() }
+            assertTrue(entered.await(2, TimeUnit.SECONDS))
+            queue.submit {}
+            broker.publish(DiagnosticMessage("overflow"))
+            assertEquals(1, exits.poll(2, TimeUnit.SECONDS))
+            assertNotNull(queue.fatalFailure)
+            assertNull(broker.status.failure)
+            assertEquals(1, broker.status.subscriberFailures)
+        } finally {
+            release.countDown()
+            runCatching { queue.close() }
+            broker.close()
+            broker.awaitClosed(Duration.ofSeconds(2))
+        }
+    }
+
     @Test fun `concurrent shutdown closes each owner once and rejects newly created components safely`() {
         val broker = EventBroker()
         val entered = CountDownLatch(1)

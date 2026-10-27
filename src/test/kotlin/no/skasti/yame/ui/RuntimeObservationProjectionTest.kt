@@ -64,7 +64,7 @@ class RuntimeObservationProjectionTest {
         val functions = FunctionStore()
         functions.register(ConnectionFunctions.RefreshPorts) { listOf(SerialPortDescriptor("COM1", "one")) }
         observer(functions).use { ui ->
-            "/port".forEach { ui.handleKey(it.toString()) }; ui.handleKey("Enter")
+            "/port".forEach { ui.handleKeyAndAwait(it.toString()) }; ui.handleKeyAndAwait("Enter")
             assertEquals(listOf("COM1"), ui.paletteSnapshot()!!.options.map { it.value })
             ui.onEvent(AvailablePortsChanged(listOf(SerialPortDescriptor("COM2", "two"))))
             assertEquals(listOf("COM2"), ui.paletteSnapshot()!!.options.map { it.value })
@@ -72,13 +72,14 @@ class RuntimeObservationProjectionTest {
     }
 
     @Test fun `dependency buffering is bounded and exposes a local projection failure`() {
-        observer().use { ui ->
-            repeat(128) { ui.onEvent(TransferBytes("unknown", TransferDirection.TO_HOST, 1)) }
-            assertFailsWith<IllegalStateException> { ui.onEvent(TransferBytes("unknown", TransferDirection.TO_HOST, 1)) }
-            assertNotNull(ui.observationFailure)
-        }
+        val ui = observer()
+        repeat(128) { ui.onEvent(TransferBytes("unknown", TransferDirection.TO_HOST, 1)) }
+        ui.onEvent(TransferBytes("unknown", TransferDirection.TO_HOST, 1))
+        assertFailsWith<IllegalStateException> { ui.close() }
+        assertNotNull(ui.observationFailure)
+        assertNotNull(ui.fatalFailure)
     }
-    @Test fun `actual TUI callback may block broker but never executes on publisher`() {
+    @Test fun `actual TUI admission proceeds without the observer monitor`() {
         val broker = EventBroker(EventBrokerConfig(capacity = 1))
         val entered = CountDownLatch(1)
         val locked = CountDownLatch(1)
@@ -92,9 +93,11 @@ class RuntimeObservationProjectionTest {
                 broker.subscribe("actual-tui") { entered.countDown(); ui.onEvent(it) }
                 broker.publish(DiagnosticMessage("render"))
                 assertTrue(entered.await(5, TimeUnit.SECONDS))
+                assertEquals(BrokerWaitResult.COMPLETED, broker.drain().await(Duration.ofSeconds(2)))
                 broker.publish(DiagnosticMessage("pending"))
-                assertEquals(1, broker.status.queuedEvents)
-                assertEquals("actual-tui", broker.status.activeSubscriber)
+                assertEquals(BrokerWaitResult.COMPLETED, broker.drain().await(Duration.ofSeconds(2)))
+                ui.awaitIdle()
+                assertEquals(0, broker.status.queuedEvents)
             } finally { release.countDown(); holder.join(5_000) }
             assertEquals(BrokerWaitResult.COMPLETED,
                 broker.drain().await(Duration.ofSeconds(5)))

@@ -7,16 +7,43 @@ connections. `RuntimeObserver` has been removed. Configuration transactions and
 subscriptions remain in `ConfigStore`; typed commands/results remain in
 `FunctionStore`; internal protocol/control callbacks remain local.
 
-The TUI currently handles broker callbacks synchronously, including rendering.
-This can block **broker dispatch**, while producers continue to enqueue until
-capacity is exhausted. A full queue waits at most the configured publication
-timeout (10 ms by default), then fails fatally. A dedicated TUI worker remains
-an independent follow-up in [#101](https://github.com/skasti/yame/issues/101).
-The proxy dashboard incrementally consumes typed observations on this same path,
-without registry hooks or a separate executor.
-The [v1 design](design/yame-events-v1.md) distinguishes these implemented boundaries
-from the future TUI worker; the [historical inventory](.history/yame-events-a37ac65.md)
-records the starting point.
+The TUI hands observations off to one count-bounded FIFO queue and one dedicated
+`yame-tui-worker`. Configuration notifications, keyboard actions and header timer
+requests use the same queue. Only that worker mutates presentation state and
+renders. Admission order defines FIFO across sources; domain occurrence ordering
+and stale/deferred event handling remain consumer-owned.
+
+The TUI queue holds at most 256 pending actions. External admission waits up to
+50 ms for capacity, without holding a rendering monitor. A synchronous callback
+from the TUI worker cannot wait on its own queue and fails immediately if full.
+Saturation and worker failure retain a fatal failure that
+`ApplicationEventLifecycle` polls independently of broker/TUI progress. Raw queue
+admission, like broker publication, rejects an interrupted wait and restores the
+interrupt flag without failing the queue. TUI observation/action callbacks use
+required admission: an interrupted rejection while still accepting is fatal,
+because those callbacks cannot replay the lost input and their callers may isolate
+exceptions. Once admission is closed, interrupted rejection is ordinary shutdown
+and does not fail the queue. A rejected attempt is never reported as accepted.
+Callback exception isolation cannot conceal a retained failure. There is no silent dropping or coalescing
+while accepting work. Typed FunctionStore command results are consumed directly
+by their command on the worker; `/port` refreshes before opening its chooser.
+
+Explicit snapshot methods serialize reads through the worker. After termination,
+state is frozen and can be inspected directly. Queue close rejects later callbacks,
+drains accepted actions and tears down the terminal on the worker. Off-worker close
+waits at most three seconds, capped by the remaining application shutdown budget
+when closed by `ApplicationEventLifecycle`; it does not start a new three-second
+budget after producer/broker drain. Worker-initiated close returns immediately and teardown
+follows accepted work. The independent five-second application shutdown deadline still bounds
+blocked rendering, command IO and teardown.
+
+Configuration notifications retain FIFO admission even when delivered synchronously
+inside a worker command's `ConfigStore.set()`. If the queue is full, required
+reentrant admission fails immediately and independently triggers fatal supervision,
+including when `ConfigStore` catches the callback exception. The committed setting
+is not rolled back. Applying the notification inline would overtake already
+accepted work, so the TUI does not bypass its queue or add a side backlog.
+
 [ADR 0001](adrs/0001-fatal-event-queue-saturation.md) decides overload handling;
 [ADR 0004](adrs/0004-extensible-event-contract.md) decides event ownership and access;
 [ADR 0006](adrs/0006-consumer-owned-event-ordering.md) adds occurrence-time
@@ -173,7 +200,7 @@ reads, and waits for connection attempts and proxy producers outside protocol
 monitors. Session closure fences late UDP/ICMP callbacks. Proxy close remains
 bounded, with a separate `awaitQuiescence` boundary used by the PPP owner to
 verify actual worker/handler completion. It then closes and awaits the broker,
-removes subscriptions and closes the
+removes frontend subscriptions, drains accepted TUI work before terminal teardown, and closes the
 frontend, configuration installation and logging/capture resources. Finally it
 seals the facade. An incomplete shutdown is a failure; it never claims a
 successful drain or closes a still-dispatching frontend.
@@ -247,15 +274,14 @@ observations of a pending member/use coalesce using the same domain semantics. W
 proxy panel shows an **incomplete** status; it does not invent a graph from a
 resource payload. Creation resolves that graph's dependencies, and removal discards
 them. If the bound is exceeded or observations are ambiguous, the proxy view is
-cleared and marked **unavailable** until restart. `observationFailure` and broker
-subscriber diagnostics retain the failure. Other runtime observations continue.
+cleared and marked **unavailable** until restart. `observationFailure` and independent fatal
+supervision retain the failure. A terminal projection failure also fails the TUI worker and triggers fatal supervision.
 An intentionally late subscriber receives no replay or bootstrap.
 
-Until [#101](https://github.com/skasti/yame/issues/101), this TUI subscriber can
-update/render synchronously on the broker worker. A slow render delays all broker
-dispatch and sustained load can cause fatal queue saturation. Serial/PPP/proxy
-producer threads only publish; they never invoke this subscriber or render the
-terminal. Latch-based tests cover this interim boundary and saturation.
+Broker callbacks only admit TUI observations. A blocked terminal does not hold an
+observer monitor needed by broker/config/input admission. Queue saturation remains
+fatal and is detected without TUI worker progress. Latch-based tests exercise
+FIFO, overload, worker failure and drain/teardown boundaries.
 
 The integration tests register an independent `RecordingResourceView` before the
 fixture registry publishes. Controlled clocks and broker drain checkpoints compare

@@ -17,7 +17,7 @@ abstraction:
 
 1. Construct the selected `Presentation`, installing its event subscriptions, and
    register it as a lifecycle consumer before calling its nonblocking `start()`.
-   The TUI owns its render timer and input thread; plain diagnostics need no loop.
+   The TUI owns its bounded FIFO worker, render timer and input thread; plain diagnostics need no loop.
 2. Construct `YameRuntime`, which observes configuration but exposes no runtime
    functions, and immediately register it as a lifecycle producer.
 3. Call `run()`, which claims startup once and registers the runtime functions
@@ -26,7 +26,8 @@ abstraction:
    Core components also remain usable
    without a presentation.
 4. On return or failure, use `ApplicationEventLifecycle` to stop runtime producers,
-   close and drain the broker, then close presentation subscriptions/workers,
+   close and drain the broker, then close presentation subscriptions and drain
+   accepted TUI work before terminal teardown,
    release the configuration installation and close logging. A shutdown hook and
    fatal-event supervisor use that same idempotent owner.
 
