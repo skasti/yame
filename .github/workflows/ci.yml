@@ -64,6 +64,8 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_release_workflow.py'
           python3 -m unittest discover -s tests -p 'test_tui_previews.py'
           python3 -m unittest discover -s tests -p 'test_dosbox_downloads.py'
+          python3 -m unittest discover -s tests -p 'test_dosbox_binary_integrity.py'
+          python3 -m unittest discover -s tests -p 'test_serial_faults.py'
           node --test tests/tui-previews.test.cjs tests/render-tui-previews.test.cjs tests/font-metrics.test.cjs
 
   build-and-test:
@@ -212,6 +214,34 @@ jobs:
       - name: DOSBox dial-up PPP, DNS and TCP compatibility suite
         if: needs.preview-gate.outputs.reuse != 'true'
         run: bash scripts/dosbox-network-integration-test.sh
+
+      - name: DOSBox serial binary download integrity
+        if: needs.preview-gate.outputs.reuse != 'true'
+        timeout-minutes: 15
+        run: bash scripts/dosbox-network-integration-test.sh binary-integrity
+
+      - name: Upload DOSBox binary integrity diagnostics
+        if: always() && needs.preview-gate.outputs.reuse != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: yame-serial-binary-integrity
+          path: build/reports/dosbox-network/binary-integrity/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: DOSBox binary integrity with serial data loss and corruption
+        if: needs.preview-gate.outputs.reuse != 'true'
+        timeout-minutes: 20
+        run: bash scripts/dosbox-network-integration-test.sh serial-faults
+
+      - name: Upload DOSBox serial fault diagnostics
+        if: always() && needs.preview-gate.outputs.reuse != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: yame-serial-faults
+          path: build/reports/dosbox-network/serial-faults/
+          if-no-files-found: warn
+          retention-days: 14
 
       # External availability is outside YAME's control. Report the smoke
       # failure but never fail an otherwise healthy pull request.

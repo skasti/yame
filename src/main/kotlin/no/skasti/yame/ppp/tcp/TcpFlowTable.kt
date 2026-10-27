@@ -86,6 +86,7 @@ class TcpFlowTable(
         var peerMaximumSegmentSize: Int,
         var localReceiveWindow: Int,
         val outstanding: ArrayDeque<OutstandingSegment> = ArrayDeque(),
+        var recoveryEndSequence: UInt? = null,
         var state: TcpConnectionState,
     )
 
@@ -212,6 +213,12 @@ class TcpFlowTable(
                 outstanding.packet.sequenceSpaceLength == packet.sequenceSpaceLength
         }
         if (existing != null) {
+            // A legacy peer may discard every segment after a gap. Drain the
+            // pre-retransmission window before filling ACKed slices with newer
+            // data, otherwise each new segment can perpetuate the same gap.
+            if (flow.recoveryEndSequence == null) {
+                flow.recoveryEndSequence = flow.localNextSequence
+            }
             existing.packet = packet.copy(payload = packet.payload.copyOf())
             existing.lastSentNanos = now
             return
@@ -421,6 +428,10 @@ class TcpFlowTable(
 
         acknowledgeOutstandingSegments(flow, acknowledged.toLong())
         flow.localAcknowledgedSequence = acknowledgmentNumber
+        val recoveryEnd = flow.recoveryEndSequence
+        if (recoveryEnd != null && !isSequenceAfter(recoveryEnd, acknowledgmentNumber)) {
+            flow.recoveryEndSequence = null
+        }
         return true
     }
 
@@ -488,6 +499,7 @@ class TcpFlowTable(
     }
 
     private fun availableSendWindow(flow: Flow): Int {
+        if (flow.recoveryEndSequence != null) return 0
         val inFlight = forwardDistance(
             flow.localAcknowledgedSequence,
             flow.localNextSequence,
