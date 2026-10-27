@@ -97,7 +97,12 @@ internal class ApplicationEventLifecycle(
                     // Inspect actual termination before releasing resources its callbacks use.
                     val brokerStopped = broker.status.terminated
                     if (brokerStopped) {
-                        consumers.reversed().forEach { consumer -> attempt("consumer shutdown", consumer::close) }
+                        consumers.reversed().forEach { consumer ->
+                            attempt("consumer shutdown") {
+                                if (consumer is DeadlineCloseable) consumer.closeBefore(deadlineNanos)
+                                else consumer.close()
+                            }
+                        }
                     } else {
                         reportFailure("YAME consumer shutdown skipped: event dispatcher has not terminated")
                     }

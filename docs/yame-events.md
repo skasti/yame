@@ -16,18 +16,33 @@ and stale/deferred event handling remain consumer-owned.
 The TUI queue holds at most 256 pending actions. External admission waits up to
 50 ms for capacity, without holding a rendering monitor. A synchronous callback
 from the TUI worker cannot wait on its own queue and fails immediately if full.
-Saturation, interrupted admission and worker failure retain a fatal failure that
-`ApplicationEventLifecycle` polls independently of broker/TUI progress. Callback
-exception isolation cannot conceal it. There is no silent dropping or coalescing
+Saturation and worker failure retain a fatal failure that
+`ApplicationEventLifecycle` polls independently of broker/TUI progress. Raw queue
+admission, like broker publication, rejects an interrupted wait and restores the
+interrupt flag without failing the queue. TUI observation/action callbacks use
+required admission: an interrupted rejection while still accepting is fatal,
+because those callbacks cannot replay the lost input and their callers may isolate
+exceptions. Once admission is closed, interrupted rejection is ordinary shutdown
+and does not fail the queue. A rejected attempt is never reported as accepted.
+Callback exception isolation cannot conceal a retained failure. There is no silent dropping or coalescing
 while accepting work. Typed FunctionStore command results are consumed directly
 by their command on the worker; `/port` refreshes before opening its chooser.
 
 Explicit snapshot methods serialize reads through the worker. After termination,
 state is frozen and can be inspected directly. Queue close rejects later callbacks,
 drains accepted actions and tears down the terminal on the worker. Off-worker close
-waits at most three seconds; worker-initiated close returns immediately and teardown
-follows accepted work. The independent application shutdown deadline still bounds
+waits at most three seconds, capped by the remaining application shutdown budget
+when closed by `ApplicationEventLifecycle`; it does not start a new three-second
+budget after producer/broker drain. Worker-initiated close returns immediately and teardown
+follows accepted work. The independent five-second application shutdown deadline still bounds
 blocked rendering, command IO and teardown.
+
+Configuration notifications retain FIFO admission even when delivered synchronously
+inside a worker command's `ConfigStore.set()`. If the queue is full, required
+reentrant admission fails immediately and independently triggers fatal supervision,
+including when `ConfigStore` catches the callback exception. The committed setting
+is not rolled back. Applying the notification inline would overtake already
+accepted work, so the TUI does not bypass its queue or add a side backlog.
 
 [ADR 0001](adrs/0001-fatal-event-queue-saturation.md) decides overload handling;
 [ADR 0004](adrs/0004-extensible-event-contract.md) decides event ownership and access;

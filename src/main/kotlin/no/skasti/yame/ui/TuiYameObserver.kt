@@ -32,6 +32,7 @@ import no.skasti.yame.ppp.dns.DnsSettings
 import no.skasti.yame.ppp.proxy.ProxySettings
 import no.skasti.yame.logging.LogSettings
 import no.skasti.yame.lifecycle.FatalFailureSource
+import no.skasti.yame.lifecycle.DeadlineCloseable
 import no.skasti.yame.lifecycle.ApplicationFunctions
 import com.github.ajalt.mordant.animation.textAnimation
 import com.github.ajalt.mordant.rendering.TextColors.Companion.gray
@@ -63,7 +64,7 @@ class TuiYameObserver(
     private val configStore: ConfigStore = ConfigStore.current,
     private val functions: FunctionStore = FunctionStore.current,
     private val terminal: Terminal = Terminal(interactive = true),
-) : AutoCloseable, FatalFailureSource {
+) : DeadlineCloseable, FatalFailureSource {
     private val paletteRegistry = CommandPalette()
     private val onPortSelected: (String) -> Unit = { value -> selectConnectionSetting(SerialSettings.Port, value) }
     private val onBaudSelected: (Int) -> Unit = { value -> selectConnectionSetting(SerialSettings.Baud, value) }
@@ -138,7 +139,7 @@ class TuiYameObserver(
     internal fun awaitIdle() = work.read { Unit }
 
     private val configurationSubscription = configStore.onChange.subscribe(initial = true) { changes ->
-        work.submit {
+        work.submitRequired {
             changes[SerialSettings.Port]?.let { portName = it.value }
             changes[SerialSettings.Baud]?.let { baud = it.value }
             changes[SerialSettings.FlowControl]?.let { flowControl = it.value }
@@ -163,7 +164,7 @@ class TuiYameObserver(
         commandPalette?.let { it.copy(options = it.options.toList()) }
     }
 
-    internal fun handleKey(key: String) { work.submit { applyKey(key) } }
+    internal fun handleKey(key: String) { work.submitRequired { applyKey(key) } }
 
     private fun applyKey(key: String) {
         try {
@@ -185,14 +186,14 @@ class TuiYameObserver(
         }
     }
 
-    fun start() { work.submit { startScreen() } }
+    fun start() { work.submitRequired { startScreen() } }
 
     private fun startScreen() {
         if (closed || screenStarted) return
         screenStarted = true
         headerStartedNanos = System.nanoTime()
         headerTimer.scheduleAtFixedRate(
-            { work.submit { render() } }, 5, 5, java.util.concurrent.TimeUnit.SECONDS,
+            { work.submitRequired { render() } }, 5, 5, java.util.concurrent.TimeUnit.SECONDS,
         )
         enterScreen()
         render()
@@ -227,7 +228,7 @@ class TuiYameObserver(
     internal fun updateAvailablePorts(ports: List<SerialPortDescriptor>) {
         if (!work.isWorker) {
             val snapshot = ports.toList()
-            work.submit { updateAvailablePorts(snapshot) }
+            work.submitRequired { updateAvailablePorts(snapshot) }
             return
         }
         val previousPalette = commandPalette
@@ -262,7 +263,7 @@ class TuiYameObserver(
     }
 
     fun onLog(message: String) {
-        if (!work.isWorker) { work.submit { onLog(message) }; return }
+        if (!work.isWorker) { work.submitRequired { onLog(message) }; return }
         appendLog(message)
         render()
     }
@@ -279,8 +280,8 @@ class TuiYameObserver(
         private set
 
     fun onEvent(event: YameEvent) {
-        val snapshot = event // Typed production events defensively snapshot collection payloads.
-        work.submit { processEvent(snapshot) }
+        // Production events already own immutable payloads at the publication boundary.
+        work.submitRequired { processEvent(event) }
     }
 
     private fun processEvent(event: YameEvent) {
@@ -1107,6 +1108,11 @@ class TuiYameObserver(
     override fun close() {
         configurationSubscription.close()
         work.close()
+    }
+
+    override fun closeBefore(deadlineNanos: Long) {
+        configurationSubscription.close()
+        work.closeBefore(deadlineNanos)
     }
 
     private fun teardown() {

@@ -1,6 +1,7 @@
 package no.skasti.yame.ui
 
 import no.skasti.yame.lifecycle.FatalFailureSource
+import no.skasti.yame.lifecycle.DeadlineCloseable
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
@@ -15,11 +16,13 @@ internal class TuiWorkQueue(
     private val admissionWait: Duration = Duration.ofMillis(50),
     private val drainWait: Duration = Duration.ofSeconds(3),
     private val teardown: () -> Unit = {},
-) : AutoCloseable, FatalFailureSource {
+) : DeadlineCloseable, FatalFailureSource {
     private val lock = ReentrantLock()
     private val changed = lock.newCondition()
+    private val admissionWaiting = lock.newCondition()
     private val pending = ArrayDeque<() -> Unit>()
     private var accepting = true
+    private var waitingAdmissions = 0
     private val stopped = CountDownLatch(1)
     private val fatal = AtomicReference<Throwable?>()
     override val fatalFailure: Throwable? get() = fatal.get()
@@ -47,8 +50,17 @@ internal class TuiWorkQueue(
         }
     }, "yame-tui-worker").apply { isDaemon = true; start() }
 
+    /** Interruption rejects this attempt without poisoning the queue, as in EventBroker.publish. */
+    fun submit(action: () -> Unit): Boolean = submit(failOnInterruption = false, action)
+
+    /**
+     * Live callbacks cannot replay a rejected observation/action. Retain that failure even if
+     * their caller isolates exceptions. Once admission is closed, rejection is ordinary shutdown.
+     */
+    fun submitRequired(action: () -> Unit): Boolean = submit(failOnInterruption = true, action)
+
     /** Closed callbacks are ignored. Capacity exhaustion is terminal and independently observable. */
-    fun submit(action: () -> Unit): Boolean = lock.withLock {
+    private fun submit(failOnInterruption: Boolean, action: () -> Unit): Boolean = lock.withLock {
         if (!accepting) return false
         var remaining = admissionWait.toNanos()
         while (pending.size == capacity && accepting) {
@@ -58,10 +70,14 @@ internal class TuiWorkQueue(
                 fail(error)
                 throw error
             }
+            waitingAdmissions++
+            admissionWaiting.signalAll()
             remaining = try { changed.awaitNanos(remaining) } catch (error: InterruptedException) {
-                fail(error)
                 Thread.currentThread().interrupt()
+                if (failOnInterruption && accepting) fail(error)
                 throw error
+            } finally {
+                waitingAdmissions--
             }
         }
         if (!accepting) return false
@@ -85,10 +101,29 @@ internal class TuiWorkQueue(
         lock.withLock { accepting = false; changed.signalAll() }
     }
 
-    override fun close() {
+    /** Deterministic admission boundary for tests; never waits for rendering. */
+    internal fun awaitAdmissionWait(timeout: Duration): Boolean = lock.withLock {
+        var remaining = timeout.toNanos()
+        while (waitingAdmissions == 0) {
+            if (remaining <= 0) return false
+            remaining = admissionWaiting.awaitNanos(remaining)
+        }
+        true
+    }
+
+    override fun close() = closeBefore(System.nanoTime() + drainWait.toNanos())
+
+    override fun closeBefore(deadlineNanos: Long) {
         lock.withLock { accepting = false; changed.signalAll() }
         if (isWorker) return // The worker drains and tears down after the current action returns.
-        if (!stopped.await(drainWait.toNanos(), TimeUnit.NANOSECONDS)) {
+        val drained = try {
+            val remaining = (deadlineNanos - System.nanoTime()).coerceAtLeast(0)
+            stopped.await(minOf(drainWait.toNanos(), remaining), TimeUnit.NANOSECONDS)
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw error
+        }
+        if (!drained) {
             val error = IllegalStateException("TUI worker did not drain")
             fail(error)
             throw error
