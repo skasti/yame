@@ -433,3 +433,12 @@ section/key names are retained. Existing files are not rewritten on startup.
 and first-run default-file creator; runtime rule reads and edits use
 `ElementSimplifierSettings` through the shared store. Its distinct default-template
 creation responsibility does not recreate application configuration state.
+
+Production bootstrap installs the store before CLI parsing and component
+construction, including tone-test mode. Main uses `ConfigStore.current` for its
+own reads; component constructors resolve optional config arguments from the
+installed store. For example, `YameLogManager(logDirectory = path)` defaults its
+`config` argument to `LoggingConfig.fromConfigStore()`. Explicit immutable configs
+remain available for isolated tests. The installation is released on parse/load
+failure and after lifecycle cleanup, with logging and presentation stopped first.
+ToneTest owns the standalone modem and its forced tone-enabled configuration.

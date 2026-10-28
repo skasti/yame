@@ -40,7 +40,7 @@ class RuntimeObservationIntegrationTest {
             if (events.size == 1) initial.countDown() else changed.countDown()
         }
         try {
-            YameLogManager(YameLogManager.defaultLevels(), root).use { logs ->
+            YameLogManager(no.skasti.yame.logging.LoggingConfig(), root).use { logs ->
                 YameRuntime(ConfigStore(), functions, logs,
                     resourceGraphs = NavigationResourceRegistry(), portProvider = source::get).use { runtime ->
                     val worker = thread { runtime.run() }
@@ -91,7 +91,7 @@ class RuntimeObservationIntegrationTest {
             broker.publish(DiagnosticMessage("blocked"))
             assertTrue(entered.await(5, TimeUnit.SECONDS))
             broker.publish(DiagnosticMessage("pending"))
-            YameLogManager(YameLogManager.defaultLevels(), root).use { logs ->
+            YameLogManager(no.skasti.yame.logging.LoggingConfig(), root).use { logs ->
                 val session = PppSession(sendFrame = {}, logger = {}, diagnosticSink = logs::eventSink)
                 try {
                     assertFailsWith<QueueFullException> { session.receive(PppFrame(0x8057, byteArrayOf(1, 2, 3))) }

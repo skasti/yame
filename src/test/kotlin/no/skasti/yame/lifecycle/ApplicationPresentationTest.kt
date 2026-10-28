@@ -77,7 +77,7 @@ class ApplicationPresentationTest {
         val functions = FunctionStore()
         val config = ConfigStore()
         try {
-            YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
+            YameLogManager(no.skasti.yame.logging.LoggingConfig(), logDirectory = directory).use { logs ->
                 YameRuntime(config, functions, logs, NavigationResourceRegistry(), {
                     functions.invoke(ApplicationFunctions.Quit)
                     emptyList()

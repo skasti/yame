@@ -56,7 +56,7 @@ class YameRuntimeLifecycleTest {
         val store: ConfigStore = ConfigStore(listOf(no.skasti.yame.serial.SerialSettings.Port to "COM1")),
     ) : AutoCloseable {
         val directory = Files.createTempDirectory("yame-runtime-lifecycle")
-        val logs = YameLogManager(YameLogManager.defaultLevels(), directory)
+        val logs = YameLogManager(no.skasti.yame.logging.LoggingConfig(), directory)
         val functions = FunctionStore()
         val ports = RuntimeTestPorts(source)
         val runtime = YameRuntime(store, functions, logs, NavigationResourceRegistry(), ports::scan,

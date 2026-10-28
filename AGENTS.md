@@ -171,8 +171,10 @@ unbounded buffering.
 - Accept an explicitly constructed immutable config independently of any store.
   A non-null constructor default such as
   `config: ConfigType = ConfigType.fromConfigStore()` is useful when appropriate,
-  but is not the only construction pattern. Composition with an explicit store
-  can inject `ConfigType.fromConfigStore(store)` instead. Do not use a nullable
+  and is the production construction pattern for configured components. Main
+  installs ConfigStore before parsing CLI flags or constructing any component;
+  components resolve their own default config from that installed store. Explicit
+  test composition can inject `ConfigType.fromConfigStore(store)` instead. Do not use a nullable
   config argument merely to implement a fallback.
 - Explicit config must allow isolated tests without installing or modifying a
   global store. Config data-class defaults remain ordinary standalone defaults.

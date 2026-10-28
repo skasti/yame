@@ -1,5 +1,7 @@
 package no.skasti.yame.logging
 
+import no.skasti.yame.config.ConfigStore
+import kotlin.test.assertFailsWith
 import java.nio.file.Files
 import kotlin.io.path.name
 import kotlin.io.path.readText
@@ -10,6 +12,30 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class YameLoggingTest {
+    @Test fun `default constructor reads the installed store while explicit config stays isolated`() {
+        val root = Files.createTempDirectory("yame-logging-config")
+        try {
+            assertFailsWith<IllegalStateException> { YameLogManager(logDirectory = root.resolve("missing")) }
+            val store = ConfigStore(listOf(
+                LogSettings.Levels.getValue(YameLogModule.MODEM) to YameLogLevel.DEBUG,
+                LogSettings.CaptureLimits.getValue(PacketCaptureLimitKind.TOTAL) to 42,
+            ))
+            ConfigStore.install(store).use {
+                YameLogManager(logDirectory = root.resolve("installed")).use { logs ->
+                    assertEquals(YameLogLevel.DEBUG, logs.level(YameLogModule.MODEM))
+                    assertEquals(42, logs.captureLimits.maxTotal)
+                }
+                YameLogManager(config = LoggingConfig(), logDirectory = root.resolve("explicit")).use { logs ->
+                    assertEquals(YameLogLevel.INFO, logs.level(YameLogModule.MODEM))
+                    assertEquals(PacketCaptureLimits(), logs.captureLimits)
+                }
+            }
+            YameLogManager(config = LoggingConfig(), logDirectory = root.resolve("standalone")).use { logs ->
+                assertEquals(YameLogLevel.INFO, logs.level(YameLogModule.MODEM))
+            }
+        } finally { root.toFile().deleteRecursively() }
+    }
+
     @Test
     fun `module levels filter independently and all active files are created`() {
         val directory = Files.createTempDirectory("yame-logs")
@@ -18,7 +44,7 @@ class YameLoggingTest {
             this[YameLogModule.PROXY] = YameLogLevel.DEBUG
         }
 
-        YameLogManager(levels, directory).use { logs ->
+        YameLogManager(LoggingConfig(levels), directory).use { logs ->
             logs.log(YameLogModule.PPP, YameLogLevel.INFO, "hidden ppp info")
             logs.log(YameLogModule.PPP, YameLogLevel.ERROR, "visible ppp error")
             logs.log(YameLogModule.PROXY, YameLogLevel.DEBUG, "visible proxy debug")
@@ -41,7 +67,7 @@ class YameLoggingTest {
     fun `runtime level changes take effect immediately`() {
         val directory = Files.createTempDirectory("yame-log-runtime-levels")
 
-        YameLogManager(YameLogManager.defaultLevels(), directory).use { logs ->
+        YameLogManager(no.skasti.yame.logging.LoggingConfig(), directory).use { logs ->
             logs.log(YameLogModule.PROXY, YameLogLevel.DEBUG, "hidden before")
             logs.setLevel(YameLogModule.PROXY, YameLogLevel.DEBUG)
             logs.log(YameLogModule.PROXY, YameLogLevel.DEBUG, "visible after")
@@ -57,7 +83,7 @@ class YameLoggingTest {
     fun `log initialization failure does not abort application logging setup`() {
         val notADirectory = Files.createTempFile("yame-log-path", ".tmp")
 
-        YameLogManager(YameLogManager.defaultLevels(), notADirectory).use { logs ->
+        YameLogManager(no.skasti.yame.logging.LoggingConfig(), notADirectory).use { logs ->
             assertEquals(YameLogLevel.INFO, logs.level(YameLogModule.PROXY))
             logs.log(YameLogModule.PROXY, YameLogLevel.ERROR, "logging path unavailable")
         }
@@ -70,7 +96,7 @@ class YameLoggingTest {
             this[YameLogModule.SERIAL] = YameLogLevel.ERROR
         }
 
-        YameLogManager(levels, directory).use { logs ->
+        YameLogManager(LoggingConfig(levels), directory).use { logs ->
             logs.logger(YameLogModule.SERIAL)("Serial reader stopped: device disconnected")
         }
 
@@ -82,7 +108,7 @@ class YameLoggingTest {
         val directory = Files.createTempDirectory("yame-log-bounded")
 
         YameLogManager(
-            YameLogManager.defaultLevels(),
+            no.skasti.yame.logging.LoggingConfig(),
             directory,
             maxActiveLogBytes = 120,
             maxArchivesPerModule = 2,
@@ -103,11 +129,11 @@ class YameLoggingTest {
     fun `existing active log is archived using timestamped module name`() {
         val directory = Files.createTempDirectory("yame-log-rotation")
 
-        YameLogManager(YameLogManager.defaultLevels(), directory).use { logs ->
+        YameLogManager(no.skasti.yame.logging.LoggingConfig(), directory).use { logs ->
             logs.log(YameLogModule.DNS, YameLogLevel.INFO, "first run")
         }
 
-        YameLogManager(YameLogManager.defaultLevels(), directory).use { logs ->
+        YameLogManager(no.skasti.yame.logging.LoggingConfig(), directory).use { logs ->
             logs.log(YameLogModule.DNS, YameLogLevel.INFO, "second run")
         }
 

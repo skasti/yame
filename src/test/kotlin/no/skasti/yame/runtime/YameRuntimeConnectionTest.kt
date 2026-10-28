@@ -100,7 +100,7 @@ class YameRuntimeConnectionTest {
                 messages += message
                 if (message.contains("YAME ready on COM1 at 57600 baud")) secondReady.countDown()
             }
-            YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
+            YameLogManager(no.skasti.yame.logging.LoggingConfig(), logDirectory = directory).use { logs ->
                 YameRuntime(
                     configStore = store, functions = functions, logManager = logs,
                     resourceGraphs = NavigationResourceRegistry(),
@@ -148,7 +148,7 @@ class YameRuntimeConnectionTest {
                 val port = Port(failure)
                 var attempts = 0
                 val messages = mutableListOf<String>()
-                YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
+                YameLogManager(no.skasti.yame.logging.LoggingConfig(), logDirectory = directory).use { logs ->
                     YameRuntime(
                         configStore = store, functions = functions, logManager = logs,
                         resourceGraphs = NavigationResourceRegistry(),
@@ -182,7 +182,7 @@ class YameRuntimeConnectionTest {
             val ports = listOf(SerialPortDescriptor("COM1", "test port"))
             val opened = mutableListOf<Triple<String, Int, SerialFlowControl>>()
             store.onChange.subscribe { events++ }.use {
-                YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
+                YameLogManager(no.skasti.yame.logging.LoggingConfig(), logDirectory = directory).use { logs ->
                     val testPorts = RuntimeTestPorts { ports }
                     YameRuntime(
                         configStore = store,
@@ -288,7 +288,7 @@ class YameRuntimeConnectionTest {
             var attempts = 0
             val ports = listOf(SerialPortDescriptor("COM1", "test port"))
 
-            YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
+            YameLogManager(no.skasti.yame.logging.LoggingConfig(), logDirectory = directory).use { logs ->
                 val testPorts = RuntimeTestPorts { ports }
                 val runtime = YameRuntime(
                     configStore = store,

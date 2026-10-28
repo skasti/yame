@@ -6,7 +6,6 @@ import no.skasti.yame.ppp.proxy.transform.ElementSimplifierConfigurationStore
 import no.skasti.yame.config.*
 import no.skasti.yame.serial.SerialSettings
 import no.skasti.yame.logging.LogSettings
-import no.skasti.yame.logging.LoggingConfig
 import no.skasti.yame.modem.ModemSettings
 import no.skasti.yame.modem.LoginCredentials
 import no.skasti.yame.ppp.PppSettings
@@ -18,14 +17,10 @@ import no.skasti.yame.logging.YameLogManager
 import no.skasti.yame.logging.YameLogModule
 import no.skasti.yame.lifecycle.ApplicationEventLifecycle
 import no.skasti.yame.observer.YameEvents
-import no.skasti.yame.logging.DiagnosticMessage
-import no.skasti.yame.logging.diagnosticLogger
-import no.skasti.yame.modem.HayesModem
 import no.skasti.yame.modem.HayesModemConfig
 import no.skasti.yame.ppp.ip.Ipv4Address
 import no.skasti.yame.ppp.ip.Ipv4Cidr
 import no.skasti.yame.ppp.dns.PppDnsConfig
-import no.skasti.yame.ppp.PppIpConfig
 import no.skasti.yame.serial.SerialConnection
 import no.skasti.yame.serial.SerialFlowControl
 import no.skasti.yame.tone.DialString
@@ -49,101 +44,78 @@ fun main(args: Array<String>) = main(args) { useTui, terminal ->
 internal fun main(args: Array<String>, createPresentation: (Boolean, Terminal) -> Presentation) {
     val configPath = configurationPath(args)
     val informationalOnly = args.any { it == "--help" || it == "-h" || it == "--list" || it == "-l" }
-    val runtimeConfigStore = if (informationalOnly) ConfigStore() else lazyApplicationConfigStore(configPath)
-    val options = parseArgs(args, runtimeConfigStore)
+    ConfigStore.install(if (informationalOnly) ConfigStore() else lazyApplicationConfigStore(configPath)).use { installation ->
+        val options = parseArgs(args)
 
-    if (options.listPorts) {
-        val ports = SerialConnection.availablePortDescriptors()
-        if (ports.isEmpty()) {
-            println("No serial ports found")
-        } else {
-            println("Available serial ports:")
-            ports.forEach { port ->
-                println("  ${port.systemPortName}\t${port.descriptivePortName}")
-            }
-        }
-        return
-    }
-
-    val logging = LoggingConfig.fromConfigStore(runtimeConfigStore)
-    val logManager = YameLogManager(logging.levels, options.logDirectory, captureLimits = logging.captureLimits)
-    val events = ApplicationEventLifecycle()
-    events.consumer(logManager)
-    val coordinatedShutdown = YameEvents.coordinateShutdown(events::close)
-    val shutdownHook = Thread(events::close, "yame-shutdown")
-    Runtime.getRuntime().addShutdownHook(shutdownHook)
-    try {
-        if (options.testNumber != null) {
-            events.consumer(PlainPresentation())
-            val modemConsoleLogger = diagnosticLogger(logManager.logger(YameLogModule.MODEM))
-            val modemConfig = HayesModemConfig.fromConfigStore(runtimeConfigStore)
-            val modem = HayesModem(
-                baudRate = runtimeConfigStore[SerialSettings.Baud],
-                config = configurationForToneTest(modemConfig),
-                logger = modemConsoleLogger,
-                pppLogger = logManager.logger(YameLogModule.PPP),
-                dnsLogger = logManager.debugLogger(YameLogModule.DNS),
-                transferLogger = logManager.debugLogger(YameLogModule.TRANSFERS),
-                proxyLogger = logManager.debugLogger(YameLogModule.PROXY),
-                diagnosticSink = logManager::eventSink,
-            )
-            events.producer(modem)
-            println(
-                "Tone test. Dialing: ${options.testNumber} " +
-                    "(pickup: ${modemConfig.pickupTime}, " +
-                    "dial tone: ${modemConfig.dialToneTime}, " +
-                    "handshake: ${modemConfig.handshakeProfile})...",
-            )
-            modem.dial(options.testNumber)
-            YameEvents.publish(DiagnosticMessage("Tone test complete."))
-            return
-        }
-
-        if (!Files.exists(configPath)) {
-            runCatching { runtimeConfigStore.saveLoadedValues() }
-                .onFailure { error ->
-                    System.err.println("YAME could not create ${configPath}: ${error.message}")
+        if (options.listPorts) {
+            val ports = SerialConnection.availablePortDescriptors()
+            if (ports.isEmpty()) {
+                println("No serial ports found")
+            } else {
+                println("Available serial ports:")
+                ports.forEach { port ->
+                    println("  ${port.systemPortName}\t${port.descriptivePortName}")
                 }
-        }
-        runCatching { ElementSimplifierConfigurationStore.alongside(configPath).createDefaultIfMissing() }
-            .onFailure { error ->
-                System.err.println("YAME could not create element-simplifier.ini: ${error.message}")
             }
-
-        val detectedTerminal = Terminal()
-        val useTui = when (options.uiMode) {
-            UiMode.AUTO ->
-                detectedTerminal.terminalInfo.outputInteractive &&
-                    detectedTerminal.terminalInfo.inputInteractive &&
-                    detectedTerminal.terminalInfo.supportsAnsiCursor
-
-            UiMode.TUI -> true
-            UiMode.PLAIN -> false
-        }
-
-        events.consumer(no.skasti.yame.config.ConfigStore.install(runtimeConfigStore))
-        if (!useTui && runtimeConfigStore[SerialSettings.Port] == null) {
-            printUsage()
             return
         }
 
-        val terminal = if (useTui && options.uiMode == UiMode.TUI) Terminal(interactive = true) else detectedTerminal
-        val presentation = createPresentation(useTui, terminal).also(events::consumer)
-        presentation.start()
+        val events = ApplicationEventLifecycle()
+        events.consumer(installation)
+        val coordinatedShutdown = YameEvents.coordinateShutdown(events::close)
+        val shutdownHook = Thread(events::close, "yame-shutdown")
+        Runtime.getRuntime().addShutdownHook(shutdownHook)
+        try {
+            val logManager = YameLogManager(logDirectory = options.logDirectory).also(events::consumer)
+            if (options.testNumber != null) {
+                events.consumer(PlainPresentation())
+                val toneTest = no.skasti.yame.tone.ToneTest(logManager).also(events::producer)
+                toneTest.run(options.testNumber)
+                return
+            }
 
-        val runtime = YameRuntime(
-            logManager = logManager, failFastStartup = !useTui,
-        ).also(events::producer)
-        runtime.run()
-    } finally {
-        events.close()
-        coordinatedShutdown.close()
-        runCatching { Runtime.getRuntime().removeShutdownHook(shutdownHook) }
+            if (!Files.exists(configPath)) {
+                runCatching { ConfigStore.current.saveLoadedValues() }
+                    .onFailure { error ->
+                        System.err.println("YAME could not create ${configPath}: ${error.message}")
+                    }
+            }
+            runCatching { ElementSimplifierConfigurationStore.alongside(configPath).createDefaultIfMissing() }
+                .onFailure { error ->
+                    System.err.println("YAME could not create element-simplifier.ini: ${error.message}")
+                }
+
+            val detectedTerminal = Terminal()
+            val useTui = when (options.uiMode) {
+                UiMode.AUTO ->
+                    detectedTerminal.terminalInfo.outputInteractive &&
+                        detectedTerminal.terminalInfo.inputInteractive &&
+                        detectedTerminal.terminalInfo.supportsAnsiCursor
+
+                UiMode.TUI -> true
+                UiMode.PLAIN -> false
+            }
+
+            if (!useTui && ConfigStore.current[SerialSettings.Port] == null) {
+                printUsage()
+                return
+            }
+
+            val terminal = if (useTui && options.uiMode == UiMode.TUI) Terminal(interactive = true) else detectedTerminal
+            val presentation = createPresentation(useTui, terminal).also(events::consumer)
+            presentation.start()
+
+            val runtime = YameRuntime(
+                logManager = logManager, failFastStartup = !useTui,
+            ).also(events::producer)
+            runtime.run()
+        } finally {
+            events.close()
+            coordinatedShutdown.close()
+            runCatching { Runtime.getRuntime().removeShutdownHook(shutdownHook) }
+        }
     }
 }
-
-internal fun configurationForToneTest(configuration: HayesModemConfig): HayesModemConfig =
-    configuration.copy(toneSimulationEnabled = true)
 
 internal enum class UiMode {
     AUTO,
@@ -174,16 +146,15 @@ internal fun resolveLoginCredentials(
     }
 }
 
-internal fun parseArgs(args: Array<String>, store: ConfigStore): Options {
+internal fun parseArgs(args: Array<String>, store: ConfigStore = ConfigStore.current): Options {
     val toneTest = args.any { it == "--test-tone" || it == "-t" }
     // Validate startup inputs through their owners, without loading HTTP transformations.
     store[SerialSettings.Baud]
-    val defaults = HayesModemConfig.fromConfigStore(store)
-    LoggingConfig.fromConfigStore(store)
+    val login = store[ModemSettings.Login]
+    store.ensureLoaded(LogSettings)
     if (!toneTest) {
-        no.skasti.yame.serial.SerialConfig.fromConfigStore(store)
-        PppIpConfig.fromConfigStore(store)
-        PppDnsConfig.fromConfigStore(store)
+        store[PppSettings.Subnet]
+        store[DnsSettings.Upstream]
         store[ProxySettings.Enabled]
     }
     val changes = linkedMapOf<SettingKey<*>, ConfigChange<*>>()
@@ -292,8 +263,8 @@ internal fun parseArgs(args: Array<String>, store: ConfigStore): Options {
     }
 
     val (username, password) = resolveLoginCredentials(
-        savedUsername = defaults.username,
-        savedPassword = defaults.password,
+        savedUsername = login.username,
+        savedPassword = login.password,
         usernameOverride = usernameOverride,
         passwordOverride = passwordOverride,
     )

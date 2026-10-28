@@ -19,6 +19,12 @@ may construct immutable local config values. SerialConfig owns serial transport
 values; LoggingConfig supplies initial levels and capture limits. Hayes modem
 configuration remains independent of transport, PPP, DNS and proxy configuration.
 
+Main installs ConfigStore before CLI parsing or constructing components. Configured
+components accept an optional immutable config constructor parameter whose default
+reads the installed store; Main does not assemble component configs. Explicit
+config values and injected test stores remain supported. The installation survives
+through component shutdown and is released on failed startup as well.
+
 CLI parsing stages typed changes and applies them in one transient batch to the
 same store used by runtime and presentation. Invocation options carry execution
 choices only. No global configuration DTO, projection bindings or replacement

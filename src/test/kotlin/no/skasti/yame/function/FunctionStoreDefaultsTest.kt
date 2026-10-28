@@ -44,7 +44,7 @@ class FunctionStoreDefaultsTest {
             val config = ConfigStore()
             val otherConfig = ConfigStore()
             val terminal = Terminal(interactive = false)
-            YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
+            YameLogManager(no.skasti.yame.logging.LoggingConfig(), logDirectory = directory).use { logs ->
                 val injectedPorts = RuntimeTestPorts()
                 YameRuntime(config, first, logs, NavigationResourceRegistry(), injectedPorts::scan).use { runtime ->
                     assertSame(first, runtime.functions)

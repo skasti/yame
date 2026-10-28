@@ -5,8 +5,8 @@ import java.util.Collections
 
 /** Immutable initial logging values; runtime subscriptions remain owned by the runtime. */
 class LoggingConfig(
-    levels: Map<YameLogModule, YameLogLevel>,
-    val captureLimits: PacketCaptureLimits,
+    levels: Map<YameLogModule, YameLogLevel> = LogSettings.Levels.mapValues { (_, key) -> key.default() },
+    val captureLimits: PacketCaptureLimits = PacketCaptureLimits(),
 ) {
     val levels: Map<YameLogModule, YameLogLevel> = Collections.unmodifiableMap(LinkedHashMap(levels))
     companion object {
