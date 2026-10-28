@@ -129,9 +129,11 @@ remains uncommitted.
 `ConfigStore` is the sole configuration state holder. CLI flags become typed
 transient changes, validated and applied as one batch after parsing. Invocation
 options contain only mode, tone-test number, port-listing choice and log directory.
-`SerialConfig` groups transport values; `LoggingConfig` groups initial log levels
-and capture limits. Both are immutable feature-owned values read from keys, with
-no retained store or subscriptions. Hayes, PPP, DNS and proxy values remain
+Individual settings normally use direct `store[key]` reads, including serial
+baud and flow control. Config types are optional value objects for component
+interfaces that benefit from grouped values: `LoggingConfig` supplies initial log
+levels and capture limits to YameLogManager without retaining a store or
+subscriptions. Hayes, PPP, DNS and proxy values remain
 independent. Section-based `yame.ini` names are owned by feature definitions.
 Version checks, CLI precedence, credential permissions, and safe replacement remain.
 The repository restricts every existing INI file to owner-only POSIX permissions

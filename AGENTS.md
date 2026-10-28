@@ -162,6 +162,10 @@ unbounded buffering.
 
 ## Component configuration pattern
 
+- Prefer direct `store[key]` reads for individual settings. Use an immutable
+  component config only when its interface benefits from grouped values; do not
+  introduce a mandatory wrapper for every feature or group of keys.
+
 - Keep a component's immutable configuration type beside its owning component.
 - Provide `ConfigType.fromConfigStore(store: ConfigStore = ConfigStore.current)`
   on its companion object. Read owned `SettingKey` values directly through

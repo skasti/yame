@@ -43,7 +43,9 @@ class CliConfigurationTest {
         ), store)
         assertEquals(1, notifications)
         assertEquals(UiMode.PLAIN, options.uiMode)
-        assertEquals(SerialConfig("COM2", 115200, SerialFlowControl.HARDWARE), SerialConfig.fromConfigStore(store))
+        assertEquals("COM2", store[SerialSettings.Port])
+        assertEquals(115200, store[SerialSettings.Baud])
+        assertEquals(SerialFlowControl.HARDWARE, store[SerialSettings.FlowControl])
         val modem = HayesModemConfig.fromConfigStore(store)
         assertEquals(500.milliseconds, modem.pickupTime)
         assertEquals(250.milliseconds, modem.dialToneTime)
@@ -57,7 +59,9 @@ class CliConfigurationTest {
 
         store.set(TransformerSettings.Style to false)
         val restarted = lazyApplicationConfigStore(path)
-        assertEquals(SerialConfig("COM1", 57600), SerialConfig.fromConfigStore(restarted))
+        assertEquals("COM1", restarted[SerialSettings.Port])
+        assertEquals(57600, restarted[SerialSettings.Baud])
+        assertEquals(SerialFlowControl.DISABLED, restarted[SerialSettings.FlowControl])
         assertEquals("saved-secret", HayesModemConfig.fromConfigStore(restarted).password)
         assertEquals(YameLogLevel.WARN, LoggingConfig.fromConfigStore(restarted).levels[YameLogModule.MODEM])
         assertFalse(restarted[TransformerSettings.Style])
@@ -73,7 +77,9 @@ class CliConfigurationTest {
             var deliveries = 0
             store.onChange.subscribe { deliveries++ }
             assertFails { parseArgs(args, store) }
-            assertEquals(SerialConfig(), SerialConfig.fromConfigStore(store))
+            assertNull(store[SerialSettings.Port])
+            assertEquals(38400, store[SerialSettings.Baud])
+            assertEquals(SerialFlowControl.DISABLED, store[SerialSettings.FlowControl])
             assertEquals(0, deliveries)
         }
     }
@@ -82,11 +88,11 @@ class CliConfigurationTest {
         val process = ConfigStore(listOf(SerialSettings.Baud to 115200, ModemSettings.Tone to false))
         val explicit = ConfigStore(listOf(SerialSettings.Baud to 9600))
         ConfigStore.install(process).use {
-            assertEquals(9600, SerialConfig.fromConfigStore(explicit).baudRate)
+            assertEquals(9600, explicit[SerialSettings.Baud])
             assertTrue(HayesModemConfig.fromConfigStore(explicit).toneSimulationEnabled)
             explicit.set(SerialSettings.FlowControl to SerialFlowControl.HARDWARE)
             assertEquals(HayesModemConfig(), HayesModemConfig.fromConfigStore(explicit))
-            assertEquals(115200, SerialConfig.fromConfigStore().baudRate)
+            assertEquals(115200, ConfigStore.current[SerialSettings.Baud])
             val logging = LoggingConfig.fromConfigStore(explicit)
             assertFailsWith<UnsupportedOperationException> {
                 (logging.levels as MutableMap<YameLogModule, YameLogLevel>).clear()

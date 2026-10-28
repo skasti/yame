@@ -66,7 +66,9 @@ class IniConfigStoreTest {
     @Test fun `missing files use feature defaults and first run saves baseline without CLI secrets`() {
         val path = directory.resolve("yame.ini")
         val store = lazyApplicationConfigStore(path)
-        assertEquals(SerialConfig(), SerialConfig.fromConfigStore(store))
+        assertNull(store[SerialSettings.Port])
+        assertEquals(38400, store[SerialSettings.Baud])
+        assertEquals(SerialFlowControl.DISABLED, store[SerialSettings.FlowControl])
         assertEquals(HayesModemConfig(), HayesModemConfig.fromConfigStore(store))
         assertEquals(YameLogManager.defaultLevels(), LoggingConfig.fromConfigStore(store).levels)
         no.skasti.yame.parseArgs(arrayOf("--baud", "115200", "--username", "cli", "--password", "secret"), store)

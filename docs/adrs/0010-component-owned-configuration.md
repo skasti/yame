@@ -15,8 +15,10 @@ INI layout, transactional writes, secret handling and CLI precedence.
 
 ConfigStore is the sole authoritative configuration state holder. Features own
 keys, defaults, validation and INI mappings. Components read their own keys and
-may construct immutable local config values. SerialConfig owns serial transport
-values; LoggingConfig supplies initial levels and capture limits. Hayes modem
+normally use direct `store[key]` reads. Immutable local config values are useful
+when a component accepts a coherent group of values, rather than as mandatory
+wrappers. Serial transport values are read directly through SerialSettings keys;
+LoggingConfig supplies initial levels and capture limits to YameLogManager. Hayes modem
 configuration remains independent of transport, PPP, DNS and proxy configuration.
 
 Main installs ConfigStore before CLI parsing or constructing components. Configured
