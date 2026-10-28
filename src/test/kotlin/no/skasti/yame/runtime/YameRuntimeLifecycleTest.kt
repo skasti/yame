@@ -1,10 +1,11 @@
 package no.skasti.yame.runtime
 
+import no.skasti.yame.config.testConfigStore
+
 import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.lifecycle.ApplicationFunctions
 import no.skasti.yame.logging.*
 import no.skasti.yame.observer.*
-import no.skasti.yame.persistence.*
 import no.skasti.yame.ppp.proxy.NavigationResourceRegistry
 import no.skasti.yame.serial.*
 import java.io.ByteArrayOutputStream
@@ -53,11 +54,11 @@ class YameRuntimeLifecycleTest {
     private class Fixture(
         source: () -> List<SerialPortDescriptor> = { emptyList() },
         factory: () -> SerialTransport = { Port() },
-        config: YameConfiguration = YameConfiguration(portName = "COM1"),
+        config: no.skasti.yame.config.ConfigStore = testConfigStore(no.skasti.yame.serial.SerialSettings.Port to "COM1"),
     ) : AutoCloseable {
         val directory = Files.createTempDirectory("yame-runtime-lifecycle")
         val logs = YameLogManager(YameLogManager.defaultLevels(), directory)
-        val store = applicationConfigStore(config)
+        val store = config
         val functions = FunctionStore()
         val ports = RuntimeTestPorts(source)
         val runtime = YameRuntime(store, functions, logs, NavigationResourceRegistry(), ports::scan,
@@ -164,7 +165,7 @@ class YameRuntimeLifecycleTest {
     @Test fun `automatic port selection and its configuration callback create one connection`() {
         val port = Port()
         Fixture(source = { listOf(SerialPortDescriptor("COM1", "test")) }, factory = { port },
-            config = YameConfiguration()).use { f ->
+            config = testConfigStore()).use { f ->
             f.run().use {
                 f.functions.invoke(ConnectionFunctions.Reconnect)
                 assertEquals("COM1", f.store[SerialSettings.Port])
@@ -361,7 +362,7 @@ class YameRuntimeLifecycleTest {
                     catch (error: InterruptedException) { monitorInterrupted.countDown(); throw error }
                 }
                 emptyList()
-            }, factory = { port }, config = YameConfiguration()).use { f ->
+            }, factory = { port }, config = testConfigStore()).use { f ->
                 val runner = Worker { f.runtime.run() }
                 f.ports.awaitStartup()
                 f.ports.releaseStartup()

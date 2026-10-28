@@ -64,11 +64,9 @@ class IniParserCompatibilityTest {
 
         val path = directory.resolve("yame.ini")
         Files.writeString(path, content)
-        val legacy = YameConfigurationStore(path).load()
-        val runtime = lazyApplicationConfigStore(path)
-        assertEquals(57_600, legacy.baudRate)
-        assertEquals(legacy.baudRate, runtime[SerialSettings.Baud])
-        assertEquals(legacy.portName, runtime[SerialSettings.Port])
+        val runtime = iniConfigStore(path)
+        assertEquals(57_600, runtime[SerialSettings.Baud])
+        assertEquals("COM 4", runtime[SerialSettings.Port])
         // Historical login.* is intentionally not an alias for modem.login.*.
         assertEquals(null, no.skasti.yame.modem.HayesModemConfig.fromConfigStore(runtime).username)
     }
@@ -86,7 +84,7 @@ class IniParserCompatibilityTest {
         Files.writeString(path, untouched + "serial.baud=38400\nserial.baud: 57600\n")
         val original = Properties().apply { Files.newBufferedReader(path).use { load(it) } }
 
-        val store = lazyApplicationConfigStore(path)
+        val store = iniConfigStore(path)
         assertEquals(57_600, store[SerialSettings.Baud])
         store.set(SerialSettings.Baud to 115_200)
 
@@ -99,21 +97,23 @@ class IniParserCompatibilityTest {
             assertEquals(original.getProperty(key), updated.getProperty(key), key)
         }
         assertEquals("115200", IniParser.parse(written).get("serial", "baud"))
-        assertEquals(115_200, YameConfigurationStore(path).load().baudRate)
+        assertEquals(115_200, iniConfigStore(path)[SerialSettings.Baud])
     }
 
-    @Test fun `legacy save preserves unknown Java Properties records`() {
+    @Test fun `store write preserves unknown Java Properties records`() {
         val path = directory.resolve("yame.ini")
         val untouched = "# keep\nfuture\\ key:old\\ value  \nfuture.more=one\\\n  two\n"
         Files.writeString(path, untouched + "serial.baud=9600\n")
-        YameConfigurationStore(path).save(YameConfiguration(baudRate = 57_600))
+        val store = iniConfigStore(path)
+        store[SerialSettings.Baud]
+        store.set(SerialSettings.Baud to 57_600)
         assertTrue(Files.readString(path).startsWith(untouched))
     }
 
     @Test fun `unchanged comments retain CRLF and files without final newline stay that way`() {
         val crlf = directory.resolve("crlf.ini")
         Files.writeString(crlf, "# existing\r\nfuture.continued=one\\\r\n  two\r\nserial.baud=38400\r\n")
-        val store = lazyApplicationConfigStore(crlf)
+        val store = iniConfigStore(crlf)
         store[SerialSettings.Baud]
         store.set(SerialSettings.Baud to 57_600)
         assertTrue(Files.readString(crlf).startsWith("# existing\r\nfuture.continued=one\\\r\n  two\r\n"))
@@ -121,7 +121,7 @@ class IniParserCompatibilityTest {
 
         val unterminated = directory.resolve("unterminated.ini")
         Files.writeString(unterminated, "# keep\nserial.baud=38400")
-        val second = lazyApplicationConfigStore(unterminated)
+        val second = iniConfigStore(unterminated)
         second[SerialSettings.Baud]
         second.set(SerialSettings.Baud to 57_600)
         assertEquals("# keep\n[serial]\nbaud=57600", Files.readString(unterminated))

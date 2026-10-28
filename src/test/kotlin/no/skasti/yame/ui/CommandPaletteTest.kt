@@ -1,6 +1,6 @@
 package no.skasti.yame.ui
 
-import no.skasti.yame.persistence.*
+import no.skasti.yame.config.testConfigStore
 import com.github.ajalt.mordant.terminal.Terminal
 import no.skasti.yame.ppp.proxy.transform.HtmlTransformer
 import no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings
@@ -56,8 +56,9 @@ class CommandPaletteTest {
     @Test
     fun `presentation registers transformer switches independently of pipeline construction`() {
         run {
-            val store = no.skasti.yame.persistence.applicationConfigStore(no.skasti.yame.persistence.YameConfiguration())
+            val store = no.skasti.yame.config.testConfigStore()
             repeat(2) { defaultResourceTransformationPipeline(1024) }
+            store.ensureLoaded(no.skasti.yame.ppp.proxy.transform.TransformerSettings)
             val registrations = registerTransformerCommands(store)
             try {
             val parent = assertNotNull(CommandPalette.find("/transformers"))
@@ -75,7 +76,7 @@ class CommandPaletteTest {
     @Test
     fun `keyboard browses nested palettes goes back and executes local on off arguments`() {
         run {
-            val store = no.skasti.yame.persistence.applicationConfigStore(no.skasti.yame.persistence.YameConfiguration())
+            val store = no.skasti.yame.config.testConfigStore()
             defaultResourceTransformationPipeline(1024)
             observer(configStore = store).use { observer ->
                 observer.type("/transformers")
@@ -129,7 +130,7 @@ class CommandPaletteTest {
     private fun observer(
         onTone: (Boolean) -> Unit = {},
         onLogin: (String, String) -> Unit = { _, _ -> },
-        configStore: no.skasti.yame.config.ConfigStore = no.skasti.yame.persistence.applicationConfigStore(no.skasti.yame.persistence.YameConfiguration()),
+        configStore: no.skasti.yame.config.ConfigStore = no.skasti.yame.config.testConfigStore(),
     ): TuiYameObserver {
         configStore.onChange[no.skasti.yame.modem.ModemSettings.Group].subscribe { changes ->
             changes[no.skasti.yame.modem.ModemSettings.Tone]?.let { onTone(it.value) }

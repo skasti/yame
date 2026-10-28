@@ -1,6 +1,5 @@
 package no.skasti.yame.config
 
-import no.skasti.yame.persistence.*
 import no.skasti.yame.ppp.proxy.transform.*
 import no.skasti.yame.ppp.proxy.transform.ElementSimplifierSettings
 import no.skasti.yame.ppp.proxy.transform.TransformerSettings
@@ -57,6 +56,18 @@ class ComponentConfigurationTest {
     }
 
     @Test
+    fun `serial and logging values stay scoped and immutable`() {
+        val serial = no.skasti.yame.serial.SerialConfig(baudRate = 9600)
+        assertEquals(9600, serial.baudRate)
+        assertFailsWith<IllegalStateException> { ConfigStore.current }
+        val levels = mutableMapOf(no.skasti.yame.logging.YameLogModule.MODEM to no.skasti.yame.logging.YameLogLevel.DEBUG)
+        val logging = no.skasti.yame.logging.LoggingConfig(levels, no.skasti.yame.logging.PacketCaptureLimits())
+        levels.clear()
+        assertEquals(no.skasti.yame.logging.YameLogLevel.DEBUG, logging.levels[no.skasti.yame.logging.YameLogModule.MODEM])
+        assertFailsWith<UnsupportedOperationException> { (logging.levels as MutableMap).clear() }
+    }
+
+    @Test
     fun `modem factory needs only modem settings`() {
         val defaults = HayesModemConfig()
         val store = ConfigStore(listOf(
@@ -74,10 +85,9 @@ class ComponentConfigurationTest {
     @Test
     fun `factories read installed settings while explicit config stays independent`() {
         val rules = ElementSimplifierConfiguration(mapOf("article" to ElementSimplifierRule("div")))
-        val saved = YameConfiguration(
-            pppHttpCompatibilityConfig = no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig(elementSimplifier = rules),
-        )
-        val store = applicationConfigStore(saved)
+        val store = testConfigStore(ElementSimplifierSettings.Rules to rules)
+        store.ensureLoaded(TransformerSettings)
+        store.ensureLoaded(ModemSettings)
         ConfigStore.install(store).use {
             store.set(TransformerSettings.Style to false, ModemSettings.Tone to false)
             assertEquals(false, HtmlTransformerSettings.fromConfigStore().styleRemover)
@@ -87,10 +97,9 @@ class ComponentConfigurationTest {
             val component = ElementSimplifier(explicit)
             assertEquals("<p>text</p>", apply(component))
             assertEquals("<div>text</div>", apply(ElementSimplifier()))
-            assertFailsWith<IllegalArgumentException> {
-                store.set(ElementSimplifierSettings.Rules to explicit)
-            }
-            assertEquals(rules, ElementSimplifierConfiguration.fromConfigStore())
+            store.set(ElementSimplifierSettings.Rules to explicit)
+            assertEquals(explicit, ElementSimplifierConfiguration.fromConfigStore())
+            assertEquals("<p>text</p>", apply(component))
         }
     }
 }

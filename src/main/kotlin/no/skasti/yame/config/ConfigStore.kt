@@ -87,6 +87,14 @@ class ConfigStore(
         requireNotNull(ConfigChanges(listOfNotNull(effective[key]))[key]) { "Unregistered setting ${key.path}" }.value
     }
 
+    /** Materialize requested defaults for first-run setup, excluding transient overrides.
+     * Definitions are still requested by consumers, never enumerated here.
+     */
+    fun persistLoadedValues() = synchronized(lock) {
+        val baseline = ConfigChanges(saved.values)
+        if (repository == null) persist(baseline) else repository.persist(saved.values, baseline)
+    }
+
     /** Save before publishing. A failed save rejects the entire transaction. Duplicate keys are rejected. */
     fun set(vararg changes: ConfigChange<*>) {
         commit(changes, persistent = true)

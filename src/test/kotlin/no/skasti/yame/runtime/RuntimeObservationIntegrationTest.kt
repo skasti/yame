@@ -4,8 +4,7 @@ import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.lifecycle.ApplicationFunctions
 import no.skasti.yame.logging.*
 import no.skasti.yame.observer.*
-import no.skasti.yame.persistence.YameConfiguration
-import no.skasti.yame.persistence.applicationConfigStore
+import no.skasti.yame.config.testConfigStore
 import no.skasti.yame.ppp.PppFrame
 import no.skasti.yame.ppp.proxy.NavigationResourceRegistry
 import no.skasti.yame.ppp.session.*
@@ -42,7 +41,7 @@ class RuntimeObservationIntegrationTest {
         }
         try {
             YameLogManager(YameLogManager.defaultLevels(), root).use { logs ->
-                YameRuntime(applicationConfigStore(YameConfiguration()), functions, logs,
+                YameRuntime(testConfigStore(), functions, logs,
                     resourceGraphs = NavigationResourceRegistry(), portProvider = source::get).use { runtime ->
                     val worker = thread { runtime.run() }
                     try {

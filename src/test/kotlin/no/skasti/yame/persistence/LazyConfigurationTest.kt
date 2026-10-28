@@ -69,7 +69,7 @@ class LazyConfigurationTest {
             [transformers]
             script-remover-enabled=false
         """.trimIndent())
-        val store = lazyApplicationConfigStore(path)
+        val store = iniConfigStore(path)
 
         assertFalse(HayesModemConfig.fromConfigStore(store).toneSimulationEnabled)
         assertEquals("10.1.1.0/30", PppIpConfig.fromConfigStore(store).configuredSubnet.toString())
@@ -115,7 +115,7 @@ class LazyConfigurationTest {
     @Test fun `equivalent section and flat values agree while conflicts identify the property`() {
         val path = directory.resolve("yame.ini")
         Files.writeString(path, "serial.baud=57600\n[serial]\nbaud=57600\n")
-        val store = lazyApplicationConfigStore(path)
+        val store = iniConfigStore(path)
         assertEquals(57_600, store[SerialSettings.Baud])
         store.set(SerialSettings.Baud to 115_200)
         val written = Files.readString(path)
@@ -124,7 +124,7 @@ class LazyConfigurationTest {
 
         Files.writeString(path, "serial.baud=9600\n[serial]\nbaud=57600\n")
         val error = assertFailsWith<IllegalArgumentException> {
-            lazyApplicationConfigStore(path)[SerialSettings.Baud]
+            iniConfigStore(path)[SerialSettings.Baud]
         }
         assertTrue(error.message.orEmpty().contains("yame.ini"))
         assertTrue(error.message.orEmpty().contains("serial.baud"))
@@ -137,12 +137,12 @@ class LazyConfigurationTest {
             val key = SettingKey<Int>("max-rate_2", group, default = { 1 })
         }
         Files.writeString(path, "[ FEATURE.OPTIONS_2 ]\nMAX-RATE_2=7\n")
-        val store = lazyApplicationConfigStore(path)
+        val store = iniConfigStore(path)
         assertEquals("feature.options_2.max-rate_2", feature.key.path)
         assertEquals(7, store[feature.key])
         store.set(feature.key to 9)
         assertTrue(Files.readString(path).contains("max-rate_2=9"))
-        assertEquals(9, lazyApplicationConfigStore(path)[feature.key])
+        assertEquals(9, iniConfigStore(path)[feature.key])
     }
 
     @Test fun `string settings preserve exact whitespace through section load save and reload`() {
@@ -151,13 +151,13 @@ class LazyConfigurationTest {
             "[modem]\nlogin.username=user\nlogin.password= secret \n" +
             "[serial]\nport=\t COM  1\\path=x:y\t \n"
         Files.writeString(path, original)
-        val store = lazyApplicationConfigStore(path)
+        val store = iniConfigStore(path)
         assertEquals(" secret ", store[ModemSettings.Login].password)
         assertEquals("\t COM  1\\path=x:y\t ", store[SerialSettings.Port])
 
         store.set(ModemSettings.Login to LoginCredentials("user", "temporary"))
         store.set(ModemSettings.Login to LoginCredentials("user", " secret "))
-        assertEquals(" secret ", lazyApplicationConfigStore(path)[ModemSettings.Login].password)
+        assertEquals(" secret ", iniConfigStore(path)[ModemSettings.Login].password)
 
         val credentials = LoginCredentials("user", "  new =: \\secret  ")
         val port = "  COM  2\t=mode:fast\\path  "
@@ -166,7 +166,7 @@ class LazyConfigurationTest {
         assertTrue(written.startsWith("# keep\nfuture.value=  untouched  \n  \t  \n"))
         assertTrue(written.contains("login.password=  new =: \\secret  \n"))
         assertTrue(written.contains("port=$port\n"))
-        val reloaded = lazyApplicationConfigStore(path)
+        val reloaded = iniConfigStore(path)
         assertEquals(credentials, reloaded[ModemSettings.Login])
         assertEquals(port, reloaded[SerialSettings.Port])
     }
@@ -175,17 +175,17 @@ class LazyConfigurationTest {
         val path = directory.resolve("yame.ini")
         Files.writeString(path, "modem.login.password=\\ secret \n[modem]\n" +
             "login.username=user\nlogin.password= secret \n")
-        val store = lazyApplicationConfigStore(path)
+        val store = iniConfigStore(path)
         assertEquals(" secret ", store[ModemSettings.Login].password)
         store.set(ModemSettings.Login to LoginCredentials("user", " new "))
         val written = Files.readString(path)
         assertFalse(written.contains("modem.login.password="))
-        assertEquals(" new ", lazyApplicationConfigStore(path)[ModemSettings.Login].password)
+        assertEquals(" new ", iniConfigStore(path)[ModemSettings.Login].password)
 
         Files.writeString(path, "modem.login.password= secret \n[modem]\n" +
             "login.username=user\nlogin.password= secret \n")
         val error = assertFailsWith<IllegalArgumentException> {
-            lazyApplicationConfigStore(path)[ModemSettings.Login]
+            iniConfigStore(path)[ModemSettings.Login]
         }
         assertTrue(error.message.orEmpty().contains("yame.ini"))
         assertTrue(error.message.orEmpty().contains("login.password"))
@@ -194,9 +194,9 @@ class LazyConfigurationTest {
     @Test fun `empty string is present while absent nullable property uses its default`() {
         val path = directory.resolve("yame.ini")
         Files.writeString(path, "[serial]\nport=\n")
-        assertEquals("", lazyApplicationConfigStore(path)[SerialSettings.Port])
+        assertEquals("", iniConfigStore(path)[SerialSettings.Port])
         Files.writeString(path, "[serial]\n")
-        assertNull(lazyApplicationConfigStore(path)[SerialSettings.Port])
+        assertNull(iniConfigStore(path)[SerialSettings.Port])
     }
 
     @Test fun `numeric and duration values tolerate surrounding whitespace in both layouts`() {
@@ -206,7 +206,7 @@ class LazyConfigurationTest {
             "serial.baud= 57600 \t\nmodem.pickup-time= 500ms \t\n",
         )) {
             Files.writeString(path, content)
-            val store = lazyApplicationConfigStore(path)
+            val store = iniConfigStore(path)
             assertEquals(57_600, store[SerialSettings.Baud])
             assertEquals(kotlin.time.Duration.parse("500ms"), store[ModemSettings.PickupTime])
         }
@@ -215,7 +215,7 @@ class LazyConfigurationTest {
     @Test fun `duration and reusable composite keys round trip in canonical sections`() {
         val path = directory.resolve("yame.ini")
         Files.writeString(path, "modem.login.username=alice\n[modem]\nlogin.password=secret\npickup-time=1.5s\n")
-        val store = lazyApplicationConfigStore(path)
+        val store = iniConfigStore(path)
         assertEquals(LoginCredentials("alice", "secret"), store[ModemSettings.Login])
         assertEquals(kotlin.time.Duration.parse("1.5s"), store[ModemSettings.PickupTime])
         assertTrue(ModemSettings.Login in ModemSettings.compositeSettingKeys)
@@ -234,7 +234,7 @@ class LazyConfigurationTest {
             val User = SettingKey<LoginCredentials>("user", Group, default = { LoginCredentials(null, null) })
         }
         Files.writeString(path, "accounts.admin.username=a\n[accounts]\nadmin.password=b\nuser.username=c\nuser.password=d\n")
-        val reused = lazyApplicationConfigStore(path)
+        val reused = iniConfigStore(path)
         assertEquals(LoginCredentials("a", "b"), reused[accounts.Admin])
         assertEquals(LoginCredentials("c", "d"), reused[accounts.User])
         assertEquals(2, accounts.compositeSettingKeys.size)
@@ -257,14 +257,14 @@ class LazyConfigurationTest {
         }
         for (duration in listOf("500ms", "2s", "1.5s", "2h 5m")) {
             Files.writeString(path, "[durations]\ninterval=$duration\n")
-            val store = lazyApplicationConfigStore(path)
+            val store = iniConfigStore(path)
             assertEquals(kotlin.time.Duration.parse(duration), store[durations.Interval])
             store.set(durations.Interval to kotlin.time.Duration.parse("3s"))
             assertTrue(Files.readString(path).contains("interval=3s"))
         }
         Files.writeString(path, "[durations]\ninterval=invalid\n")
         val error = assertFailsWith<IllegalArgumentException> {
-            lazyApplicationConfigStore(path)[durations.Interval]
+            iniConfigStore(path)[durations.Interval]
         }
         assertTrue(error.message.orEmpty().contains("yame.ini"))
         assertTrue(error.message.orEmpty().contains("interval"))
@@ -274,8 +274,9 @@ class LazyConfigurationTest {
         val path = directory.resolve("yame.ini")
         Files.writeString(path, "serial.baud=57600\ntransformers.script-remover-enabled=false\n")
         Files.writeString(directory.resolve("element-simplifier.ini"), "[heading]\ntarget=h2\n")
-        val store = lazyApplicationConfigStore(path)
-        assertEquals(57600, cliConfiguration(store).baudRate)
+        val store = iniConfigStore(path)
+        no.skasti.yame.parseArgs(emptyArray(), store, path)
+        assertEquals(57600, store[SerialSettings.Baud])
         var transformersLoaded = false
         var rulesLoaded = false
         store.onChange[TransformerSettings.Group].subscribe(initial = true) { transformersLoaded = true }.close()
@@ -291,9 +292,8 @@ class LazyConfigurationTest {
     @Test fun `CLI overrides keep precedence while later feature reads retain saved values`() {
         val path = directory.resolve("yame.ini")
         Files.writeString(path, "serial.baud=57600\ntransformers.script-remover-enabled=false\n")
-        val store = lazyApplicationConfigStore(path)
-        val saved = cliConfiguration(store)
-        applyCliOverrides(store, saved, saved.copy(baudRate = 9600))
+        val store = iniConfigStore(path)
+        no.skasti.yame.parseArgs(arrayOf("--baud", "9600"), store, path)
         assertEquals(9600, store[SerialSettings.Baud])
         var transformersLoaded = false
         store.onChange[TransformerSettings.Group].subscribe(initial = true) { transformersLoaded = true }.close()
@@ -305,10 +305,10 @@ class LazyConfigurationTest {
     @Test fun `tone test reads no PPP DNS or proxy definitions`() {
         val path = directory.resolve("yame.ini")
         Files.writeString(path, "serial.baud=57600\nmodem.tone-simulation-enabled=false\nppp.subnet=invalid\n")
-        val store = lazyApplicationConfigStore(path)
-        val options = cliConfiguration(store, toneTest = true)
-        assertEquals(57600, options.baudRate)
-        assertFalse(options.modemConfig.toneSimulationEnabled)
+        val store = iniConfigStore(path)
+        no.skasti.yame.parseArgs(arrayOf("--test-tone", "123"), store, path)
+        assertEquals(57600, store[SerialSettings.Baud])
+        assertFalse(HayesModemConfig.fromConfigStore(store).toneSimulationEnabled)
         var pppLoaded = false
         var transformersLoaded = false
         store.onChange[PppSettings.Group].subscribe(initial = true) { pppLoaded = true }.close()
@@ -320,7 +320,7 @@ class LazyConfigurationTest {
     @Test fun `only requested definitions load and late load preserves saved changes`() {
         val path = directory.resolve("yame.ini")
         Files.writeString(path, "# original\nmodem.tone-simulation-enabled=false\nppp.subnet=10.1.1.0/30\nunknown.keep=value\n")
-        val store = lazyApplicationConfigStore(path)
+        val store = iniConfigStore(path)
         store.ensureLoaded(ModemSettings)
         var pppLoaded = false
         store.onChange[PppSettings.Group].subscribe(initial = true) { pppLoaded = true }.close()
@@ -339,7 +339,7 @@ class LazyConfigurationTest {
     @Test fun `saving one key leaves external edits to another key in the same definition alone`() {
         val path = directory.resolve("yame.ini")
         Files.writeString(path, "serial.baud=38400\nserial.port=COM1\n")
-        val store = lazyApplicationConfigStore(path)
+        val store = iniConfigStore(path)
         store.ensureLoaded(SerialSettings)
         Files.writeString(path, "serial.baud=38400\nserial.port=COM2\n")
         store.set(SerialSettings.Baud to 57600)
@@ -352,7 +352,7 @@ class LazyConfigurationTest {
         val stray = directory.resolve("stray.ini")
         Files.writeString(stray, "[general]\nenabled=maybe\n")
         Files.writeString(path, "serial.baud=bad\n")
-        val store = lazyApplicationConfigStore(path)
+        val store = iniConfigStore(path)
         assertFailsWith<IllegalArgumentException> { store[SerialSettings.Baud] }
         var serialLoaded = false
         store.onChange[SerialSettings.Group].subscribe(initial = true) { serialLoaded = true }.close()
@@ -369,7 +369,7 @@ class LazyConfigurationTest {
         assertEquals("element-simplifier", ElementSimplifierSettings.file)
         assertEquals(path, IniConfigurationRepository(directory.resolve("yame.ini")).file(ElementSimplifierSettings))
         Files.writeString(path, "; keep\n[heading]\ntarget=h1\nstyle=color:red;\n")
-        val store = lazyApplicationConfigStore(directory.resolve("yame.ini"))
+        val store = iniConfigStore(directory.resolve("yame.ini"))
         store.ensureLoaded(ElementSimplifierSettings)
         val rules = store[ElementSimplifierSettings.Rules]
         assertEquals("h1", rules.rules.getValue("heading").target)
@@ -381,7 +381,7 @@ class LazyConfigurationTest {
     @Test fun `rule file enabled and live switch both control element simplification`() {
         val rulesFile = directory.resolve("element-simplifier.ini")
         Files.writeString(rulesFile, "[element-simplifier.general]\nenabled=false\n[main]\ntarget=div\n")
-        val store = lazyApplicationConfigStore(directory.resolve("yame.ini"))
+        val store = iniConfigStore(directory.resolve("yame.ini"))
         assertFalse(store[ElementSimplifierSettings.Enabled])
         assertEquals("div", store[ElementSimplifierSettings.Rules].rules.getValue("main").target)
         assertFalse(HtmlTransformerSettings.fromConfigStore(store).elementSimplifier)
@@ -394,13 +394,13 @@ class LazyConfigurationTest {
         assertFalse(HtmlTransformerSettings.fromConfigStore(store).elementSimplifier)
         assertTrue(Files.readString(rulesFile).contains("enabled=false"))
         assertTrue(Files.readString(rulesFile).contains("[main]\ntarget=div"))
-        assertFalse(HtmlTransformerSettings.fromConfigStore(lazyApplicationConfigStore(directory.resolve("yame.ini"))).elementSimplifier)
+        assertFalse(HtmlTransformerSettings.fromConfigStore(iniConfigStore(directory.resolve("yame.ini"))).elementSimplifier)
     }
 
     @Test fun `concurrent first use installs one consistent definition`() {
         val path = directory.resolve("yame.ini")
         Files.writeString(path, "modem.tone-simulation-enabled=false\n")
-        val store = lazyApplicationConfigStore(path)
+        val store = iniConfigStore(path)
         val start = CountDownLatch(1)
         val workers = List(8) { thread { start.await(); store.ensureLoaded(ModemSettings) } }
         start.countDown()
@@ -420,7 +420,7 @@ class LazyConfigurationTest {
         }
         val first = TestDefinition("first")
         val second = TestDefinition("second")
-        val store = lazyApplicationConfigStore(path)
+        val store = iniConfigStore(path)
         store.ensureLoaded(first)
         var secondLoaded = false
         store.onChange[second.group].subscribe(initial = true) { secondLoaded = true }.close()
@@ -450,7 +450,7 @@ class LazyConfigurationTest {
         assertEquals(shared, repository.file(first))
         assertEquals(shared, repository.file(second))
 
-        val store = lazyApplicationConfigStore(primary)
+        val store = iniConfigStore(primary)
         assertEquals(57600, store[SerialSettings.Baud])
         assertEquals(7, store[first.key])
         assertEquals(9, store[second.key])
@@ -485,7 +485,7 @@ class LazyConfigurationTest {
     @Test fun `invalid dynamic rule does not partially register`() {
         val path = directory.resolve("element-simplifier.ini")
         Files.writeString(path, "[heading]\ntarget=h1\n[broken]\nstyle=color:red\n")
-        val store = lazyApplicationConfigStore(directory.resolve("yame.ini"))
+        val store = iniConfigStore(directory.resolve("yame.ini"))
         assertFailsWith<IllegalArgumentException> { store.ensureLoaded(ElementSimplifierSettings) }
         var rulesLoaded = false
         store.onChange[ElementSimplifierSettings.Group].subscribe(initial = true) { rulesLoaded = true }.close()
@@ -494,18 +494,14 @@ class LazyConfigurationTest {
         assertEquals(listOf("heading", "broken"), store[ElementSimplifierSettings.Rules].rules.keys.toList())
     }
 
-    @Test fun `legacy files load the same effective values through the lazy store`() {
+    @Test fun `existing section files load component values independently`() {
         val path = directory.resolve("yame.ini")
-        val expected = YameConfiguration(
-            baudRate = 57600,
-            modemConfig = HayesModemConfig(username = "user", password = "s:e=cret\\value", toneSimulationEnabled = false),
-            pppHttpCompatibilityConfig = no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig(enabled = false),
-        )
-        YameConfigurationStore(path).save(expected)
-        val loaded = cliConfiguration(lazyApplicationConfigStore(path))
-        assertEquals(expected.baudRate, loaded.baudRate)
-        assertEquals(expected.modemConfig, loaded.modemConfig)
-        assertEquals(expected.pppHttpCompatibilityConfig.enabled, loaded.pppHttpCompatibilityConfig.enabled)
+        Files.writeString(path, "[serial]\nbaud=57600\n[modem]\nlogin.username=user\nlogin.password=s:e=cret\\value\ntone-simulation-enabled=false\n[proxy]\nenabled=false\n")
+        val store = iniConfigStore(path)
+        assertEquals(57600, no.skasti.yame.serial.SerialConfig.fromConfigStore(store).baudRate)
+        assertEquals("s:e=cret\\value", HayesModemConfig.fromConfigStore(store).password)
+        assertFalse(HayesModemConfig.fromConfigStore(store).toneSimulationEnabled)
+        assertFalse(store[no.skasti.yame.ppp.proxy.ProxySettings.Enabled])
     }
 
     @Test fun `a later file failure reports partial disk replacement without memory publication`() {
@@ -537,7 +533,7 @@ class LazyConfigurationTest {
 
     @Test fun `failed save does not publish changes`() {
         val path = directory.resolve("yame.ini")
-        val store = lazyApplicationConfigStore(path)
+        val store = iniConfigStore(path)
         store.ensureLoaded(SerialSettings)
         Files.createDirectory(path)
         assertFails { store.set(SerialSettings.Baud to 9600) }
@@ -553,7 +549,7 @@ class LazyConfigurationTest {
         }
         val first = Owner("first-owner", "first")
         val second = Owner("second-owner", "second")
-        val store = lazyApplicationConfigStore(path)
+        val store = iniConfigStore(path)
         assertEquals(7, store[first.key])
         assertEquals(9, store[second.key])
         store.set(first.key to 8, second.key to 10)
@@ -621,7 +617,7 @@ class LazyConfigurationTest {
                 key to requireNotNull(context.compose(key, "shared") { attrs -> attrs["first"]?.toInt() }),
             )
         }
-        val store = lazyApplicationConfigStore(path)
+        val store = iniConfigStore(path)
         assertFailsWith<IllegalArgumentException> { store[first.key] }
         assertEquals(7, store[replacement.key])
         Files.writeString(path, "[shared]\nfirst=7\nsecond=9\n")
@@ -648,7 +644,7 @@ class LazyConfigurationTest {
                 key to requireNotNull(context.compose(key, "shared") { it["value"] }),
             )
         }
-        val store = lazyApplicationConfigStore(path)
+        val store = iniConfigStore(path)
         assertFailsWith<IllegalArgumentException> { store[invalid.key] }
         assertEquals("bad", store[replacement.key])
         assertEquals("[shared]\nvalue=bad\n", Files.readString(path))
@@ -668,7 +664,7 @@ class LazyConfigurationTest {
             val group = SettingGroup("shared", this)
             val key = SettingKey<Int>("second", group, default = { 0 })
         }
-        val store = lazyApplicationConfigStore(path)
+        val store = iniConfigStore(path)
         assertEquals(7, store[first.key])
         val before = Files.readString(path)
         assertFailsWith<IllegalArgumentException> { store.set(first.key to 8) }
@@ -692,7 +688,7 @@ class LazyConfigurationTest {
                 context.writeAttributes(key, "modem") { it["login.password"] = "stolen" }
             }
         }
-        val store = lazyApplicationConfigStore(path)
+        val store = iniConfigStore(path)
         assertEquals(LoginCredentials("user", "secret"), store[ModemSettings.Login])
         assertEquals(0, store[trespasser.key])
         val original = Files.readString(path)
@@ -728,7 +724,7 @@ class LazyConfigurationTest {
                 error("validation failed")
             }
         }
-        val store = lazyApplicationConfigStore(primary)
+        val store = iniConfigStore(primary)
         assertEquals(1, store[first.key])
         assertEquals(2, store[second.key])
         assertFails { store.set(first.key to 3, second.key to 3) }
@@ -742,7 +738,7 @@ class LazyConfigurationTest {
         val primary = directory.resolve("yame.ini")
         val path = directory.resolve("element-simplifier.ini")
         Files.writeString(path, "; keep\n[heading]\n# retain rule comment\ntarget=h1\n")
-        val store = lazyApplicationConfigStore(primary)
+        val store = iniConfigStore(primary)
         val rules = store[ElementSimplifierSettings.Rules]
         Files.writeString(path, Files.readString(path) + "[external]\ntarget=span\n")
         store.set(ElementSimplifierSettings.Rules to no.skasti.yame.ppp.proxy.transform.ElementSimplifierConfiguration(
@@ -751,7 +747,7 @@ class LazyConfigurationTest {
         assertTrue(written.contains("[external]\ntarget=span"))
         assertTrue(written.contains("[heading]\n# retain rule comment\ntarget=h2"))
         assertFalse(written.contains("rules="))
-        assertEquals("span", lazyApplicationConfigStore(primary)[ElementSimplifierSettings.Rules]
+        assertEquals("span", iniConfigStore(primary)[ElementSimplifierSettings.Rules]
             .rules.getValue("external").target)
     }
 
@@ -762,7 +758,7 @@ class LazyConfigurationTest {
             "[future.meta]\n# foreign comment\nvalue=keep\ntarget=div\n" +
             "[heading]\ntarget=h1\nstyle=color:red;\n"
         Files.writeString(path, original)
-        val store = lazyApplicationConfigStore(primary)
+        val store = iniConfigStore(primary)
         val rules = store[ElementSimplifierSettings.Rules]
         assertEquals(listOf("heading"), rules.rules.keys.toList())
         store.set(ElementSimplifierSettings.Rules to no.skasti.yame.ppp.proxy.transform.ElementSimplifierConfiguration(
@@ -770,11 +766,11 @@ class LazyConfigurationTest {
         val saved = Files.readString(path)
         assertTrue(saved.startsWith(original.substringBefore("[heading]")))
         assertTrue(saved.contains("[heading]\ntarget=h2\nstyle=color:red;"))
-        assertEquals(listOf("heading"), lazyApplicationConfigStore(primary)[ElementSimplifierSettings.Rules].rules.keys.toList())
+        assertEquals(listOf("heading"), iniConfigStore(primary)[ElementSimplifierSettings.Rules].rules.keys.toList())
 
         Files.writeString(path, "[future.meta]\nvalue=keep\n[heading]\ntarget=h1\nunknown=bad\n")
         val error = assertFailsWith<IllegalArgumentException> {
-            lazyApplicationConfigStore(primary)[ElementSimplifierSettings.Rules]
+            iniConfigStore(primary)[ElementSimplifierSettings.Rules]
         }
         assertTrue(error.message.orEmpty().contains("[heading]"), error.message)
         assertTrue(error.message.orEmpty().contains("unknown"), error.message)
@@ -787,7 +783,7 @@ class LazyConfigurationTest {
         val public = java.nio.file.attribute.PosixFilePermissions.fromString("rw-r--r--")
         val private = java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")
         Files.setPosixFilePermissions(primary, public)
-        val store = lazyApplicationConfigStore(primary)
+        val store = iniConfigStore(primary)
         assertEquals(57_600, store[SerialSettings.Baud])
         assertEquals(private, Files.getPosixFilePermissions(primary))
         store.set(SerialSettings.Baud to 115_200)
@@ -809,7 +805,7 @@ class LazyConfigurationTest {
         val primary = directory.resolve("yame.ini")
         val path = directory.resolve("element-simplifier.ini")
         Files.writeString(path, "[heading]\ntarget=h1\n[paragraph]\ntarget=p\n")
-        val store = lazyApplicationConfigStore(primary)
+        val store = iniConfigStore(primary)
         store[ElementSimplifierSettings.Rules]
         val replacement = no.skasti.yame.ppp.proxy.transform.ElementSimplifierConfiguration(
             mapOf("heading" to no.skasti.yame.ppp.proxy.transform.ElementSimplifierRule("h2")))
@@ -820,7 +816,7 @@ class LazyConfigurationTest {
         Files.writeString(path, before.replace("\nunknown=keep", ""))
         store.set(ElementSimplifierSettings.Rules to replacement)
         assertFalse(Files.readString(path).contains("[paragraph]"))
-        assertEquals("h2", lazyApplicationConfigStore(primary)[ElementSimplifierSettings.Rules]
+        assertEquals("h2", iniConfigStore(primary)[ElementSimplifierSettings.Rules]
             .rules.getValue("heading").target)
     }
 
@@ -828,7 +824,7 @@ class LazyConfigurationTest {
         val primary = directory.resolve("yame.ini")
         val path = directory.resolve("element-simplifier.ini")
         Files.writeString(path, "# retain\nheading.target=h1\n[heading]\nstyle=color:red;\n")
-        val store = lazyApplicationConfigStore(primary)
+        val store = iniConfigStore(primary)
         val rules = store[ElementSimplifierSettings.Rules]
         assertEquals("h1", rules.rules.getValue("heading").target)
         store.set(ElementSimplifierSettings.Rules to no.skasti.yame.ppp.proxy.transform.ElementSimplifierConfiguration(
@@ -838,7 +834,7 @@ class LazyConfigurationTest {
         assertTrue(written.contains("# retain"))
         assertTrue(written.contains("[heading]"))
         assertTrue(written.contains("target=h2"))
-        assertEquals("h2", lazyApplicationConfigStore(primary)[ElementSimplifierSettings.Rules]
+        assertEquals("h2", iniConfigStore(primary)[ElementSimplifierSettings.Rules]
             .rules.getValue("heading").target)
     }
 }

@@ -1,5 +1,6 @@
 package no.skasti.yame.ppp.proxy
 
+import no.skasti.yame.config.testConfigStore
 import com.sun.net.httpserver.HttpServer
 import no.skasti.yame.ppp.proxy.transform.HtmlTransformer
 import no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings
@@ -24,7 +25,7 @@ import kotlin.test.assertTrue
 import org.junit.jupiter.api.io.TempDir
 import no.skasti.yame.ppp.proxy.transform.ElementSimplifierSettings
 import no.skasti.yame.ppp.proxy.transform.TransformerSettings
-import no.skasti.yame.persistence.lazyApplicationConfigStore
+import no.skasti.yame.persistence.iniConfigStore
 
 class LiveHtmlTransformerTest {
     private val source = "<html><script>run()</script><style>body{color:red}</style><main class=\"news\">News</main></html>"
@@ -35,7 +36,7 @@ class LiveHtmlTransformerTest {
         Files.writeString(primary, "[transformers]\nscript-remover-enabled=false\nstyle-remover-enabled=false\nattribute-cleaner-enabled=false\n")
         Files.writeString(directory.resolve("element-simplifier.ini"),
             "[element-simplifier.general]\nenabled=false\n[main]\ntarget=div\n")
-        val store = lazyApplicationConfigStore(primary)
+        val store = iniConfigStore(primary)
         val server = server {}
         val handler = SystemHttpCompatibilityHandler(
             config = PppHttpCompatibilityConfig.fromConfigStore(store),
@@ -61,7 +62,7 @@ class LiveHtmlTransformerTest {
             conditional.offer(exchange.requestHeaders.containsKey("If-None-Match") || exchange.requestHeaders.containsKey("If-Modified-Since"))
         }
         run {
-            val store = no.skasti.yame.persistence.applicationConfigStore(no.skasti.yame.persistence.YameConfiguration())
+            val store = no.skasti.yame.config.testConfigStore()
             val handler = SystemHttpCompatibilityHandler(config = PppHttpCompatibilityConfig(),
                 transformerSettings = { HtmlTransformerSettings.fromConfigStore(store) })
             try {
@@ -99,7 +100,7 @@ class LiveHtmlTransformerTest {
             check(release.await(5, TimeUnit.SECONDS))
         }
         run {
-            val store = no.skasti.yame.persistence.applicationConfigStore(no.skasti.yame.persistence.YameConfiguration())
+            val store = no.skasti.yame.config.testConfigStore()
             val handler = SystemHttpCompatibilityHandler(config = PppHttpCompatibilityConfig(),
                 transformerSettings = { HtmlTransformerSettings.fromConfigStore(store) })
             try {
@@ -115,7 +116,8 @@ class LiveHtmlTransformerTest {
 
     @Test
     fun `fixed explicit settings stay independent of process store`() {
-        val store = no.skasti.yame.persistence.applicationConfigStore(no.skasti.yame.persistence.YameConfiguration())
+        val store = no.skasti.yame.config.testConfigStore()
+        store.ensureLoaded(no.skasti.yame.ppp.proxy.transform.TransformerSettings)
         val server = server {}
         no.skasti.yame.config.ConfigStore.install(store).use {
             val handler = SystemHttpCompatibilityHandler(config = PppHttpCompatibilityConfig(

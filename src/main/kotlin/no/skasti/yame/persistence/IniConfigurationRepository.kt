@@ -64,6 +64,9 @@ class IniConfigurationRepository internal constructor(
             val pending = synchronized(owners) { LinkedHashMap(owners) }
             byOwner.entries.groupBy { file(it.key) }.forEach { (path, definitions) ->
                 val document = read(path)
+                if (path.fileName.toString() == primaryName && !Files.exists(path)) {
+                    document.put("", "version", "1")
+                }
                 val claims = linkedMapOf<Pair<String, String>, SettingKey<*>>()
                 pending.filterKeys { it.file == path.toString() }.forEach { (location, owner) ->
                     claims[location.section to location.property] = owner

@@ -1,6 +1,6 @@
 package no.skasti.yame.ppp.proxy.transform
 
-import no.skasti.yame.persistence.YameConfigurationStore
+import no.skasti.yame.persistence.iniConfigStore
 
 import java.nio.file.Files
 import java.nio.file.Path
@@ -66,7 +66,7 @@ class ElementSimplifierConfigurationStoreTest {
         val path = directory.resolve("element-simplifier.ini")
         Files.writeString(path, text)
         assertEquals(expected, ElementSimplifierConfigurationStore(path).load().rules.keys.toList())
-        val runtime = no.skasti.yame.persistence.lazyApplicationConfigStore(directory.resolve("yame.ini"))
+        val runtime = no.skasti.yame.persistence.iniConfigStore(directory.resolve("yame.ini"))
         assertEquals(expected, runtime[ElementSimplifierSettings.Rules].rules.keys.toList())
         assertEquals(text, Files.readString(path))
         runtime.set(ElementSimplifierSettings.Rules to runtime[ElementSimplifierSettings.Rules].let { current ->
@@ -77,7 +77,7 @@ class ElementSimplifierConfigurationStoreTest {
         assertTrue(ElementSimplifierIni.parse("").rules.isEmpty())
         Files.writeString(path, "")
         assertTrue(ElementSimplifierConfigurationStore(path).load().rules.isEmpty())
-        assertTrue(no.skasti.yame.persistence.lazyApplicationConfigStore(directory.resolve("yame.ini"))
+        assertTrue(no.skasti.yame.persistence.iniConfigStore(directory.resolve("yame.ini"))
             [ElementSimplifierSettings.Rules].rules.isEmpty())
     }
 
@@ -86,7 +86,7 @@ class ElementSimplifierConfigurationStoreTest {
         val rules = "; user rule\n[general]\n# keep\ntarget=div\nstyle=color:#333;\n"
         val path = directory.resolve("element-simplifier.ini")
         Files.writeString(path, rules)
-        val runtime = no.skasti.yame.persistence.lazyApplicationConfigStore(directory.resolve("yame.ini"))
+        val runtime = no.skasti.yame.persistence.iniConfigStore(directory.resolve("yame.ini"))
         assertEquals("color:#333;", runtime[ElementSimplifierSettings.Rules].rules.getValue("general").style)
         runtime[no.skasti.yame.serial.SerialSettings.Baud]
         runtime.set(no.skasti.yame.serial.SerialSettings.Baud to 57_600)
@@ -132,12 +132,10 @@ class ElementSimplifierConfigurationStoreTest {
         val configPath = directory.resolve("custom-yame.ini")
         val elementPath = directory.resolve(ElementSimplifierConfigurationStore.FILE_NAME)
         Files.writeString(elementPath, "[summary]\ntarget=h3\nstyle=font-weight:bold;\n")
-        val store = YameConfigurationStore(configPath)
-        val configuration = store.load()
-        assertEquals(mapOf("summary" to ElementSimplifierRule("h3", "font-weight:bold;")),
-            configuration.pppHttpCompatibilityConfig.elementSimplifier.rules)
-        store.save(configuration)
-        assertEquals(configuration, store.load())
+        val store = iniConfigStore(configPath)
+        val configuration = ElementSimplifierConfiguration.fromConfigStore(store)
+        assertEquals(mapOf("summary" to ElementSimplifierRule("h3", "font-weight:bold;")), configuration.rules)
+        assertEquals(configuration, ElementSimplifierConfiguration.fromConfigStore(iniConfigStore(configPath)))
         assertEquals("[summary]\ntarget=h3\nstyle=font-weight:bold;\n", Files.readString(elementPath))
     }
 }

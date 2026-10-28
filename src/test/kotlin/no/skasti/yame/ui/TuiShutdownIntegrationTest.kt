@@ -5,8 +5,7 @@ import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.lifecycle.ApplicationEventLifecycle
 import no.skasti.yame.logging.DiagnosticMessage
 import no.skasti.yame.observer.*
-import no.skasti.yame.persistence.YameConfiguration
-import no.skasti.yame.persistence.applicationConfigStore
+import no.skasti.yame.config.testConfigStore
 import no.skasti.yame.serial.SerialSettings
 import java.time.Duration
 import java.util.concurrent.CopyOnWriteArrayList
@@ -38,7 +37,7 @@ class TuiShutdownIntegrationTest {
         val releaseCallback = CountDownLatch(1)
         val brokerClosing = CountDownLatch(1)
         val terminal = BlockedTerminal()
-        val config = applicationConfigStore(YameConfiguration())
+        val config = testConfigStore()
         val reports = CopyOnWriteArrayList<String>()
         val exits = CopyOnWriteArrayList<Int>()
         broker.subscribe("pause-before-tui") {
@@ -94,7 +93,7 @@ class TuiShutdownIntegrationTest {
 
     @Test fun `expired application budget cannot give a blocked terminal another three seconds to drain`() {
         val terminal = BlockedTerminal()
-        val app = InteractiveYameApplication(applicationConfigStore(YameConfiguration()), FunctionStore(), terminal.terminal)
+        val app = InteractiveYameApplication(testConfigStore(), FunctionStore(), terminal.terminal)
         val producerEntered = CountDownLatch(1)
         val releaseProducer = CountDownLatch(1)
         val consumersFinished = CountDownLatch(1)
@@ -139,7 +138,7 @@ class TuiShutdownIntegrationTest {
 
     @Test fun `broker isolated TUI overload still enforces fatal deadline while terminal rendering is blocked`() {
         val terminal = BlockedTerminal()
-        val app = InteractiveYameApplication(applicationConfigStore(YameConfiguration()), FunctionStore(), terminal.terminal)
+        val app = InteractiveYameApplication(testConfigStore(), FunctionStore(), terminal.terminal)
         val exits = LinkedBlockingQueue<Int>()
         val reports = CopyOnWriteArrayList<String>()
         val owner = ApplicationEventLifecycle(broker, timeout = Duration.ofMillis(200),

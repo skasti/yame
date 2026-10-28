@@ -2,8 +2,7 @@ package no.skasti.yame.ui
 
 import com.github.ajalt.mordant.terminal.Terminal
 import no.skasti.yame.function.FunctionStore
-import no.skasti.yame.persistence.YameConfiguration
-import no.skasti.yame.persistence.applicationConfigStore
+import no.skasti.yame.config.testConfigStore
 import no.skasti.yame.ppp.session.*
 import no.skasti.yame.serial.*
 import no.skasti.yame.logging.DiagnosticMessage
@@ -17,7 +16,7 @@ import kotlin.test.*
 
 class RuntimeObservationProjectionTest {
     private fun observer(functions: FunctionStore = FunctionStore()) = TuiYameObserver(
-        applicationConfigStore(YameConfiguration()), functions, Terminal(interactive = false))
+        testConfigStore(), functions, Terminal(interactive = false))
 
     @Test fun `delayed old session teardown and reused flow IDs cannot modify the new connection`() {
         observer().use { ui ->

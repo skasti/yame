@@ -7,8 +7,7 @@ import java.time.Duration
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
-import no.skasti.yame.persistence.YameConfiguration
-import no.skasti.yame.persistence.applicationConfigStore
+import no.skasti.yame.config.testConfigStore
 import no.skasti.yame.ppp.proxy.*
 import no.skasti.yame.ppp.proxy.transform.ResourceTransformationSummary
 import no.skasti.yame.ppp.session.PppSessionEnded
@@ -38,7 +37,7 @@ class HttpGraphProjectionTest {
         ResourceLifecycleEvent(change, id, rootUri, LegacyHttpUrl.requestObservableKey(uri), uri,
             URI("https://${uri.host}${uri.path}"), ReferenceRole.SUBRESOURCE, kind, null,
             state, prefetch, attempt, attempt, edges, transforms, count, usedAt, at)
-    private fun observer() = TuiYameObserver(applicationConfigStore(YameConfiguration()),
+    private fun observer() = TuiYameObserver(testConfigStore(),
         FunctionStore(), Terminal(interactive = false))
 
     @Test fun `resource and use before creation are deferred and duplicate creation is incremental`() {

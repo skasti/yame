@@ -108,8 +108,8 @@ list of keys.
 A direct `store[key]` read requests the definition attached to the key's group,
 loading that definition on first use. Component `fromConfigStore()` factories
 read only their owned keys through the supplied store.
-The `persistence` package retains compatibility adapters for existing callers and
-CLI composition. They do not register features or supply the runtime's settings.
+The `persistence` package supplies generic INI IO and the store factory. It has
+no aggregate adapters or feature registry.
 INI ownership lives in `IniConfigurationRepository`, scoped to its store. Each
 logical `(file, section, property)` belongs to at most one `SettingKey`, including
 conventional keys, composite children and dynamic rule attributes. Two keys may
@@ -126,9 +126,12 @@ when `Rules` had previously claimed their attributes. Each affected document is
 prepared and validated before the first replacement; an actual filesystem failure
 in a later replacement still reports partial disk state while the typed store
 remains uncommitted.
-`YameConfiguration` is used only during startup/CLI parsing and file persistence.
-It reuses immutable feature values as sibling fields without putting PPP, DNS, or
-HTTP configuration inside the modem config. The new section-based `yame.ini` names are owned by feature definitions.
+Startup and CLI use the same `ConfigStore` as runtime and presentation. CLI flags
+stage typed changes and apply one transient batch after validation; repeated flags
+use the last value. There is no aggregate application configuration or projection
+layer. `SerialConfig` owns serial transport values; `LoggingConfig` carries immutable
+logging startup values. Hayes configuration contains modem behavior and credentials
+only. Feature definitions own the section-based `yame.ini` names.
 Version checks, CLI precedence, credential permissions, and safe replacement remain.
 The repository restricts every existing INI file to owner-only POSIX permissions
 when reading it and writes replacements with the same permissions. A file may
@@ -288,7 +291,7 @@ loaded from its separate INI file; runtime writes use the repository.
 | `config`, `function` | Typed generic stores, changes, subscriptions and operations; no concrete features or persistence |
 | `serial`, `modem`, `ppp`, `ppp.dns`, `ppp.proxy`, `logging` | Their own keys, groups, value validation and immutable component configs |
 | `ppp.proxy.transform` | HTML switches, element rules/INI, transformation policy and implementation |
-| `persistence` | Generic INI repository and legacy CLI/DTO adapters; feature definitions own mappings |
+| `persistence` | Generic INI repository and store factory; feature definitions own mappings |
 | `Main` | Load file, apply CLI precedence, install configuration, construct/register/start presentation before constructing/registering/running runtime; close the lifecycle owner in its outer finally |
 | `ApplicationEventLifecycle` | Supervise fatal broker failure, own registered producers/consumers and order shutdown |
 | `YameRuntime` | Construct component configs from direct store reads, observe committed batches, own connections and registered functions |
@@ -315,8 +318,7 @@ transformation configuration;
 config defaults. `HayesModem` also receives the serial baud value explicitly to report the correct
 CONNECT rate. These do not make modem settings an application config tree.
 `PppHttpCompatibilityConfig` retains immutable transformation values because the
-HTTP handler owns their use in response preparation. Application persistence reuses
-feature value types rather than introducing duplicate file-only versions of them.
+HTTP handler owns their use in response preparation. Persistence reads and writes feature keys directly.
 There are no feature-to-persistence dependencies or obsolete compatibility wrappers.
 
 Plain mode propagates initial connection construction/open errors so scripts exit with a
@@ -404,14 +406,18 @@ Transactions spanning multiple files are not atomic across the filesystem:
 `PartialIniWriteException` reports replaced files and the process should
 restart to reconcile disk and memory.
 
-### Legacy adapter boundary
+### Startup persistence
 
-| API | Responsibility | Future |
-| --- | --- | --- |
-| `YameConfiguration` | CLI defaults and older aggregate callers | Retain until CLI callers migrate to typed keys |
-| `YameConfigurationBindings` / `applicationConfigStore` | Translate fields exposed by that existing aggregate into feature keys; no registration role | Internal compatibility bridge, removable with aggregate callers |
-| `YameConfigurationStore` | Older file API and first-run file creation; its new-format save delegates mappings to feature definitions | Keep while public callers need the API; historic flat-format load remains a compatibility path |
+`iniConfigStore(path)` creates the store with its generic INI repository and no
+feature inventory. Normal CLI parsing requests serial, modem, PPP, DNS and proxy
+values; logging requests its own settings before constructing the manager. Tone
+mode skips unrelated definitions. Informational commands avoid configuration IO.
+HTTP transformations and dynamic rules load when their owner requests them.
 
-Feature definitions are the source of truth for runtime defaults, validation,
-and persistence. Adding a feature key does not require changing the aggregate or
-central bindings unless a particular legacy API explicitly exposes that field.
+For a missing primary file, `ConfigStore.persistLoadedValues()` materializes the
+persistent baseline of definitions already requested by consumers, using the same
+repository transaction as ordinary writes. It excludes CLI overrides and emits no
+change event. Unrequested feature values still use their defaults when first read.
+Auxiliary rule-file creation remains owned by the element simplifier. Existing
+files need no migration for this removal of the aggregate layer. See
+[ADR 0010](adrs/0010-component-owned-configuration.md).
