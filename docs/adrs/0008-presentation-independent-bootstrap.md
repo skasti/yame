@@ -98,3 +98,7 @@ Both modes share startup/shutdown ordering, and the runtime remains usable with
 no presentation. Presentations must implement nonblocking startup and release
 their own workers/subscriptions. This introduces no broker replay, UI FIFO worker
 or new registry retention policy.
+
+Configuration-store injection in this decision is superseded by
+[ADR 0011](0011-global-configuration-access.md). Presentation ownership and
+FunctionStore injection remain unchanged.

@@ -1,15 +1,16 @@
 package no.skasti.yame.ui
 
+import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.ppp.proxy.transform.HtmlTransformer
 
-internal fun registerTransformerCommands(store: no.skasti.yame.config.ConfigStore, registry: CommandPalette = CommandPalette.global): List<AutoCloseable> {
+internal fun registerTransformerCommands(registry: CommandPalette = CommandPalette.global): List<AutoCloseable> {
     val registrations = mutableListOf<AutoCloseable>()
     try {
         HtmlTransformer.entries.forEach { transformer ->
             val key = no.skasti.yame.ppp.proxy.transform.TransformerSettings.key(transformer)
             val path = "/transformers/${transformer.command}"
-            registrations += registry.add("$path/on", { if (store[key]) "current" else "" }) { store.set(key to true) }
-            registrations += registry.add("$path/off", { if (!store[key]) "current" else "" }) { store.set(key to false) }
+            registrations += registry.add("$path/on", { if (ConfigStore[key]) "current" else "" }) { ConfigStore.set(key to true) }
+            registrations += registry.add("$path/off", { if (!ConfigStore[key]) "current" else "" }) { ConfigStore.set(key to false) }
         }
         return registrations
     } catch (error: Exception) {

@@ -1,5 +1,6 @@
 package no.skasti.yame.ui
 
+import no.skasti.yame.config.InstalledConfigTest
 import com.github.ajalt.mordant.terminal.Terminal
 import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.observer.*
@@ -17,7 +18,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.test.*
 
-class InteractiveYameApplicationTest {
+class InteractiveYameApplicationTest : InstalledConfigTest() {
     private lateinit var broker: EventBroker
     private lateinit var installation: AutoCloseable
     private val timeout = Duration.ofSeconds(5)
@@ -37,10 +38,8 @@ class InteractiveYameApplicationTest {
     }
 
     private fun withApp(test: (InteractiveYameApplication) -> Unit) =
-        InteractiveYameApplication(
-            configStore = ConfigStore(listOf(no.skasti.yame.serial.SerialSettings.Port to "COM1")),
-            functions = FunctionStore(), terminal = Terminal(interactive = false),
-        ).use(test)
+        run { installConfig(ConfigStore(listOf(no.skasti.yame.serial.SerialSettings.Port to "COM1"))); InteractiveYameApplication(functions = FunctionStore(), terminal = Terminal(interactive = false),
+        ) }.use(test)
 
     @Test fun `early independent consumer matches complete TUI graph and host views from published events`() {
         val clock = ControlledClock()

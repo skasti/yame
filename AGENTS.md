@@ -162,24 +162,25 @@ unbounded buffering.
 
 ## Component configuration pattern
 
-- Prefer direct `store[key]` reads for individual settings. Use an immutable
+- Prefer direct `ConfigStore[key]` reads for individual settings. Use an immutable
   component config only when its interface benefits from grouped values; do not
   introduce a mandatory wrapper for every feature or group of keys.
 
 - Keep a component's immutable configuration type beside its owning component.
-- Provide `ConfigType.fromConfigStore(store: ConfigStore = ConfigStore.current)`
-  on its companion object. Read owned `SettingKey` values directly through
-  `store[key]`; these reads trigger lazy loading. Pass an available store
-  explicitly to `fromConfigStore(store)`. The `ConfigStore.current` default is
-  convenient when constructing a component without an explicit store.
+- Provide `ConfigType.fromConfigStore()` on its companion object. Read owned
+  keys through the global `ConfigStore[key]` facade, which delegates to the one
+  installed process store and triggers lazy loading. Production code must not
+  accept, retain, pass around or construct local ConfigStore instances. Bootstrap
+  constructs the one instance directly for installation. Tests may construct local
+  stores and install one for each scenario. See ADR 0011.
 - Accept an explicitly constructed immutable config independently of any store.
   A non-null constructor default such as
   `config: ConfigType = ConfigType.fromConfigStore()` is useful when appropriate,
   and is the production construction pattern for configured components. Main
   installs ConfigStore before parsing CLI flags or constructing any component;
   components resolve their own default config from that installed store. Explicit
-  test composition can inject `ConfigType.fromConfigStore(store)` instead. Do not use a nullable
-  config argument merely to implement a fallback.
+  immutable config values remain injectable for isolated component tests. Do not
+  use a nullable config argument merely to implement a fallback.
 - Explicit config must allow isolated tests without installing or modifying a
   global store. Config data-class defaults remain ordinary standalone defaults.
 - Factories produce immutable component configuration values without retaining
@@ -189,13 +190,12 @@ unbounded buffering.
   Hold the returned installation handle for the application's lifetime and close it
   after runtime/frontends stop. A second installation is rejected. Multiple
   frontends share the existing store; they never install a replacement.
-- Runtime and presentation constructors default to `ConfigStore.current` and
-  the lazy process-owned `FunctionStore.current` ([ADR 0009](docs/adrs/0009-lazy-global-function-store.md)).
-  Production bootstrap installs configuration but creates no function store.
-  Explicit stores bypass their respective defaults and must be used consistently
-  for internal operations and composed children. Never add function-store
-  installation, replacement or reset. Do not duplicate initial setting values or
-  pass the persistent application configuration tree to components.
+- Runtime and presentation always use the global ConfigStore facade. They may
+  accept an explicit FunctionStore, defaulting to FunctionStore.current
+  ([ADR 0009](docs/adrs/0009-lazy-global-function-store.md)). Configuration-store
+  injection is not supported. Never add function-store installation, replacement
+  or reset. Do not duplicate initial setting values or pass an application-wide
+  configuration tree to components.
 - `ConfigStore` is the single authoritative source of configuration values.
   Components read settings directly through typed keys; multi-key read snapshots
   are intentionally unsupported. YAME accepts the negligible possibility that a
@@ -255,7 +255,7 @@ unbounded buffering.
   composes only valid tag sections; unrelated sections and root-flat entries
   remain unclaimed. The separate file's `[element-simplifier.general] enabled`
   setting and the live `TransformerSettings.Elements` switch both gate the
-  element simplifier. `HtmlTransformerSettings.fromConfigStore(store)` reads
+  element simplifier. `HtmlTransformerSettings.fromConfigStore()` reads
   both directly for each new request; its effective value determines the
   transformation profile. The repository applies owner-only POSIX
   permissions to all INI files on read/write because a lazy, unregistered feature

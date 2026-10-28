@@ -10,11 +10,11 @@ class LoggingConfig(
 ) {
     val levels: Map<YameLogModule, YameLogLevel> = Collections.unmodifiableMap(LinkedHashMap(levels))
     companion object {
-        fun fromConfigStore(store: ConfigStore = ConfigStore.current) = LoggingConfig(
-            LogSettings.Levels.mapValues { (_, key) -> store[key] },
+        fun fromConfigStore() = LoggingConfig(
+            LogSettings.Levels.mapValues { (_, key) -> ConfigStore[key] },
             PacketCaptureLimits(
-                store[LogSettings.CaptureLimits.getValue(PacketCaptureLimitKind.PER_TYPE)],
-                store[LogSettings.CaptureLimits.getValue(PacketCaptureLimitKind.TOTAL)],
+                ConfigStore[LogSettings.CaptureLimits.getValue(PacketCaptureLimitKind.PER_TYPE)],
+                ConfigStore[LogSettings.CaptureLimits.getValue(PacketCaptureLimitKind.TOTAL)],
             ),
         )
     }

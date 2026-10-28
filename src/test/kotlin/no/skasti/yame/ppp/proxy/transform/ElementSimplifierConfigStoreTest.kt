@@ -1,5 +1,6 @@
 package no.skasti.yame.ppp.proxy.transform
 
+import no.skasti.yame.config.withInstalledConfig
 import no.skasti.yame.persistence.lazyApplicationConfigStore
 import no.skasti.yame.config.ConfigStore
 
@@ -17,7 +18,7 @@ class ElementSimplifierConfigStoreTest {
     lateinit var directory: Path
 
     private fun store() = lazyApplicationConfigStore(directory.resolve("yame.ini"))
-    private fun rules() = ElementSimplifierConfiguration.fromConfigStore(store())
+    private fun rules() = withInstalledConfig(store()) { ElementSimplifierConfiguration.fromConfigStore() }
     private fun readRules(text: String): ElementSimplifierConfiguration {
         Files.writeString(directory.resolve("element-simplifier.ini"), text)
         return rules()
@@ -190,12 +191,12 @@ class ElementSimplifierConfigStoreTest {
         val elementPath = directory.resolve("element-simplifier.ini")
         Files.writeString(elementPath, "[summary]\ntarget=h3\nstyle=font-weight:bold;\n")
         val store = lazyApplicationConfigStore(configPath)
-        val configuration = ElementSimplifierConfiguration.fromConfigStore(store)
+        val configuration = withInstalledConfig(store) { ElementSimplifierConfiguration.fromConfigStore() }
         assertEquals(mapOf("summary" to ElementSimplifierRule("h3", "font-weight:bold;")),
             configuration.rules)
         store[no.skasti.yame.serial.SerialSettings.Baud]
         store.set(no.skasti.yame.serial.SerialSettings.Baud to 9600)
-        assertEquals(configuration, ElementSimplifierConfiguration.fromConfigStore(lazyApplicationConfigStore(configPath)))
+        assertEquals(configuration, withInstalledConfig(lazyApplicationConfigStore(configPath)) { ElementSimplifierConfiguration.fromConfigStore() })
         assertEquals("[summary]\ntarget=h3\nstyle=font-weight:bold;\n", Files.readString(elementPath))
     }
 }

@@ -1,5 +1,6 @@
 package no.skasti.yame.lifecycle
 
+import no.skasti.yame.config.InstalledConfigTest
 import com.github.ajalt.mordant.terminal.Terminal
 import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.function.FunctionStore
@@ -22,7 +23,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import kotlin.test.*
 
-class ApplicationPresentationTest {
+class ApplicationPresentationTest : InstalledConfigTest() {
     @Test fun `Main starts subscribed TUI before constructing and running core`() = scenario("tui")
     @Test fun `Main plain execution failure cleans up runtime and diagnostics`() = scenario("plain")
     @Test fun `Main cleans up shared infrastructure if presentation construction fails`() = scenario("construct")
@@ -78,16 +79,16 @@ class ApplicationPresentationTest {
         val config = ConfigStore()
         try {
             YameLogManager(no.skasti.yame.logging.LoggingConfig(), logDirectory = directory).use { logs ->
-                YameRuntime(config, functions, logs, NavigationResourceRegistry(), {
+                run { installConfig(config); YameRuntime(functions, logs, NavigationResourceRegistry(), {
                     functions.invoke(ApplicationFunctions.Quit)
                     emptyList()
-                }).use {
+                }) }.use {
                     assertTrue(functions.keys().isEmpty())
                     it.run()
                 }
             }
             assertTrue(functions.keys().isEmpty())
-            assertFailsWith<IllegalStateException> { ConfigStore.current }
+            assertSame(config, ConfigStore.current)
         } finally {
             broker.close()
             assertEquals(BrokerWaitResult.COMPLETED, broker.awaitClosed(Duration.ofSeconds(5)))

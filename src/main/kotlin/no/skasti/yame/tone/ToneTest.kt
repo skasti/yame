@@ -14,7 +14,7 @@ import no.skasti.yame.serial.SerialSettings
 class ToneTest(
     logManager: YameLogManager,
     config: HayesModemConfig = HayesModemConfig.fromConfigStore(),
-    baudRate: Int = ConfigStore.current[SerialSettings.Baud],
+    baudRate: Int = ConfigStore[SerialSettings.Baud],
 ) : AutoCloseable {
     private val config = configurationForToneTest(config)
     private val modem = HayesModem(

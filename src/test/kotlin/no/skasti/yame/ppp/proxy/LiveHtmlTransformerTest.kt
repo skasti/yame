@@ -1,5 +1,6 @@
 package no.skasti.yame.ppp.proxy
 
+import no.skasti.yame.config.withInstalledConfig
 import no.skasti.yame.config.ConfigStore
 import com.sun.net.httpserver.HttpServer
 import no.skasti.yame.ppp.proxy.transform.HtmlTransformer
@@ -39,8 +40,8 @@ class LiveHtmlTransformerTest {
         val store = lazyApplicationConfigStore(primary)
         val server = server {}
         val handler = SystemHttpCompatibilityHandler(
-            config = PppHttpCompatibilityConfig.fromConfigStore(store),
-            transformerSettings = { HtmlTransformerSettings.fromConfigStore(store) },
+            config = withInstalledConfig(store) { PppHttpCompatibilityConfig.fromConfigStore() },
+            transformerSettings = { withInstalledConfig(store) { HtmlTransformerSettings.fromConfigStore() } },
         )
         try {
             val request = request(server)
@@ -64,7 +65,7 @@ class LiveHtmlTransformerTest {
         run {
             val store = ConfigStore()
             val handler = SystemHttpCompatibilityHandler(config = PppHttpCompatibilityConfig(),
-                transformerSettings = { HtmlTransformerSettings.fromConfigStore(store) })
+                transformerSettings = { withInstalledConfig(store) { HtmlTransformerSettings.fromConfigStore() } })
             try {
                 val request = request(server).copy(headers = request(server).headers + listOf(
                     "If-None-Match" to "\"source\"", "If-Modified-Since" to "Tue, 29 Sep 2026 12:00:00 GMT",
@@ -102,7 +103,7 @@ class LiveHtmlTransformerTest {
         run {
             val store = ConfigStore()
             val handler = SystemHttpCompatibilityHandler(config = PppHttpCompatibilityConfig(),
-                transformerSettings = { HtmlTransformerSettings.fromConfigStore(store) })
+                transformerSettings = { withInstalledConfig(store) { HtmlTransformerSettings.fromConfigStore() } })
             try {
                 val response = CompletableFuture.supplyAsync { handler.handle(connection(), request(server)) }
                 assertTrue(entered.await(5, TimeUnit.SECONDS))

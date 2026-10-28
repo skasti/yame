@@ -1,5 +1,6 @@
 package no.skasti.yame.runtime
 
+import no.skasti.yame.config.InstalledConfigTest
 import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.lifecycle.ApplicationFunctions
 import no.skasti.yame.logging.*
@@ -17,7 +18,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 import kotlin.test.*
 
-class RuntimeObservationIntegrationTest {
+class RuntimeObservationIntegrationTest : InstalledConfigTest() {
     private fun isolated(config: EventBrokerConfig = EventBrokerConfig(), body: (EventBroker) -> Unit) {
         val broker = EventBroker(config)
         val installation = YameEvents.install(broker)
@@ -41,8 +42,8 @@ class RuntimeObservationIntegrationTest {
         }
         try {
             YameLogManager(no.skasti.yame.logging.LoggingConfig(), root).use { logs ->
-                YameRuntime(ConfigStore(), functions, logs,
-                    resourceGraphs = NavigationResourceRegistry(), portProvider = source::get).use { runtime ->
+                run { installConfig(ConfigStore()); YameRuntime(functions, logs,
+                    resourceGraphs = NavigationResourceRegistry(), portProvider = source::get) }.use { runtime ->
                     val worker = thread { runtime.run() }
                     try {
                         assertTrue(initial.await(5, TimeUnit.SECONDS))

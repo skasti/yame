@@ -10,6 +10,15 @@ class ConfigStore(
     private val onSubscriberFailure: (Throwable) -> Unit = { System.err.println("Configuration subscriber failed: ${it.javaClass.simpleName}") },
 ) {
     companion object {
+        /** Production access always delegates to the single installed store. */
+        operator fun <T> get(key: SettingKey<T>): T = current[key]
+        fun set(vararg changes: ConfigChange<*>) = current.set(*changes)
+        fun setTransient(vararg changes: ConfigChange<*>) = current.setTransient(*changes)
+        fun ensureLoaded(definition: Settings) = current.ensureLoaded(definition)
+        fun saveLoadedValues() = current.saveLoadedValues()
+        fun createFileIfMissing(definition: Settings) = current.createFileIfMissing(definition)
+        val onChange: ConfigStore.ChangeEvents get() = current.onChange
+
         /** Installed explicitly by the application before using process-default factories. */
         @Volatile private var installed: ConfigStore? = null
         val current: ConfigStore get() = checkNotNull(installed) { "ConfigStore has not been installed" }

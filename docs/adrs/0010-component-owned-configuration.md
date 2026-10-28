@@ -15,7 +15,7 @@ INI layout, transactional writes, secret handling and CLI precedence.
 
 ConfigStore is the sole authoritative configuration state holder. Features own
 keys, defaults, validation and INI mappings. Components read their own keys and
-normally use direct `store[key]` reads. Immutable local config values are useful
+normally use direct `ConfigStore[key]` reads. Immutable local config values are useful
 when a component accepts a coherent group of values, rather than as mandatory
 wrappers. Serial transport values are read directly through SerialSettings keys;
 LoggingConfig supplies initial levels and capture limits to YameLogManager. Hayes modem
@@ -24,7 +24,8 @@ configuration remains independent of transport, PPP, DNS and proxy configuration
 Main installs ConfigStore before CLI parsing or constructing components. Configured
 components accept an optional immutable config constructor parameter whose default
 reads the installed store; Main does not assemble component configs. Explicit
-config values and injected test stores remain supported. The installation survives
+config values remain supported. ADR 0011 supersedes store injection into production
+consumers: tests install their chosen store for each scenario. The installation survives
 through component shutdown and is released on failed startup as well.
 
 CLI parsing stages typed changes and applies them in one transient batch to the
@@ -59,7 +60,8 @@ repository's protections. Historical pre-section aliases remain outside the
 supported format, as documented before this change. Existing installations using
 the supported format require no migration.
 
-Tests inject stores or immutable component values directly. The obsolete aggregate
+Tests construct local stores for infrastructure checks, install a store for
+production-consumer scenarios, or inject immutable component values directly. The obsolete aggregate
 API is intentionally removed. No-op writes remain no-ops; the explicit first-run
 baseline save is separate from ordinary changes. Multi-file filesystem failures
 retain the existing partial-write reporting contract.

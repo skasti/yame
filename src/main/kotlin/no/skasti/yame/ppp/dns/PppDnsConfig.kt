@@ -17,8 +17,8 @@ data class PppDnsConfig(
     }
 
     companion object {
-        fun fromConfigStore(store: ConfigStore = ConfigStore.current): PppDnsConfig =
-            PppDnsConfig(upstreamServer = store[DnsSettings.Upstream])
+        fun fromConfigStore(): PppDnsConfig =
+            PppDnsConfig(upstreamServer = ConfigStore[DnsSettings.Upstream])
 
         const val DNS_PORT = 53
         val DEFAULT_UPSTREAM_SERVER: Ipv4Address = Ipv4Address.Companion.parse("8.8.8.8")

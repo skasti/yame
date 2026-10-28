@@ -16,12 +16,12 @@ data class HtmlTransformerSettings(
     val elementSimplifier: Boolean = true,
 ) {
     companion object {
-        fun fromConfigStore(store: ConfigStore = ConfigStore.current): HtmlTransformerSettings =
+        fun fromConfigStore(): HtmlTransformerSettings =
             HtmlTransformerSettings(
-                store[TransformerSettings.Script],
-                store[TransformerSettings.Style],
-                store[TransformerSettings.Attributes],
-                store[TransformerSettings.Elements] && store[ElementSimplifierSettings.Enabled],
+                ConfigStore[TransformerSettings.Script],
+                ConfigStore[TransformerSettings.Style],
+                ConfigStore[TransformerSettings.Attributes],
+                ConfigStore[TransformerSettings.Elements] && ConfigStore[ElementSimplifierSettings.Enabled],
             )
     }
 

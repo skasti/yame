@@ -1,5 +1,6 @@
 package no.skasti.yame
 
+import no.skasti.yame.config.withInstalledConfig
 import no.skasti.yame.config.*
 import no.skasti.yame.serial.*
 import no.skasti.yame.modem.*
@@ -33,37 +34,37 @@ class CliConfigurationTest {
         val store = lazyApplicationConfigStore(path)
         var notifications = 0
         store.onChange.subscribe { notifications++ }
-        val options = parseArgs(arrayOf(
+        val options = withInstalledConfig(store) { parseArgs(arrayOf(
             "--baud", "9600", "--baud", "115200", "--port", "COM2", "--flow-control", "hardware",
             "--pickup-time", "500ms", "--dial-tone-time", "250ms", "--handshake-profile", "none",
             "--username", "cli", "--password", "cli-secret", "--subnet", "10.99.0.0/30",
             "--dns-upstream", "1.1.1.1", "--no-http-https-proxy", "--loglevel-modem", "debug",
             "--capture-limit-per-type", "20", "--capture-limit-total", "500", "--ui", "plain",
             "--log-dir", directory.resolve("logs").toString(),
-        ), store)
+        )) }
         assertEquals(1, notifications)
         assertEquals(UiMode.PLAIN, options.uiMode)
         assertEquals("COM2", store[SerialSettings.Port])
         assertEquals(115200, store[SerialSettings.Baud])
         assertEquals(SerialFlowControl.HARDWARE, store[SerialSettings.FlowControl])
-        val modem = HayesModemConfig.fromConfigStore(store)
+        val modem = withInstalledConfig(store) { HayesModemConfig.fromConfigStore() }
         assertEquals(500.milliseconds, modem.pickupTime)
         assertEquals(250.milliseconds, modem.dialToneTime)
         assertEquals(no.skasti.yame.tone.HandshakeProfile.NONE, modem.handshakeProfile)
         assertEquals("cli-secret", modem.password)
-        assertEquals("10.99.0.0/30", PppIpConfig.fromConfigStore(store).configuredSubnet.toString())
-        assertEquals("1.1.1.1", PppDnsConfig.fromConfigStore(store).upstreamServer.toString())
+        assertEquals("10.99.0.0/30", withInstalledConfig(store) { PppIpConfig.fromConfigStore() }.configuredSubnet.toString())
+        assertEquals("1.1.1.1", withInstalledConfig(store) { PppDnsConfig.fromConfigStore() }.upstreamServer.toString())
         assertFalse(store[ProxySettings.Enabled])
-        assertEquals(YameLogLevel.DEBUG, LoggingConfig.fromConfigStore(store).levels[YameLogModule.MODEM])
-        assertEquals(PacketCaptureLimits(20, 500), LoggingConfig.fromConfigStore(store).captureLimits)
+        assertEquals(YameLogLevel.DEBUG, withInstalledConfig(store) { LoggingConfig.fromConfigStore() }.levels[YameLogModule.MODEM])
+        assertEquals(PacketCaptureLimits(20, 500), withInstalledConfig(store) { LoggingConfig.fromConfigStore() }.captureLimits)
 
         store.set(TransformerSettings.Style to false)
         val restarted = lazyApplicationConfigStore(path)
         assertEquals("COM1", restarted[SerialSettings.Port])
         assertEquals(57600, restarted[SerialSettings.Baud])
         assertEquals(SerialFlowControl.DISABLED, restarted[SerialSettings.FlowControl])
-        assertEquals("saved-secret", HayesModemConfig.fromConfigStore(restarted).password)
-        assertEquals(YameLogLevel.WARN, LoggingConfig.fromConfigStore(restarted).levels[YameLogModule.MODEM])
+        assertEquals("saved-secret", withInstalledConfig(restarted) { HayesModemConfig.fromConfigStore() }.password)
+        assertEquals(YameLogLevel.WARN, withInstalledConfig(restarted) { LoggingConfig.fromConfigStore() }.levels[YameLogModule.MODEM])
         assertFalse(restarted[TransformerSettings.Style])
         assertFalse(Files.readString(path).contains("cli-secret"))
         store.set(SerialSettings.Baud to 115200)
@@ -76,7 +77,7 @@ class CliConfigurationTest {
             val store = ConfigStore()
             var deliveries = 0
             store.onChange.subscribe { deliveries++ }
-            assertFails { parseArgs(args, store) }
+            assertFails { withInstalledConfig(store) { parseArgs(args) } }
             assertNull(store[SerialSettings.Port])
             assertEquals(38400, store[SerialSettings.Baud])
             assertEquals(SerialFlowControl.DISABLED, store[SerialSettings.FlowControl])
@@ -84,21 +85,20 @@ class CliConfigurationTest {
         }
     }
 
-    @Test fun `explicit store keeps serial modem and logging independent of process defaults`() {
+    @Test fun `production factories read installed settings while explicit values stay independent`() {
         val process = ConfigStore(listOf(SerialSettings.Baud to 115200, ModemSettings.Tone to false))
-        val explicit = ConfigStore(listOf(SerialSettings.Baud to 9600))
+        val explicitModem = HayesModemConfig()
+        val explicitLogging = LoggingConfig()
         ConfigStore.install(process).use {
-            assertEquals(9600, explicit[SerialSettings.Baud])
-            assertTrue(HayesModemConfig.fromConfigStore(explicit).toneSimulationEnabled)
-            explicit.set(SerialSettings.FlowControl to SerialFlowControl.HARDWARE)
-            assertEquals(HayesModemConfig(), HayesModemConfig.fromConfigStore(explicit))
-            assertEquals(115200, ConfigStore.current[SerialSettings.Baud])
-            val logging = LoggingConfig.fromConfigStore(explicit)
+            assertEquals(115200, ConfigStore[SerialSettings.Baud])
+            assertFalse(HayesModemConfig.fromConfigStore().toneSimulationEnabled)
+            assertTrue(explicitModem.toneSimulationEnabled)
+            ConfigStore.set(LogSettings.Levels.getValue(YameLogModule.MODEM) to YameLogLevel.DEBUG)
+            assertEquals(YameLogLevel.DEBUG, LoggingConfig.fromConfigStore().levels[YameLogModule.MODEM])
+            assertEquals(YameLogLevel.INFO, explicitLogging.levels[YameLogModule.MODEM])
             assertFailsWith<UnsupportedOperationException> {
-                (logging.levels as MutableMap<YameLogModule, YameLogLevel>).clear()
+                (explicitLogging.levels as MutableMap<YameLogModule, YameLogLevel>).clear()
             }
-            explicit.set(LogSettings.Levels.getValue(YameLogModule.MODEM) to YameLogLevel.DEBUG)
-            assertEquals(YameLogLevel.INFO, logging.levels[YameLogModule.MODEM])
         }
     }
 }

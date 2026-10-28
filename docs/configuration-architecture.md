@@ -31,14 +31,15 @@ abstraction:
    release the configuration installation and close logging. A shutdown hook and
    fatal-event supervisor use that same idempotent owner.
 
-Production presentation/runtime construction omits both stores. Constructors for
-`InteractiveYameApplication`, `TuiYameObserver` and `YameRuntime` default to
-`ConfigStore.current` (the explicitly installed process store) and
-`FunctionStore.current` (the lazy process-owned registry from
-[ADR 0009](adrs/0009-lazy-global-function-store.md)). Main creates no function
-store. Explicit constructor arguments bypass the defaults independently; a
-component retains those instances for its operations and passes them to children
-when composing them. It never replaces an injected store with a global lookup.
+Production code accesses configuration exclusively through the global
+`ConfigStore` facade, including `ConfigStore[key]`, `set`, and `onChange`.
+Runtime, presentation, CLI parsing and component factories have no ConfigStore
+parameters or retained store references. Bootstrap creates and installs the one
+process instance. Tests may construct isolated stores and install one for the
+scenario; explicit immutable component config values remain available.
+[ADR 0011](adrs/0011-global-configuration-access.md) records this boundary.
+FunctionStore injection remains independent: constructors default to its lazy
+process-owned registry and may accept an explicit function registry.
 
 `InteractiveYameApplication` owns only `TuiYameObserver` and its subscription.
 Neither the TUI nor plain diagnostics owns a runtime or resource registry.
@@ -89,7 +90,7 @@ path with plain diagnostics, and plain mode without a port still prints usage.
 ## Typed settings and ownership
 
 `SettingKey<T>` is invariant and has a member `to(T)` operator. Consequently
-`store.set(SerialSettings.Baud to 9600, ModemSettings.Tone to false)` compiles,
+`ConfigStore.set(SerialSettings.Baud to 9600, ModemSettings.Tone to false)` compiles,
 whereas passing `SerialSettings.Baud to "9600"` to `set` is rejected. `ConfigChanges[key]` returns a
 typed `ConfigChange<T>?`, including for nullable settings, in average O(1) time.
 Iteration preserves the caller's batch order. Keys use identity; registering or
@@ -105,7 +106,7 @@ custom mapping. `Settings` defines ownership, while `ConfigStore` holds current
 values and immutable component `*Config` objects carry values into components;
 component configs do not inherit `Settings`. The generic store contains no central
 list of keys.
-A direct `store[key]` read requests the definition attached to the key's group,
+A direct `ConfigStore[key]` read requests the definition attached to the key's group,
 loading that definition on first use. Component `fromConfigStore()` factories
 read only their owned keys through the supplied store.
 The `persistence` package supplies the generic INI repository and a store factory.
@@ -129,7 +130,7 @@ remains uncommitted.
 `ConfigStore` is the sole configuration state holder. CLI flags become typed
 transient changes, validated and applied as one batch after parsing. Invocation
 options contain only mode, tone-test number, port-listing choice and log directory.
-Individual settings normally use direct `store[key]` reads, including serial
+Individual settings normally use direct `ConfigStore[key]` reads, including serial
 baud and flow control. Config types are optional value objects for component
 interfaces that benefit from grouped values: `LoggingConfig` supplies initial log
 levels and capture limits to YameLogManager without retaining a store or
@@ -174,9 +175,9 @@ the existing filesystem/store guarantees.
 
 ## Notifications and lifecycle
 
-Subscribe with `store.onChange[group].subscribe { changes -> ... }` and close the
+Subscribe with `ConfigStore.onChange[group].subscribe { changes -> ... }` and close the
 returned handle on shutdown. `+= handler` / `-= handler` are also supported.
-Global listeners use `store.onChange.subscribe`. A cross-group transaction is
+Global listeners use `ConfigStore.onChange.subscribe`. A cross-group transaction is
 fully committed before delivery; each group receives one precomputed indexed view
 containing only its changed keys. Global listeners receive the whole batch.
 
@@ -281,8 +282,8 @@ Multi-key read snapshots are intentionally unsupported. YAME accepts the negligi
 possibility that a value changes between individual reads. `ConfigStore.current`
 fails fast until `Main` installs a process store. `install` returns an idempotent
 lifetime handle, rejects an existing owner, and releases the store on close.
-`Main` closes that handle after the runtime and frontend. Multiple frontends take
-shared store instances; they do not replace global state. Explicit constructor
+`Main` closes that handle after the runtime and frontend. Multiple frontends use
+the same global configuration facade; they do not replace global state. Explicit constructor
 configurations never require installation, including the modem's standalone PPP
 child defaults. Element-simplifier rules are a typed setting in a separate INI file
 loaded from its separate INI file; runtime writes use the repository.
@@ -343,7 +344,7 @@ port without requiring serial hardware or process-global configuration.
 
 ## Lazy configuration definitions (issue #96)
 
-A typed read such as `store[SerialSettings.Baud]` loads only the owning
+A typed read such as `ConfigStore[SerialSettings.Baud]` loads only the owning
 `Settings` definition on first use. `Settings` discovers public `SettingKey`
 properties (including keys in collections) once, lazily and thread-safely.
 `settingKeys` and `compositeSettingKeys` partition that discovery. There is no
@@ -415,17 +416,19 @@ restart to reconcile disk and memory.
 The aggregate configuration DTO and its binding/projection layer have been
 removed; [ADR 0010](adrs/0010-component-owned-configuration.md) records the boundary.
 Adding a key requires only its feature definition and consumers.
-`lazyApplicationConfigStore(path)` constructs an empty store with an INI repository;
-it contains no feature registry. Startup reads only the features needed by the
+`installApplicationConfigStore(path)` constructs and installs the process store
+with an INI repository; it returns only the installation lifetime handle and
+contains no feature registry. Startup reads only the features needed by the
 selected mode. Help and port listing use an in-memory store and do not open INI
 files. Tone tests do not load PPP, DNS or proxy definitions unless a CLI flag
 explicitly addresses one of those features. HTTP transformations load when their
 owner requests them.
 
 A store without a repository lazily supplies feature-key defaults. Explicitly
-seeded values take precedence over these defaults, so tests and embedded callers
-can inject just the settings they need without installing a process store. Writes
-also request the owning definition before validation.
+seeded values take precedence over these defaults. Local instances are confined
+to infrastructure tests. Tests exercising production consumers install their
+chosen store for the scenario; those consumers always use the global facade.
+Writes also request the owning definition before validation.
 
 On first normal startup, `saveLoadedValues()` persists the requested features'
 saved baseline, excluding CLI overrides. Unrequested defaults need no file entries;
@@ -442,7 +445,7 @@ and edits use the shared infrastructure; there are no feature-specific INI
 parsers, writers, resource loaders or initial-file template hooks.
 
 Production bootstrap installs the store before CLI parsing and component
-construction, including tone-test mode. Main uses `ConfigStore.current` for its
+construction, including tone-test mode. Main uses the global `ConfigStore` facade for its
 own reads; component constructors resolve optional config arguments from the
 installed store. For example, `YameLogManager(logDirectory = path)` defaults its
 `config` argument to `LoggingConfig.fromConfigStore()`. Explicit immutable configs

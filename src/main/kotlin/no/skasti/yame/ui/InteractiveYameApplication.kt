@@ -10,11 +10,10 @@ import no.skasti.yame.presentation.Presentation
 
 /** TUI presentation only; application bootstrap owns runtime and shared stores. */
 class InteractiveYameApplication(
-    val configStore: ConfigStore = ConfigStore.current,
     val functions: FunctionStore = FunctionStore.current,
     terminal: Terminal,
 ) : Presentation, FatalFailureSource, DeadlineCloseable {
-    private val observer = TuiYameObserver(configStore, functions, terminal)
+    private val observer = TuiYameObserver(functions, terminal)
     private val observations = try {
         YameEvents.subscribe("tui-runtime", handler = observer::onEvent)
     } catch (error: Throwable) {

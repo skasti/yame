@@ -9,6 +9,22 @@ import kotlin.test.assertTrue
 class ConfigurationArchitectureTest {
     private val sources = Path.of("src/main/kotlin/no/skasti/yame")
 
+    @Test fun `production consumers only use the installed configuration facade`() {
+        Files.walk(sources).use { files ->
+            files.filter { it.toString().endsWith(".kt") }.forEach { file ->
+                val relative = sources.relativize(file).toString()
+                if (relative.startsWith("config/")) return@forEach
+                val text = Files.readString(file)
+                assertFalse(Regex("\\b\\w+\\s*:\\s*ConfigStore\\b").containsMatchIn(text),
+                    "$file accepts or retains a ConfigStore instance")
+                assertFalse(text.contains("ConfigStore.current"), "$file accesses the instance instead of the facade")
+                if (relative != "Main.kt" && relative != "persistence/IniConfigStore.kt") {
+                    assertFalse(Regex("\\bConfigStore\\(").containsMatchIn(text), "$file constructs a local store")
+                }
+            }
+        }
+    }
+
     @Test
     fun `presentation and core do not own one another`() {
         for (folder in listOf("ui", "presentation", "runtime")) {

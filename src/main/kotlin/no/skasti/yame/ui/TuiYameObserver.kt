@@ -61,7 +61,6 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
 class TuiYameObserver(
-    private val configStore: ConfigStore = ConfigStore.current,
     private val functions: FunctionStore = FunctionStore.current,
     private val terminal: Terminal = Terminal(interactive = true),
 ) : DeadlineCloseable, FatalFailureSource {
@@ -69,30 +68,30 @@ class TuiYameObserver(
     private val onPortSelected: (String) -> Unit = { value -> selectConnectionSetting(SerialSettings.Port, value) }
     private val onBaudSelected: (Int) -> Unit = { value -> selectConnectionSetting(SerialSettings.Baud, value) }
     private val onFlowControlSelected: (SerialFlowControl) -> Unit = { value -> selectConnectionSetting(SerialSettings.FlowControl, value) }
-    private val onDnsUpstreamSelected: (String) -> Unit = { value -> configStore.set(DnsSettings.Upstream to no.skasti.yame.ppp.ip.Ipv4Address.parse(value)) }
-    private val onHttpProxySelected: (Boolean) -> Unit = { value -> configStore.set(ProxySettings.Enabled to value) }
-    private val onToneSimulationSelected: (Boolean) -> Unit = { value -> configStore.set(ModemSettings.Tone to value) }
+    private val onDnsUpstreamSelected: (String) -> Unit = { value -> ConfigStore.set(DnsSettings.Upstream to no.skasti.yame.ppp.ip.Ipv4Address.parse(value)) }
+    private val onHttpProxySelected: (Boolean) -> Unit = { value -> ConfigStore.set(ProxySettings.Enabled to value) }
+    private val onToneSimulationSelected: (Boolean) -> Unit = { value -> ConfigStore.set(ModemSettings.Tone to value) }
     private val onQuit: () -> Unit = { functions.invoke(ApplicationFunctions.Quit) }
     private val onDisconnect: () -> Unit = { functions.invoke(ConnectionFunctions.Disconnect) }
     private val onReconnect: () -> Unit = { functions.invoke(ConnectionFunctions.Reconnect) }
     private fun refreshAvailablePorts() = updateAvailablePorts(functions.invoke(ConnectionFunctions.RefreshPorts))
-    private val onCaptureLimitSelected: (PacketCaptureLimitKind, Int) -> Unit = { kind, value -> configStore.set(LogSettings.CaptureLimits.getValue(kind) to value) }
-    private val onLogLevelSelected: (YameLogModule, YameLogLevel) -> Unit = { module, level -> configStore.set(LogSettings.Levels.getValue(module) to level) }
-    private val onLoginAdded: (String, String) -> Unit = { username, password -> configStore.set(ModemSettings.Login to LoginCredentials(username, password)) }
+    private val onCaptureLimitSelected: (PacketCaptureLimitKind, Int) -> Unit = { kind, value -> ConfigStore.set(LogSettings.CaptureLimits.getValue(kind) to value) }
+    private val onLogLevelSelected: (YameLogModule, YameLogLevel) -> Unit = { module, level -> ConfigStore.set(LogSettings.Levels.getValue(module) to level) }
+    private val onLoginAdded: (String, String) -> Unit = { username, password -> ConfigStore.set(ModemSettings.Login to LoginCredentials(username, password)) }
 
     // Presentation state starts from typed reads; the initial subscription closes
     // the read/subscribe race and applies subsequent change values in order.
     private var captureLimits = PacketCaptureLimitKind.entries.fold(PacketCaptureLimits()) { limits, kind ->
-        kind.apply(limits, configStore[LogSettings.CaptureLimits.getValue(kind)])
+        kind.apply(limits, ConfigStore[LogSettings.CaptureLimits.getValue(kind)])
     }
-    private var portName = configStore[SerialSettings.Port]
-    private var baud = configStore[SerialSettings.Baud]
-    private var flowControl = configStore[SerialSettings.FlowControl]
-    private var dnsUpstream = configStore[DnsSettings.Upstream].toString()
-    private var httpProxyEnabled = configStore[ProxySettings.Enabled]
-    private var toneSimulationEnabled = configStore[ModemSettings.Tone]
+    private var portName = ConfigStore[SerialSettings.Port]
+    private var baud = ConfigStore[SerialSettings.Baud]
+    private var flowControl = ConfigStore[SerialSettings.FlowControl]
+    private var dnsUpstream = ConfigStore[DnsSettings.Upstream].toString()
+    private var httpProxyEnabled = ConfigStore[ProxySettings.Enabled]
+    private var toneSimulationEnabled = ConfigStore[ModemSettings.Tone]
     private val logLevels = YameLogModule.entries.associateWith {
-        configStore[LogSettings.Levels.getValue(it)]
+        ConfigStore[LogSettings.Levels.getValue(it)]
     }.toMutableMap()
     private var connected = false
     private var availablePorts: List<SerialPortDescriptor> = emptyList()
@@ -133,12 +132,12 @@ class TuiYameObserver(
     var stopRequested: Boolean = false
         private set
 
-    private val commandRegistrations = registerCommands() + registerTransformerCommands(configStore, paletteRegistry)
+    private val commandRegistrations = registerCommands() + registerTransformerCommands(paletteRegistry)
     private val work = TuiWorkQueue(teardown = ::teardown)
     override val fatalFailure: Throwable? get() = work.fatalFailure
     internal fun awaitIdle() = work.read { Unit }
 
-    private val configurationSubscription = configStore.onChange.subscribe(initial = true) { changes ->
+    private val configurationSubscription = ConfigStore.onChange.subscribe(initial = true) { changes ->
         work.submitRequired {
             changes[SerialSettings.Port]?.let { portName = it.value }
             changes[SerialSettings.Baud]?.let { baud = it.value }
@@ -153,8 +152,8 @@ class TuiYameObserver(
     }
 
     private fun <T> selectConnectionSetting(key: SettingKey<T>, value: T) {
-        val unchanged = configStore[key] == value
-        configStore.set(key to value)
+        val unchanged = ConfigStore[key] == value
+        ConfigStore.set(key to value)
         // A selection is also a connection intent. Keep that action separate from
         // configuration events, whose no-op semantics apply to all consumers.
         if (unchanged) functions.invoke(ConnectionFunctions.Reconnect)

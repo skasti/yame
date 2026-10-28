@@ -1,5 +1,6 @@
 package no.skasti.yame.persistence
 
+import no.skasti.yame.config.withInstalledConfig
 import no.skasti.yame.config.*
 import no.skasti.yame.modem.HayesModemConfig
 import no.skasti.yame.modem.ModemSettings
@@ -71,11 +72,11 @@ class LazyConfigurationTest {
         """.trimIndent())
         val store = lazyApplicationConfigStore(path)
 
-        assertFalse(HayesModemConfig.fromConfigStore(store).toneSimulationEnabled)
-        assertEquals("10.1.1.0/30", PppIpConfig.fromConfigStore(store).configuredSubnet.toString())
-        assertEquals("1.1.1.1", PppDnsConfig.fromConfigStore(store).upstreamServer.toString())
-        assertFalse(HtmlTransformerSettings.fromConfigStore(store).scriptRemover)
-        val http = PppHttpCompatibilityConfig.fromConfigStore(store)
+        assertFalse(withInstalledConfig(store) { HayesModemConfig.fromConfigStore() }.toneSimulationEnabled)
+        assertEquals("10.1.1.0/30", withInstalledConfig(store) { PppIpConfig.fromConfigStore() }.configuredSubnet.toString())
+        assertEquals("1.1.1.1", withInstalledConfig(store) { PppDnsConfig.fromConfigStore() }.upstreamServer.toString())
+        assertFalse(withInstalledConfig(store) { HtmlTransformerSettings.fromConfigStore() }.scriptRemover)
+        val http = withInstalledConfig(store) { PppHttpCompatibilityConfig.fromConfigStore() }
         assertFalse(http.enabled)
         assertFalse(http.htmlTransformers.scriptRemover)
 
@@ -275,7 +276,7 @@ class LazyConfigurationTest {
         Files.writeString(path, "serial.baud=57600\ntransformers.script-remover-enabled=false\n")
         Files.writeString(directory.resolve("element-simplifier.ini"), "[heading]\ntarget=h2\n")
         val store = lazyApplicationConfigStore(path)
-        no.skasti.yame.parseArgs(emptyArray(), store)
+        withInstalledConfig(store) { no.skasti.yame.parseArgs(emptyArray()) }
         assertEquals(57600, store[SerialSettings.Baud])
         var transformersLoaded = false
         var rulesLoaded = false
@@ -284,7 +285,7 @@ class LazyConfigurationTest {
         assertFalse(transformersLoaded)
         assertFalse(rulesLoaded)
 
-        val http = no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig.fromConfigStore(store)
+        val http = withInstalledConfig(store) { no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig.fromConfigStore() }
         assertFalse(http.htmlTransformers.scriptRemover)
         assertEquals("h2", http.elementSimplifier.rules.getValue("heading").target)
     }
@@ -293,7 +294,7 @@ class LazyConfigurationTest {
         val path = directory.resolve("yame.ini")
         Files.writeString(path, "serial.baud=57600\ntransformers.script-remover-enabled=false\n")
         val store = lazyApplicationConfigStore(path)
-        no.skasti.yame.parseArgs(arrayOf("--baud", "9600"), store)
+        withInstalledConfig(store) { no.skasti.yame.parseArgs(arrayOf("--baud", "9600")) }
         assertEquals(9600, store[SerialSettings.Baud])
         var transformersLoaded = false
         store.onChange[TransformerSettings.Group].subscribe(initial = true) { transformersLoaded = true }.close()
@@ -306,9 +307,9 @@ class LazyConfigurationTest {
         val path = directory.resolve("yame.ini")
         Files.writeString(path, "serial.baud=57600\nmodem.tone-simulation-enabled=false\nppp.subnet=invalid\n")
         val store = lazyApplicationConfigStore(path)
-        no.skasti.yame.parseArgs(arrayOf("--test-tone", "123"), store)
+        withInstalledConfig(store) { no.skasti.yame.parseArgs(arrayOf("--test-tone", "123")) }
         assertEquals(57600, store[SerialSettings.Baud])
-        assertFalse(HayesModemConfig.fromConfigStore(store).toneSimulationEnabled)
+        assertFalse(withInstalledConfig(store) { HayesModemConfig.fromConfigStore() }.toneSimulationEnabled)
         var pppLoaded = false
         var transformersLoaded = false
         store.onChange[PppSettings.Group].subscribe(initial = true) { pppLoaded = true }.close()
@@ -325,7 +326,7 @@ class LazyConfigurationTest {
         var pppLoaded = false
         store.onChange[PppSettings.Group].subscribe(initial = true) { pppLoaded = true }.close()
         assertFalse(pppLoaded)
-        assertFalse(HayesModemConfig.fromConfigStore(store).toneSimulationEnabled)
+        assertFalse(withInstalledConfig(store) { HayesModemConfig.fromConfigStore() }.toneSimulationEnabled)
         store.set(ModemSettings.Tone to true)
         assertTrue(Files.readString(path).contains("ppp.subnet=10.1.1.0/30"))
         assertTrue(Files.readString(path).contains("# original"))
@@ -384,17 +385,17 @@ class LazyConfigurationTest {
         val store = lazyApplicationConfigStore(directory.resolve("yame.ini"))
         assertFalse(store[ElementSimplifierSettings.Enabled])
         assertEquals("div", store[ElementSimplifierSettings.Rules].rules.getValue("main").target)
-        assertFalse(HtmlTransformerSettings.fromConfigStore(store).elementSimplifier)
+        assertFalse(withInstalledConfig(store) { HtmlTransformerSettings.fromConfigStore() }.elementSimplifier)
 
         store.set(ElementSimplifierSettings.Enabled to true)
-        assertTrue(HtmlTransformerSettings.fromConfigStore(store).elementSimplifier)
+        assertTrue(withInstalledConfig(store) { HtmlTransformerSettings.fromConfigStore() }.elementSimplifier)
         store.set(TransformerSettings.Elements to false)
-        assertFalse(HtmlTransformerSettings.fromConfigStore(store).elementSimplifier)
+        assertFalse(withInstalledConfig(store) { HtmlTransformerSettings.fromConfigStore() }.elementSimplifier)
         store.set(ElementSimplifierSettings.Enabled to false, TransformerSettings.Elements to true)
-        assertFalse(HtmlTransformerSettings.fromConfigStore(store).elementSimplifier)
+        assertFalse(withInstalledConfig(store) { HtmlTransformerSettings.fromConfigStore() }.elementSimplifier)
         assertTrue(Files.readString(rulesFile).contains("enabled=false"))
         assertTrue(Files.readString(rulesFile).contains("[main]\ntarget=div"))
-        assertFalse(HtmlTransformerSettings.fromConfigStore(lazyApplicationConfigStore(directory.resolve("yame.ini"))).elementSimplifier)
+        assertFalse(withInstalledConfig(lazyApplicationConfigStore(directory.resolve("yame.ini"))) { HtmlTransformerSettings.fromConfigStore() }.elementSimplifier)
     }
 
     @Test fun `concurrent first use installs one consistent definition`() {
@@ -509,10 +510,10 @@ class LazyConfigurationTest {
         """.trimIndent())
         val before = Files.readAllBytes(path)
         val store = lazyApplicationConfigStore(path)
-        no.skasti.yame.parseArgs(emptyArray(), store)
+        withInstalledConfig(store) { no.skasti.yame.parseArgs(emptyArray()) }
         assertEquals(57600, store[SerialSettings.Baud])
         assertEquals(HayesModemConfig(username = "user", password = "s:e=cret\\value", toneSimulationEnabled = false),
-            HayesModemConfig.fromConfigStore(store))
+            withInstalledConfig(store) { HayesModemConfig.fromConfigStore() })
         assertFalse(store[no.skasti.yame.ppp.proxy.ProxySettings.Enabled])
         assertContentEquals(before, Files.readAllBytes(path))
     }

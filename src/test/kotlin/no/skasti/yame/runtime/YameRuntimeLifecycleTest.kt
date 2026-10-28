@@ -1,5 +1,6 @@
 package no.skasti.yame.runtime
 
+import no.skasti.yame.config.InstalledConfigTest
 import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.lifecycle.ApplicationFunctions
@@ -18,7 +19,7 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 import kotlin.test.*
 
-class YameRuntimeLifecycleTest {
+class YameRuntimeLifecycleTest : InstalledConfigTest() {
     private lateinit var broker: EventBroker
     private lateinit var installation: AutoCloseable
     @BeforeTest fun install() {
@@ -59,7 +60,8 @@ class YameRuntimeLifecycleTest {
         val logs = YameLogManager(no.skasti.yame.logging.LoggingConfig(), directory)
         val functions = FunctionStore()
         val ports = RuntimeTestPorts(source)
-        val runtime = YameRuntime(store, functions, logs, NavigationResourceRegistry(), ports::scan,
+        private val configInstallation = ConfigStore.install(store)
+        val runtime = YameRuntime(functions, logs, NavigationResourceRegistry(), ports::scan,
             connectionFactory = { _, _, _, _ -> factory() })
         var expectedCloseFailure: Throwable? = null
         fun run() = RuntimeTestRun(runtime, ports)
@@ -68,7 +70,7 @@ class YameRuntimeLifecycleTest {
             try {
                 val expected = expectedCloseFailure
                 if (expected == null) runtime.close() else assertSame(expected, assertFails { runtime.close() })
-            } finally { logs.close(); directory.toFile().deleteRecursively() }
+            } finally { logs.close(); configInstallation.close(); directory.toFile().deleteRecursively() }
         }
     }
 

@@ -1,5 +1,6 @@
 package no.skasti.yame.persistence
 
+import no.skasti.yame.config.withInstalledConfig
 import no.skasti.yame.config.*
 import no.skasti.yame.serial.*
 import no.skasti.yame.modem.*
@@ -69,9 +70,9 @@ class IniConfigStoreTest {
         assertNull(store[SerialSettings.Port])
         assertEquals(38400, store[SerialSettings.Baud])
         assertEquals(SerialFlowControl.DISABLED, store[SerialSettings.FlowControl])
-        assertEquals(HayesModemConfig(), HayesModemConfig.fromConfigStore(store))
-        assertEquals(YameLogManager.defaultLevels(), LoggingConfig.fromConfigStore(store).levels)
-        no.skasti.yame.parseArgs(arrayOf("--baud", "115200", "--username", "cli", "--password", "secret"), store)
+        assertEquals(HayesModemConfig(), withInstalledConfig(store) { HayesModemConfig.fromConfigStore() })
+        assertEquals(YameLogManager.defaultLevels(), withInstalledConfig(store) { LoggingConfig.fromConfigStore() }.levels)
+        withInstalledConfig(store) { no.skasti.yame.parseArgs(arrayOf("--baud", "115200", "--username", "cli", "--password", "secret")) }
         store.saveLoadedValues()
         val restarted = lazyApplicationConfigStore(path)
         assertEquals(38400, restarted[SerialSettings.Baud])
@@ -124,7 +125,7 @@ class IniConfigStoreTest {
         val path = directory.resolve("yame.ini")
         for (value in listOf("0", "-1", "no", "2147483648")) {
             Files.writeString(path, "[logging]\nmax-per-type=$value")
-            assertFailsWith<IllegalArgumentException> { LoggingConfig.fromConfigStore(lazyApplicationConfigStore(path)) }
+            assertFailsWith<IllegalArgumentException> { withInstalledConfig(lazyApplicationConfigStore(path)) { LoggingConfig.fromConfigStore() } }
         }
     }
 

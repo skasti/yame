@@ -1,5 +1,6 @@
 package no.skasti.yame.persistence
 
+import no.skasti.yame.config.withInstalledConfig
 import no.skasti.yame.config.*
 
 import no.skasti.yame.serial.SerialSettings
@@ -20,9 +21,9 @@ class FeaturePersistenceTest {
         try {
             val path = directory.resolve("yame.ini")
             val store = lazyApplicationConfigStore(path)
-            assertTrue(HtmlTransformerSettings.fromConfigStore(store).elementSimplifier)
+            assertTrue(withInstalledConfig(store) { HtmlTransformerSettings.fromConfigStore() }.elementSimplifier)
             store.set(ElementSimplifierSettings.Enabled to false)
-            assertFalse(HtmlTransformerSettings.fromConfigStore(lazyApplicationConfigStore(path)).elementSimplifier)
+            assertFalse(withInstalledConfig(lazyApplicationConfigStore(path)) { HtmlTransformerSettings.fromConfigStore() }.elementSimplifier)
         } finally { directory.toFile().deleteRecursively() }
     }
 
@@ -30,7 +31,7 @@ class FeaturePersistenceTest {
         var saved = ConfigChanges(emptyList())
         var saves = 0
         val store = ConfigStore(persist = { saved = it; saves++ })
-        no.skasti.yame.parseArgs(arrayOf("--baud", "115200", "--username", "cli", "--password", "secret"), store)
+        withInstalledConfig(store) { no.skasti.yame.parseArgs(arrayOf("--baud", "115200", "--username", "cli", "--password", "secret")) }
         store.setTransient(SerialSettings.Port to "COM2")
         store.set(TransformerSettings.Style to false, LogSettings.Levels.getValue(YameLogModule.MODEM) to YameLogLevel.DEBUG)
         assertEquals(1, saves)

@@ -1,5 +1,6 @@
 package no.skasti.yame.persistence
 
+import no.skasti.yame.config.withInstalledConfig
 import no.skasti.yame.config.ini.IniParser
 import no.skasti.yame.serial.SerialSettings
 import java.io.StringReader
@@ -68,7 +69,7 @@ class IniParserCompatibilityTest {
         assertEquals(57_600, runtime[SerialSettings.Baud])
         assertEquals("COM 4", runtime[SerialSettings.Port])
         // Historical login.* is intentionally not an alias for modem.login.*.
-        assertEquals(null, no.skasti.yame.modem.HayesModemConfig.fromConfigStore(runtime).username)
+        assertEquals(null, withInstalledConfig(runtime) { no.skasti.yame.modem.HayesModemConfig.fromConfigStore() }.username)
     }
 
     @Test fun `writing one setting keeps unknown escaped values continuation and comments`() {

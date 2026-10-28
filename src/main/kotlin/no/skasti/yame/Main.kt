@@ -1,7 +1,7 @@
 package no.skasti.yame
 
 import com.github.ajalt.mordant.terminal.Terminal
-import no.skasti.yame.persistence.lazyApplicationConfigStore
+import no.skasti.yame.persistence.installApplicationConfigStore
 import no.skasti.yame.ppp.proxy.transform.ElementSimplifierSettings
 import no.skasti.yame.config.*
 import no.skasti.yame.serial.SerialSettings
@@ -44,7 +44,7 @@ fun main(args: Array<String>) = main(args) { useTui, terminal ->
 internal fun main(args: Array<String>, createPresentation: (Boolean, Terminal) -> Presentation) {
     val configPath = configurationPath(args)
     val informationalOnly = args.any { it == "--help" || it == "-h" || it == "--list" || it == "-l" }
-    ConfigStore.install(if (informationalOnly) ConfigStore() else lazyApplicationConfigStore(configPath)).use { installation ->
+    (if (informationalOnly) ConfigStore.install(ConfigStore()) else installApplicationConfigStore(configPath)).use { installation ->
         val options = parseArgs(args)
 
         if (options.listPorts) {
@@ -75,12 +75,12 @@ internal fun main(args: Array<String>, createPresentation: (Boolean, Terminal) -
             }
 
             if (!Files.exists(configPath)) {
-                runCatching { ConfigStore.current.saveLoadedValues() }
+                runCatching { ConfigStore.saveLoadedValues() }
                     .onFailure { error ->
                         System.err.println("YAME could not create ${configPath}: ${error.message}")
                     }
             }
-            runCatching { ConfigStore.current.createFileIfMissing(ElementSimplifierSettings) }
+            runCatching { ConfigStore.createFileIfMissing(ElementSimplifierSettings) }
                 .onFailure { error ->
                     System.err.println("YAME could not create element-simplifier.ini: ${error.message}")
                 }
@@ -96,7 +96,7 @@ internal fun main(args: Array<String>, createPresentation: (Boolean, Terminal) -
                 UiMode.PLAIN -> false
             }
 
-            if (!useTui && ConfigStore.current[SerialSettings.Port] == null) {
+            if (!useTui && ConfigStore[SerialSettings.Port] == null) {
                 printUsage()
                 return
             }
@@ -146,16 +146,16 @@ internal fun resolveLoginCredentials(
     }
 }
 
-internal fun parseArgs(args: Array<String>, store: ConfigStore = ConfigStore.current): Options {
+internal fun parseArgs(args: Array<String>): Options {
     val toneTest = args.any { it == "--test-tone" || it == "-t" }
     // Validate startup inputs through their owners, without loading HTTP transformations.
-    store[SerialSettings.Baud]
-    val login = store[ModemSettings.Login]
-    store.ensureLoaded(LogSettings)
+    ConfigStore[SerialSettings.Baud]
+    val login = ConfigStore[ModemSettings.Login]
+    ConfigStore.ensureLoaded(LogSettings)
     if (!toneTest) {
-        store[PppSettings.Subnet]
-        store[DnsSettings.Upstream]
-        store[ProxySettings.Enabled]
+        ConfigStore[PppSettings.Subnet]
+        ConfigStore[DnsSettings.Upstream]
+        ConfigStore[ProxySettings.Enabled]
     }
     val changes = linkedMapOf<SettingKey<*>, ConfigChange<*>>()
     fun <T> option(key: SettingKey<T>, value: T) { changes[key] = key to value }
@@ -270,7 +270,7 @@ internal fun parseArgs(args: Array<String>, store: ConfigStore = ConfigStore.cur
     )
 
     if (usernameOverride != null) option(ModemSettings.Login, LoginCredentials(username, password))
-    store.setTransient(*changes.values.toTypedArray())
+    ConfigStore.setTransient(*changes.values.toTypedArray())
     return Options(list, testNumber, uiMode, logDirectory)
 }
 

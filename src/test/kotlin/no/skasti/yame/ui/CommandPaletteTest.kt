@@ -1,5 +1,6 @@
 package no.skasti.yame.ui
 
+import no.skasti.yame.config.InstalledConfigTest
 import no.skasti.yame.config.ConfigStore
 import com.github.ajalt.mordant.terminal.Terminal
 import no.skasti.yame.ppp.proxy.transform.HtmlTransformer
@@ -14,7 +15,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-class CommandPaletteTest {
+class CommandPaletteTest : InstalledConfigTest() {
     @Test
     fun `paths create palettes callbacks only execute on selection and cleanup waits for last child`() {
         var enabled = false
@@ -58,7 +59,8 @@ class CommandPaletteTest {
         run {
             val store = ConfigStore()
             repeat(2) { defaultResourceTransformationPipeline(1024) }
-            val registrations = registerTransformerCommands(store)
+            installConfig(store)
+            val registrations = registerTransformerCommands()
             try {
             val parent = assertNotNull(CommandPalette.find("/transformers"))
             assertEquals(HtmlTransformer.entries.map { "/${it.command}" }, parent.items().map { it.command })
@@ -122,6 +124,7 @@ class CommandPaletteTest {
                 observer.handleKeyAndAwait("Enter")
                 assertEquals("user" to "secret", login)
             }
+            releaseTestConfig()
         }
         assertNull(CommandPalette.find("/")?.item("baud"))
     }
@@ -135,9 +138,8 @@ class CommandPaletteTest {
             changes[no.skasti.yame.modem.ModemSettings.Tone]?.let { onTone(it.value) }
             changes[no.skasti.yame.modem.ModemSettings.Login]?.let { onLogin(it.value.username!!, it.value.password!!) }
         }
-        return TuiYameObserver(
-            configStore = configStore, functions = no.skasti.yame.function.FunctionStore(), terminal = Terminal(interactive = false),
-        )
+        return run { installConfig(configStore); TuiYameObserver(functions = no.skasti.yame.function.FunctionStore(), terminal = Terminal(interactive = false),
+        ) }
     }
 
     private fun TuiYameObserver.type(text: String) { text.forEach { handleKeyAndAwait(it.toString()) } }
