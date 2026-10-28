@@ -390,7 +390,7 @@ serializers. Durations specifically use `Duration.toString()` and
 `CompositeSetting<T>` maps one logical key to child properties relative to that
 key; `LoginCredentials` is `[modem] login.username/password`. ElementSimplifier
 delegates static settings to `Settings` and maps dynamically named rule sections
-through its override. A missing rule file uses bundled defaults; an existing
+through its override. A missing rule file uses feature-owned defaults; an existing
 empty file has no rules. It preserves rule ordering and validation.
 
 Historical names such as `http-https-proxy.enabled`, `ppp.dns.upstream`, and
@@ -430,15 +430,14 @@ saved baseline, excluding CLI overrides. Unrequested defaults need no file entri
 features supply them when first read. The primary INI version marker and existing
 section/key names are retained. Existing files are not rewritten on startup.
 `ConfigStore.createFileIfMissing(definition)` delegates first-run file creation to
-`IniConfigurationRepository`. The owner may provide an `initialIni` template;
-otherwise its default values are serialized through the regular feature mapping.
-Templates are bounded and validated through that mapping before writing. Creation
-uses a permission-restricted temporary file and a move without replacement;
-existing files, including empty or malformed files, remain untouched. This does
-not register the definition, change live values or publish notifications.
-`ElementSimplifierSettings` owns the bundled initial template. All user-file reads,
-runtime edits and first-run creation use the common store/repository; the remaining
-bundled-resource reader supplies standalone immutable defaults only.
+`IniConfigurationRepository`. The feature's key defaults are validated and
+serialized through its normal INI mapping and the shared writer. Creation uses a
+permission-restricted temporary file and a move without replacement; existing
+files, including empty or malformed files, remain untouched. This does not
+register the definition, change live values or publish notifications.
+`ElementSimplifierSettings` owns its typed default rules. File creation, loading
+and edits use the shared infrastructure; there are no feature-specific INI
+parsers, writers, resource loaders or initial-file template hooks.
 
 Production bootstrap installs the store before CLI parsing and component
 construction, including tone-test mode. Main uses `ConfigStore.current` for its

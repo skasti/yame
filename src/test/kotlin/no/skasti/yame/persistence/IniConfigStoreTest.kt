@@ -32,9 +32,9 @@ class IniConfigStoreTest {
         val path = directory.resolve("race.ini")
         val existing = "# user file\n[race]\nvalue=42\n"
         val feature = object : SeparateSettings("race") {
-            override fun initialIni(): String {
-                Files.writeString(path, existing)
-                return "[race]\nvalue=7\n"
+            override fun loadFromIni(context: IniReadContext): List<ConfigChange<*>> {
+                if (!context.existed) Files.writeString(path, existing)
+                return super.loadFromIni(context)
             }
             val group = SettingGroup(this)
             val Value = SettingKey<Int>("value", group, default = { 7 })
@@ -46,19 +46,18 @@ class IniConfigStoreTest {
         Files.list(directory).use { paths -> assertEquals(listOf(path), paths.toList()) }
     }
 
-    @Test fun `invalid initial template creates no file and can be retried`() {
-        var initial = "[initial]\nvalue=invalid\n"
+    @Test fun `invalid feature defaults create no file and can be retried`() {
+        var initial = -1
         val feature = object : SeparateSettings("initial") {
-            override fun initialIni(): String = initial
             val group = SettingGroup(this)
-            val Value = SettingKey<Int>("value", group, default = { 7 })
+            val Value = SettingKey<Int>("value", group, { require(it > 0) }, default = { initial })
         }
         val store = lazyApplicationConfigStore(directory.resolve("yame.ini"))
         var events = 0
         store.onChange.subscribe { events++ }
         assertFailsWith<IllegalArgumentException> { store.createFileIfMissing(feature) }
         assertFalse(Files.exists(directory.resolve("initial.ini")))
-        initial = "[initial]\nvalue=8\n"
+        initial = 8
         store.createFileIfMissing(feature)
         assertEquals(8, store[feature.Value])
         assertEquals(0, events)

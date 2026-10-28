@@ -214,7 +214,7 @@ unbounded buffering.
 - HTML transformation settings and rules live in `ppp.proxy.transform`, alongside
   the transformation implementation. The shared repository reads their INI file
   through `ElementSimplifierSettings`. First-run creation uses ConfigStore and the
-  same generic INI repository; features may supply an `initialIni` template.
+  same generic INI repository and the feature-owned key defaults and mappings.
   Do not introduce feature-specific file stores or alternative user-file readers.
 - Feature-owned `Settings` definitions own their identity, optional logical
   `file` name, static groups, typed keys, and optional dynamic-section mapping.

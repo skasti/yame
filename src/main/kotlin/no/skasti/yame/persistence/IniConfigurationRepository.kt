@@ -35,22 +35,16 @@ class IniConfigurationRepository internal constructor(
     override fun createFileIfMissing(definition: Settings) {
         val path = file(definition)
         if (Files.exists(path)) return
-        val template = definition.initialIni()
-        require(template == null || template.toByteArray(Charsets.UTF_8).size <= IniParser.MAX_BYTES) {
-            "Initial configuration exceeds ${IniParser.MAX_BYTES} bytes: $path"
-        }
-        val document = IniParser.parse(template.orEmpty(), path.fileName.toString())
-        val context = IniReadContext(path.fileName.toString(), document, template != null, definition = definition)
+        val document = IniParser.parse("", path.fileName.toString())
+        val context = IniReadContext(path.fileName.toString(), document, false, definition = definition)
         val entries = definition.loadFromIni(context)
         require(entries.size == definition.allSettingKeys.size &&
             entries.map { it.key }.toSet() == definition.allSettingKeys.toSet()) {
             "${definition.id} did not load exactly its declared setting keys"
         }
         entries.forEach { it.validate() }
-        if (template == null) {
-            definition.saveToIni(IniWriteContext(ConfigChanges(entries), document,
-                entries.map { it.key }.toSet(), path.fileName.toString(), definition = definition))
-        }
+        definition.saveToIni(IniWriteContext(ConfigChanges(entries), document,
+            entries.map { it.key }.toSet(), path.fileName.toString(), definition = definition))
         if (path.fileName.toString() == primaryName) document.put("", "version", "1")
         val bytes = IniWriter.write(document).toByteArray(Charsets.UTF_8)
         require(bytes.size <= IniParser.MAX_BYTES) { "Configuration file exceeds ${IniParser.MAX_BYTES} bytes: $path" }

@@ -4,13 +4,30 @@ import no.skasti.yame.config.*
 
 /** Dynamic tag sections in the existing element-simplifier.ini. */
 object ElementSimplifierSettings : SeparateSettings("element-simplifier") {
-    override fun initialIni(): String = ElementSimplifierIni.defaultText
+    private val defaultRules by lazy {
+        ElementSimplifierConfiguration(linkedMapOf(
+            "main" to ElementSimplifierRule("div"),
+            "article" to ElementSimplifierRule("div"),
+            "section" to ElementSimplifierRule("div"),
+            "nav" to ElementSimplifierRule("div"),
+            "header" to ElementSimplifierRule("div"),
+            "footer" to ElementSimplifierRule("div"),
+            "aside" to ElementSimplifierRule("div"),
+            "figure" to ElementSimplifierRule("div"),
+            "hgroup" to ElementSimplifierRule("div"),
+            "figcaption" to ElementSimplifierRule("p"),
+            "time" to ElementSimplifierRule("span"),
+            "mark" to ElementSimplifierRule("span"),
+            "details" to ElementSimplifierRule("div"),
+            "summary" to ElementSimplifierRule("p", "font-weight:bold;"),
+        ))
+    }
     val General = SettingGroup("element-simplifier.general", this)
     /** General rule-file switch; both this and TransformerSettings.Elements must be enabled. */
     val Enabled = SettingKey<Boolean>("enabled", General, default = { true })
     val Group = SettingGroup(this)
     val Rules = SettingKey<ElementSimplifierConfiguration>("rules", Group, structural = true,
-        default = { ElementSimplifierConfiguration.defaults() })
+        default = { defaultRules })
 
     override fun loadFromIni(context: IniReadContext): List<ConfigChange<*>> {
         val ordinary = super.loadFromIni(context)
@@ -32,7 +49,7 @@ object ElementSimplifierSettings : SeparateSettings("element-simplifier") {
             }
             if (rule != null) rules[section] = rule
         }
-        return ordinary + (Rules to if (context.existed) ElementSimplifierConfiguration(rules) else ElementSimplifierConfiguration.defaults())
+        return ordinary + (Rules to if (context.existed) ElementSimplifierConfiguration(rules) else Rules.default())
     }
 
     override fun saveToIni(context: IniWriteContext) {

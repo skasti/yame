@@ -24,7 +24,7 @@ class ElementSimplifierConfigStoreTest {
     }
 
     @Test
-    fun `shared store initializes bundled defaults without loading or overwriting user rules`() {
+    fun `shared store initializes feature defaults without loading or overwriting user rules`() {
         val path = directory.resolve("element-simplifier.ini")
         val store = store()
         var notifications = 0
@@ -37,7 +37,10 @@ class ElementSimplifierConfigStoreTest {
             assertEquals(ElementSimplifierConfiguration.defaults(), ElementSimplifierConfiguration.fromConfigStore())
         }
         assertEquals(0, notifications)
-        assertEquals(ElementSimplifierIni.defaultText, Files.readString(path))
+        val generated = Files.readString(path)
+        assertTrue(generated.contains("[summary]\ntarget=p\nstyle=font-weight:bold;"))
+        assertEquals(ElementSimplifierRule("p", "font-weight:bold;"), rules().rules["summary"])
+        assertEquals(ElementSimplifierConfiguration.defaults(), rules())
         if (Files.getFileStore(path).supportsFileAttributeView("posix")) {
             assertEquals(setOf(java.nio.file.attribute.PosixFilePermission.OWNER_READ,
                 java.nio.file.attribute.PosixFilePermission.OWNER_WRITE), Files.getPosixFilePermissions(path))
@@ -56,7 +59,16 @@ class ElementSimplifierConfigStoreTest {
     }
 
     @Test fun `missing rule reads use defaults without creating files`() {
-        assertEquals(ElementSimplifierConfiguration.defaults(), rules())
+        val defaults = rules()
+        assertEquals(ElementSimplifierConfiguration.defaults(), defaults)
+        assertEquals(linkedMapOf(
+            "main" to "div", "article" to "div", "section" to "div", "nav" to "div",
+            "header" to "div", "footer" to "div", "aside" to "div", "figure" to "div",
+            "hgroup" to "div", "figcaption" to "p", "time" to "span", "mark" to "span",
+            "details" to "div", "summary" to "p",
+        ), defaults.rules.mapValues { it.value.target })
+        assertEquals("font-weight:bold;", defaults.rules.getValue("summary").style)
+        assertTrue(defaults.rules.filterKeys { it != "summary" }.values.all { it.style == null })
         assertFalse(Files.exists(directory.resolve("element-simplifier.ini")))
     }
 
@@ -154,7 +166,7 @@ class ElementSimplifierConfigStoreTest {
     @Test
     fun `file size and regular file checks bound configuration reads`() {
         val path = directory.resolve("element-simplifier.ini")
-        Files.write(path, ByteArray(ElementSimplifierIni.MAX_BYTES + 1))
+        Files.write(path, ByteArray(no.skasti.yame.config.ini.IniParser.MAX_BYTES + 1))
         assertFailsWith<IllegalArgumentException> { rules() }
         Files.delete(path)
         Files.createDirectory(path)

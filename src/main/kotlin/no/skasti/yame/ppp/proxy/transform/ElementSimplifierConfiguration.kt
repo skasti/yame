@@ -38,7 +38,7 @@ class ElementSimplifierConfiguration(rules: Map<String, ElementSimplifierRule>) 
             return store[ElementSimplifierSettings.Rules]
         }
 
-        fun defaults(): ElementSimplifierConfiguration = ElementSimplifierIni.defaults
+        fun defaults(): ElementSimplifierConfiguration = ElementSimplifierSettings.Rules.default()
     }
 }
 
