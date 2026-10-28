@@ -79,29 +79,48 @@ class IniDocument internal constructor(
         return header
     }
 
-    /** The file block is anchored at byte zero and ends at a blank line or EOF. */
-    fun synchronizeFileDescription(description: String?) {
-        var end = 0
-        if (lines.firstOrNull() == Line.Other("##### @yame file")) {
-            var candidate = 1
-            while (candidate < lines.size) {
-                val raw = (lines[candidate] as? Line.Other)?.raw ?: break
-                if (!(raw.trimStart().startsWith("#") || raw.trimStart().startsWith(";")) || raw.trimStart().startsWith("#####")) break
-                candidate++
+    /** Definition blocks are identified by owner ID, never by their description text.
+     * Named sections take precedence; root-only mappings anchor at their first property.
+     * Unknown and legacy markers are deliberately left alone.
+     */
+    fun synchronizeSettingsDescription(
+        id: String, description: String?, ownedSections: Set<String>, rootProperties: Set<String>,
+    ) {
+        val marker = "##### @yame $id settings:"
+        // Search by explicit owner identity so a block can follow its first section
+        // after external reordering or deletion. Remove only well-formed blocks.
+        for (start in lines.indices.reversed()) {
+            if (lines[start] != Line.Other(marker)) continue
+            val end = settingsBlockEnd(start) ?: continue
+            lines.subList(start, end).clear()
+            if (lines.getOrNull(start) == Line.Other("")) lines.removeAt(start)
+        }
+        val comments = markedComments("$id settings:", description)
+        if (comments.isEmpty()) return
+        val header = lines.indexOfFirst { it is Line.Section && it.name in ownedSections }
+        val insertion = if (header >= 0) sectionBlockStart(header) else
+            lines.indexOfFirst { it is Line.Property && it.section.isEmpty() && it.name in rootProperties }
+        if (insertion >= 0) lines.addAll(insertion, comments + Line.Other(""))
+    }
+
+    private fun settingsBlockEnd(start: Int): Int? {
+        var index = start + 1
+        while (index < lines.size) {
+            when (val line = lines[index]) {
+                is Line.Section -> return index
+                is Line.Property -> return null // Incomplete block: preserve ambiguous content.
+                is Line.Other -> {
+                    if (line.raw.isEmpty()) return index
+                    if (line.raw.trimStart().startsWith("#####")) {
+                        // Consecutive generated blocks have independent ownership.
+                        return index.takeIf { line.raw.matches(Regex("##### @yame [a-z0-9][a-z0-9_.-]*( settings:)?")) }
+                    }
+                    if (!(line.raw.trimStart().startsWith("#") || line.raw.trimStart().startsWith(";"))) return null
+                }
             }
-            if (candidate == lines.size || lines[candidate] == Line.Other("")) {
-                end = candidate
-            }
+            index++
         }
-        val replacement = markedComments("file", description)
-        if (end > 0) {
-            lines.subList(0, end).clear()
-            // The separating blank belongs to the file block, not the next section.
-            if (replacement.isEmpty() && lines.firstOrNull() == Line.Other("")) lines.removeAt(0)
-        }
-        if (replacement.isNotEmpty()) {
-            lines.addAll(0, replacement + if (end == 0) listOf(Line.Other("")) else emptyList())
-        }
+        return index
     }
 
     private fun markedComments(id: String, description: String?): List<Line.Other> =

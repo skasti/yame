@@ -312,9 +312,6 @@ class IniWriteContext internal constructor(
     }.distinct()
     /** Uses mapping claims, including composite child names and actual dynamic sections. */
     internal fun synchronizeDocumentation(definitions: Collection<Settings>) {
-        document.synchronizeFileDescription(definitions.sortedBy { it.id }.flatMap { definition ->
-            listOfNotNull(definition.description) + definition.allSettingKeys.filter { it.structural }.mapNotNull { it.description }
-        }.filter(String::isNotBlank).distinct().joinToString("\n"))
         val keys = definitions.flatMap { it.allSettingKeys }
         document.sections().forEach { section ->
             val groups = keys.map { it.group }.distinct().filter { it.id == section }.sortedBy { it.configuration?.id }
@@ -333,6 +330,14 @@ class IniWriteContext internal constructor(
             if (groups.isNotEmpty() || claims.any { it.key.first == section && it.value in keys }) {
                 document.synchronizeSectionDescription(section, descriptions.joinToString("\n"))
             }
+        }
+        definitions.sortedBy { it.id }.forEach { definition ->
+            val owned = claims.filterValues { it.group.configuration === definition }.keys
+            val description = (listOfNotNull(definition.description) + definition.allSettingKeys
+                .filter { it.structural }.mapNotNull { it.description })
+                .filter(String::isNotBlank).distinct().joinToString("\n")
+            document.synchronizeSettingsDescription(definition.id, description,
+                owned.map { it.first }.toSet(), owned.map { "${it.first}.${it.second}" }.toSet())
         }
     }
     internal fun claims(): Map<Pair<String, String>, SettingKey<*>> = claims.toMap()

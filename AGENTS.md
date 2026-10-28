@@ -284,6 +284,9 @@ unbounded buffering.
 - Descriptions belong in public feature-owned Settings, SettingGroup and SettingKey
   metadata. The shared INI writer owns only explicitly marked `##### @yame`
   documentation blocks; preserve unmarked user comments and ambiguous markers.
-  Structural descriptions are shared at file level. Keep documentation synchronization
+  Settings overviews use independently owned `<id> settings:` blocks beside the
+  first owned section in document order; structural descriptions join that owner's
+  overview. Never regenerate a shared file header from lazily loaded definitions.
+  Preserve legacy file markers conservatively. Keep documentation synchronization
   independent of value changes and notifications; never add templates or
   feature-specific comment writers.

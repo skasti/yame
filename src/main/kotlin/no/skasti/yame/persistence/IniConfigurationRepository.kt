@@ -43,10 +43,10 @@ class IniConfigurationRepository internal constructor(
             "${definition.id} did not load exactly its declared setting keys"
         }
         entries.forEach { it.validate() }
+        if (path.fileName.toString() == primaryName) document.put("", "version", "1")
         val writer = IniWriteContext(ConfigChanges(entries), document,
             entries.map { it.key }.toSet(), path.fileName.toString(), definition = definition)
         writer.apply { definition.saveToIni(this); synchronizeDocumentation(listOf(definition)) }
-        if (path.fileName.toString() == primaryName) document.put("", "version", "1")
         val bytes = IniWriter.write(document).toByteArray(Charsets.UTF_8)
         require(bytes.size <= IniParser.MAX_BYTES) { "Configuration file exceeds ${IniParser.MAX_BYTES} bytes: $path" }
         try {
@@ -110,9 +110,8 @@ class IniConfigurationRepository internal constructor(
                             path.fileName.toString(), claims, definition = definition))
                     }
                 }
-                val knownDefinitions = (claims.values.mapNotNull { it.group.configuration } + definitions.map { it.key }).distinct()
                 IniWriteContext(snapshot, document, emptySet(), path.fileName.toString(), claims)
-                    .synchronizeDocumentation(knownDefinitions)
+                    .synchronizeDocumentation(definitions.map { it.key })
                 pending.keys.removeAll { it.file == path.toString() }
                 claims.forEach { (location, owner) ->
                     val id = IniPropertyId(path.toString(), location.first, location.second)

@@ -455,18 +455,23 @@ ToneTest owns the standalone modem and its forced tone-enabled configuration.
 
 ## Configuration descriptions
 
-Feature-owned `Settings.description` documents a logical file,
+Feature-owned `Settings.description` documents its definition,
 `SettingGroup.description` documents a section, and `SettingKey.description`
 documents a value. All are optional public, frontend-neutral metadata suitable for
-future configuration frontends. The shared INI writer uses mapping claims to
-associate descriptions with actual property names, including composite children.
-Structural key descriptions join the file overview once, rather than repeating
-long descriptions for every dynamically named section. Features use normal mapping
-contexts and never write comments themselves.
+future configuration frontends. Documentation ownership follows the feature even
+when several definitions share a file or only some definitions have loaded.
+[ADR 0012](adrs/0012-feature-local-ini-documentation.md) records this decision.
 
-Generated section documentation is directly above its header:
+The shared writer uses mapping claims to associate descriptions with actual
+property names, including composite children and dynamically named sections.
+Structural key descriptions join their owning Settings overview once, rather than
+repeating long descriptions for every dynamic section. Features use ordinary
+mapping contexts and never write comments themselves.
 
 ```ini
+##### @yame serial settings:
+# Serial transport configuration.
+
 ##### @yame serial
 # Serial port configuration.
 # baud: Serial port baud rate in bits per second.
@@ -474,31 +479,45 @@ Generated section documentation is directly above its header:
 baud=38400
 ```
 
-The group description appears first. Property descriptions follow property order;
-multiline continuations are indented within full-line `#` comments, so apparent INI
-syntax remains comment text. New properties follow the section's last property,
-ahead of trailing whitespace or user comments. Newly appended sections have two
-empty lines between them. Existing layout and LF/CRLF conventions remain intact.
+These are independently owned blocks, even when the Settings and group IDs match.
+The exact `##### @yame <settings-id> settings:` marker owns the definition overview.
+It appears once immediately before that definition's first existing section and
+its section documentation. The first section is chosen in document order using
+mapping ownership, including structural claims; groups need not be adjacent.
+Existing sections are never reordered. A root-only mapping places its overview
+before its first owned root property instead. With no owned section or property,
+no overview is inserted. Descriptions without meaningful text are omitted.
 
-The exact marker `##### @yame <section-id>` owns the contiguous comment block
-immediately above that section. **Comments inside this block are generated content
-and may be replaced.** Put personal notes outside the marked block. Ordinary `#`
-and `;` comments elsewhere remain user-owned, even when their text matches current
-metadata. Missing blocks are inserted; obsolete marked blocks are removed.
-Mismatched, detached and malformed markers are preserved. There is no global
-comment-text matching or deduplication.
+The section marker `##### @yame <section-id>` owns the contiguous comment block
+immediately above that header. Group descriptions appear first, followed by
+property descriptions in property order. Multiline continuations are indented
+inside full-line `#` comments, so apparent INI syntax remains comment text.
+Settings overviews have one separating empty line; consecutive Settings and
+section markers are recognized as separate units even without that separator.
 
-File documentation has its own `##### @yame file` marker at the beginning of the
-file, separated from the rest by an empty line. Only this anchored, explicitly
-marked file block can be replaced or removed; a section named `file` is handled
-independently. Existing unmarked file descriptions remain user-owned.
+**Comments inside an explicitly marked block are generated content and may be
+replaced.** Keep personal notes outside these blocks. Settings blocks end at the
+separating blank line or the next section/documentation block. Unmarked `#` and
+`;` comments elsewhere remain user-owned, even if their text matches metadata.
+Unknown, mismatched, malformed and incomplete markers are preserved. An overview
+can be updated, removed, or relocated when its first section changes using its
+explicit owner marker, without matching description text or moving user comments.
+Legacy `##### @yame file` blocks are conservatively retained: they do not identify
+their contributing definitions and may contain documentation from unloaded owners.
 
-Persistent value changes synchronize documentation in their affected files.
+Persistent value changes synchronize documentation for the changed definitions.
 `ConfigStore.synchronizeDocumentation(definition, ...)` explicitly synchronizes
-existing sections even when values have not changed. It uses the same fresh,
-bounded reads, ownership claims, staged size validation and replacement pipeline;
-it changes no values, transient overrides or saved baselines and emits no change
-notifications. No-op value updates remain no-ops. Repeated synchronization is
-byte-stable and skips file replacement when content is unchanged. Startup does not
-implicitly rewrite existing files. No templates, metadata registry, persistent
-documentation state or feature-specific INI writers are needed.
+requested definitions even when values have not changed. Neither path rewrites
+documentation belonging to unrelated or unloaded definitions; no registry of all
+features or shared overview is involved. Documentation-only synchronization uses
+the same fresh bounded reads, ownership claims, staged size validation and
+replacement pipeline. It changes no effective values, transient overrides or
+saved baselines, persists no unrelated values and emits no change notifications.
+No-op value updates remain no-ops. Repeated synchronization is byte-stable and
+skips physical replacement when the content is unchanged.
+
+New properties follow their section's last property, ahead of trailing whitespace
+or user comments. Newly appended sections have two empty lines between them.
+Existing layout, section order and LF/CRLF conventions remain intact; startup does
+not implicitly rewrite existing files. There are no templates, central metadata
+registry, persistent documentation state or feature-specific INI writers.
