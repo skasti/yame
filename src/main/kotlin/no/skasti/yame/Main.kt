@@ -2,7 +2,7 @@ package no.skasti.yame
 
 import com.github.ajalt.mordant.terminal.Terminal
 import no.skasti.yame.persistence.lazyApplicationConfigStore
-import no.skasti.yame.ppp.proxy.transform.ElementSimplifierConfigurationStore
+import no.skasti.yame.ppp.proxy.transform.ElementSimplifierSettings
 import no.skasti.yame.config.*
 import no.skasti.yame.serial.SerialSettings
 import no.skasti.yame.logging.LogSettings
@@ -80,7 +80,7 @@ internal fun main(args: Array<String>, createPresentation: (Boolean, Terminal) -
                         System.err.println("YAME could not create ${configPath}: ${error.message}")
                     }
             }
-            runCatching { ElementSimplifierConfigurationStore.alongside(configPath).createDefaultIfMissing() }
+            runCatching { ConfigStore.current.createFileIfMissing(ElementSimplifierSettings) }
                 .onFailure { error ->
                     System.err.println("YAME could not create element-simplifier.ini: ${error.message}")
                 }

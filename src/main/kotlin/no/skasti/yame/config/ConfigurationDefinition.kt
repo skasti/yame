@@ -17,6 +17,9 @@ abstract class Settings(val id: String, val file: String? = null) {
         }
     }
 
+    /** Optional first-run template, owned by the feature and validated by its INI mapping. */
+    open fun initialIni(): String? = null
+
     private data class Discovered(
         val all: List<SettingKey<*>>,
         val ordinary: List<SettingKey<*>>,

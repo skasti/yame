@@ -3,6 +3,7 @@ package no.skasti.yame.persistence
 import no.skasti.yame.config.*
 import no.skasti.yame.config.ini.*
 import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
@@ -30,6 +31,35 @@ class IniConfigurationRepository internal constructor(
 
     fun file(definition: Settings): Path =
         definition.file?.let { directory.resolve("$it.ini") } ?: directory.resolve(primaryName)
+
+    override fun createFileIfMissing(definition: Settings) {
+        val path = file(definition)
+        if (Files.exists(path)) return
+        val template = definition.initialIni()
+        require(template == null || template.toByteArray(Charsets.UTF_8).size <= IniParser.MAX_BYTES) {
+            "Initial configuration exceeds ${IniParser.MAX_BYTES} bytes: $path"
+        }
+        val document = IniParser.parse(template.orEmpty(), path.fileName.toString())
+        val context = IniReadContext(path.fileName.toString(), document, template != null, definition = definition)
+        val entries = definition.loadFromIni(context)
+        require(entries.size == definition.allSettingKeys.size &&
+            entries.map { it.key }.toSet() == definition.allSettingKeys.toSet()) {
+            "${definition.id} did not load exactly its declared setting keys"
+        }
+        entries.forEach { it.validate() }
+        if (template == null) {
+            definition.saveToIni(IniWriteContext(ConfigChanges(entries), document,
+                entries.map { it.key }.toSet(), path.fileName.toString(), definition = definition))
+        }
+        if (path.fileName.toString() == primaryName) document.put("", "version", "1")
+        val bytes = IniWriter.write(document).toByteArray(Charsets.UTF_8)
+        require(bytes.size <= IniParser.MAX_BYTES) { "Configuration file exceeds ${IniParser.MAX_BYTES} bytes: $path" }
+        try {
+            writeFile(path, bytes, replaceExisting = false)
+        } catch (_: FileAlreadyExistsException) {
+            // A file created since the initial check also belongs to the user.
+        }
+    }
 
     override fun load(definition: Settings): ConfigurationLoad {
         val path = file(definition)
@@ -85,20 +115,25 @@ class IniConfigurationRepository internal constructor(
             }
             // Every document and ownership mutation is validated before replacing any file.
             prepared.forEach { (path, bytes) ->
-                Files.createDirectories(directory)
-                val temporary = Files.createTempFile(directory, ".yame-ini-", ".tmp")
-                try {
-                    restrictPermissions(temporary)
-                    Files.write(temporary, bytes)
-                    replaceFile(temporary, path)
-                    replaced.add(path)
-                } finally { Files.deleteIfExists(temporary) }
+                writeFile(path, bytes, replaceExisting = true)
+                replaced.add(path)
             }
             synchronized(owners) { owners.clear(); owners.putAll(pending) }
         } catch (error: Exception) {
             if (replaced.isNotEmpty()) throw PartialIniWriteException(replaced, error)
             throw error
         }
+    }
+
+    private fun writeFile(path: Path, bytes: ByteArray, replaceExisting: Boolean) {
+        Files.createDirectories(directory)
+        val temporary = Files.createTempFile(directory, ".yame-ini-", ".tmp")
+        try {
+            restrictPermissions(temporary)
+            Files.write(temporary, bytes)
+            if (replaceExisting) replaceFile(temporary, path)
+            else Files.move(temporary, path) // No REPLACE_EXISTING: never overwrite user configuration.
+        } finally { Files.deleteIfExists(temporary) }
     }
 
     private fun read(path: Path): IniDocument {

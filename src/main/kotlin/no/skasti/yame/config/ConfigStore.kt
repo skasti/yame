@@ -80,6 +80,12 @@ class ConfigStore(
 
     private fun <T> defaultChange(key: SettingKey<T>): ConfigChange<T> = key to key.default()
 
+    /** Initialize a feature file without loading/registering it or publishing changes. */
+    fun createFileIfMissing(definition: Settings) = synchronized(lock) {
+        repository?.createFileIfMissing(definition)
+        Unit
+    }
+
     /** First-run persistence of requested feature baselines, excluding transient overrides. */
     fun saveLoadedValues() = synchronized(lock) {
         val values = ConfigChanges(saved.values)

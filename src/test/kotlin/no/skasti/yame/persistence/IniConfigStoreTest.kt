@@ -15,6 +15,55 @@ import kotlin.test.*
 class IniConfigStoreTest {
     @TempDir lateinit var directory: Path
 
+    @Test fun `generic first run creation uses feature defaults and preserves transient values`() {
+        val feature = object : SeparateSettings("independent") {
+            val group = SettingGroup(this)
+            val Value = SettingKey<Int>("value", group, default = { 7 })
+        }
+        val store = lazyApplicationConfigStore(directory.resolve("yame.ini"))
+        store.setTransient(feature.Value to 9)
+        store.createFileIfMissing(feature)
+        assertEquals(9, store[feature.Value])
+        assertEquals(7, lazyApplicationConfigStore(directory.resolve("yame.ini"))[feature.Value])
+        assertFalse(Files.exists(directory.resolve("yame.ini")))
+    }
+
+    @Test fun `first run creation cannot overwrite a file appearing during preparation`() {
+        val path = directory.resolve("race.ini")
+        val existing = "# user file\n[race]\nvalue=42\n"
+        val feature = object : SeparateSettings("race") {
+            override fun initialIni(): String {
+                Files.writeString(path, existing)
+                return "[race]\nvalue=7\n"
+            }
+            val group = SettingGroup(this)
+            val Value = SettingKey<Int>("value", group, default = { 7 })
+        }
+        val store = lazyApplicationConfigStore(directory.resolve("yame.ini"))
+        store.createFileIfMissing(feature)
+        assertEquals(existing, Files.readString(path))
+        assertEquals(42, store[feature.Value])
+        Files.list(directory).use { paths -> assertEquals(listOf(path), paths.toList()) }
+    }
+
+    @Test fun `invalid initial template creates no file and can be retried`() {
+        var initial = "[initial]\nvalue=invalid\n"
+        val feature = object : SeparateSettings("initial") {
+            override fun initialIni(): String = initial
+            val group = SettingGroup(this)
+            val Value = SettingKey<Int>("value", group, default = { 7 })
+        }
+        val store = lazyApplicationConfigStore(directory.resolve("yame.ini"))
+        var events = 0
+        store.onChange.subscribe { events++ }
+        assertFailsWith<IllegalArgumentException> { store.createFileIfMissing(feature) }
+        assertFalse(Files.exists(directory.resolve("initial.ini")))
+        initial = "[initial]\nvalue=8\n"
+        store.createFileIfMissing(feature)
+        assertEquals(8, store[feature.Value])
+        assertEquals(0, events)
+    }
+
     @Test fun `missing files use feature defaults and first run saves baseline without CLI secrets`() {
         val path = directory.resolve("yame.ini")
         val store = lazyApplicationConfigStore(path)

@@ -1,6 +1,7 @@
 package no.skasti.yame.ppp.proxy.transform
 
 import no.skasti.yame.persistence.lazyApplicationConfigStore
+import no.skasti.yame.config.ConfigStore
 
 import java.nio.file.Files
 import java.nio.file.Path
@@ -11,23 +12,66 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.io.TempDir
 
-class ElementSimplifierConfigurationStoreTest {
+class ElementSimplifierConfigStoreTest {
     @TempDir
     lateinit var directory: Path
 
+    private fun store() = lazyApplicationConfigStore(directory.resolve("yame.ini"))
+    private fun rules() = ElementSimplifierConfiguration.fromConfigStore(store())
+    private fun readRules(text: String): ElementSimplifierConfiguration {
+        Files.writeString(directory.resolve("element-simplifier.ini"), text)
+        return rules()
+    }
+
     @Test
-    fun `missing file uses bundled defaults and creation never overwrites user rules`() {
-        val path = directory.resolve(ElementSimplifierConfigurationStore.FILE_NAME)
-        val store = ElementSimplifierConfigurationStore(path)
-        assertEquals(ElementSimplifierRule("p", "font-weight:bold;"), store.load().rules["summary"])
-        assertFalse(Files.exists(path))
-        store.createDefaultIfMissing()
-        assertEquals(ElementSimplifierConfiguration.defaults(), store.load())
+    fun `shared store initializes bundled defaults without loading or overwriting user rules`() {
+        val path = directory.resolve("element-simplifier.ini")
+        val store = store()
+        var notifications = 0
+        store.onChange.subscribe { notifications++ }
+        ConfigStore.install(store).use {
+            ConfigStore.current.createFileIfMissing(ElementSimplifierSettings)
+            var loaded = false
+            store.onChange[ElementSimplifierSettings.Group].subscribe(initial = true) { loaded = true }.close()
+            assertFalse(loaded)
+            assertEquals(ElementSimplifierConfiguration.defaults(), ElementSimplifierConfiguration.fromConfigStore())
+        }
+        assertEquals(0, notifications)
+        assertEquals(ElementSimplifierIni.defaultText, Files.readString(path))
+        if (Files.getFileStore(path).supportsFileAttributeView("posix")) {
+            assertEquals(setOf(java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                java.nio.file.attribute.PosixFilePermission.OWNER_WRITE), Files.getPosixFilePermissions(path))
+        }
         val custom = "[summary]\ntarget=h3\nstyle=font-weight:normal;\n"
         Files.writeString(path, custom)
-        store.createDefaultIfMissing()
+        store.createFileIfMissing(ElementSimplifierSettings)
         assertEquals(custom, Files.readString(path))
-        assertEquals(ElementSimplifierRule("h3", "font-weight:normal;"), store.load().rules["summary"])
+        assertEquals(ElementSimplifierRule("h3", "font-weight:normal;"), rules().rules["summary"])
+        // Empty and malformed files must also remain untouched by initialization.
+        for (existing in listOf("", "[summary]\ntarget=<invalid>\n")) {
+            Files.writeString(path, existing)
+            store.createFileIfMissing(ElementSimplifierSettings)
+            assertEquals(existing, Files.readString(path))
+        }
+    }
+
+    @Test fun `missing rule reads use defaults without creating files`() {
+        assertEquals(ElementSimplifierConfiguration.defaults(), rules())
+        assertFalse(Files.exists(directory.resolve("element-simplifier.ini")))
+    }
+
+    @Test fun `shared store persists edits and switch across restart without leaking transient values`() {
+        val store = store()
+        store.createFileIfMissing(ElementSimplifierSettings)
+        val saved = store[ElementSimplifierSettings.Rules]
+        val transient = ElementSimplifierConfiguration(mapOf("summary" to ElementSimplifierRule("h3")))
+        store.setTransient(ElementSimplifierSettings.Rules to transient)
+        store.set(ElementSimplifierSettings.Enabled to false)
+        assertEquals(saved, rules())
+        assertFalse(store()[ElementSimplifierSettings.Enabled])
+        store.set(ElementSimplifierSettings.Rules to transient)
+        assertEquals(transient, rules())
+        assertFalse(store()[ElementSimplifierSettings.Enabled])
     }
 
     @Test
@@ -39,12 +83,12 @@ class ElementSimplifierConfigurationStoreTest {
             TARGET = P
             style=font-weight:bold; color:#333; background:url('/icon.gif?v=1');
         """.trimIndent()
-        val rules = ElementSimplifierIni.parse(text).rules
+        val rules = readRules(text).rules
         assertEquals(setOf("summary"), rules.keys)
         assertEquals("p", rules.getValue("summary").target)
         assertEquals("font-weight:bold; color:#333; background:url('/icon.gif?v=1');", rules.getValue("summary").style)
-        assertTrue(ElementSimplifierIni.parse("; no rules").rules.isEmpty())
-        assertTrue(ElementSimplifierIni.parse("[bad tag]\ntarget=p\n").rules.isEmpty())
+        assertTrue(readRules("; no rules").rules.isEmpty())
+        assertTrue(readRules("[bad tag]\ntarget=p\n").rules.isEmpty())
     }
 
     @Test
@@ -62,21 +106,20 @@ class ElementSimplifierConfigurationStoreTest {
             target=span
         """.trimIndent() + "\n"
         val expected = listOf("summary", "general", "time")
-        assertEquals(expected, ElementSimplifierIni.parse(text).rules.keys.toList())
+        assertEquals(expected, readRules(text).rules.keys.toList())
         val path = directory.resolve("element-simplifier.ini")
         Files.writeString(path, text)
-        assertEquals(expected, ElementSimplifierConfigurationStore(path).load().rules.keys.toList())
+        assertEquals(expected, rules().rules.keys.toList())
         val runtime = no.skasti.yame.persistence.lazyApplicationConfigStore(directory.resolve("yame.ini"))
         assertEquals(expected, runtime[ElementSimplifierSettings.Rules].rules.keys.toList())
         assertEquals(text, Files.readString(path))
         runtime.set(ElementSimplifierSettings.Rules to runtime[ElementSimplifierSettings.Rules].let { current ->
             ElementSimplifierConfiguration(current.rules + ("time" to ElementSimplifierRule("div")))
         })
-        assertEquals(expected, ElementSimplifierConfigurationStore(path).load().rules.keys.toList())
-        assertEquals("div", ElementSimplifierConfigurationStore(path).load().rules.getValue("general").target)
-        assertTrue(ElementSimplifierIni.parse("").rules.isEmpty())
+        assertEquals(expected, rules().rules.keys.toList())
+        assertEquals("div", rules().rules.getValue("general").target)
         Files.writeString(path, "")
-        assertTrue(ElementSimplifierConfigurationStore(path).load().rules.isEmpty())
+        assertTrue(rules().rules.isEmpty())
         assertTrue(no.skasti.yame.persistence.lazyApplicationConfigStore(directory.resolve("yame.ini"))
             [ElementSimplifierSettings.Rules].rules.isEmpty())
     }
@@ -101,10 +144,10 @@ class ElementSimplifierConfigurationStoreTest {
             "[summary]\ntarget=p\ntarget=div", "[summary]\ntarget=p\n[SUMMARY]\ntarget=span",
             "[summary]\ntarget=p\nstyle=${"x".repeat(1025)}",
         )) {
-            assertFailsWith<IllegalArgumentException>(text) { ElementSimplifierIni.parse(text) }
+            assertFailsWith<IllegalArgumentException>(text) { readRules(text) }
         }
         assertFailsWith<IllegalArgumentException> {
-            ElementSimplifierIni.parse((0..256).joinToString("\n") { "[tag-$it]\ntarget=div" })
+            readRules((0..256).joinToString("\n") { "[tag-$it]\ntarget=div" })
         }
     }
 
@@ -112,8 +155,10 @@ class ElementSimplifierConfigurationStoreTest {
     fun `file size and regular file checks bound configuration reads`() {
         val path = directory.resolve("element-simplifier.ini")
         Files.write(path, ByteArray(ElementSimplifierIni.MAX_BYTES + 1))
-        assertFailsWith<IllegalArgumentException> { ElementSimplifierConfigurationStore(path).load() }
-        assertFailsWith<IllegalArgumentException> { ElementSimplifierConfigurationStore(directory).load() }
+        assertFailsWith<IllegalArgumentException> { rules() }
+        Files.delete(path)
+        Files.createDirectory(path)
+        assertFailsWith<IllegalArgumentException> { rules() }
     }
 
     @Test
@@ -130,7 +175,7 @@ class ElementSimplifierConfigurationStoreTest {
     @Test
     fun `main configuration loads sibling rules even before yame ini exists`() {
         val configPath = directory.resolve("custom-yame.ini")
-        val elementPath = directory.resolve(ElementSimplifierConfigurationStore.FILE_NAME)
+        val elementPath = directory.resolve("element-simplifier.ini")
         Files.writeString(elementPath, "[summary]\ntarget=h3\nstyle=font-weight:bold;\n")
         val store = lazyApplicationConfigStore(configPath)
         val configuration = ElementSimplifierConfiguration.fromConfigStore(store)

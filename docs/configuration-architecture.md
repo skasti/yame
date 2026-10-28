@@ -429,10 +429,16 @@ On first normal startup, `saveLoadedValues()` persists the requested features'
 saved baseline, excluding CLI overrides. Unrequested defaults need no file entries;
 features supply them when first read. The primary INI version marker and existing
 section/key names are retained. Existing files are not rewritten on startup.
-`ElementSimplifierConfigurationStore` remains a feature-local standalone reader
-and first-run default-file creator; runtime rule reads and edits use
-`ElementSimplifierSettings` through the shared store. Its distinct default-template
-creation responsibility does not recreate application configuration state.
+`ConfigStore.createFileIfMissing(definition)` delegates first-run file creation to
+`IniConfigurationRepository`. The owner may provide an `initialIni` template;
+otherwise its default values are serialized through the regular feature mapping.
+Templates are bounded and validated through that mapping before writing. Creation
+uses a permission-restricted temporary file and a move without replacement;
+existing files, including empty or malformed files, remain untouched. This does
+not register the definition, change live values or publish notifications.
+`ElementSimplifierSettings` owns the bundled initial template. All user-file reads,
+runtime edits and first-run creation use the common store/repository; the remaining
+bundled-resource reader supplies standalone immutable defaults only.
 
 Production bootstrap installs the store before CLI parsing and component
 construction, including tone-test mode. Main uses `ConfigStore.current` for its

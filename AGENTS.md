@@ -213,7 +213,9 @@ unbounded buffering.
   DNS, and HTTP compatibility are independent component configs.
 - HTML transformation settings and rules live in `ppp.proxy.transform`, alongside
   the transformation implementation. The shared repository reads their INI file
-  through `ElementSimplifierSettings`; the older reader remains for compatibility.
+  through `ElementSimplifierSettings`. First-run creation uses ConfigStore and the
+  same generic INI repository; features may supply an `initialIni` template.
+  Do not introduce feature-specific file stores or alternative user-file readers.
 - Feature-owned `Settings` definitions own their identity, optional logical
   `file` name, static groups, typed keys, and optional dynamic-section mapping.
   A group's ID is its canonical INI section. Keys declare relative names and

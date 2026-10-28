@@ -36,9 +36,12 @@ saved baseline of requested definitions, never transient CLI overrides. Missing
 entries use feature defaults. Standalone stores lazily load key defaults and
 preserve explicit injected values. Both reads and writes request their owner.
 
-The feature-local element-simplifier reader/default-template creator is retained
-for its independent file-creation API. Runtime rule configuration remains in the
-shared store, including dynamic edits and the separate-file enable switch.
+First-run feature files are created through ConfigStore and the same generic INI
+repository. Feature-owned optional templates are validated through their mappings;
+creation never replaces existing user files or registers live configuration state.
+The element-simplifier file store is removed. Its remaining bundled-resource
+reader only supplies immutable standalone defaults; all user-file IO uses the
+shared repository, including dynamic edits and the separate-file enable switch.
 
 ## Alternatives
 

@@ -4,6 +4,7 @@ import no.skasti.yame.config.*
 
 /** Dynamic tag sections in the existing element-simplifier.ini. */
 object ElementSimplifierSettings : SeparateSettings("element-simplifier") {
+    override fun initialIni(): String = ElementSimplifierIni.defaultText
     val General = SettingGroup("element-simplifier.general", this)
     /** General rule-file switch; both this and TransformerSettings.Elements must be enabled. */
     val Enabled = SettingKey<Boolean>("enabled", General, default = { true })
