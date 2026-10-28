@@ -280,8 +280,9 @@ internal class YameRuntime(
             }
             val connectionGeneration = attempt.first
             val connectionIdentity = attempt.second
-            val baud = configStore[SerialSettings.Baud]
-            val flowControl = configStore[SerialSettings.FlowControl]
+            val serial = no.skasti.yame.serial.SerialConfig.fromConfigStore(configStore)
+            val baud = serial.baudRate
+            val flowControl = serial.flowControl
             val config = HayesModemConfig.fromConfigStore(configStore)
             val ipConfig = PppIpConfig.fromConfigStore(configStore)
             val dnsConfig = PppDnsConfig.fromConfigStore(configStore)

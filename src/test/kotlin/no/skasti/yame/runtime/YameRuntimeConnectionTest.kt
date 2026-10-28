@@ -23,8 +23,6 @@ import no.skasti.yame.ppp.proxy.SystemRoutingTcpProxy
 import no.skasti.yame.ppp.tcp.TcpFlowKey
 import no.skasti.yame.ppp.tcp.TcpProxyEvent
 import no.skasti.yame.ppp.tcp.TcpProxyFlow
-import no.skasti.yame.persistence.YameConfiguration
-import no.skasti.yame.persistence.applicationConfigStore
 import no.skasti.yame.persistence.lazyApplicationConfigStore
 import no.skasti.yame.ppp.ip.Ipv4Address
 import no.skasti.yame.serial.*
@@ -145,7 +143,7 @@ class YameRuntimeConnectionTest {
         try {
             for (constructionFails in listOf(true, false)) {
                 val functions = FunctionStore()
-                val store = applicationConfigStore(YameConfiguration(portName = "invalid"))
+                val store = ConfigStore(listOf(no.skasti.yame.serial.SerialSettings.Port to "invalid"))
                 val failure = IOException(if (constructionFails) "invalid port" else "port busy")
                 val port = Port(failure)
                 var attempts = 0
@@ -179,7 +177,7 @@ class YameRuntimeConnectionTest {
         try {
             var saves = 0
             var events = 0
-            val store = applicationConfigStore(YameConfiguration(portName = "COM1"), save = { saves++ })
+            val store = ConfigStore(listOf(no.skasti.yame.serial.SerialSettings.Port to "COM1"), persist = { saves++ })
             val functions = FunctionStore()
             val ports = listOf(SerialPortDescriptor("COM1", "test port"))
             val opened = mutableListOf<Triple<String, Int, SerialFlowControl>>()
@@ -249,7 +247,7 @@ class YameRuntimeConnectionTest {
         }
         try {
             val functions = FunctionStore()
-            val store = applicationConfigStore(YameConfiguration(portName = "COM1"))
+            val store = ConfigStore(listOf(no.skasti.yame.serial.SerialSettings.Port to "COM1"))
             val registry = NavigationResourceRegistry(maxContexts = 4)
             val httpConfig = PppHttpCompatibilityConfig(enabled = true, requestTimeoutMillis = 2_000)
 

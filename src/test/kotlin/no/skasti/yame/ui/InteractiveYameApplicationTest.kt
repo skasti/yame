@@ -3,8 +3,7 @@ package no.skasti.yame.ui
 import com.github.ajalt.mordant.terminal.Terminal
 import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.observer.*
-import no.skasti.yame.persistence.YameConfiguration
-import no.skasti.yame.persistence.applicationConfigStore
+import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.ppp.proxy.*
 import no.skasti.yame.ppp.proxy.transform.ResourceTransformationSummary
 import no.skasti.yame.recording.RecordingResourceView
@@ -39,7 +38,7 @@ class InteractiveYameApplicationTest {
 
     private fun withApp(test: (InteractiveYameApplication) -> Unit) =
         InteractiveYameApplication(
-            configStore = applicationConfigStore(YameConfiguration(portName = "COM1")),
+            configStore = ConfigStore(listOf(no.skasti.yame.serial.SerialSettings.Port to "COM1")),
             functions = FunctionStore(), terminal = Terminal(interactive = false),
         ).use(test)
 

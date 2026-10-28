@@ -1,6 +1,6 @@
 package no.skasti.yame.ppp.proxy.transform
 
-import no.skasti.yame.persistence.YameConfigurationStore
+import no.skasti.yame.persistence.lazyApplicationConfigStore
 
 import java.nio.file.Files
 import java.nio.file.Path
@@ -132,12 +132,13 @@ class ElementSimplifierConfigurationStoreTest {
         val configPath = directory.resolve("custom-yame.ini")
         val elementPath = directory.resolve(ElementSimplifierConfigurationStore.FILE_NAME)
         Files.writeString(elementPath, "[summary]\ntarget=h3\nstyle=font-weight:bold;\n")
-        val store = YameConfigurationStore(configPath)
-        val configuration = store.load()
+        val store = lazyApplicationConfigStore(configPath)
+        val configuration = ElementSimplifierConfiguration.fromConfigStore(store)
         assertEquals(mapOf("summary" to ElementSimplifierRule("h3", "font-weight:bold;")),
-            configuration.pppHttpCompatibilityConfig.elementSimplifier.rules)
-        store.save(configuration)
-        assertEquals(configuration, store.load())
+            configuration.rules)
+        store[no.skasti.yame.serial.SerialSettings.Baud]
+        store.set(no.skasti.yame.serial.SerialSettings.Baud to 9600)
+        assertEquals(configuration, ElementSimplifierConfiguration.fromConfigStore(lazyApplicationConfigStore(configPath)))
         assertEquals("[summary]\ntarget=h3\nstyle=font-weight:bold;\n", Files.readString(elementPath))
     }
 }

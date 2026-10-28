@@ -4,8 +4,7 @@ import com.github.ajalt.mordant.terminal.*
 import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.lifecycle.ApplicationEventLifecycle
 import no.skasti.yame.observer.EventBroker
-import no.skasti.yame.persistence.YameConfiguration
-import no.skasti.yame.persistence.applicationConfigStore
+import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.serial.ConnectionState
 import no.skasti.yame.serial.ConnectionStateChanged
 import no.skasti.yame.serial.SerialSettings
@@ -29,7 +28,7 @@ class TuiWorkerIntegrationTest {
     @Test fun `baud command commits synchronously and reentrant notification updates presentation in FIFO order`() {
         val recorder = TerminalRecorder(outputInteractive = true, inputInteractive = false)
         val savingThread = AtomicReference<Thread>()
-        val config = applicationConfigStore(YameConfiguration(), save = { savingThread.set(Thread.currentThread()) })
+        val config = ConfigStore(persist = { savingThread.set(Thread.currentThread()) })
         TuiYameObserver(config, FunctionStore(), Terminal(terminalInterface = recorder)).use { ui ->
             ui.start()
             ui.chooseNextBaud()
@@ -53,7 +52,7 @@ class TuiWorkerIntegrationTest {
         val callbackFailure = AtomicReference<Throwable>()
         val exits = LinkedBlockingQueue<Int>()
         val reports = CopyOnWriteArrayList<String>()
-        val config = applicationConfigStore(YameConfiguration(), save = {
+        val config = ConfigStore(persist = {
             saving.countDown(); check(save.await(5, TimeUnit.SECONDS))
         }, onSubscriberFailure = {
             callbackFailure.set(it); caught.countDown()
@@ -95,7 +94,7 @@ class TuiWorkerIntegrationTest {
             check(release.await(5, TimeUnit.SECONDS))
             ui.close()
         }.use {
-            ui = TuiYameObserver(applicationConfigStore(YameConfiguration()), functions, Terminal(interactive = false))
+            ui = TuiYameObserver(ConfigStore(), functions, Terminal(interactive = false))
             try {
                 "/disconnect".forEach { ui.handleKey(it.toString()) }
                 ui.handleKey("Enter")
@@ -124,7 +123,7 @@ class TuiWorkerIntegrationTest {
                 recorder.completePrintRequest(request)
             }
         }
-        val config = applicationConfigStore(YameConfiguration())
+        val config = ConfigStore()
         val ui = TuiYameObserver(config, FunctionStore(), Terminal(terminalInterface = output))
         try {
             ui.start()

@@ -1,6 +1,5 @@
 package no.skasti.yame.runtime
 
-import no.skasti.yame.persistence.*
 import no.skasti.yame.config.*
 import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.logging.*
@@ -12,7 +11,7 @@ import kotlin.test.*
 class YameRuntimeStoreTest {
     @Test fun `failed registration releases earlier operations and configuration subscription`() {
         val directory = Files.createTempDirectory("yame-runtime-startup")
-        val store = applicationConfigStore(YameConfiguration())
+        val store = ConfigStore()
         val functions = FunctionStore()
         try {
             functions.register(ConnectionFunctions.Disconnect) {}.use {
@@ -35,8 +34,7 @@ class YameRuntimeStoreTest {
     @Test fun `headless runtime observes logging settings and releases functions and subscriptions on close`() {
         val directory = Files.createTempDirectory("yame-runtime-test")
         try {
-            val configuration = YameConfiguration()
-            val store = applicationConfigStore(configuration)
+            val store = ConfigStore()
             val functions = FunctionStore()
             YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
                 val ports = RuntimeTestPorts()

@@ -275,7 +275,8 @@ class LazyConfigurationTest {
         Files.writeString(path, "serial.baud=57600\ntransformers.script-remover-enabled=false\n")
         Files.writeString(directory.resolve("element-simplifier.ini"), "[heading]\ntarget=h2\n")
         val store = lazyApplicationConfigStore(path)
-        assertEquals(57600, cliConfiguration(store).baudRate)
+        no.skasti.yame.parseArgs(emptyArray(), store)
+        assertEquals(57600, store[SerialSettings.Baud])
         var transformersLoaded = false
         var rulesLoaded = false
         store.onChange[TransformerSettings.Group].subscribe(initial = true) { transformersLoaded = true }.close()
@@ -292,8 +293,7 @@ class LazyConfigurationTest {
         val path = directory.resolve("yame.ini")
         Files.writeString(path, "serial.baud=57600\ntransformers.script-remover-enabled=false\n")
         val store = lazyApplicationConfigStore(path)
-        val saved = cliConfiguration(store)
-        applyCliOverrides(store, saved, saved.copy(baudRate = 9600))
+        no.skasti.yame.parseArgs(arrayOf("--baud", "9600"), store)
         assertEquals(9600, store[SerialSettings.Baud])
         var transformersLoaded = false
         store.onChange[TransformerSettings.Group].subscribe(initial = true) { transformersLoaded = true }.close()
@@ -306,9 +306,9 @@ class LazyConfigurationTest {
         val path = directory.resolve("yame.ini")
         Files.writeString(path, "serial.baud=57600\nmodem.tone-simulation-enabled=false\nppp.subnet=invalid\n")
         val store = lazyApplicationConfigStore(path)
-        val options = cliConfiguration(store, toneTest = true)
-        assertEquals(57600, options.baudRate)
-        assertFalse(options.modemConfig.toneSimulationEnabled)
+        no.skasti.yame.parseArgs(arrayOf("--test-tone", "123"), store)
+        assertEquals(57600, store[SerialSettings.Baud])
+        assertFalse(HayesModemConfig.fromConfigStore(store).toneSimulationEnabled)
         var pppLoaded = false
         var transformersLoaded = false
         store.onChange[PppSettings.Group].subscribe(initial = true) { pppLoaded = true }.close()
@@ -494,18 +494,27 @@ class LazyConfigurationTest {
         assertEquals(listOf("heading", "broken"), store[ElementSimplifierSettings.Rules].rules.keys.toList())
     }
 
-    @Test fun `legacy files load the same effective values through the lazy store`() {
+    @Test fun `existing section files load component values without migration`() {
         val path = directory.resolve("yame.ini")
-        val expected = YameConfiguration(
-            baudRate = 57600,
-            modemConfig = HayesModemConfig(username = "user", password = "s:e=cret\\value", toneSimulationEnabled = false),
-            pppHttpCompatibilityConfig = no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig(enabled = false),
-        )
-        YameConfigurationStore(path).save(expected)
-        val loaded = cliConfiguration(lazyApplicationConfigStore(path))
-        assertEquals(expected.baudRate, loaded.baudRate)
-        assertEquals(expected.modemConfig, loaded.modemConfig)
-        assertEquals(expected.pppHttpCompatibilityConfig.enabled, loaded.pppHttpCompatibilityConfig.enabled)
+        Files.writeString(path, """
+            version=1
+            [serial]
+            baud=57600
+            [modem]
+            login.username=user
+            login.password=s:e=cret\value
+            tone-simulation-enabled=false
+            [proxy]
+            enabled=false
+        """.trimIndent())
+        val before = Files.readAllBytes(path)
+        val store = lazyApplicationConfigStore(path)
+        no.skasti.yame.parseArgs(emptyArray(), store)
+        assertEquals(57600, store[SerialSettings.Baud])
+        assertEquals(HayesModemConfig(username = "user", password = "s:e=cret\\value", toneSimulationEnabled = false),
+            HayesModemConfig.fromConfigStore(store))
+        assertFalse(store[no.skasti.yame.ppp.proxy.ProxySettings.Enabled])
+        assertContentEquals(before, Files.readAllBytes(path))
     }
 
     @Test fun `a later file failure reports partial disk replacement without memory publication`() {

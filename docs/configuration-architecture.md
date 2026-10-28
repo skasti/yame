@@ -108,8 +108,8 @@ list of keys.
 A direct `store[key]` read requests the definition attached to the key's group,
 loading that definition on first use. Component `fromConfigStore()` factories
 read only their owned keys through the supplied store.
-The `persistence` package retains compatibility adapters for existing callers and
-CLI composition. They do not register features or supply the runtime's settings.
+The `persistence` package supplies the generic INI repository and a store factory.
+Startup and CLI parsing use the same typed store as runtime and presentation.
 INI ownership lives in `IniConfigurationRepository`, scoped to its store. Each
 logical `(file, section, property)` belongs to at most one `SettingKey`, including
 conventional keys, composite children and dynamic rule attributes. Two keys may
@@ -126,9 +126,13 @@ when `Rules` had previously claimed their attributes. Each affected document is
 prepared and validated before the first replacement; an actual filesystem failure
 in a later replacement still reports partial disk state while the typed store
 remains uncommitted.
-`YameConfiguration` is used only during startup/CLI parsing and file persistence.
-It reuses immutable feature values as sibling fields without putting PPP, DNS, or
-HTTP configuration inside the modem config. The new section-based `yame.ini` names are owned by feature definitions.
+`ConfigStore` is the sole configuration state holder. CLI flags become typed
+transient changes, validated and applied as one batch after parsing. Invocation
+options contain only mode, tone-test number, port-listing choice and log directory.
+`SerialConfig` groups transport values; `LoggingConfig` groups initial log levels
+and capture limits. Both are immutable feature-owned values read from keys, with
+no retained store or subscriptions. Hayes, PPP, DNS and proxy values remain
+independent. Section-based `yame.ini` names are owned by feature definitions.
 Version checks, CLI precedence, credential permissions, and safe replacement remain.
 The repository restricts every existing INI file to owner-only POSIX permissions
 when reading it and writes replacements with the same permissions. A file may
@@ -288,7 +292,7 @@ loaded from its separate INI file; runtime writes use the repository.
 | `config`, `function` | Typed generic stores, changes, subscriptions and operations; no concrete features or persistence |
 | `serial`, `modem`, `ppp`, `ppp.dns`, `ppp.proxy`, `logging` | Their own keys, groups, value validation and immutable component configs |
 | `ppp.proxy.transform` | HTML switches, element rules/INI, transformation policy and implementation |
-| `persistence` | Generic INI repository and legacy CLI/DTO adapters; feature definitions own mappings |
+| `persistence` | Generic INI repository and store factory; feature definitions own mappings |
 | `Main` | Load file, apply CLI precedence, install configuration, construct/register/start presentation before constructing/registering/running runtime; close the lifecycle owner in its outer finally |
 | `ApplicationEventLifecycle` | Supervise fatal broker failure, own registered producers/consumers and order shutdown |
 | `YameRuntime` | Construct component configs from direct store reads, observe committed batches, own connections and registered functions |
@@ -404,14 +408,28 @@ Transactions spanning multiple files are not atomic across the filesystem:
 `PartialIniWriteException` reports replaced files and the process should
 restart to reconcile disk and memory.
 
-### Legacy adapter boundary
+### Startup and standalone stores
 
-| API | Responsibility | Future |
-| --- | --- | --- |
-| `YameConfiguration` | CLI defaults and older aggregate callers | Retain until CLI callers migrate to typed keys |
-| `YameConfigurationBindings` / `applicationConfigStore` | Translate fields exposed by that existing aggregate into feature keys; no registration role | Internal compatibility bridge, removable with aggregate callers |
-| `YameConfigurationStore` | Older file API and first-run file creation; its new-format save delegates mappings to feature definitions | Keep while public callers need the API; historic flat-format load remains a compatibility path |
+The aggregate configuration DTO and its binding/projection layer have been
+removed; [ADR 0010](adrs/0010-component-owned-configuration.md) records the boundary.
+Adding a key requires only its feature definition and consumers.
+`lazyApplicationConfigStore(path)` constructs an empty store with an INI repository;
+it contains no feature registry. Startup reads only the features needed by the
+selected mode. Help and port listing use an in-memory store and do not open INI
+files. Tone tests do not load PPP, DNS or proxy definitions unless a CLI flag
+explicitly addresses one of those features. HTTP transformations load when their
+owner requests them.
 
-Feature definitions are the source of truth for runtime defaults, validation,
-and persistence. Adding a feature key does not require changing the aggregate or
-central bindings unless a particular legacy API explicitly exposes that field.
+A store without a repository lazily supplies feature-key defaults. Explicitly
+seeded values take precedence over these defaults, so tests and embedded callers
+can inject just the settings they need without installing a process store. Writes
+also request the owning definition before validation.
+
+On first normal startup, `saveLoadedValues()` persists the requested features'
+saved baseline, excluding CLI overrides. Unrequested defaults need no file entries;
+features supply them when first read. The primary INI version marker and existing
+section/key names are retained. Existing files are not rewritten on startup.
+`ElementSimplifierConfigurationStore` remains a feature-local standalone reader
+and first-run default-file creator; runtime rule reads and edits use
+`ElementSimplifierSettings` through the shared store. Its distinct default-template
+creation responsibility does not recreate application configuration state.

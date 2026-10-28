@@ -252,10 +252,11 @@ unbounded buffering.
   transformation profile. The repository applies owner-only POSIX
   permissions to all INI files on read/write because a lazy, unregistered feature
   may already have sensitive values in a shared file.
-- `YameConfiguration` and `YameConfigurationBindings` remain compatibility and CLI
-  adapters. New persistence mappings live in their owning feature definitions.
-- Application persistence may reuse immutable feature config values. This does not
-  authorize a feature to import the application schema or nest unrelated configs.
+- Startup and CLI parsing use the runtime ConfigStore directly. CLI overrides are
+  one transient typed batch; invocation options must not become a configuration
+  aggregate. Persistence mappings live in feature definitions. See ADR 0010.
+- Serial transport and logging may use immutable feature-owned values; never nest
+  these or unrelated PPP/DNS/proxy settings inside Hayes modem configuration.
 - `YameRuntime` composes serial, modem, PPP, DNS, proxy, and logging behavior. TUI
   and plain mode use that same runtime, ConfigStore, and FunctionStore.
 - A user selecting unchanged serial settings expresses a reconnect action through

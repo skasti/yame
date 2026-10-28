@@ -5,8 +5,6 @@ import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.lifecycle.ApplicationFunctions
 import no.skasti.yame.modem.ModemSettings
-import no.skasti.yame.persistence.YameConfiguration
-import no.skasti.yame.persistence.applicationConfigStore
 import no.skasti.yame.serial.ConnectionFunctions
 import no.skasti.yame.serial.SerialPortDescriptor
 import kotlin.test.*
@@ -14,7 +12,7 @@ import kotlin.test.*
 class TuiStartupTest {
     @Test fun `empty function store does not stop input and later registrations work`() {
         val functions = FunctionStore()
-        val config = applicationConfigStore(YameConfiguration())
+        val config = ConfigStore()
         TuiYameObserver(config, functions, Terminal(interactive = false)).use { ui ->
             ui.start()
             assertTrue(functions.keys().isEmpty(), "starting UI must not create runtime functions")

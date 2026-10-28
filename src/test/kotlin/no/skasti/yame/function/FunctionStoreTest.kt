@@ -1,7 +1,6 @@
 package no.skasti.yame.function
 
-import no.skasti.yame.persistence.applicationConfigStore
-import no.skasti.yame.persistence.YameConfiguration
+import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.serial.SerialSettings
 import no.skasti.yame.modem.ModemSettings
 import kotlin.test.*
@@ -10,7 +9,7 @@ class FunctionStoreTest {
     @Test fun `typed action commits multiple groups once and unregisters safely`() {
         val functions = FunctionStore()
         var saves = 0
-        val config = applicationConfigStore(YameConfiguration(), save = { saves++ })
+        val config = ConfigStore(persist = { saves++ })
         val slow = FunctionKey<Int, String>("modem.slow-mode")
         val handle = functions.register(slow) { baud ->
             config.set(SerialSettings.Baud to baud, ModemSettings.Tone to false)

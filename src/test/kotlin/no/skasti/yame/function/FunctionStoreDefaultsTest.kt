@@ -6,8 +6,6 @@ import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.logging.YameLogManager
 import no.skasti.yame.modem.ModemSettings
 import no.skasti.yame.observer.*
-import no.skasti.yame.persistence.YameConfiguration
-import no.skasti.yame.persistence.applicationConfigStore
 import no.skasti.yame.ppp.proxy.NavigationResourceRegistry
 import no.skasti.yame.runtime.YameRuntime
 import no.skasti.yame.runtime.RuntimeTestPorts
@@ -43,8 +41,8 @@ class FunctionStoreDefaultsTest {
         val installation = YameEvents.install(broker)
         val directory = Files.createTempDirectory("yame-function-defaults")
         try {
-            val config = applicationConfigStore(YameConfiguration())
-            val otherConfig = applicationConfigStore(YameConfiguration())
+            val config = ConfigStore()
+            val otherConfig = ConfigStore()
             val terminal = Terminal(interactive = false)
             YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
                 val injectedPorts = RuntimeTestPorts()
@@ -107,7 +105,7 @@ class FunctionStoreDefaultsTest {
                 assertTrue(shared.keys().isEmpty())
                 assertFailsWith<IllegalStateException> { ConfigStore.current }
 
-                val processConfig = applicationConfigStore(YameConfiguration())
+                val processConfig = ConfigStore()
                 var refreshes = 0
                 val sharedPorts = RuntimeTestPorts { refreshes++; emptyList() }
                 ConfigStore.install(processConfig).use {

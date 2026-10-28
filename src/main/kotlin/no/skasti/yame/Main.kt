@@ -1,13 +1,17 @@
 package no.skasti.yame
 
 import com.github.ajalt.mordant.terminal.Terminal
-import no.skasti.yame.persistence.YameConfiguration
-import no.skasti.yame.persistence.YameConfigurationStore
 import no.skasti.yame.persistence.lazyApplicationConfigStore
-import no.skasti.yame.persistence.cliConfiguration
-import no.skasti.yame.persistence.applyCliOverrides
 import no.skasti.yame.ppp.proxy.transform.ElementSimplifierConfigurationStore
-import no.skasti.yame.logging.PacketCaptureLimits
+import no.skasti.yame.config.*
+import no.skasti.yame.serial.SerialSettings
+import no.skasti.yame.logging.LogSettings
+import no.skasti.yame.logging.LoggingConfig
+import no.skasti.yame.modem.ModemSettings
+import no.skasti.yame.modem.LoginCredentials
+import no.skasti.yame.ppp.PppSettings
+import no.skasti.yame.ppp.dns.DnsSettings
+import no.skasti.yame.ppp.proxy.ProxySettings
 import no.skasti.yame.logging.PacketCaptureLimitKind
 import no.skasti.yame.logging.YameLogLevel
 import no.skasti.yame.logging.YameLogManager
@@ -44,15 +48,9 @@ fun main(args: Array<String>) = main(args) { useTui, terminal ->
 // finally block. Runtime construction and lifecycle ownership are never replaced.
 internal fun main(args: Array<String>, createPresentation: (Boolean, Terminal) -> Presentation) {
     val configPath = configurationPath(args)
-    val fileStore = YameConfigurationStore(configPath)
-    val runtimeConfigStore = lazyApplicationConfigStore(configPath)
     val informationalOnly = args.any { it == "--help" || it == "-h" || it == "--list" || it == "-l" }
-    val savedConfiguration = if (informationalOnly) {
-        YameConfiguration()
-    } else {
-        cliConfiguration(runtimeConfigStore, toneTest = args.any { it == "--test-tone" || it == "-t" })
-    }
-    val options = parseArgs(args, savedConfiguration, configPath)
+    val runtimeConfigStore = if (informationalOnly) ConfigStore() else lazyApplicationConfigStore(configPath)
+    val options = parseArgs(args, runtimeConfigStore)
 
     if (options.listPorts) {
         val ports = SerialConnection.availablePortDescriptors()
@@ -67,7 +65,8 @@ internal fun main(args: Array<String>, createPresentation: (Boolean, Terminal) -
         return
     }
 
-    val logManager = YameLogManager(options.logLevels, options.logDirectory, captureLimits = options.captureLimits)
+    val logging = LoggingConfig.fromConfigStore(runtimeConfigStore)
+    val logManager = YameLogManager(logging.levels, options.logDirectory, captureLimits = logging.captureLimits)
     val events = ApplicationEventLifecycle()
     events.consumer(logManager)
     val coordinatedShutdown = YameEvents.coordinateShutdown(events::close)
@@ -77,9 +76,10 @@ internal fun main(args: Array<String>, createPresentation: (Boolean, Terminal) -
         if (options.testNumber != null) {
             events.consumer(PlainPresentation())
             val modemConsoleLogger = diagnosticLogger(logManager.logger(YameLogModule.MODEM))
+            val modemConfig = HayesModemConfig.fromConfigStore(runtimeConfigStore)
             val modem = HayesModem(
-                baudRate = options.baudRate,
-                config = configurationForToneTest(options.modemConfig),
+                baudRate = runtimeConfigStore[SerialSettings.Baud],
+                config = configurationForToneTest(modemConfig),
                 logger = modemConsoleLogger,
                 pppLogger = logManager.logger(YameLogModule.PPP),
                 dnsLogger = logManager.debugLogger(YameLogModule.DNS),
@@ -90,22 +90,22 @@ internal fun main(args: Array<String>, createPresentation: (Boolean, Terminal) -
             events.producer(modem)
             println(
                 "Tone test. Dialing: ${options.testNumber} " +
-                    "(pickup: ${options.modemConfig.pickupTime}, " +
-                    "dial tone: ${options.modemConfig.dialToneTime}, " +
-                    "handshake: ${options.modemConfig.handshakeProfile})...",
+                    "(pickup: ${modemConfig.pickupTime}, " +
+                    "dial tone: ${modemConfig.dialToneTime}, " +
+                    "handshake: ${modemConfig.handshakeProfile})...",
             )
             modem.dial(options.testNumber)
             YameEvents.publish(DiagnosticMessage("Tone test complete."))
             return
         }
 
-        if (!Files.exists(options.configPath)) {
-            runCatching { fileStore.save(savedConfiguration) }
+        if (!Files.exists(configPath)) {
+            runCatching { runtimeConfigStore.saveLoadedValues() }
                 .onFailure { error ->
-                    System.err.println("YAME could not create ${options.configPath}: ${error.message}")
+                    System.err.println("YAME could not create ${configPath}: ${error.message}")
                 }
         }
-        runCatching { ElementSimplifierConfigurationStore.alongside(options.configPath).createDefaultIfMissing() }
+        runCatching { ElementSimplifierConfigurationStore.alongside(configPath).createDefaultIfMissing() }
             .onFailure { error ->
                 System.err.println("YAME could not create element-simplifier.ini: ${error.message}")
             }
@@ -121,15 +121,8 @@ internal fun main(args: Array<String>, createPresentation: (Boolean, Terminal) -
             UiMode.PLAIN -> false
         }
 
-        val effectiveConfiguration = YameConfiguration(
-            portName = options.portName, baudRate = options.baudRate, flowControl = options.flowControl,
-            modemConfig = options.modemConfig, pppIpConfig = options.pppIpConfig,
-            pppDnsConfig = options.pppDnsConfig, pppHttpCompatibilityConfig = options.httpConfig,
-            captureLimits = options.captureLimits, logLevels = options.logLevels,
-        )
-        applyCliOverrides(runtimeConfigStore, savedConfiguration, effectiveConfiguration)
         events.consumer(no.skasti.yame.config.ConfigStore.install(runtimeConfigStore))
-        if (!useTui && options.portName == null) {
+        if (!useTui && runtimeConfigStore[SerialSettings.Port] == null) {
             printUsage()
             return
         }
@@ -152,27 +145,17 @@ internal fun main(args: Array<String>, createPresentation: (Boolean, Terminal) -
 internal fun configurationForToneTest(configuration: HayesModemConfig): HayesModemConfig =
     configuration.copy(toneSimulationEnabled = true)
 
-private enum class UiMode {
+internal enum class UiMode {
     AUTO,
     TUI,
     PLAIN,
 }
 
-private data class Options(
-    val portName: String?,
-    val baudRate: Int,
-    val flowControl: SerialFlowControl,
+internal data class Options(
     val listPorts: Boolean,
     val testNumber: String?,
     val uiMode: UiMode,
-    val modemConfig: HayesModemConfig,
-    val pppIpConfig: PppIpConfig,
-    val pppDnsConfig: PppDnsConfig,
-    val httpConfig: no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig,
-    val logLevels: Map<YameLogModule, YameLogLevel>,
-    val configPath: Path,
     val logDirectory: Path,
-    val captureLimits: PacketCaptureLimits,
 )
 
 internal fun resolveLoginCredentials(
@@ -191,47 +174,43 @@ internal fun resolveLoginCredentials(
     }
 }
 
-private fun parseArgs(
-    args: Array<String>,
-    savedConfiguration: YameConfiguration,
-    configPath: Path,
-): Options {
-    val defaults = savedConfiguration.modemConfig
-    var port: String? = savedConfiguration.portName
-    var baud = savedConfiguration.baudRate
-    var flowControl = savedConfiguration.flowControl
+internal fun parseArgs(args: Array<String>, store: ConfigStore): Options {
+    val toneTest = args.any { it == "--test-tone" || it == "-t" }
+    // Validate startup inputs through their owners, without loading HTTP transformations.
+    store[SerialSettings.Baud]
+    val defaults = HayesModemConfig.fromConfigStore(store)
+    LoggingConfig.fromConfigStore(store)
+    if (!toneTest) {
+        no.skasti.yame.serial.SerialConfig.fromConfigStore(store)
+        PppIpConfig.fromConfigStore(store)
+        PppDnsConfig.fromConfigStore(store)
+        store[ProxySettings.Enabled]
+    }
+    val changes = linkedMapOf<SettingKey<*>, ConfigChange<*>>()
+    fun <T> option(key: SettingKey<T>, value: T) { changes[key] = key to value }
     var list = false
     var testNumber: String? = null
-    var pickupTime = defaults.pickupTime
-    var dialToneTime = defaults.dialToneTime
-    var handshakeProfile = defaults.handshakeProfile
-    val toneSimulationEnabled = defaults.toneSimulationEnabled
     var usernameOverride: String? = null
     var passwordOverride: String? = null
-    var pppSubnet: Ipv4Cidr? = savedConfiguration.pppIpConfig.configuredSubnet
-    var dnsUpstream = savedConfiguration.pppDnsConfig.upstreamServer
-    var httpCompatibilityEnabled = savedConfiguration.pppHttpCompatibilityConfig.enabled
-    val logLevels = savedConfiguration.logLevels.toMutableMap()
     var uiMode = UiMode.AUTO
     var logDirectory = Path.of("logs")
-    var captureLimits = savedConfiguration.captureLimits
 
     var i = 0
     while (i < args.size) {
         when (val arg = args[i]) {
             "--port", "-p" -> {
                 require(i + 1 < args.size) { "$arg requires a port name" }
-                port = args[++i]
+                option(SerialSettings.Port, args[++i])
             }
             "--baud", "-b" -> {
                 require(i + 1 < args.size) { "$arg requires a baud rate" }
-                baud = args[++i].toInt()
+                option(SerialSettings.Baud, args[++i].toInt())
             }
             "--flow-control" -> {
                 require(i + 1 < args.size) {
                     "$arg requires disabled, xon-xoff, or hardware"
                 }
-                flowControl = SerialFlowControl.parse(args[++i])
+                option(SerialSettings.FlowControl, SerialFlowControl.parse(args[++i]))
             }
             "--list", "-l" -> list = true
             "--test-tone", "-t" -> {
@@ -245,15 +224,15 @@ private fun parseArgs(
             }
             "--pickup-time" -> {
                 require(i + 1 < args.size) { "$arg requires a duration, e.g. 2s or 500ms" }
-                pickupTime = parseDuration(args[++i], arg)
+                option(ModemSettings.PickupTime, parseDuration(args[++i], arg))
             }
             "--dial-tone-time" -> {
                 require(i + 1 < args.size) { "$arg requires a duration, e.g. 500ms or 1s" }
-                dialToneTime = parseDuration(args[++i], arg)
+                option(ModemSettings.DialToneTime, parseDuration(args[++i], arg))
             }
             "--handshake-profile" -> {
                 require(i + 1 < args.size) { "$arg requires a profile (${handshakeProfileNames()})" }
-                handshakeProfile = parseHandshakeProfile(args[++i])
+                option(ModemSettings.Handshake, parseHandshakeProfile(args[++i]))
             }
             "--username" -> {
                 require(i + 1 < args.size) { "$arg requires a username" }
@@ -265,14 +244,14 @@ private fun parseArgs(
             }
             "--subnet" -> {
                 require(i + 1 < args.size) { "$arg requires an IPv4 CIDR, e.g. 10.0.0.0/30" }
-                pppSubnet = Ipv4Cidr.parse(args[++i])
+                option(PppSettings.Subnet, Ipv4Cidr.parse(args[++i]))
             }
             "--dns-upstream" -> {
                 require(i + 1 < args.size) { "$arg requires an IPv4 address, e.g. 8.8.8.8" }
-                dnsUpstream = Ipv4Address.parse(args[++i])
+                option(DnsSettings.Upstream, Ipv4Address.parse(args[++i]))
             }
-            "--http-https-proxy" -> httpCompatibilityEnabled = true
-            "--no-http-https-proxy" -> httpCompatibilityEnabled = false
+            "--http-https-proxy" -> option(ProxySettings.Enabled, true)
+            "--no-http-https-proxy" -> option(ProxySettings.Enabled, false)
             "--loglevel-modem",
             "--loglevel-serial",
             "--loglevel-ppp",
@@ -282,12 +261,12 @@ private fun parseArgs(
             "--loglevel-unhandled" -> {
                 require(i + 1 < args.size) { "$arg requires error, warn, info, or debug" }
                 val module = logModuleForArgument(arg)
-                logLevels[module] = YameLogLevel.parse(args[++i])
+                option(LogSettings.Levels.getValue(module), YameLogLevel.parse(args[++i]))
             }
             "--capture-limit-per-type", "--capture-limit-total" -> {
                 val kind = PacketCaptureLimitKind.entries.single { "--${it.commandName}" == arg }
                 require(i + 1 < args.size) { "$arg requires a positive integer" }
-                captureLimits = kind.apply(captureLimits, kind.parse(args[++i]))
+                option(LogSettings.CaptureLimits.getValue(kind), kind.parse(args[++i]))
             }
             "--log-dir" -> {
                 require(i + 1 < args.size) { "$arg requires a directory" }
@@ -319,29 +298,9 @@ private fun parseArgs(
         passwordOverride = passwordOverride,
     )
 
-    return Options(
-        portName = port,
-        baudRate = baud,
-        flowControl = flowControl,
-        listPorts = list,
-        testNumber = testNumber,
-        uiMode = uiMode,
-        modemConfig = HayesModemConfig(
-            pickupTime = pickupTime,
-            dialToneTime = dialToneTime,
-            handshakeProfile = handshakeProfile,
-            toneSimulationEnabled = toneSimulationEnabled,
-            username = username,
-            password = password,
-        ),
-        pppIpConfig = PppIpConfig(configuredSubnet = pppSubnet),
-        pppDnsConfig = PppDnsConfig(upstreamServer = dnsUpstream),
-        httpConfig = savedConfiguration.pppHttpCompatibilityConfig.copy(enabled = httpCompatibilityEnabled),
-        logLevels = logLevels.toMap(),
-        configPath = configPath,
-        logDirectory = logDirectory,
-        captureLimits = captureLimits,
-    )
+    if (usernameOverride != null) option(ModemSettings.Login, LoginCredentials(username, password))
+    store.setTransient(*changes.values.toTypedArray())
+    return Options(list, testNumber, uiMode, logDirectory)
 }
 
 private fun configurationPath(args: Array<String>): Path {

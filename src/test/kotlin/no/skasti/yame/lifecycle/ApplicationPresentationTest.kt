@@ -7,8 +7,6 @@ import no.skasti.yame.logging.DiagnosticMessage
 import no.skasti.yame.logging.YameLogManager
 import no.skasti.yame.main as applicationMain
 import no.skasti.yame.observer.*
-import no.skasti.yame.persistence.YameConfiguration
-import no.skasti.yame.persistence.applicationConfigStore
 import no.skasti.yame.ppp.proxy.NavigationResourceRegistry
 import no.skasti.yame.presentation.PlainPresentation
 import no.skasti.yame.presentation.Presentation
@@ -77,7 +75,7 @@ class ApplicationPresentationTest {
         val installation = YameEvents.install(broker)
         val directory = Files.createTempDirectory("yame-headless")
         val functions = FunctionStore()
-        val config = applicationConfigStore(YameConfiguration())
+        val config = ConfigStore()
         try {
             YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
                 YameRuntime(config, functions, logs, NavigationResourceRegistry(), {
