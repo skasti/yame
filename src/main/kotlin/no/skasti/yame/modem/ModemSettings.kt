@@ -3,7 +3,7 @@ package no.skasti.yame.modem
 import no.skasti.yame.config.*
 
 object ModemSettings : Settings("modem") {
-    val Group = SettingGroup(this, description = "Settings for the modem component.")
+    val Group = SettingGroup(this)
     val PickupTime = SettingKey<kotlin.time.Duration>("pickup-time", Group,
         { HayesModemConfig(pickupTime = it) }, description = "Ringback duration before the modem answers a dial command.", default = { HayesModemConfig().pickupTime })
     val DialToneTime = SettingKey<kotlin.time.Duration>("dial-tone-time", Group,

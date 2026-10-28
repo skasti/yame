@@ -4,7 +4,7 @@ import no.skasti.yame.config.*
 
 object LogSettings : Settings("logging") {
     val DEFAULT_LEVEL = YameLogLevel.INFO
-    val Group = SettingGroup(this, description = "Logging severity and packet capture limits.")
+    val Group = SettingGroup(this)
     val Levels = YameLogModule.entries.associateWith {
         SettingKey<YameLogLevel>("level-${it.fileName}", Group, description = "Minimum severity written to the ${it.fileName} log: ERROR, WARN, INFO or DEBUG.", default = { DEFAULT_LEVEL })
     }

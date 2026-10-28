@@ -214,7 +214,7 @@ class IniDocumentationTest {
         assertEquals(text, Files.readString(path))
         assertEquals(9600, store[SerialSettings.Baud])
         store.set(SerialSettings.Baud to 19200)
-        assertContains(Files.readString(path), "##### @yame serial\r\n# Serial port configuration.\r\n# baud: Serial port baud rate in bits per second.\r\n[serial]\r\nbaud=19200")
+        assertContains(Files.readString(path), "##### @yame serial\r\n# baud: Serial port baud rate in bits per second.\r\n[serial]\r\nbaud=19200")
     }
 
     @Test fun `documentation failures roll back value transactions and documentation only writes`() {

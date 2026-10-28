@@ -473,7 +473,10 @@ ToneTest owns the standalone modem and its forced tone-enabled configuration.
 Feature-owned `Settings.description` documents its definition,
 `SettingGroup.description` documents a section, and `SettingKey.description`
 documents a value. All are optional public, frontend-neutral metadata suitable for
-future configuration frontends. Documentation ownership follows the feature even
+future configuration frontends. Leave group descriptions unset when they merely
+repeat the section name or summarize its keys; use them for useful section-wide
+context, such as interactions, prerequisites or constraints.
+Documentation ownership follows the feature even
 when several definitions share a file or only some definitions have loaded.
 [ADR 0012](adrs/0012-feature-local-ini-documentation.md) records this decision.
 
@@ -488,7 +491,6 @@ mapping contexts and never write comments themselves.
 # Serial transport configuration.
 
 ##### @yame serial
-# Serial port configuration.
 # baud: Serial port baud rate in bits per second.
 [serial]
 baud=38400
