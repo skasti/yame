@@ -1,6 +1,5 @@
 package no.skasti.yame.config
 
-import no.skasti.yame.persistence.*
 import no.skasti.yame.ppp.proxy.transform.*
 import no.skasti.yame.ppp.proxy.transform.ElementSimplifierSettings
 import no.skasti.yame.ppp.proxy.transform.TransformerSettings
@@ -56,6 +55,19 @@ class ComponentConfigurationTest {
         assertFailsWith<IllegalStateException> { ConfigStore.current }
     }
 
+    @Test fun `lazy in memory defaults preserve explicit and transient values`() {
+        val owner = object : Settings("isolated") {
+            val group = SettingGroup(this)
+            val Supplied = SettingKey<Int>("supplied", group)
+            val Defaulted = SettingKey<Int>("defaulted", group, default = { 7 })
+        }
+        val store = ConfigStore(listOf(owner.Supplied to 3), listOf(owner.Supplied to 5))
+        assertEquals(7, store[owner.Defaulted])
+        assertEquals(5, store[owner.Supplied])
+        store.set(owner.Defaulted to 9)
+        assertEquals(5, store[owner.Supplied])
+    }
+
     @Test
     fun `modem factory needs only modem settings`() {
         val defaults = HayesModemConfig()
@@ -74,10 +86,7 @@ class ComponentConfigurationTest {
     @Test
     fun `factories read installed settings while explicit config stays independent`() {
         val rules = ElementSimplifierConfiguration(mapOf("article" to ElementSimplifierRule("div")))
-        val saved = YameConfiguration(
-            pppHttpCompatibilityConfig = no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig(elementSimplifier = rules),
-        )
-        val store = applicationConfigStore(saved)
+        val store = ConfigStore(listOf(ElementSimplifierSettings.Rules to rules))
         ConfigStore.install(store).use {
             store.set(TransformerSettings.Style to false, ModemSettings.Tone to false)
             assertEquals(false, HtmlTransformerSettings.fromConfigStore().styleRemover)
@@ -87,10 +96,9 @@ class ComponentConfigurationTest {
             val component = ElementSimplifier(explicit)
             assertEquals("<p>text</p>", apply(component))
             assertEquals("<div>text</div>", apply(ElementSimplifier()))
-            assertFailsWith<IllegalArgumentException> {
-                store.set(ElementSimplifierSettings.Rules to explicit)
-            }
-            assertEquals(rules, ElementSimplifierConfiguration.fromConfigStore())
+            store.set(ElementSimplifierSettings.Rules to explicit)
+            assertEquals(explicit, ElementSimplifierConfiguration.fromConfigStore())
+            assertEquals("<p>text</p>", apply(component))
         }
     }
 }

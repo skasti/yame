@@ -2,7 +2,7 @@ package no.skasti.yame.config
 
 /** One process-owned instance, shared by adapters and components; no presentation dependencies. */
 class ConfigStore(
-    persistent: List<ConfigChange<*>>,
+    persistent: List<ConfigChange<*>> = emptyList(),
     overrides: List<ConfigChange<*>> = emptyList(),
     private val persist: (ConfigChanges) -> Unit = {},
     private val repository: ConfigurationRepository? = null,
@@ -10,6 +10,16 @@ class ConfigStore(
     private val onSubscriberFailure: (Throwable) -> Unit = { System.err.println("Configuration subscriber failed: ${it.javaClass.simpleName}") },
 ) {
     companion object {
+        /** Production access always delegates to the single installed store. */
+        operator fun <T> get(key: SettingKey<T>): T = current[key]
+        fun set(vararg changes: ConfigChange<*>) = current.set(*changes)
+        fun setTransient(vararg changes: ConfigChange<*>) = current.setTransient(*changes)
+        fun ensureLoaded(definition: Settings) = current.ensureLoaded(definition)
+        fun synchronizeDocumentation(vararg definitions: Settings) = current.synchronizeDocumentation(*definitions)
+        fun saveLoadedValues() = current.saveLoadedValues()
+        fun createFileIfMissing(definition: Settings) = current.createFileIfMissing(definition)
+        val onChange: ConfigStore.ChangeEvents get() = current.onChange
+
         /** Installed explicitly by the application before using process-default factories. */
         @Volatile private var installed: ConfigStore? = null
         val current: ConfigStore get() = checkNotNull(installed) { "ConfigStore has not been installed" }
@@ -39,7 +49,7 @@ class ConfigStore(
     private class Delivery(val changes: ConfigChanges, val listeners: List<Listener>)
 
     init {
-        require(saved.size == persistent.size && persistent.map { it.key.path }.distinct().size == persistent.size) {
+        require(saved.size == persistent.size && persistent.map { it.key.group.configuration?.file to it.key.path }.distinct().size == persistent.size) {
             "Duplicate setting definition"
         }
         persistent.forEach { it.validate() }
@@ -55,12 +65,10 @@ class ConfigStore(
                 require(it === definition) { "Conflicting definition identity ${definition.id}" }
                 return
             }
-            val repo = repository ?: run {
-                // Compatibility for explicitly populated stores used by existing embedders.
-                if (definition.allSettingKeys.all { it in saved }) return
-                error("This ConfigStore has no lazy INI repository")
-            }
-            val loadedDefinition = repo.load(definition)
+            validateGroupOwnership(definition)
+            val loadedDefinition = repository?.load(definition) ?: ConfigurationLoad(
+                definition.allSettingKeys.map { key -> saved[key] ?: defaultChange(key) },
+            )
             val entries = loadedDefinition.entries
             require(entries.map { it.key.path }.distinct().size == entries.size) { "Duplicate setting path in ${definition.id}" }
             require(entries.map { it.key }.toSet() == definition.allSettingKeys.toSet()) {
@@ -68,17 +76,55 @@ class ConfigStore(
             }
             entries.forEach { entry ->
                 require(entry.key.group.configuration === definition) { "${entry.key.path} belongs to another definition" }
-                require(saved.keys.none { it.path == entry.key.path }) { "Duplicate setting path ${entry.key.path}" }
+                require(saved.keys.none { it.group.configuration?.file == definition.file && it.path == entry.key.path && (repository != null || it !== entry.key) }) { "Duplicate setting path ${entry.key.path}" }
                 entry.validate()
             }
             val candidate = LinkedHashMap(saved)
-            entries.forEach { candidate[it.key] = it }
+            entries.forEach { candidate.putIfAbsent(it.key, it) }
             validateSnapshot(ConfigChanges(candidate.values))
             loadedDefinition.install()
             saved = candidate
-            effective = LinkedHashMap(effective).apply { entries.forEach { this[it.key] = it } }
+            effective = LinkedHashMap(effective).apply { entries.forEach { putIfAbsent(it.key, it) } }
             loaded[definition.id] = definition
         }
+    }
+
+    /** Declared logical sections are exclusive; physical mapping claims belong to the repository. */
+    private fun validateGroupOwnership(definition: Settings) {
+        val owners = mutableMapOf<Pair<String?, String>, SettingGroup>()
+        (loaded.values + definition).forEach { owner ->
+            owner.allSettingKeys.forEach { key ->
+                val group = key.group
+                val location = owner.file to group.id
+                val previous = owners.putIfAbsent(location, group)
+                require(previous == null || previous === group) {
+                    val file = owner.file?.let { "logical file '$it'" } ?: "primary file"
+                    "Configuration section [${group.id}] in $file is owned by both " +
+                        "'${previous?.configuration?.id}' and '${owner.id}' (distinct SettingGroup instances)"
+                }
+            }
+        }
+    }
+
+    private fun <T> defaultChange(key: SettingKey<T>): ConfigChange<T> = key to key.default()
+
+    /** Initialize a feature file without loading/registering it or publishing changes. */
+    fun createFileIfMissing(definition: Settings) = synchronized(lock) {
+        repository?.createFileIfMissing(definition)
+        Unit
+    }
+
+    /** Refresh generated comments without changing values, baselines or notifications. */
+    fun synchronizeDocumentation(vararg definitions: Settings) = synchronized(lock) {
+        definitions.forEach(::ensureLoaded)
+        repository?.synchronizeDocumentation(definitions.toList())
+        Unit
+    }
+
+    /** First-run persistence of requested feature baselines, excluding transient overrides. */
+    fun saveLoadedValues() = synchronized(lock) {
+        val values = ConfigChanges(saved.values)
+        if (repository == null) persist(values) else repository.persist(saved.values, values)
     }
 
     /** The requested key identifies its owner; no application-wide definition list is needed. */
@@ -99,7 +145,8 @@ class ConfigStore(
 
     private fun commit(changes: Array<out ConfigChange<*>>, persistent: Boolean) {
         synchronized(lock) {
-            require(changes.map { it.key.path }.distinct().size == changes.size) { "Duplicate setting in batch" }
+            require(changes.map { it.key.group.configuration?.file to it.key.path }.distinct().size == changes.size) { "Duplicate setting in batch" }
+            changes.forEach { if (it.key !in saved) it.key.group.configuration?.let(::ensureLoaded) }
             changes.forEach { require(it.key in saved) { "Unregistered setting ${it.key.path}" }; it.validate() }
             val nextSaved = LinkedHashMap(saved)
             val nextEffective = LinkedHashMap(effective)

@@ -10,7 +10,7 @@ object SerialSettings : Settings("serial") {
         require(value == null || value.length <= MAX_PORT_NAME_LENGTH) {
             "portName must not exceed $MAX_PORT_NAME_LENGTH characters"
         }
-    }, default = { null })
-    val Baud = SettingKey<Int>("baud", Group, { require(it > 0) { "Baud must be positive" } }, default = { DEFAULT_BAUD_RATE })
-    val FlowControl = SettingKey<SerialFlowControl>("flow-control", Group, default = { SerialFlowControl.DISABLED })
+    }, description = "Serial device name, for example COM1 or /dev/ttyUSB0. Omit to select a port at runtime.", default = { null })
+    val Baud = SettingKey<Int>("baud", Group, { require(it > 0) { "Baud must be positive" } }, description = "Serial port baud rate in bits per second.", default = { DEFAULT_BAUD_RATE })
+    val FlowControl = SettingKey<SerialFlowControl>("flow-control", Group, description = "Serial flow control: DISABLED, XON_XOFF or HARDWARE.", default = { SerialFlowControl.DISABLED })
 }

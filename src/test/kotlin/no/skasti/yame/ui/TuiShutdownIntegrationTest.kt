@@ -1,12 +1,12 @@
 package no.skasti.yame.ui
 
+import no.skasti.yame.config.InstalledConfigTest
 import com.github.ajalt.mordant.terminal.*
 import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.lifecycle.ApplicationEventLifecycle
 import no.skasti.yame.logging.DiagnosticMessage
 import no.skasti.yame.observer.*
-import no.skasti.yame.persistence.YameConfiguration
-import no.skasti.yame.persistence.applicationConfigStore
+import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.serial.SerialSettings
 import java.time.Duration
 import java.util.concurrent.CopyOnWriteArrayList
@@ -17,7 +17,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.*
 
 /** Exercises the production subscription, including its remaining-budget close delegation. */
-class TuiShutdownIntegrationTest {
+class TuiShutdownIntegrationTest : InstalledConfigTest() {
     private val timeout = Duration.ofSeconds(5)
     private lateinit var broker: EventBroker
     private lateinit var installation: AutoCloseable
@@ -38,7 +38,7 @@ class TuiShutdownIntegrationTest {
         val releaseCallback = CountDownLatch(1)
         val brokerClosing = CountDownLatch(1)
         val terminal = BlockedTerminal()
-        val config = applicationConfigStore(YameConfiguration())
+        val config = ConfigStore()
         val reports = CopyOnWriteArrayList<String>()
         val exits = CopyOnWriteArrayList<Int>()
         broker.subscribe("pause-before-tui") {
@@ -47,7 +47,7 @@ class TuiShutdownIntegrationTest {
                 check(releaseCallback.await(5, TimeUnit.SECONDS))
             }
         }
-        val app = InteractiveYameApplication(config, FunctionStore(), terminal.terminal)
+        val app = run { installConfig(config); InteractiveYameApplication(FunctionStore(), terminal.terminal) }
         val owner = ApplicationEventLifecycle(broker, sealFacade = {}, report = reports::add, terminate = exits::add,
             awaitBrokerClosed = { remaining -> brokerClosing.countDown(); broker.awaitClosed(remaining) })
         owner.consumer(app)
@@ -94,7 +94,7 @@ class TuiShutdownIntegrationTest {
 
     @Test fun `expired application budget cannot give a blocked terminal another three seconds to drain`() {
         val terminal = BlockedTerminal()
-        val app = InteractiveYameApplication(applicationConfigStore(YameConfiguration()), FunctionStore(), terminal.terminal)
+        val app = run { installConfig(ConfigStore()); InteractiveYameApplication(FunctionStore(), terminal.terminal) }
         val producerEntered = CountDownLatch(1)
         val releaseProducer = CountDownLatch(1)
         val consumersFinished = CountDownLatch(1)
@@ -139,7 +139,7 @@ class TuiShutdownIntegrationTest {
 
     @Test fun `broker isolated TUI overload still enforces fatal deadline while terminal rendering is blocked`() {
         val terminal = BlockedTerminal()
-        val app = InteractiveYameApplication(applicationConfigStore(YameConfiguration()), FunctionStore(), terminal.terminal)
+        val app = run { installConfig(ConfigStore()); InteractiveYameApplication(FunctionStore(), terminal.terminal) }
         val exits = LinkedBlockingQueue<Int>()
         val reports = CopyOnWriteArrayList<String>()
         val owner = ApplicationEventLifecycle(broker, timeout = Duration.ofMillis(200),

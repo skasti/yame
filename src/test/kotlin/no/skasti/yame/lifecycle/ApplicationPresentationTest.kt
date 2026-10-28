@@ -1,5 +1,6 @@
 package no.skasti.yame.lifecycle
 
+import no.skasti.yame.config.InstalledConfigTest
 import com.github.ajalt.mordant.terminal.Terminal
 import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.function.FunctionStore
@@ -7,8 +8,6 @@ import no.skasti.yame.logging.DiagnosticMessage
 import no.skasti.yame.logging.YameLogManager
 import no.skasti.yame.main as applicationMain
 import no.skasti.yame.observer.*
-import no.skasti.yame.persistence.YameConfiguration
-import no.skasti.yame.persistence.applicationConfigStore
 import no.skasti.yame.ppp.proxy.NavigationResourceRegistry
 import no.skasti.yame.presentation.PlainPresentation
 import no.skasti.yame.presentation.Presentation
@@ -24,7 +23,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import kotlin.test.*
 
-class ApplicationPresentationTest {
+class ApplicationPresentationTest : InstalledConfigTest() {
     @Test fun `Main starts subscribed TUI before constructing and running core`() = scenario("tui")
     @Test fun `Main plain execution failure cleans up runtime and diagnostics`() = scenario("plain")
     @Test fun `Main cleans up shared infrastructure if presentation construction fails`() = scenario("construct")
@@ -77,19 +76,19 @@ class ApplicationPresentationTest {
         val installation = YameEvents.install(broker)
         val directory = Files.createTempDirectory("yame-headless")
         val functions = FunctionStore()
-        val config = applicationConfigStore(YameConfiguration())
+        val config = ConfigStore()
         try {
-            YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
-                YameRuntime(config, functions, logs, NavigationResourceRegistry(), {
+            YameLogManager(no.skasti.yame.logging.LoggingConfig(), logDirectory = directory).use { logs ->
+                run { installConfig(config); YameRuntime(functions, logs, NavigationResourceRegistry(), {
                     functions.invoke(ApplicationFunctions.Quit)
                     emptyList()
-                }).use {
+                }) }.use {
                     assertTrue(functions.keys().isEmpty())
                     it.run()
                 }
             }
             assertTrue(functions.keys().isEmpty())
-            assertFailsWith<IllegalStateException> { ConfigStore.current }
+            assertSame(config, ConfigStore.current)
         } finally {
             broker.close()
             assertEquals(BrokerWaitResult.COMPLETED, broker.awaitClosed(Duration.ofSeconds(5)))

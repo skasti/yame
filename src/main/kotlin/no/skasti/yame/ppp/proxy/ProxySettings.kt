@@ -4,5 +4,5 @@ import no.skasti.yame.config.*
 
 object ProxySettings : Settings("proxy") {
     val Group = SettingGroup(this)
-    val Enabled = SettingKey<Boolean>("enabled", Group, default = { true })
+    val Enabled = SettingKey<Boolean>("enabled", Group, description = "Enable HTTP compatibility handling on TCP port 80, including modern upstream HTTPS access.", default = { true })
 }

@@ -1,5 +1,6 @@
 package no.skasti.yame.persistence
 
+import no.skasti.yame.config.withInstalledConfig
 import no.skasti.yame.config.*
 import no.skasti.yame.modem.HayesModemConfig
 import no.skasti.yame.modem.ModemSettings
@@ -71,11 +72,11 @@ class LazyConfigurationTest {
         """.trimIndent())
         val store = lazyApplicationConfigStore(path)
 
-        assertFalse(HayesModemConfig.fromConfigStore(store).toneSimulationEnabled)
-        assertEquals("10.1.1.0/30", PppIpConfig.fromConfigStore(store).configuredSubnet.toString())
-        assertEquals("1.1.1.1", PppDnsConfig.fromConfigStore(store).upstreamServer.toString())
-        assertFalse(HtmlTransformerSettings.fromConfigStore(store).scriptRemover)
-        val http = PppHttpCompatibilityConfig.fromConfigStore(store)
+        assertFalse(withInstalledConfig(store) { HayesModemConfig.fromConfigStore() }.toneSimulationEnabled)
+        assertEquals("10.1.1.0/30", withInstalledConfig(store) { PppIpConfig.fromConfigStore() }.configuredSubnet.toString())
+        assertEquals("1.1.1.1", withInstalledConfig(store) { PppDnsConfig.fromConfigStore() }.upstreamServer.toString())
+        assertFalse(withInstalledConfig(store) { HtmlTransformerSettings.fromConfigStore() }.scriptRemover)
+        val http = withInstalledConfig(store) { PppHttpCompatibilityConfig.fromConfigStore() }
         assertFalse(http.enabled)
         assertFalse(http.htmlTransformers.scriptRemover)
 
@@ -275,7 +276,8 @@ class LazyConfigurationTest {
         Files.writeString(path, "serial.baud=57600\ntransformers.script-remover-enabled=false\n")
         Files.writeString(directory.resolve("element-simplifier.ini"), "[heading]\ntarget=h2\n")
         val store = lazyApplicationConfigStore(path)
-        assertEquals(57600, cliConfiguration(store).baudRate)
+        withInstalledConfig(store) { no.skasti.yame.parseArgs(emptyArray()) }
+        assertEquals(57600, store[SerialSettings.Baud])
         var transformersLoaded = false
         var rulesLoaded = false
         store.onChange[TransformerSettings.Group].subscribe(initial = true) { transformersLoaded = true }.close()
@@ -283,7 +285,7 @@ class LazyConfigurationTest {
         assertFalse(transformersLoaded)
         assertFalse(rulesLoaded)
 
-        val http = no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig.fromConfigStore(store)
+        val http = withInstalledConfig(store) { no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig.fromConfigStore() }
         assertFalse(http.htmlTransformers.scriptRemover)
         assertEquals("h2", http.elementSimplifier.rules.getValue("heading").target)
     }
@@ -292,8 +294,7 @@ class LazyConfigurationTest {
         val path = directory.resolve("yame.ini")
         Files.writeString(path, "serial.baud=57600\ntransformers.script-remover-enabled=false\n")
         val store = lazyApplicationConfigStore(path)
-        val saved = cliConfiguration(store)
-        applyCliOverrides(store, saved, saved.copy(baudRate = 9600))
+        withInstalledConfig(store) { no.skasti.yame.parseArgs(arrayOf("--baud", "9600")) }
         assertEquals(9600, store[SerialSettings.Baud])
         var transformersLoaded = false
         store.onChange[TransformerSettings.Group].subscribe(initial = true) { transformersLoaded = true }.close()
@@ -306,9 +307,9 @@ class LazyConfigurationTest {
         val path = directory.resolve("yame.ini")
         Files.writeString(path, "serial.baud=57600\nmodem.tone-simulation-enabled=false\nppp.subnet=invalid\n")
         val store = lazyApplicationConfigStore(path)
-        val options = cliConfiguration(store, toneTest = true)
-        assertEquals(57600, options.baudRate)
-        assertFalse(options.modemConfig.toneSimulationEnabled)
+        withInstalledConfig(store) { no.skasti.yame.parseArgs(arrayOf("--test-tone", "123")) }
+        assertEquals(57600, store[SerialSettings.Baud])
+        assertFalse(withInstalledConfig(store) { HayesModemConfig.fromConfigStore() }.toneSimulationEnabled)
         var pppLoaded = false
         var transformersLoaded = false
         store.onChange[PppSettings.Group].subscribe(initial = true) { pppLoaded = true }.close()
@@ -325,7 +326,7 @@ class LazyConfigurationTest {
         var pppLoaded = false
         store.onChange[PppSettings.Group].subscribe(initial = true) { pppLoaded = true }.close()
         assertFalse(pppLoaded)
-        assertFalse(HayesModemConfig.fromConfigStore(store).toneSimulationEnabled)
+        assertFalse(withInstalledConfig(store) { HayesModemConfig.fromConfigStore() }.toneSimulationEnabled)
         store.set(ModemSettings.Tone to true)
         assertTrue(Files.readString(path).contains("ppp.subnet=10.1.1.0/30"))
         assertTrue(Files.readString(path).contains("# original"))
@@ -384,17 +385,17 @@ class LazyConfigurationTest {
         val store = lazyApplicationConfigStore(directory.resolve("yame.ini"))
         assertFalse(store[ElementSimplifierSettings.Enabled])
         assertEquals("div", store[ElementSimplifierSettings.Rules].rules.getValue("main").target)
-        assertFalse(HtmlTransformerSettings.fromConfigStore(store).elementSimplifier)
+        assertFalse(withInstalledConfig(store) { HtmlTransformerSettings.fromConfigStore() }.elementSimplifier)
 
         store.set(ElementSimplifierSettings.Enabled to true)
-        assertTrue(HtmlTransformerSettings.fromConfigStore(store).elementSimplifier)
+        assertTrue(withInstalledConfig(store) { HtmlTransformerSettings.fromConfigStore() }.elementSimplifier)
         store.set(TransformerSettings.Elements to false)
-        assertFalse(HtmlTransformerSettings.fromConfigStore(store).elementSimplifier)
+        assertFalse(withInstalledConfig(store) { HtmlTransformerSettings.fromConfigStore() }.elementSimplifier)
         store.set(ElementSimplifierSettings.Enabled to false, TransformerSettings.Elements to true)
-        assertFalse(HtmlTransformerSettings.fromConfigStore(store).elementSimplifier)
+        assertFalse(withInstalledConfig(store) { HtmlTransformerSettings.fromConfigStore() }.elementSimplifier)
         assertTrue(Files.readString(rulesFile).contains("enabled=false"))
         assertTrue(Files.readString(rulesFile).contains("[main]\ntarget=div"))
-        assertFalse(HtmlTransformerSettings.fromConfigStore(lazyApplicationConfigStore(directory.resolve("yame.ini"))).elementSimplifier)
+        assertFalse(withInstalledConfig(lazyApplicationConfigStore(directory.resolve("yame.ini"))) { HtmlTransformerSettings.fromConfigStore() }.elementSimplifier)
     }
 
     @Test fun `concurrent first use installs one consistent definition`() {
@@ -438,9 +439,9 @@ class LazyConfigurationTest {
         val shared = directory.resolve("shared-settings.ini")
         val primaryText = "[serial]\nbaud=57600\n# primary comment\n"
         Files.writeString(primary, primaryText)
-        Files.writeString(shared, "# shared comment\n[shared]\nfirst=7\nsecond=9\nother=untouched\n")
-        class SharedDefinition(id: String, property: String) : Settings(id, file = "shared-settings") {
-            val group = SettingGroup("shared", this)
+        Files.writeString(shared, "# shared comment\n[first-owner]\nfirst=7\nother=untouched\n[second-owner]\nsecond=9\n")
+        class SharedDefinition(id: String, property: String, section: String = id) : Settings(id, file = "shared-settings") {
+            val group = SettingGroup(section, this)
             val key = SettingKey<Int>(property, group, default = { 0 })
         }
         val first = SharedDefinition("first-owner", "first")
@@ -461,9 +462,9 @@ class LazyConfigurationTest {
             assertTrue(saved.contains(record), record)
         }
 
-        val conflict = SharedDefinition("third-owner", "first")
+        val conflict = SharedDefinition("third-owner", "first", "first-owner")
         val error = assertFailsWith<IllegalArgumentException> { store[conflict.key] }
-        assertTrue(error.message.orEmpty().contains("Duplicate setting path shared.first"), error.message)
+        assertTrue(error.message.orEmpty().contains("Configuration section [first-owner] in logical file 'shared-settings'"), error.message)
         assertEquals(8, store[first.key])
     }
 
@@ -494,18 +495,27 @@ class LazyConfigurationTest {
         assertEquals(listOf("heading", "broken"), store[ElementSimplifierSettings.Rules].rules.keys.toList())
     }
 
-    @Test fun `legacy files load the same effective values through the lazy store`() {
+    @Test fun `existing section files load component values without migration`() {
         val path = directory.resolve("yame.ini")
-        val expected = YameConfiguration(
-            baudRate = 57600,
-            modemConfig = HayesModemConfig(username = "user", password = "s:e=cret\\value", toneSimulationEnabled = false),
-            pppHttpCompatibilityConfig = no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig(enabled = false),
-        )
-        YameConfigurationStore(path).save(expected)
-        val loaded = cliConfiguration(lazyApplicationConfigStore(path))
-        assertEquals(expected.baudRate, loaded.baudRate)
-        assertEquals(expected.modemConfig, loaded.modemConfig)
-        assertEquals(expected.pppHttpCompatibilityConfig.enabled, loaded.pppHttpCompatibilityConfig.enabled)
+        Files.writeString(path, """
+            version=1
+            [serial]
+            baud=57600
+            [modem]
+            login.username=user
+            login.password=s:e=cret\value
+            tone-simulation-enabled=false
+            [proxy]
+            enabled=false
+        """.trimIndent())
+        val before = Files.readAllBytes(path)
+        val store = lazyApplicationConfigStore(path)
+        withInstalledConfig(store) { no.skasti.yame.parseArgs(emptyArray()) }
+        assertEquals(57600, store[SerialSettings.Baud])
+        assertEquals(HayesModemConfig(username = "user", password = "s:e=cret\\value", toneSimulationEnabled = false),
+            withInstalledConfig(store) { HayesModemConfig.fromConfigStore() })
+        assertFalse(store[no.skasti.yame.ppp.proxy.ProxySettings.Enabled])
+        assertContentEquals(before, Files.readAllBytes(path))
     }
 
     @Test fun `a later file failure reports partial disk replacement without memory publication`() {
@@ -544,7 +554,7 @@ class LazyConfigurationTest {
         assertEquals(38_400, store[SerialSettings.Baud])
     }
 
-    @Test fun `different keys share a section but cannot claim the same attribute in either syntax`() {
+    @Test fun `different definitions cannot share a declared section regardless of property syntax or name`() {
         val path = directory.resolve("yame.ini")
         Files.writeString(path, "shared.first=7\n[shared]\nsecond=9\n")
         class Owner(id: String, name: String) : Settings(id) {
@@ -552,27 +562,21 @@ class LazyConfigurationTest {
             val key = SettingKey<Int>(name, group, default = { 0 })
         }
         val first = Owner("first-owner", "first")
-        val second = Owner("second-owner", "second")
         val store = lazyApplicationConfigStore(path)
         assertEquals(7, store[first.key])
-        assertEquals(9, store[second.key])
-        store.set(first.key to 8, second.key to 10)
-        val text = Files.readString(path)
-        assertTrue(text.contains("first=8"))
-        assertTrue(text.contains("second=10"))
-        assertFalse(text.contains("shared.first="))
-
-        val conflicting = object : Settings("third-owner") {
-            val group = SettingGroup("shared", this)
-            val key = SettingKey<Int>("alias", group, default = { 0 }, structural = true)
-            override fun loadFromIni(context: IniReadContext): List<ConfigChange<*>> = listOf(
-                key to requireNotNull(context.compose(key, "shared") { attrs -> attrs["first"]?.toInt() }),
-            )
+        val before = Files.readString(path)
+        for (name in listOf("first", "second")) {
+            val second = Owner("second-owner", name)
+            val error = assertFailsWith<IllegalArgumentException> { store[second.key] }
+            assertContains(error.message.orEmpty(), "[shared] in primary file")
+            assertContains(error.message.orEmpty(), "'first-owner'")
+            assertContains(error.message.orEmpty(), "'second-owner'")
         }
-        val error = assertFailsWith<IllegalArgumentException> { store[conflicting.key] }
-        assertTrue(error.message.orEmpty().contains("yame.ini [shared] first"), error.message)
-        assertTrue(error.message.orEmpty().contains(first.key.path), error.message)
-        assertEquals(8, store[first.key])
+        assertEquals(before, Files.readString(path))
+        assertEquals(7, store[first.key])
+        store.set(first.key to 8)
+        assertEquals(8, lazyApplicationConfigStore(path)[first.key])
+        assertContains(Files.readString(path), "second=9")
     }
 
     @Test fun `composition commits only nonnull claims including absent attributes`() {
@@ -626,7 +630,7 @@ class LazyConfigurationTest {
         assertEquals(7, store[replacement.key])
         Files.writeString(path, "[shared]\nfirst=7\nsecond=9\n")
         val conflict = assertFailsWith<IllegalArgumentException> { store[first.key] }
-        assertTrue(conflict.message.orEmpty().contains("conflicts with"))
+        assertContains(conflict.message.orEmpty(), "Configuration section [shared]")
         assertEquals(7, store[replacement.key])
     }
 
@@ -658,15 +662,21 @@ class LazyConfigurationTest {
         val path = directory.resolve("yame.ini")
         Files.writeString(path, "[shared]\nfirst=7\nsecond=9\nunknown=keep\n")
         val first = object : Settings("first-owner") {
-            val group = SettingGroup("shared", this)
+            val group = SettingGroup(this)
             val key = SettingKey<Int>("first", group, default = { 0 })
+            override fun loadFromIni(context: IniReadContext): List<ConfigChange<*>> = listOf(
+                key to requireNotNull(context.compose(key, "shared") { it["first"]?.toInt() }),
+            )
             override fun saveToIni(context: IniWriteContext) {
                 context.removeSection(key, "shared")
             }
         }
         val second = object : Settings("second-owner") {
-            val group = SettingGroup("shared", this)
+            val group = SettingGroup(this)
             val key = SettingKey<Int>("second", group, default = { 0 })
+            override fun loadFromIni(context: IniReadContext): List<ConfigChange<*>> = listOf(
+                key to requireNotNull(context.compose(key, "shared") { it["second"]?.toInt() }),
+            )
         }
         val store = lazyApplicationConfigStore(path)
         assertEquals(7, store[first.key])
@@ -686,7 +696,7 @@ class LazyConfigurationTest {
         val path = directory.resolve("yame.ini")
         Files.writeString(path, "[modem]\nlogin.username=user\nlogin.password=secret\n")
         val trespasser = object : Settings("trespasser") {
-            val group = SettingGroup("modem", this)
+            val group = SettingGroup(this)
             val key = SettingKey<Int>("attempt", group, default = { 0 })
             override fun saveToIni(context: IniWriteContext) {
                 context.writeAttributes(key, "modem") { it["login.password"] = "stolen" }
@@ -702,7 +712,7 @@ class LazyConfigurationTest {
         assertEquals(0, store[trespasser.key])
 
         val competingReader = object : Settings("competing-reader") {
-            val group = SettingGroup("modem", this)
+            val group = SettingGroup(this)
             val key = SettingKey<String>("alias", group, default = { "" }, structural = true)
             override fun loadFromIni(context: IniReadContext): List<ConfigChange<*>> = listOf(
                 key to requireNotNull(context.compose(key, "modem") { it["login.password"] }),
@@ -768,7 +778,7 @@ class LazyConfigurationTest {
         store.set(ElementSimplifierSettings.Rules to no.skasti.yame.ppp.proxy.transform.ElementSimplifierConfiguration(
             mapOf("heading" to no.skasti.yame.ppp.proxy.transform.ElementSimplifierRule("h2", "color:red;"))))
         val saved = Files.readString(path)
-        assertTrue(saved.startsWith(original.substringBefore("[heading]")))
+        assertTrue(saved.contains(original.substringBefore("[heading]")))
         assertTrue(saved.contains("[heading]\ntarget=h2\nstyle=color:red;"))
         assertEquals(listOf("heading"), lazyApplicationConfigStore(primary)[ElementSimplifierSettings.Rules].rules.keys.toList())
 

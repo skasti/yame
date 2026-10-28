@@ -5,13 +5,13 @@ import no.skasti.yame.config.*
 object ModemSettings : Settings("modem") {
     val Group = SettingGroup(this)
     val PickupTime = SettingKey<kotlin.time.Duration>("pickup-time", Group,
-        { HayesModemConfig(pickupTime = it) }, default = { HayesModemConfig().pickupTime })
+        { HayesModemConfig(pickupTime = it) }, description = "Ringback duration before the modem answers a dial command.", default = { HayesModemConfig().pickupTime })
     val DialToneTime = SettingKey<kotlin.time.Duration>("dial-tone-time", Group,
-        { HayesModemConfig(dialToneTime = it) }, default = { HayesModemConfig().dialToneTime })
+        { HayesModemConfig(dialToneTime = it) }, description = "Duration of the simulated dial tone before dialing.", default = { HayesModemConfig().dialToneTime })
     val Handshake = SettingKey<no.skasti.yame.tone.HandshakeProfile>("handshake-profile", Group,
-        default = { HayesModemConfig().handshakeProfile })
+        description = "Modem handshake sound profile used during connection setup.", default = { HayesModemConfig().handshakeProfile })
     val Tone = SettingKey<Boolean>("tone-simulation-enabled", Group,
-        default = { HayesModemConfig().toneSimulationEnabled })
+        description = "Play simulated modem tones during dialing and handshaking.", default = { HayesModemConfig().toneSimulationEnabled })
     val Login = SettingKey<LoginCredentials>("login", Group, sensitive = true,
-        default = { LoginCredentials(null, null) })
+        description = "Terminal login credentials. Set both username and password, or omit both.\nCredentials are stored in plaintext; protect this file.", default = { LoginCredentials(null, null) })
 }

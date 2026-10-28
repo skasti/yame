@@ -9,7 +9,7 @@ import kotlin.reflect.KClass
 import kotlin.reflect.jvm.javaField
 
 /** Feature-owned setting definitions and mappings, not the current values held by ConfigStore. */
-abstract class Settings(val id: String, val file: String? = null) {
+abstract class Settings(val id: String, val file: String? = null, val description: String? = null) {
     init {
         require(id.isNotBlank())
         require(file == null || file.matches(Regex("[A-Za-z0-9][A-Za-z0-9_-]*"))) {
@@ -102,7 +102,7 @@ abstract class Settings(val id: String, val file: String? = null) {
 }
 
 /** Use a separate file named after this definition; the repository chooses its extension. */
-abstract class SeparateSettings(id: String) : Settings(id = id, file = id)
+abstract class SeparateSettings(id: String, description: String? = null) : Settings(id = id, file = id, description = description)
 
 interface CompositeSetting<T : Any> {
     fun loadFromIni(context: IniReadContext): T
@@ -310,5 +310,35 @@ class IniWriteContext internal constructor(
         location.first.takeIf { owner === key &&
             (document.properties(it).isNotEmpty() || document.properties("").keys.any { flat -> flat.startsWith("$it.") }) }
     }.distinct()
+    /** Uses mapping claims, including composite child names and actual dynamic sections. */
+    internal fun synchronizeDocumentation(definitions: Collection<Settings>) {
+        val keys = definitions.flatMap { it.allSettingKeys }
+        document.sections().forEach { section ->
+            val groups = keys.map { it.group }.distinct().filter { it.id == section }.sortedBy { it.configuration?.id }
+            val descriptions = groups.mapNotNull { it.description?.takeIf(String::isNotBlank) }.distinct().toMutableList()
+            document.properties(section).keys.forEach { property ->
+                val owner = claims[section to property]
+                if (owner != null && !owner.structural) {
+                    owner.description?.takeIf(String::isNotBlank)?.let { description ->
+                        val parts = description.lines()
+                        descriptions += "$property: ${parts.first()}" +
+                            parts.drop(1).joinToString("") { "\n  $it" }
+                    }
+                }
+            }
+            // Only sections belonging to these definitions may have their blocks synchronized.
+            if (groups.isNotEmpty() || claims.any { it.key.first == section && it.value in keys }) {
+                document.synchronizeSectionDescription(section, descriptions.joinToString("\n"))
+            }
+        }
+        definitions.sortedBy { it.id }.forEach { definition ->
+            val owned = claims.filterValues { it.group.configuration === definition }.keys
+            val description = (listOfNotNull(definition.description) + definition.allSettingKeys
+                .filter { it.structural }.mapNotNull { it.description })
+                .filter(String::isNotBlank).distinct().joinToString("\n")
+            document.synchronizeSettingsDescription(definition.id, description,
+                owned.map { it.first }.toSet(), owned.map { "${it.first}.${it.second}" }.toSet())
+        }
+    }
     internal fun claims(): Map<Pair<String, String>, SettingKey<*>> = claims.toMap()
 }

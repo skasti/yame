@@ -1,6 +1,6 @@
 package no.skasti.yame.ui
 
-import no.skasti.yame.persistence.*
+import no.skasti.yame.config.InstalledConfigTest
 import com.github.ajalt.mordant.terminal.Terminal
 import no.skasti.yame.config.*
 import no.skasti.yame.function.FunctionStore
@@ -10,10 +10,9 @@ import no.skasti.yame.ppp.proxy.transform.TransformerSettings
 import java.io.IOException
 import kotlin.test.*
 
-class StoreFrontendTest {
-    private fun observer(store: ConfigStore, functions: FunctionStore = FunctionStore()) = TuiYameObserver(
-        terminal = Terminal(interactive = false), configStore = store, functions = functions,
-    )
+class StoreFrontendTest : InstalledConfigTest() {
+    private fun observer(store: ConfigStore, functions: FunctionStore = FunctionStore()) = run { installConfig(store); TuiYameObserver(terminal = Terminal(interactive = false), functions = functions,
+    ) }
     private fun TuiYameObserver.command(value: String) {
         value.forEach { handleKeyAndAwait(it.toString()) }
         handleKeyAndAwait("Enter")
@@ -21,7 +20,7 @@ class StoreFrontendTest {
 
     @Test fun `multiple frontends share configuration while owning independent palettes`() {
         var saves = 0
-        val store = applicationConfigStore(YameConfiguration(), save = { saves++ })
+        val store = ConfigStore(persist = { saves++ })
         observer(store).use { first ->
             observer(store).use { second ->
                 first.command("/tone off")
@@ -36,7 +35,7 @@ class StoreFrontendTest {
     }
 
     @Test fun `frontend invokes registered operations and survives rejected persistence`() {
-        val store = applicationConfigStore(YameConfiguration(), save = { throw IOException("disk full") })
+        val store = ConfigStore(persist = { throw IOException("disk full") })
         val functions = FunctionStore()
         var disconnects = 0
         functions.register(ConnectionFunctions.Disconnect) { disconnects++ }

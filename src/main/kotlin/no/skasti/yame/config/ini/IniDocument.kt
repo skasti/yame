@@ -25,7 +25,6 @@ class IniDocument internal constructor(
     fun put(section: String, property: String, value: String) {
         require(property.isNotBlank() && !property.contains('\n') && !property.contains('\r'))
         require(!value.contains('\n') && !value.contains('\r'))
-        // Java Properties uses the last declaration of a repeated root key.
         val index = lines.indexOfLast { it is Line.Property && it.section == section && it.name == property }
         if (index >= 0) {
             val old = lines[index] as Line.Property
@@ -34,29 +33,115 @@ class IniDocument internal constructor(
         }
         val entry = Line.Property(section, property, value, renderProperty(section, property, value))
         if (section.isEmpty()) {
+            // Keep root entries before any comments belonging to the first section.
+            val last = lines.indexOfLast { it is Line.Property && it.section.isEmpty() }
             val first = lines.indexOfFirst { it is Line.Section }
-            lines.add(if (first < 0) lines.size else first, entry)
+            val insertion = if (last >= 0) last + 1 else if (first < 0) lines.size else sectionBlockStart(first)
+            lines.add(insertion, entry)
         } else {
             val start = lines.indexOfFirst { it is Line.Section && it.name == section }
             if (start < 0) {
-                if (lines.isNotEmpty() && lines.last() !is Line.Other) lines.add(Line.Other(""))
+                if (lines.isNotEmpty()) {
+                    // Only new section boundaries get the preferred two empty lines.
+                    var blanks = lines.asReversed().takeWhile { it == Line.Other("") }.size
+                    while (blanks++ < 2) lines.add(Line.Other(""))
+                }
                 lines.add(Line.Section(section, "[$section]"))
                 lines.add(entry)
             } else {
                 val next = (start + 1 until lines.size).firstOrNull { lines[it] is Line.Section } ?: lines.size
-                lines.add(next, entry)
+                val last = (start + 1 until next).lastOrNull { lines[it] is Line.Property }
+                lines.add((last ?: start) + 1, entry)
             }
         }
     }
+
+    /** Replace only an unambiguous marked block directly attached to this section. */
+    fun synchronizeSectionDescription(section: String, description: String?) {
+        val header = lines.indexOfFirst { it is Line.Section && it.name == section }
+        if (header < 0) return
+        val start = sectionBlockStart(header)
+        val replacement = markedComments(section, description)
+        lines.subList(start, header).clear()
+        lines.addAll(start, replacement)
+    }
+
+    private fun sectionBlockStart(header: Int): Int {
+        val section = (lines[header] as Line.Section).name
+        var index = header - 1
+        while (index >= 0) {
+            val raw = (lines[index] as? Line.Other)?.raw ?: break
+            if (raw == "##### @yame $section") return index
+            // Marker-like content is ambiguous and must never be consumed.
+            if (raw.trimStart().startsWith("#####") || !(raw.trimStart().startsWith("#") || raw.trimStart().startsWith(";"))) break
+            index--
+        }
+        return header
+    }
+
+    /** Definition blocks are identified by owner ID, never by their description text.
+     * Named sections take precedence; root-only mappings anchor at their first property.
+     * Unknown and legacy markers are deliberately left alone.
+     */
+    fun synchronizeSettingsDescription(
+        id: String, description: String?, ownedSections: Set<String>, rootProperties: Set<String>,
+    ) {
+        val marker = "##### @yame $id settings:"
+        // Search by explicit owner identity so a block can follow its first section
+        // after external reordering or deletion. Remove only well-formed blocks.
+        for (start in lines.indices.reversed()) {
+            if (lines[start] != Line.Other(marker)) continue
+            val end = settingsBlockEnd(start) ?: continue
+            lines.subList(start, end).clear()
+            if (lines.getOrNull(start) == Line.Other("")) lines.removeAt(start)
+        }
+        val comments = markedComments("$id settings:", description)
+        if (comments.isEmpty()) return
+        val header = lines.indexOfFirst { it is Line.Section && it.name in ownedSections }
+        val insertion = if (header >= 0) sectionBlockStart(header) else
+            lines.indexOfFirst { it is Line.Property && it.section.isEmpty() && it.name in rootProperties }
+        if (insertion >= 0) lines.addAll(insertion, comments + Line.Other(""))
+    }
+
+    private fun settingsBlockEnd(start: Int): Int? {
+        var index = start + 1
+        while (index < lines.size) {
+            when (val line = lines[index]) {
+                is Line.Section -> return index
+                is Line.Property -> return null // Incomplete block: preserve ambiguous content.
+                is Line.Other -> {
+                    if (line.raw.isEmpty()) return index
+                    if (line.raw.trimStart().startsWith("#####")) {
+                        // Consecutive generated blocks have independent ownership.
+                        return index.takeIf { line.raw.matches(Regex("##### @yame [a-z0-9][a-z0-9_.-]*( settings:)?")) }
+                    }
+                    if (!(line.raw.trimStart().startsWith("#") || line.raw.trimStart().startsWith(";"))) return null
+                }
+            }
+            index++
+        }
+        return index
+    }
+
+    private fun markedComments(id: String, description: String?): List<Line.Other> =
+        if (description.isNullOrBlank()) emptyList() else
+            listOf(Line.Other("##### @yame $id")) + description.lineSequence().map {
+                Line.Other(if (it.isEmpty()) "#" else "# $it")
+            }.toList()
 
     fun remove(section: String, property: String) {
         lines.removeAll { it is Line.Property && it.section == section && it.name == property }
     }
     fun removeSection(section: String) {
+        synchronizeSectionDescription(section, null)
         val start = lines.indexOfFirst { it is Line.Section && it.name == section }
         if (start < 0) return
         val end = (start + 1 until lines.size).firstOrNull { lines[it] is Line.Section } ?: lines.size
-        lines.subList(start, end).clear()
+        // Trailing comments may introduce the following section. Only the
+        // removed header/properties and its explicitly owned block are ours.
+        for (index in end - 1 downTo start) {
+            if (lines[index] !is Line.Other) lines.removeAt(index)
+        }
     }
     fun render(): String = lines.joinToString(newline) { when (it) {
         is Line.Other -> it.raw

@@ -1,5 +1,6 @@
 package no.skasti.yame.persistence
 
+import no.skasti.yame.config.withInstalledConfig
 import no.skasti.yame.config.*
 
 import no.skasti.yame.serial.SerialSettings
@@ -14,47 +15,46 @@ import no.skasti.yame.logging.YameLogLevel
 import java.nio.file.Files
 import kotlin.test.*
 
-class ApplicationConfigStoreTest {
-    @Test fun `legacy DTO adapter uses default rule file switch and rejects unsupported writes`() {
-        val store = applicationConfigStore(YameConfiguration())
-        assertTrue(HtmlTransformerSettings.fromConfigStore(store).elementSimplifier)
-        val error = assertFailsWith<IllegalArgumentException> {
+class FeaturePersistenceTest {
+    @Test fun `separate rule file switch is persisted by its owner`() {
+        val directory = Files.createTempDirectory("yame-rule-switch")
+        try {
+            val path = directory.resolve("yame.ini")
+            val store = lazyApplicationConfigStore(path)
+            assertTrue(withInstalledConfig(store) { HtmlTransformerSettings.fromConfigStore() }.elementSimplifier)
             store.set(ElementSimplifierSettings.Enabled to false)
-        }
-        assertTrue(error.message.orEmpty().contains("cannot persist"))
-        assertTrue(store[ElementSimplifierSettings.Enabled])
+            assertFalse(withInstalledConfig(lazyApplicationConfigStore(path)) { HtmlTransformerSettings.fromConfigStore() }.elementSimplifier)
+        } finally { directory.toFile().deleteRecursively() }
     }
 
     @Test fun `CLI overrides and runtime discovery do not leak into later persistent changes`() {
-        val baseline = YameConfiguration()
-        val effective = baseline.copy(baudRate = 115200, modemConfig = baseline.modemConfig.copy(username = "cli", password = "secret"))
-        var saved = baseline
+        var saved = ConfigChanges(emptyList())
         var saves = 0
-        val store = applicationConfigStore(baseline, effective, { saved = it; saves++ })
+        val store = ConfigStore(persist = { saved = it; saves++ })
+        withInstalledConfig(store) { no.skasti.yame.parseArgs(arrayOf("--baud", "115200", "--username", "cli", "--password", "secret")) }
         store.setTransient(SerialSettings.Port to "COM2")
         store.set(TransformerSettings.Style to false, LogSettings.Levels.getValue(YameLogModule.MODEM) to YameLogLevel.DEBUG)
         assertEquals(1, saves)
-        assertEquals(38400, saved.baudRate)
-        assertNull(saved.portName)
-        assertNull(saved.modemConfig.password)
+        assertEquals(38400, saved[SerialSettings.Baud]?.value)
+        assertNull(saved[SerialSettings.Port]?.value)
+        assertNull(saved[ModemSettings.Login]?.value?.password)
         assertEquals(115200, store[SerialSettings.Baud])
         assertEquals("COM2", store[SerialSettings.Port])
         store.set(SerialSettings.Baud to 115200)
         assertEquals(2, saves)
-        assertEquals(115200, saved.baudRate)
+        assertEquals(115200, saved[SerialSettings.Baud]?.value)
     }
 
     @Test fun `feature changes autosave one compatible file snapshot and invalid credentials reject entire batch`() {
         val directory = Files.createTempDirectory("yame-store-test")
         try {
             val path = directory.resolve("yame.ini")
-            val file = YameConfigurationStore(path)
-            val store = applicationConfigStore(YameConfiguration(), save = file::save)
+            val store = lazyApplicationConfigStore(path)
             store.set(SerialSettings.Baud to 9600, ModemSettings.Login to LoginCredentials("user", "secret"), TransformerSettings.Script to false)
-            val loaded = file.load()
-            assertEquals(9600, loaded.baudRate)
-            assertEquals("secret", loaded.modemConfig.password)
-            assertFalse(loaded.pppHttpCompatibilityConfig.htmlTransformers.scriptRemover)
+            val loaded = lazyApplicationConfigStore(path)
+            assertEquals(9600, loaded[SerialSettings.Baud])
+            assertEquals("secret", loaded[ModemSettings.Login].password)
+            assertFalse(loaded[TransformerSettings.Script])
             val bytes = Files.readAllBytes(path)
             assertFailsWith<IllegalArgumentException> {
                 store.set(SerialSettings.Baud to 19200, ModemSettings.Login to LoginCredentials("user", null))
@@ -64,12 +64,11 @@ class ApplicationConfigStoreTest {
         } finally { directory.toFile().deleteRecursively() }
     }
 
-    @Test fun `cross feature transaction persists all legacy bindings once`() {
+    @Test fun `cross feature transaction persists independently owned keys`() {
         val directory = Files.createTempDirectory("yame-bindings")
         try {
-            val file = YameConfigurationStore(directory.resolve("yame.ini"))
-            var saves = 0
-            val store = applicationConfigStore(YameConfiguration(), save = { file.save(it); saves++ })
+            val path = directory.resolve("yame.ini")
+            val store = lazyApplicationConfigStore(path)
             val changes = listOf(
                 SerialSettings.Port to "COM4",
                 SerialSettings.Baud to 19200,
@@ -89,10 +88,9 @@ class ApplicationConfigStoreTest {
             ) + LogSettings.Levels.values.map { it to YameLogLevel.DEBUG } +
                 LogSettings.CaptureLimits.values.map { it to 20 }
             store.set(*changes.toTypedArray())
-            assertEquals(1, saves)
-            val reloaded = applicationConfigStore(file.load())
-            YameConfigurationBindings.all.forEach { binding ->
-                assertEquals(store[binding.key], reloaded[binding.key], binding.key.path)
+            val reloaded = lazyApplicationConfigStore(path)
+            changes.forEach { change ->
+                assertEquals(change.value, reloaded[change.key], change.key.path)
             }
             val text = Files.readString(directory.resolve("yame.ini"))
             for (name in listOf("version=1", "login.username=user", "port=COM4", "subnet=10.99.0.0/30", "upstream=1.1.1.1")) {

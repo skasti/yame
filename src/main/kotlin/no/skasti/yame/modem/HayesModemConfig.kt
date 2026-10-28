@@ -30,13 +30,13 @@ data class HayesModemConfig(
     }
 
     companion object {
-        fun fromConfigStore(store: ConfigStore = ConfigStore.current): HayesModemConfig {
-            val login = store[ModemSettings.Login]
+        fun fromConfigStore(): HayesModemConfig {
+            val login = ConfigStore[ModemSettings.Login]
             return HayesModemConfig(
-                pickupTime = store[ModemSettings.PickupTime],
-                dialToneTime = store[ModemSettings.DialToneTime],
-                handshakeProfile = store[ModemSettings.Handshake],
-                toneSimulationEnabled = store[ModemSettings.Tone],
+                pickupTime = ConfigStore[ModemSettings.PickupTime],
+                dialToneTime = ConfigStore[ModemSettings.DialToneTime],
+                handshakeProfile = ConfigStore[ModemSettings.Handshake],
+                toneSimulationEnabled = ConfigStore[ModemSettings.Tone],
                 username = login.username, password = login.password,
             )
         }
