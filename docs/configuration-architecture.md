@@ -355,8 +355,23 @@ external path as `group.id + "." + name`.
 `Settings.file = null` selects the primary file (`yame.ini` or `--config`).
 `SeparateSettings("element-simplifier")` selects `element-simplifier.ini` beside
 it. A logical file name has no extension, path separator, traversal, or non-ASCII
-characters. Multiple definitions can share a file or section if they claim
-different properties. The repository resolves files and performs all IO.
+characters. Multiple definitions may share a file, but each declared logical
+section has one owning `SettingGroup` instance. Before repository IO,
+`ConfigStore.ensureLoaded()` checks `(Settings.file, SettingGroup.id)` against
+already loaded definitions and the candidate's own groups under its transaction
+lock. `null` identifies the primary file; named logical files are independent, so
+they may reuse group IDs and property paths. Repeated references to the same group
+are allowed; distinct groups with the same identity are rejected, even inside one
+definition. Rejection installs no values, definition or repository claims and
+publishes no notifications. The check derives ownership from loaded definitions,
+without an additional mutable registry. See
+[ADR 0013](adrs/0013-exclusive-setting-group-ownership.md).
+
+The repository resolves files and performs all IO. It still validates actual
+physical property/section claims, including structural mappings whose dynamic
+section names differ from their declared group. ConfigStore does not parse INI
+or infer physical sections. Logical declaration validation and physical mapping
+validation remain separate responsibilities.
 
 For each key, reads accept either `[serial]` with `baud=115200` or root-level
 `serial.baud=115200`. Equal duplicates are accepted; different values fail with

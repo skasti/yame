@@ -65,3 +65,12 @@ production-consumer scenarios, or inject immutable component values directly. Th
 API is intentionally removed. No-op writes remain no-ops; the explicit first-run
 baseline save is separate from ordinary changes. Multi-file filesystem failures
 retain the existing partial-write reporting contract.
+
+## Related ownership invariant
+
+[ADR 0013](0013-exclusive-setting-group-ownership.md) defines exclusive declared
+SettingGroup ownership within each logical file. ConfigStore enforces this during
+lazy loading before repository IO. The INI repository continues enforcing physical
+mapping claims, including dynamically named structural sections. Multiple Settings
+definitions may share a file, but cannot declare independently owned groups for
+the same logical section.

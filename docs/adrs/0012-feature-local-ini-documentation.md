@@ -25,6 +25,12 @@ explicit owner markers; never infer ownership from description text. Preserve
 unknown, malformed and legacy shared-file blocks conservatively. Unmarked
 comments and unrelated formatting remain user-owned.
 
+Declared section ownership is exclusive per logical file and is checked centrally
+by ConfigStore before loading a definition; [ADR 0013](0013-exclusive-setting-group-ownership.md)
+records that invariant. The INI layer separately validates physical mapping claims,
+including dynamic sections. This keeps one unambiguous owner for each declared
+section documentation block.
+
 Keep documentation-only synchronization independent of configuration changes and
 notifications, using the shared transactional INI persistence pipeline.
 

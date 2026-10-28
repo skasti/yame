@@ -439,9 +439,9 @@ class LazyConfigurationTest {
         val shared = directory.resolve("shared-settings.ini")
         val primaryText = "[serial]\nbaud=57600\n# primary comment\n"
         Files.writeString(primary, primaryText)
-        Files.writeString(shared, "# shared comment\n[shared]\nfirst=7\nsecond=9\nother=untouched\n")
-        class SharedDefinition(id: String, property: String) : Settings(id, file = "shared-settings") {
-            val group = SettingGroup("shared", this)
+        Files.writeString(shared, "# shared comment\n[first-owner]\nfirst=7\nother=untouched\n[second-owner]\nsecond=9\n")
+        class SharedDefinition(id: String, property: String, section: String = id) : Settings(id, file = "shared-settings") {
+            val group = SettingGroup(section, this)
             val key = SettingKey<Int>(property, group, default = { 0 })
         }
         val first = SharedDefinition("first-owner", "first")
@@ -462,9 +462,9 @@ class LazyConfigurationTest {
             assertTrue(saved.contains(record), record)
         }
 
-        val conflict = SharedDefinition("third-owner", "first")
+        val conflict = SharedDefinition("third-owner", "first", "first-owner")
         val error = assertFailsWith<IllegalArgumentException> { store[conflict.key] }
-        assertTrue(error.message.orEmpty().contains("Duplicate setting path shared.first"), error.message)
+        assertTrue(error.message.orEmpty().contains("Configuration section [first-owner] in logical file 'shared-settings'"), error.message)
         assertEquals(8, store[first.key])
     }
 
@@ -554,7 +554,7 @@ class LazyConfigurationTest {
         assertEquals(38_400, store[SerialSettings.Baud])
     }
 
-    @Test fun `different keys share a section but cannot claim the same attribute in either syntax`() {
+    @Test fun `different definitions cannot share a declared section regardless of property syntax or name`() {
         val path = directory.resolve("yame.ini")
         Files.writeString(path, "shared.first=7\n[shared]\nsecond=9\n")
         class Owner(id: String, name: String) : Settings(id) {
@@ -562,27 +562,21 @@ class LazyConfigurationTest {
             val key = SettingKey<Int>(name, group, default = { 0 })
         }
         val first = Owner("first-owner", "first")
-        val second = Owner("second-owner", "second")
         val store = lazyApplicationConfigStore(path)
         assertEquals(7, store[first.key])
-        assertEquals(9, store[second.key])
-        store.set(first.key to 8, second.key to 10)
-        val text = Files.readString(path)
-        assertTrue(text.contains("first=8"))
-        assertTrue(text.contains("second=10"))
-        assertFalse(text.contains("shared.first="))
-
-        val conflicting = object : Settings("third-owner") {
-            val group = SettingGroup("shared", this)
-            val key = SettingKey<Int>("alias", group, default = { 0 }, structural = true)
-            override fun loadFromIni(context: IniReadContext): List<ConfigChange<*>> = listOf(
-                key to requireNotNull(context.compose(key, "shared") { attrs -> attrs["first"]?.toInt() }),
-            )
+        val before = Files.readString(path)
+        for (name in listOf("first", "second")) {
+            val second = Owner("second-owner", name)
+            val error = assertFailsWith<IllegalArgumentException> { store[second.key] }
+            assertContains(error.message.orEmpty(), "[shared] in primary file")
+            assertContains(error.message.orEmpty(), "'first-owner'")
+            assertContains(error.message.orEmpty(), "'second-owner'")
         }
-        val error = assertFailsWith<IllegalArgumentException> { store[conflicting.key] }
-        assertTrue(error.message.orEmpty().contains("yame.ini [shared] first"), error.message)
-        assertTrue(error.message.orEmpty().contains(first.key.path), error.message)
-        assertEquals(8, store[first.key])
+        assertEquals(before, Files.readString(path))
+        assertEquals(7, store[first.key])
+        store.set(first.key to 8)
+        assertEquals(8, lazyApplicationConfigStore(path)[first.key])
+        assertContains(Files.readString(path), "second=9")
     }
 
     @Test fun `composition commits only nonnull claims including absent attributes`() {
@@ -636,7 +630,7 @@ class LazyConfigurationTest {
         assertEquals(7, store[replacement.key])
         Files.writeString(path, "[shared]\nfirst=7\nsecond=9\n")
         val conflict = assertFailsWith<IllegalArgumentException> { store[first.key] }
-        assertTrue(conflict.message.orEmpty().contains("conflicts with"))
+        assertContains(conflict.message.orEmpty(), "Configuration section [shared]")
         assertEquals(7, store[replacement.key])
     }
 
@@ -668,15 +662,21 @@ class LazyConfigurationTest {
         val path = directory.resolve("yame.ini")
         Files.writeString(path, "[shared]\nfirst=7\nsecond=9\nunknown=keep\n")
         val first = object : Settings("first-owner") {
-            val group = SettingGroup("shared", this)
+            val group = SettingGroup(this)
             val key = SettingKey<Int>("first", group, default = { 0 })
+            override fun loadFromIni(context: IniReadContext): List<ConfigChange<*>> = listOf(
+                key to requireNotNull(context.compose(key, "shared") { it["first"]?.toInt() }),
+            )
             override fun saveToIni(context: IniWriteContext) {
                 context.removeSection(key, "shared")
             }
         }
         val second = object : Settings("second-owner") {
-            val group = SettingGroup("shared", this)
+            val group = SettingGroup(this)
             val key = SettingKey<Int>("second", group, default = { 0 })
+            override fun loadFromIni(context: IniReadContext): List<ConfigChange<*>> = listOf(
+                key to requireNotNull(context.compose(key, "shared") { it["second"]?.toInt() }),
+            )
         }
         val store = lazyApplicationConfigStore(path)
         assertEquals(7, store[first.key])
@@ -696,7 +696,7 @@ class LazyConfigurationTest {
         val path = directory.resolve("yame.ini")
         Files.writeString(path, "[modem]\nlogin.username=user\nlogin.password=secret\n")
         val trespasser = object : Settings("trespasser") {
-            val group = SettingGroup("modem", this)
+            val group = SettingGroup(this)
             val key = SettingKey<Int>("attempt", group, default = { 0 })
             override fun saveToIni(context: IniWriteContext) {
                 context.writeAttributes(key, "modem") { it["login.password"] = "stolen" }
@@ -712,7 +712,7 @@ class LazyConfigurationTest {
         assertEquals(0, store[trespasser.key])
 
         val competingReader = object : Settings("competing-reader") {
-            val group = SettingGroup("modem", this)
+            val group = SettingGroup(this)
             val key = SettingKey<String>("alias", group, default = { "" }, structural = true)
             override fun loadFromIni(context: IniReadContext): List<ConfigChange<*>> = listOf(
                 key to requireNotNull(context.compose(key, "modem") { it["login.password"] }),

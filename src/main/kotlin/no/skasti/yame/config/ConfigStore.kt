@@ -49,7 +49,7 @@ class ConfigStore(
     private class Delivery(val changes: ConfigChanges, val listeners: List<Listener>)
 
     init {
-        require(saved.size == persistent.size && persistent.map { it.key.path }.distinct().size == persistent.size) {
+        require(saved.size == persistent.size && persistent.map { it.key.group.configuration?.file to it.key.path }.distinct().size == persistent.size) {
             "Duplicate setting definition"
         }
         persistent.forEach { it.validate() }
@@ -65,6 +65,7 @@ class ConfigStore(
                 require(it === definition) { "Conflicting definition identity ${definition.id}" }
                 return
             }
+            validateGroupOwnership(definition)
             val loadedDefinition = repository?.load(definition) ?: ConfigurationLoad(
                 definition.allSettingKeys.map { key -> saved[key] ?: defaultChange(key) },
             )
@@ -75,7 +76,7 @@ class ConfigStore(
             }
             entries.forEach { entry ->
                 require(entry.key.group.configuration === definition) { "${entry.key.path} belongs to another definition" }
-                require(saved.keys.none { it.path == entry.key.path && (repository != null || it !== entry.key) }) { "Duplicate setting path ${entry.key.path}" }
+                require(saved.keys.none { it.group.configuration?.file == definition.file && it.path == entry.key.path && (repository != null || it !== entry.key) }) { "Duplicate setting path ${entry.key.path}" }
                 entry.validate()
             }
             val candidate = LinkedHashMap(saved)
@@ -85,6 +86,23 @@ class ConfigStore(
             saved = candidate
             effective = LinkedHashMap(effective).apply { entries.forEach { putIfAbsent(it.key, it) } }
             loaded[definition.id] = definition
+        }
+    }
+
+    /** Declared logical sections are exclusive; physical mapping claims belong to the repository. */
+    private fun validateGroupOwnership(definition: Settings) {
+        val owners = mutableMapOf<Pair<String?, String>, SettingGroup>()
+        (loaded.values + definition).forEach { owner ->
+            owner.allSettingKeys.forEach { key ->
+                val group = key.group
+                val location = owner.file to group.id
+                val previous = owners.putIfAbsent(location, group)
+                require(previous == null || previous === group) {
+                    val file = owner.file?.let { "logical file '$it'" } ?: "primary file"
+                    "Configuration section [${group.id}] in $file is owned by both " +
+                        "'${previous?.configuration?.id}' and '${owner.id}' (distinct SettingGroup instances)"
+                }
+            }
         }
     }
 
@@ -127,7 +145,7 @@ class ConfigStore(
 
     private fun commit(changes: Array<out ConfigChange<*>>, persistent: Boolean) {
         synchronized(lock) {
-            require(changes.map { it.key.path }.distinct().size == changes.size) { "Duplicate setting in batch" }
+            require(changes.map { it.key.group.configuration?.file to it.key.path }.distinct().size == changes.size) { "Duplicate setting in batch" }
             changes.forEach { if (it.key !in saved) it.key.group.configuration?.let(::ensureLoaded) }
             changes.forEach { require(it.key in saved) { "Unregistered setting ${it.key.path}" }; it.validate() }
             val nextSaved = LinkedHashMap(saved)

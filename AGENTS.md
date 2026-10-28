@@ -232,8 +232,12 @@ unbounded buffering.
   `file = null` uses the configured primary file; `SeparateSettings(id)` uses a
   separate file named after its ID. Use a bare name such as `shared-settings`,
   never an extension or path. `IniConfigurationRepository` resolves it to
-  `shared-settings.ini`. Definitions may share a logical file and must not claim
-  the same property. The generic ConfigStore registers only definitions requested
+  `shared-settings.ini`. Definitions may share a logical file, but each declared
+  `(Settings.file, SettingGroup.id)` belongs to one group instance. ConfigStore
+  checks loaded definitions and the candidate before repository IO; repeated keys
+  in one group are allowed, distinct groups for the same logical section are not.
+  INI mappings still validate physical claims, including dynamic structural
+  sections. See ADR 0013. Definitions must not claim the same physical property. The generic ConfigStore registers only definitions requested
   by components; it never enumerates all features.
 - INI reads accept `[serial] baud=115200` and the equivalent root property
   `serial.baud=115200`. A conflict is an error. Writes emit only the section
