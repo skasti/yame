@@ -473,9 +473,10 @@ ToneTest owns the standalone modem and its forced tone-enabled configuration.
 Feature-owned `Settings.description` documents its definition,
 `SettingGroup.description` documents a section, and `SettingKey.description`
 documents a value. All are optional public, frontend-neutral metadata suitable for
-future configuration frontends. Leave group descriptions unset when they merely
-repeat the section name or summarize its keys; use them for useful section-wide
-context, such as interactions, prerequisites or constraints.
+future configuration frontends. Add descriptions only when they provide useful
+information. Leave Settings and group descriptions unset when they merely repeat
+section names or individual setting descriptions; use them for shared context,
+such as interactions, prerequisites or constraints.
 Documentation ownership follows the feature even
 when several definitions share a file or only some definitions have loaded.
 [ADR 0012](adrs/0012-feature-local-ini-documentation.md) records this decision.
@@ -486,17 +487,18 @@ Structural key descriptions join their owning Settings overview once, rather tha
 repeating long descriptions for every dynamic section. Features use ordinary
 mapping contexts and never write comments themselves.
 
-```ini
-##### @yame serial settings:
-# Serial transport configuration.
+For example, a serial section containing only `baud` is documented as follows:
 
+```ini
 ##### @yame serial
 # baud: Serial port baud rate in bits per second.
 [serial]
 baud=38400
 ```
 
-These are independently owned blocks, even when the Settings and group IDs match.
+`SerialSettings` defines neither a Settings description nor a group description,
+so this example contains only the property description. Definition and section
+documentation use independently owned blocks, even when their IDs match.
 The exact `##### @yame <settings-id> settings:` marker owns the definition overview.
 It appears once immediately before that definition's first existing section and
 its section documentation. The first section is chosen in document order using
