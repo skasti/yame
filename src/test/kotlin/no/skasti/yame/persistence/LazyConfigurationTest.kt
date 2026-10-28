@@ -778,7 +778,7 @@ class LazyConfigurationTest {
         store.set(ElementSimplifierSettings.Rules to no.skasti.yame.ppp.proxy.transform.ElementSimplifierConfiguration(
             mapOf("heading" to no.skasti.yame.ppp.proxy.transform.ElementSimplifierRule("h2", "color:red;"))))
         val saved = Files.readString(path)
-        assertTrue(saved.startsWith(original.substringBefore("[heading]")))
+        assertTrue(saved.contains(original.substringBefore("[heading]")))
         assertTrue(saved.contains("[heading]\ntarget=h2\nstyle=color:red;"))
         assertEquals(listOf("heading"), lazyApplicationConfigStore(primary)[ElementSimplifierSettings.Rules].rules.keys.toList())
 

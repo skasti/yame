@@ -15,6 +15,7 @@ class ConfigStore(
         fun set(vararg changes: ConfigChange<*>) = current.set(*changes)
         fun setTransient(vararg changes: ConfigChange<*>) = current.setTransient(*changes)
         fun ensureLoaded(definition: Settings) = current.ensureLoaded(definition)
+        fun synchronizeDocumentation(vararg definitions: Settings) = current.synchronizeDocumentation(*definitions)
         fun saveLoadedValues() = current.saveLoadedValues()
         fun createFileIfMissing(definition: Settings) = current.createFileIfMissing(definition)
         val onChange: ConfigStore.ChangeEvents get() = current.onChange
@@ -92,6 +93,13 @@ class ConfigStore(
     /** Initialize a feature file without loading/registering it or publishing changes. */
     fun createFileIfMissing(definition: Settings) = synchronized(lock) {
         repository?.createFileIfMissing(definition)
+        Unit
+    }
+
+    /** Refresh generated comments without changing values, baselines or notifications. */
+    fun synchronizeDocumentation(vararg definitions: Settings) = synchronized(lock) {
+        definitions.forEach(::ensureLoaded)
+        repository?.synchronizeDocumentation(definitions.toList())
         Unit
     }
 

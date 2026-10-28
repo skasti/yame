@@ -5,6 +5,7 @@ interface ConfigurationRepository {
     /** Create a missing feature file without replacing an existing user file. */
     fun createFileIfMissing(definition: Settings)
     fun load(definition: Settings): ConfigurationLoad
+    fun synchronizeDocumentation(definitions: Collection<Settings>) {}
     fun persist(changes: Collection<ConfigChange<*>>, snapshot: ConfigChanges)
 }
 

@@ -455,17 +455,50 @@ ToneTest owns the standalone modem and its forced tone-enabled configuration.
 
 ## Configuration descriptions
 
-Feature-owned `SettingKey.description` is optional public metadata, reusable by
-configuration frontends. `Settings.description` optionally documents a logical
-file. The shared INI infrastructure emits file descriptions only when creating a
-missing file, and key descriptions only when writing a previously absent logical
-key. Composite child properties share one description; structural keys describe
-their representation before the first new section they create. Features still
-use ordinary mapping contexts and never write comments themselves.
+Feature-owned `Settings.description` documents a logical file,
+`SettingGroup.description` documents a section, and `SettingKey.description`
+documents a value. All are optional public, frontend-neutral metadata suitable for
+future configuration frontends. The shared INI writer uses mapping claims to
+associate descriptions with actual property names, including composite children.
+Structural key descriptions join the file overview once, rather than repeating
+long descriptions for every dynamically named section. Features use normal mapping
+contexts and never write comments themselves.
 
-Descriptions become full-line `#` comments using the document's newline style;
-each description line, including text resembling INI syntax, is prefixed safely.
-Updating existing entries or normalizing their equivalent flat paths never adds
-or refreshes descriptions. Existing comments and unrelated formatting stay
-verbatim; repeated updates do not duplicate documentation. Metadata edits apply
-to future new entries, not to user-owned documentation already on disk.
+Generated section documentation is directly above its header:
+
+```ini
+##### @yame serial
+# Serial port configuration.
+# baud: Serial port baud rate in bits per second.
+[serial]
+baud=38400
+```
+
+The group description appears first. Property descriptions follow property order;
+multiline continuations are indented within full-line `#` comments, so apparent INI
+syntax remains comment text. New properties follow the section's last property,
+ahead of trailing whitespace or user comments. Newly appended sections have two
+empty lines between them. Existing layout and LF/CRLF conventions remain intact.
+
+The exact marker `##### @yame <section-id>` owns the contiguous comment block
+immediately above that section. **Comments inside this block are generated content
+and may be replaced.** Put personal notes outside the marked block. Ordinary `#`
+and `;` comments elsewhere remain user-owned, even when their text matches current
+metadata. Missing blocks are inserted; obsolete marked blocks are removed.
+Mismatched, detached and malformed markers are preserved. There is no global
+comment-text matching or deduplication.
+
+File documentation has its own `##### @yame file` marker at the beginning of the
+file, separated from the rest by an empty line. Only this anchored, explicitly
+marked file block can be replaced or removed; a section named `file` is handled
+independently. Existing unmarked file descriptions remain user-owned.
+
+Persistent value changes synchronize documentation in their affected files.
+`ConfigStore.synchronizeDocumentation(definition, ...)` explicitly synchronizes
+existing sections even when values have not changed. It uses the same fresh,
+bounded reads, ownership claims, staged size validation and replacement pipeline;
+it changes no values, transient overrides or saved baselines and emits no change
+notifications. No-op value updates remain no-ops. Repeated synchronization is
+byte-stable and skips file replacement when content is unchanged. Startup does not
+implicitly rewrite existing files. No templates, metadata registry, persistent
+documentation state or feature-specific INI writers are needed.

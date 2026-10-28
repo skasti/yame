@@ -123,7 +123,10 @@ class IniParserCompatibilityTest {
         val second = lazyApplicationConfigStore(unterminated)
         second[SerialSettings.Baud]
         second.set(SerialSettings.Baud to 57_600)
-        assertEquals("# keep\n[serial]\nbaud=57600", Files.readString(unterminated))
+        val updated = Files.readString(unterminated)
+        assertTrue(updated.startsWith("# keep\n"))
+        assertTrue(updated.contains("##### @yame serial\n"))
+        assertTrue(updated.endsWith("[serial]\nbaud=57600"))
     }
 
     @Test fun `malformed Unicode escape reports file and physical line`() {

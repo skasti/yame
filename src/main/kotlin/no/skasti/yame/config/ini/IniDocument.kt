@@ -11,8 +11,6 @@ class IniDocument internal constructor(
     private val newline: String,
     private val terminalNewline: Boolean,
 ) {
-    private val originalLines = lines.toList()
-
     internal sealed class Line {
         data class Section(val name: String, val raw: String) : Line()
         data class Property(val section: String, val name: String, var value: String, var raw: String) : Line()
@@ -24,10 +22,9 @@ class IniDocument internal constructor(
         .filter { it.section == section }.associateTo(linkedMapOf()) { it.name to it.value }
     fun get(section: String, property: String): String? = properties(section)[property]
 
-    fun put(section: String, property: String, value: String, description: String? = null, sectionDescription: Boolean = false) {
+    fun put(section: String, property: String, value: String) {
         require(property.isNotBlank() && !property.contains('\n') && !property.contains('\r'))
         require(!value.contains('\n') && !value.contains('\r'))
-        // Java Properties uses the last declaration of a repeated root key.
         val index = lines.indexOfLast { it is Line.Property && it.section == section && it.name == property }
         if (index >= 0) {
             val old = lines[index] as Line.Property
@@ -35,50 +32,97 @@ class IniDocument internal constructor(
             return
         }
         val entry = Line.Property(section, property, value, renderProperty(section, property, value))
-        val comments = commentLines(description)
         if (section.isEmpty()) {
+            // Keep root entries before any comments belonging to the first section.
+            val last = lines.indexOfLast { it is Line.Property && it.section.isEmpty() }
             val first = lines.indexOfFirst { it is Line.Section }
-            val insertion = if (first < 0) lines.size else first
-            lines.addAll(insertion, withoutAdjacentDuplicate(insertion, comments) + entry)
+            val insertion = if (last >= 0) last + 1 else if (first < 0) lines.size else sectionBlockStart(first)
+            lines.add(insertion, entry)
         } else {
             val start = lines.indexOfFirst { it is Line.Section && it.name == section }
             if (start < 0) {
-                if (lines.isNotEmpty() && lines.last() !is Line.Other) lines.add(Line.Other(""))
-                if (sectionDescription) lines.addAll(withoutAdjacentDuplicate(lines.size, comments))
+                if (lines.isNotEmpty()) {
+                    // Only new section boundaries get the preferred two empty lines.
+                    var blanks = lines.asReversed().takeWhile { it == Line.Other("") }.size
+                    while (blanks++ < 2) lines.add(Line.Other(""))
+                }
                 lines.add(Line.Section(section, "[$section]"))
-                if (!sectionDescription) lines.addAll(comments)
                 lines.add(entry)
             } else {
                 val next = (start + 1 until lines.size).firstOrNull { lines[it] is Line.Section } ?: lines.size
-                lines.addAll(next, withoutAdjacentDuplicate(next, comments) + entry)
+                val last = (start + 1 until next).lastOrNull { lines[it] is Line.Property }
+                lines.add((last ?: start) + 1, entry)
             }
         }
     }
 
-    private fun withoutAdjacentDuplicate(index: Int, comments: List<Line.Other>): List<Line.Other> =
-        if (comments.isNotEmpty() &&
-            ((index >= comments.size && lines.subList(index - comments.size, index) == comments) ||
-                originalLines.windowed(comments.size).any { it == comments })) emptyList() else comments
-
-    /** File documentation is emitted only by the repository for a missing file. */
-    fun addFileDescription(description: String?) {
-        val comments = commentLines(description)
-        if (comments.isNotEmpty()) lines.addAll(0, comments + Line.Other(""))
+    /** Replace only an unambiguous marked block directly attached to this section. */
+    fun synchronizeSectionDescription(section: String, description: String?) {
+        val header = lines.indexOfFirst { it is Line.Section && it.name == section }
+        if (header < 0) return
+        val start = sectionBlockStart(header)
+        val replacement = markedComments(section, description)
+        lines.subList(start, header).clear()
+        lines.addAll(start, replacement)
     }
 
-    private fun commentLines(description: String?): List<Line.Other> =
-        description?.takeIf { it.isNotBlank() }?.lineSequence()?.map {
-            Line.Other(if (it.isEmpty()) "#" else "# $it")
-        }?.toList().orEmpty()
+    private fun sectionBlockStart(header: Int): Int {
+        val section = (lines[header] as Line.Section).name
+        var index = header - 1
+        while (index >= 0) {
+            val raw = (lines[index] as? Line.Other)?.raw ?: break
+            if (raw == "##### @yame $section") return index
+            // Marker-like content is ambiguous and must never be consumed.
+            if (raw.trimStart().startsWith("#####") || !(raw.trimStart().startsWith("#") || raw.trimStart().startsWith(";"))) break
+            index--
+        }
+        return header
+    }
+
+    /** The file block is anchored at byte zero and ends at a blank line or EOF. */
+    fun synchronizeFileDescription(description: String?) {
+        var end = 0
+        if (lines.firstOrNull() == Line.Other("##### @yame file")) {
+            var candidate = 1
+            while (candidate < lines.size) {
+                val raw = (lines[candidate] as? Line.Other)?.raw ?: break
+                if (!(raw.trimStart().startsWith("#") || raw.trimStart().startsWith(";")) || raw.trimStart().startsWith("#####")) break
+                candidate++
+            }
+            if (candidate == lines.size || lines[candidate] == Line.Other("")) {
+                end = candidate
+            }
+        }
+        val replacement = markedComments("file", description)
+        if (end > 0) {
+            lines.subList(0, end).clear()
+            // The separating blank belongs to the file block, not the next section.
+            if (replacement.isEmpty() && lines.firstOrNull() == Line.Other("")) lines.removeAt(0)
+        }
+        if (replacement.isNotEmpty()) {
+            lines.addAll(0, replacement + if (end == 0) listOf(Line.Other("")) else emptyList())
+        }
+    }
+
+    private fun markedComments(id: String, description: String?): List<Line.Other> =
+        if (description.isNullOrBlank()) emptyList() else
+            listOf(Line.Other("##### @yame $id")) + description.lineSequence().map {
+                Line.Other(if (it.isEmpty()) "#" else "# $it")
+            }.toList()
 
     fun remove(section: String, property: String) {
         lines.removeAll { it is Line.Property && it.section == section && it.name == property }
     }
     fun removeSection(section: String) {
+        synchronizeSectionDescription(section, null)
         val start = lines.indexOfFirst { it is Line.Section && it.name == section }
         if (start < 0) return
         val end = (start + 1 until lines.size).firstOrNull { lines[it] is Line.Section } ?: lines.size
-        lines.subList(start, end).clear()
+        // Trailing comments may introduce the following section. Only the
+        // removed header/properties and its explicitly owned block are ours.
+        for (index in end - 1 downTo start) {
+            if (lines[index] !is Line.Other) lines.removeAt(index)
+        }
     }
     fun render(): String = lines.joinToString(newline) { when (it) {
         is Line.Other -> it.raw

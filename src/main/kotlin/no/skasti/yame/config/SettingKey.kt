@@ -6,8 +6,8 @@ import kotlin.reflect.typeOf
 private val SETTING_NAME_SEGMENT = Regex("[a-z0-9][a-z0-9_-]*")
 
 /** The group ID is both the logical namespace and its canonical INI section. */
-data class SettingGroup(val id: String, val configuration: Settings? = null) {
-    constructor(configuration: Settings) : this(configuration.id, configuration)
+data class SettingGroup(val id: String, val configuration: Settings? = null, val description: String? = null) {
+    constructor(configuration: Settings, description: String? = null) : this(configuration.id, configuration, description)
 
     init {
         require(id.split('.').all { it.matches(SETTING_NAME_SEGMENT) }) {

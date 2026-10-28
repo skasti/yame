@@ -36,7 +36,6 @@ class IniConfigurationRepository internal constructor(
         val path = file(definition)
         if (Files.exists(path)) return
         val document = IniParser.parse("", path.fileName.toString())
-        document.addFileDescription(definition.description)
         val context = IniReadContext(path.fileName.toString(), document, false, definition = definition)
         val entries = definition.loadFromIni(context)
         require(entries.size == definition.allSettingKeys.size &&
@@ -44,8 +43,9 @@ class IniConfigurationRepository internal constructor(
             "${definition.id} did not load exactly its declared setting keys"
         }
         entries.forEach { it.validate() }
-        definition.saveToIni(IniWriteContext(ConfigChanges(entries), document,
-            entries.map { it.key }.toSet(), path.fileName.toString(), definition = definition))
+        val writer = IniWriteContext(ConfigChanges(entries), document,
+            entries.map { it.key }.toSet(), path.fileName.toString(), definition = definition)
+        writer.apply { definition.saveToIni(this); synchronizeDocumentation(listOf(definition)) }
         if (path.fileName.toString() == primaryName) document.put("", "version", "1")
         val bytes = IniWriter.write(document).toByteArray(Charsets.UTF_8)
         require(bytes.size <= IniParser.MAX_BYTES) { "Configuration file exceeds ${IniParser.MAX_BYTES} bytes: $path" }
@@ -79,28 +79,40 @@ class IniConfigurationRepository internal constructor(
     }
 
     /** The store holds its transaction lock across this call. */
-    override fun persist(changes: Collection<ConfigChange<*>>, snapshot: ConfigChanges) {
+    override fun persist(changes: Collection<ConfigChange<*>>, snapshot: ConfigChanges) =
+        write(changes, snapshot, emptyList())
+
+    override fun synchronizeDocumentation(definitions: Collection<Settings>) =
+        write(emptyList(), ConfigChanges(emptyList()), definitions)
+
+    private fun write(changes: Collection<ConfigChange<*>>, snapshot: ConfigChanges, documentation: Collection<Settings>) {
         val replaced = mutableListOf<Path>()
         try {
             val byOwner = changes.groupBy { change ->
                 requireNotNull(change.key.group.configuration) { "No INI owner for ${change.key.path}" }
             }
+            val requested = LinkedHashMap(byOwner)
+            documentation.forEach { requested.putIfAbsent(it, emptyList()) }
             val prepared = mutableListOf<Pair<Path, ByteArray>>()
             val pending = synchronized(owners) { LinkedHashMap(owners) }
-            byOwner.entries.groupBy { file(it.key) }.forEach { (path, definitions) ->
+            requested.entries.groupBy { file(it.key) }.forEach { (path, definitions) ->
+                if (!Files.exists(path) && definitions.all { it.value.isEmpty() }) return@forEach
                 val document = read(path)
+                val original = IniWriter.write(document)
                 if (path.fileName.toString() == primaryName && !Files.exists(path)) document.put("", "version", "1")
                 val claims = linkedMapOf<Pair<String, String>, SettingKey<*>>()
                 pending.filterKeys { it.file == path.toString() }.forEach { (location, owner) ->
                     claims[location.section to location.property] = owner
                 }
-                if (!Files.exists(path)) {
-                    document.addFileDescription(definitions.mapNotNull { it.key.description }.distinct().joinToString("\n"))
-                }
                 definitions.forEach { (definition, changed) ->
-                    definition.saveToIni(IniWriteContext(snapshot, document, changed.map { it.key }.toSet(),
-                        path.fileName.toString(), claims, definition = definition))
+                    if (changed.isNotEmpty()) {
+                        definition.saveToIni(IniWriteContext(snapshot, document, changed.map { it.key }.toSet(),
+                            path.fileName.toString(), claims, definition = definition))
+                    }
                 }
+                val knownDefinitions = (claims.values.mapNotNull { it.group.configuration } + definitions.map { it.key }).distinct()
+                IniWriteContext(snapshot, document, emptySet(), path.fileName.toString(), claims)
+                    .synchronizeDocumentation(knownDefinitions)
                 pending.keys.removeAll { it.file == path.toString() }
                 claims.forEach { (location, owner) ->
                     val id = IniPropertyId(path.toString(), location.first, location.second)
@@ -109,7 +121,7 @@ class IniConfigurationRepository internal constructor(
                 }
                 val bytes = IniWriter.write(document).toByteArray(Charsets.UTF_8)
                 require(bytes.size <= IniParser.MAX_BYTES) { "Configuration file exceeds ${IniParser.MAX_BYTES} bytes: $path" }
-                prepared += path to bytes
+                if (!Files.exists(path) || original != bytes.toString(Charsets.UTF_8)) prepared += path to bytes
             }
             // Every document and ownership mutation is validated before replacing any file.
             prepared.forEach { (path, bytes) ->

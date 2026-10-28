@@ -281,8 +281,9 @@ unbounded buffering.
   injects each configured dependency. Supplying an explicit modem config must not
   indirectly consult a process store for unrelated PPP configuration.
 
-- Setting descriptions belong in public `SettingKey.description` metadata;
-  optional `Settings.description` documents new files. The shared INI writer
-  emits comments only for new logical entries/files. Structural key descriptions
-  document their representation through the normal mapping context. Never
-  regenerate existing user comments or add templates/feature-specific writers.
+- Descriptions belong in public feature-owned Settings, SettingGroup and SettingKey
+  metadata. The shared INI writer owns only explicitly marked `##### @yame`
+  documentation blocks; preserve unmarked user comments and ambiguous markers.
+  Structural descriptions are shared at file level. Keep documentation synchronization
+  independent of value changes and notifications; never add templates or
+  feature-specific comment writers.

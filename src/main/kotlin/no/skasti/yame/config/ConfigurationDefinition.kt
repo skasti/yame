@@ -234,13 +234,9 @@ class IniReadContext internal constructor(
         }
 
         override fun set(name: String, value: String) {
-            val present = document.get(section, name) != null || document.get("", "$section.$name") != null ||
-                claims.any { (location, key) -> key === owner &&
-                    (document.get(location.first, location.second) != null ||
-                        document.get("", "${location.first}.${location.second}") != null) }
             checkClaim(claims, section, name, owner, filename)
             document.remove("", "$section.$name")
-            document.put(section, name, value, if (present) null else owner.description, owner.structural)
+            document.put(section, name, value)
         }
 
         override fun remove(name: String) {
@@ -314,5 +310,30 @@ class IniWriteContext internal constructor(
         location.first.takeIf { owner === key &&
             (document.properties(it).isNotEmpty() || document.properties("").keys.any { flat -> flat.startsWith("$it.") }) }
     }.distinct()
+    /** Uses mapping claims, including composite child names and actual dynamic sections. */
+    internal fun synchronizeDocumentation(definitions: Collection<Settings>) {
+        document.synchronizeFileDescription(definitions.sortedBy { it.id }.flatMap { definition ->
+            listOfNotNull(definition.description) + definition.allSettingKeys.filter { it.structural }.mapNotNull { it.description }
+        }.filter(String::isNotBlank).distinct().joinToString("\n"))
+        val keys = definitions.flatMap { it.allSettingKeys }
+        document.sections().forEach { section ->
+            val groups = keys.map { it.group }.distinct().filter { it.id == section }.sortedBy { it.configuration?.id }
+            val descriptions = groups.mapNotNull { it.description?.takeIf(String::isNotBlank) }.distinct().toMutableList()
+            document.properties(section).keys.forEach { property ->
+                val owner = claims[section to property]
+                if (owner != null && !owner.structural) {
+                    owner.description?.takeIf(String::isNotBlank)?.let { description ->
+                        val parts = description.lines()
+                        descriptions += "$property: ${parts.first()}" +
+                            parts.drop(1).joinToString("") { "\n  $it" }
+                    }
+                }
+            }
+            // Only sections belonging to these definitions may have their blocks synchronized.
+            if (groups.isNotEmpty() || claims.any { it.key.first == section && it.value in keys }) {
+                document.synchronizeSectionDescription(section, descriptions.joinToString("\n"))
+            }
+        }
+    }
     internal fun claims(): Map<Pair<String, String>, SettingKey<*>> = claims.toMap()
 }
