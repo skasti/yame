@@ -36,6 +36,7 @@ class IniConfigurationRepository internal constructor(
         val path = file(definition)
         if (Files.exists(path)) return
         val document = IniParser.parse("", path.fileName.toString())
+        document.addFileDescription(definition.description)
         val context = IniReadContext(path.fileName.toString(), document, false, definition = definition)
         val entries = definition.loadFromIni(context)
         require(entries.size == definition.allSettingKeys.size &&
@@ -92,6 +93,9 @@ class IniConfigurationRepository internal constructor(
                 val claims = linkedMapOf<Pair<String, String>, SettingKey<*>>()
                 pending.filterKeys { it.file == path.toString() }.forEach { (location, owner) ->
                     claims[location.section to location.property] = owner
+                }
+                if (!Files.exists(path)) {
+                    document.addFileDescription(definitions.mapNotNull { it.key.description }.distinct().joinToString("\n"))
                 }
                 definitions.forEach { (definition, changed) ->
                     definition.saveToIni(IniWriteContext(snapshot, document, changed.map { it.key }.toSet(),

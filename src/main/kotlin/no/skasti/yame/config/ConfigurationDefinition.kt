@@ -9,7 +9,7 @@ import kotlin.reflect.KClass
 import kotlin.reflect.jvm.javaField
 
 /** Feature-owned setting definitions and mappings, not the current values held by ConfigStore. */
-abstract class Settings(val id: String, val file: String? = null) {
+abstract class Settings(val id: String, val file: String? = null, val description: String? = null) {
     init {
         require(id.isNotBlank())
         require(file == null || file.matches(Regex("[A-Za-z0-9][A-Za-z0-9_-]*"))) {
@@ -102,7 +102,7 @@ abstract class Settings(val id: String, val file: String? = null) {
 }
 
 /** Use a separate file named after this definition; the repository chooses its extension. */
-abstract class SeparateSettings(id: String) : Settings(id = id, file = id)
+abstract class SeparateSettings(id: String, description: String? = null) : Settings(id = id, file = id, description = description)
 
 interface CompositeSetting<T : Any> {
     fun loadFromIni(context: IniReadContext): T
@@ -234,9 +234,13 @@ class IniReadContext internal constructor(
         }
 
         override fun set(name: String, value: String) {
+            val present = document.get(section, name) != null || document.get("", "$section.$name") != null ||
+                claims.any { (location, key) -> key === owner &&
+                    (document.get(location.first, location.second) != null ||
+                        document.get("", "${location.first}.${location.second}") != null) }
             checkClaim(claims, section, name, owner, filename)
             document.remove("", "$section.$name")
-            document.put(section, name, value)
+            document.put(section, name, value, if (present) null else owner.description, owner.structural)
         }
 
         override fun remove(name: String) {

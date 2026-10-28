@@ -280,3 +280,9 @@ unbounded buffering.
   have ordinary standalone child defaults. Application composition explicitly
   injects each configured dependency. Supplying an explicit modem config must not
   indirectly consult a process store for unrelated PPP configuration.
+
+- Setting descriptions belong in public `SettingKey.description` metadata;
+  optional `Settings.description` documents new files. The shared INI writer
+  emits comments only for new logical entries/files. Structural key descriptions
+  document their representation through the normal mapping context. Never
+  regenerate existing user comments or add templates/feature-specific writers.

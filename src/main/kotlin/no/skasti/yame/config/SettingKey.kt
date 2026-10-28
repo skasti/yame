@@ -25,6 +25,7 @@ class SettingKey<T> @PublishedApi internal constructor(
     val sensitive: Boolean,
     internal val default: () -> T,
     val structural: Boolean,
+    val description: String? = null,
 ) {
     val path: String = "${group.id}.$name"
 
@@ -46,7 +47,8 @@ inline fun <reified T> SettingKey(
     sensitive: Boolean = false,
     noinline default: () -> T = { error("No default for ${group.id}.$name") },
     structural: Boolean = false,
-): SettingKey<T> = SettingKey(name, group, typeOf<T>(), validateValue, sensitive, default, structural)
+    description: String? = null,
+): SettingKey<T> = SettingKey(name, group, typeOf<T>(), validateValue, sensitive, default, structural, description)
 
 class ConfigChange<T> internal constructor(val key: SettingKey<T>, val value: T) {
     internal fun validate() = key.validate(value)

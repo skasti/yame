@@ -11,6 +11,8 @@ class IniDocument internal constructor(
     private val newline: String,
     private val terminalNewline: Boolean,
 ) {
+    private val originalLines = lines.toList()
+
     internal sealed class Line {
         data class Section(val name: String, val raw: String) : Line()
         data class Property(val section: String, val name: String, var value: String, var raw: String) : Line()
@@ -22,7 +24,7 @@ class IniDocument internal constructor(
         .filter { it.section == section }.associateTo(linkedMapOf()) { it.name to it.value }
     fun get(section: String, property: String): String? = properties(section)[property]
 
-    fun put(section: String, property: String, value: String) {
+    fun put(section: String, property: String, value: String, description: String? = null, sectionDescription: Boolean = false) {
         require(property.isNotBlank() && !property.contains('\n') && !property.contains('\r'))
         require(!value.contains('\n') && !value.contains('\r'))
         // Java Properties uses the last declaration of a repeated root key.
@@ -33,21 +35,41 @@ class IniDocument internal constructor(
             return
         }
         val entry = Line.Property(section, property, value, renderProperty(section, property, value))
+        val comments = commentLines(description)
         if (section.isEmpty()) {
             val first = lines.indexOfFirst { it is Line.Section }
-            lines.add(if (first < 0) lines.size else first, entry)
+            val insertion = if (first < 0) lines.size else first
+            lines.addAll(insertion, withoutAdjacentDuplicate(insertion, comments) + entry)
         } else {
             val start = lines.indexOfFirst { it is Line.Section && it.name == section }
             if (start < 0) {
                 if (lines.isNotEmpty() && lines.last() !is Line.Other) lines.add(Line.Other(""))
+                if (sectionDescription) lines.addAll(withoutAdjacentDuplicate(lines.size, comments))
                 lines.add(Line.Section(section, "[$section]"))
+                if (!sectionDescription) lines.addAll(comments)
                 lines.add(entry)
             } else {
                 val next = (start + 1 until lines.size).firstOrNull { lines[it] is Line.Section } ?: lines.size
-                lines.add(next, entry)
+                lines.addAll(next, withoutAdjacentDuplicate(next, comments) + entry)
             }
         }
     }
+
+    private fun withoutAdjacentDuplicate(index: Int, comments: List<Line.Other>): List<Line.Other> =
+        if (comments.isNotEmpty() &&
+            ((index >= comments.size && lines.subList(index - comments.size, index) == comments) ||
+                originalLines.windowed(comments.size).any { it == comments })) emptyList() else comments
+
+    /** File documentation is emitted only by the repository for a missing file. */
+    fun addFileDescription(description: String?) {
+        val comments = commentLines(description)
+        if (comments.isNotEmpty()) lines.addAll(0, comments + Line.Other(""))
+    }
+
+    private fun commentLines(description: String?): List<Line.Other> =
+        description?.takeIf { it.isNotBlank() }?.lineSequence()?.map {
+            Line.Other(if (it.isEmpty()) "#" else "# $it")
+        }?.toList().orEmpty()
 
     fun remove(section: String, property: String) {
         lines.removeAll { it is Line.Property && it.section == section && it.name == property }

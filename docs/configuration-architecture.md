@@ -452,3 +452,20 @@ installed store. For example, `YameLogManager(logDirectory = path)` defaults its
 remain available for isolated tests. The installation is released on parse/load
 failure and after lifecycle cleanup, with logging and presentation stopped first.
 ToneTest owns the standalone modem and its forced tone-enabled configuration.
+
+## Configuration descriptions
+
+Feature-owned `SettingKey.description` is optional public metadata, reusable by
+configuration frontends. `Settings.description` optionally documents a logical
+file. The shared INI infrastructure emits file descriptions only when creating a
+missing file, and key descriptions only when writing a previously absent logical
+key. Composite child properties share one description; structural keys describe
+their representation before the first new section they create. Features still
+use ordinary mapping contexts and never write comments themselves.
+
+Descriptions become full-line `#` comments using the document's newline style;
+each description line, including text resembling INI syntax, is prefixed safely.
+Updating existing entries or normalizing their equivalent flat paths never adds
+or refreshes descriptions. Existing comments and unrelated formatting stay
+verbatim; repeated updates do not duplicate documentation. Metadata edits apply
+to future new entries, not to user-owned documentation already on disk.
