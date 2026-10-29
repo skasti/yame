@@ -140,7 +140,7 @@ class TuiYameObserver(
         nowNanos = System::nanoTime,
         schedule = ::scheduleFrame,
         draw = ::renderNow,
-        initialFps = ConfigStore[TuiSettings.MaxFps],
+        dispatch = { action -> work.submitRequired(kind = "TuiFrameRateChanged", action = action) },
     )
     override val fatalFailure: Throwable? get() = work.fatalFailure
     internal fun awaitIdle() = work.read { Unit }
@@ -153,7 +153,6 @@ class TuiYameObserver(
             changes[DnsSettings.Upstream]?.let { dnsUpstream = it.value.toString() }
             changes[ProxySettings.Enabled]?.let { httpProxyEnabled = it.value }
             changes[ModemSettings.Tone]?.let { toneSimulationEnabled = it.value }
-            changes[TuiSettings.MaxFps]?.let { frames.updateFrameRate(it.value) }
             LogSettings.Levels.forEach { (module, key) -> changes[key]?.let { logLevels[module] = it.value } }
             LogSettings.CaptureLimits.forEach { (kind, key) -> changes[key]?.let { captureLimits = kind.apply(captureLimits, it.value) } }
             render()
@@ -1140,11 +1139,13 @@ class TuiYameObserver(
     }
 
     override fun close() {
+        frames.close()
         configurationSubscription.close()
         work.close()
     }
 
     override fun closeBefore(deadlineNanos: Long) {
+        frames.close()
         configurationSubscription.close()
         work.closeBefore(deadlineNanos)
     }
@@ -1155,6 +1156,7 @@ class TuiYameObserver(
         try {
             if (work.fatalFailure == null && screenStarted) frames.flush()
         } finally {
+            frames.close() // Also release the subscription for worker-initiated teardown.
             closed = true
             headerTimer.shutdownNow()
             commandRegistrations.forEach(AutoCloseable::close)
