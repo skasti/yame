@@ -22,6 +22,7 @@ import sys
 import termios
 import threading
 import time
+import tempfile
 from urllib.parse import urlsplit, urlunsplit
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -254,8 +255,8 @@ def check_tui_overload(stage):
 
 
 def browser(namespace, url, label, user):
-    profile = WORK / f"chrome-{label}"
-    profile.mkdir(exist_ok=True)
+    # Keep Chrome caches, cookies and other browsing profile data out of CI artifacts.
+    profile = Path(tempfile.mkdtemp(prefix=f"yame-chrome-{label}-"))
     cmd = [
         "sudo", "-n", "ip", "netns", "exec", namespace,
         "runuser", "-u", user, "--", shutil.which("google-chrome") or shutil.which("chromium"),
@@ -280,6 +281,8 @@ def browser(namespace, url, label, user):
     except subprocess.TimeoutExpired:
         log(f"{label}: browser timeout at {url}")
         return False
+    finally:
+        shutil.rmtree(profile, ignore_errors=True)
 
 
 def main():
