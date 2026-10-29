@@ -318,6 +318,7 @@ internal class YameRuntime(
             }
             createdModem.attachOutput(opened.output)
             createdModem.attachCarrierPresent(opened::setCarrierPresent)
+            opened.onPeerDtrDropped(createdModem::hangup)
 
             var initialized = false
             var stoppedDuringInitialization = false
