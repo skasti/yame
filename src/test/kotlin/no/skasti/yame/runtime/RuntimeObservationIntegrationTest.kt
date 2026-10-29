@@ -92,7 +92,9 @@ class RuntimeObservationIntegrationTest : InstalledConfigTest() {
             broker.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "blocked"))
             assertTrue(entered.await(5, TimeUnit.SECONDS))
             broker.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "pending"))
-            YameLogManager(no.skasti.yame.logging.LoggingConfig(), root).use { logs ->
+            // Isolate domain-event rejection from the separate LogEntry stream:
+            // capture/file diagnostics must still run when the broker rejects the domain event.
+            YameLogManager(no.skasti.yame.logging.LoggingConfig(), root, publishEntry = { }).use { logs ->
                 val session = PppSession(sendFrame = {}, logger = {}, diagnosticSink = logs::eventSink)
                 try {
                     assertFailsWith<QueueFullException> { session.receive(PppFrame(0x8057, byteArrayOf(1, 2, 3))) }
