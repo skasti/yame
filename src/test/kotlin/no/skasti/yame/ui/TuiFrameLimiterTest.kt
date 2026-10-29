@@ -1,5 +1,7 @@
 package no.skasti.yame.ui
 
+import no.skasti.yame.config.ConfigStore
+
 import kotlin.test.*
 
 class TuiFrameLimiterTest {
@@ -8,6 +10,7 @@ class TuiFrameLimiterTest {
         var renders = 0
         val deadlines = mutableListOf<Pair<Long, Long>>()
         val limiter = TuiFrameLimiter(
+            configStore = ConfigStore(),
             nowNanos = { now },
             schedule = { delay, generation -> deadlines += now + delay to generation },
             draw = { renders++ },
@@ -47,6 +50,7 @@ class TuiFrameLimiterTest {
         val frames = mutableListOf<Int>()
         val scheduled = mutableListOf<Pair<Long, Long>>()
         val limiter = TuiFrameLimiter(
+            configStore = ConfigStore(),
             nowNanos = { now },
             schedule = { delay, generation -> scheduled += delay to generation },
             draw = { frames += state },
@@ -78,10 +82,10 @@ class TuiFrameLimiterTest {
             var renders = 0
             val deadlines = mutableListOf<Pair<Long, Long>>()
             val limiter = TuiFrameLimiter(
+                configStore = ConfigStore(listOf(TuiSettings.MaxFps to fps)),
                 nowNanos = { now },
                 schedule = { delay, generation -> deadlines += now + delay to generation },
                 draw = { renders++ },
-                initialFps = fps,
             )
             val interval = (1_000_000_000L + fps - 1) / fps
             limiter.request()
@@ -97,10 +101,12 @@ class TuiFrameLimiterTest {
     }
 
     @Test fun `changing FPS reissues a timer and ignores callbacks from the old rate`() {
+        val configStore = ConfigStore()
         var now = 0L
         var renders = 0
         val scheduled = mutableListOf<Pair<Long, Long>>()
         val limiter = TuiFrameLimiter(
+            configStore = configStore,
             nowNanos = { now },
             schedule = { delay, generation -> scheduled += now + delay to generation },
             draw = { renders++ },
@@ -110,7 +116,7 @@ class TuiFrameLimiterTest {
         val old = scheduled.last()
         assertEquals(16_666_667L, old.first)
 
-        limiter.updateFrameRate(120)
+        configStore.set(TuiSettings.MaxFps to 120)
         val faster = scheduled.last()
         assertEquals(8_333_334L, faster.first)
         assertNotEquals(old.second, faster.second)
@@ -120,7 +126,7 @@ class TuiFrameLimiterTest {
         limiter.onDeadline(faster.second)
         assertEquals(2, renders)
         // Configuration changes while idle affect the next requested frame.
-        limiter.updateFrameRate(15)
+        configStore.set(TuiSettings.MaxFps to 15)
         limiter.request()
         val slower = scheduled.last()
         assertEquals(now + 66_666_667L, slower.first)
@@ -132,23 +138,56 @@ class TuiFrameLimiterTest {
     }
 
     @Test fun `invalid rates are rejected without changing active interval`() {
+        val configStore = ConfigStore()
         var now = 0L
         val deadlines = mutableListOf<Long>()
         val limiter = TuiFrameLimiter(
+            configStore = configStore,
             nowNanos = { now },
             schedule = { delay, _ -> deadlines += delay },
             draw = {},
         )
-        assertFailsWith<IllegalArgumentException> { limiter.updateFrameRate(0) }
-        assertFailsWith<IllegalArgumentException> { limiter.updateFrameRate(144) }
+        assertFailsWith<IllegalArgumentException> { configStore.set(TuiSettings.MaxFps to 0) }
+        assertFailsWith<IllegalArgumentException> { configStore.set(TuiSettings.MaxFps to 144) }
         limiter.request()
         limiter.request()
         assertEquals(listOf(16_666_667L), deadlines)
     }
 
+    @Test fun `configuration callbacks use worker dispatch and unsubscribe on close`() {
+        val configStore = ConfigStore()
+        val actions = ArrayDeque<() -> Unit>()
+        val scheduled = mutableListOf<Long>()
+        var now = 0L
+        val limiter = TuiFrameLimiter(
+            nowNanos = { now },
+            schedule = { delay, _ -> scheduled += delay },
+            draw = {},
+            configStore = configStore,
+            dispatch = { action -> actions.addLast(action) },
+        )
+        // Initial=true supplies the current ConfigStore rate through the same
+        // dispatcher; configuration must not mutate timer state on its caller.
+        assertEquals(1, actions.size)
+        actions.removeFirst().invoke()
+        limiter.request()
+        limiter.request()
+        assertEquals(listOf(16_666_667L), scheduled)
+        configStore.set(TuiSettings.MaxFps to 120)
+        assertEquals(1, actions.size)
+        assertEquals(1, scheduled.size)
+        actions.removeFirst().invoke()
+        assertEquals(listOf(16_666_667L, 8_333_334L), scheduled)
+
+        limiter.close()
+        configStore.set(TuiSettings.MaxFps to 15)
+        assertTrue(actions.isEmpty(), "closed limiter must release its subscription")
+    }
+
     @Test fun `render failures propagate and are not silently dropped`() {
         val problem = IllegalStateException("terminal failed")
         val limiter = TuiFrameLimiter(
+            configStore = ConfigStore(),
             nowNanos = { 0L },
             schedule = { _, _ -> fail("unexpected schedule") },
             draw = { throw problem },
