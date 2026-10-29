@@ -1,5 +1,7 @@
 package no.skasti.yame.ui
 
+import no.skasti.yame.config.ConfigStore
+
 /**
  * Coalesces presentation redraws without coalescing or dropping observations.
  * All methods are invoked on the TUI worker; the scheduler posts [onDeadline]
@@ -9,16 +11,29 @@ internal class TuiFrameLimiter(
     private val nowNanos: () -> Long,
     private val schedule: (delayNanos: Long, generation: Long) -> Unit,
     private val draw: () -> Unit,
-    initialFps: Int = 60,
-) {
+    private val configStore: ConfigStore = ConfigStore.current,
+    private val dispatch: (() -> Unit) -> Unit = { action -> action() },
+    initialFps: Int = configStore[TuiSettings.MaxFps],
+) : AutoCloseable {
     private var intervalNanos = frameIntervalNanos(initialFps)
     private var dirty = false
     private var scheduledGeneration: Long? = null
     private var nextGeneration = 0L
     private var lastDrawNanos: Long? = null
+    @Volatile private var closed = false
 
-    /** Apply configuration changes without restarting the presentation. */
-    fun updateFrameRate(fps: Int) {
+    // Own both the initial rate and subsequent updates. The caller only provides
+    // its execution context so timer state remains confined to the TUI worker.
+    // Subscribing with initial=true closes the read/subscribe race.
+    private val configurationSubscription =
+        configStore.onChange[TuiSettings.Group].subscribe(initial = true) { changes ->
+            changes[TuiSettings.MaxFps]?.let { change ->
+                dispatch { if (!closed) updateFrameRate(change.value) }
+            }
+        }
+
+    /** Apply configuration changes without restarting the presentation. Worker-only. */
+    private fun updateFrameRate(fps: Int) {
         val interval = frameIntervalNanos(fps)
         if (interval == intervalNanos) return
         intervalNanos = interval
@@ -28,6 +43,11 @@ internal class TuiFrameLimiter(
             scheduledGeneration = null
             scheduleIfNeeded()
         }
+    }
+
+    override fun close() {
+        closed = true
+        configurationSubscription.close()
     }
 
     fun request() {
