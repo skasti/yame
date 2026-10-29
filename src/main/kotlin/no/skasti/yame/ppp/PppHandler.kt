@@ -1,5 +1,6 @@
 package no.skasti.yame.ppp
 
+import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.observer.YameEvent
 import no.skasti.yame.ppp.dns.PppDnsConfig
 import no.skasti.yame.ppp.proxy.NavigationResourceRegistry
@@ -7,6 +8,7 @@ import no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig
 import no.skasti.yame.ppp.proxy.SystemRoutingTcpProxy
 import no.skasti.yame.ppp.proxy.YameRegistries
 import no.skasti.yame.ppp.session.PppSession
+import no.skasti.yame.ppp.lcp.LcpPacket
 import no.skasti.yame.ppp.session.PppSessionIdentity
 import java.io.Closeable
 import java.io.OutputStream
@@ -15,12 +17,16 @@ import kotlin.time.Duration.Companion.milliseconds
 interface PppHandler : Closeable {
     fun attachOutput(output: OutputStream)
     fun connected()
-    fun receive(bytes: ByteArray)
+    /** Returns true after acknowledging a valid peer LCP termination. */
+    fun receive(bytes: ByteArray): Boolean
+    fun disconnected()
 
     override fun close() = Unit
 }
 
 internal class RetroPppHandler(
+    @Volatile var disconnectOnTerminate: Boolean = ConfigStore[PppSettings.DisconnectOnTerminate],
+    subscribeToConfiguration: Boolean = true,
     private val connectionId: Long = 0,
     private val logger: (String) -> Unit = ::println,
     private val dnsLogger: (String) -> Unit = logger,
@@ -34,10 +40,17 @@ internal class RetroPppHandler(
     internal val resourceGraphs: NavigationResourceRegistry =
         YameRegistries.navigationResources(httpCompatibilityConfig),
 ) : PppHandler {
+    private val configurationSubscription = if (subscribeToConfiguration) {
+        ConfigStore.onChange[PppSettings.Group].subscribe { changes ->
+            changes[PppSettings.DisconnectOnTerminate]?.let { disconnectOnTerminate = it.value }
+        }
+    } else null
+
     private var output: OutputStream? = null
     private var encoder = PppEncoder()
     private var framer = createFramer()
     private var session: PppSession? = null
+    private var peerTerminated = false
     private var addressResolver = createAddressResolver()
     private var frameDelay = 75.milliseconds
 
@@ -50,7 +63,8 @@ internal class RetroPppHandler(
     override fun connected() {
         if (output == null) return
 
-        session?.close()
+        disconnected()
+        peerTerminated = false
         encoder = PppEncoder()
         framer = createFramer()
         addressResolver = createAddressResolver()
@@ -78,8 +92,9 @@ internal class RetroPppHandler(
         )
     }
 
-    override fun receive(bytes: ByteArray) {
+    override fun receive(bytes: ByteArray): Boolean {
         framer.receive(bytes)
+        return peerTerminated
     }
 
     private fun createAddressResolver(): PppAddressResolver =
@@ -98,6 +113,8 @@ internal class RetroPppHandler(
         )
 
     private fun receiveFrame(frame: PppFrame) {
+        // Ignore trailing frames in this batch once the call has ended.
+        if (peerTerminated) return
         val hex = frame.payload.joinToString(" ") { "%02X".format(it.toInt() and 0xff) }
         logger(
             "PPP <= protocol=${frame.protocolName()} (0x%04X), payload=${frame.payload.size} bytes: $hex"
@@ -112,6 +129,13 @@ internal class RetroPppHandler(
 
         session.receive(frame)
         syncNegotiatedOptions(session)
+        if (disconnectOnTerminate && frame.protocol == PppSession.LCP_PROTOCOL &&
+            LcpPacket.parse(frame.payload)?.code == LcpPacket.TERMINATE_REQUEST
+        ) {
+            // Session processing, including writing/flushing Terminate-Ack, is complete.
+            peerTerminated = true
+            return
+        }
 
         // CONNECT only means that the modem has entered data mode. Some clients,
         // including Trumpet Winsock, do not enable PPP immediately. Wait until
@@ -141,7 +165,14 @@ internal class RetroPppHandler(
         framer.receiveAccm = session.receiveAccm
     }
 
+    override fun disconnected() {
+        val active = session
+        session = null
+        active?.close()
+    }
+
     override fun close() {
-        try { session?.close() } finally { session = null }
+        configurationSubscription?.close()
+        disconnected()
     }
 }

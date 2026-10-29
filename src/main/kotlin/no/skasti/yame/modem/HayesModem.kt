@@ -23,6 +23,8 @@ class HayesModem(
     private val proxyLogger: (String) -> Unit = pppLogger,
     private val diagnosticSink: (YameEvent) -> Unit = {},
     private val pppHandler: PppHandler = RetroPppHandler(
+        disconnectOnTerminate = true,
+        subscribeToConfiguration = false,
         logger = pppLogger,
         dnsLogger = dnsLogger,
         transferLogger = transferLogger,
@@ -214,15 +216,37 @@ class HayesModem(
             ConnectedPhase.LOGIN_PASSWORD,
             ConnectedPhase.LOGIN_COMMAND -> receiveLogin(bytes)
 
-            ConnectedPhase.PPP -> pppHandler.receive(bytes)
+            ConnectedPhase.PPP -> receivePpp(bytes)
         }
+    }
+
+    private fun receivePpp(bytes: ByteArray) {
+        if (pppHandler.receive(bytes)) hangup()
+    }
+
+    fun hangup() {
+        if (state != State.CONNECTED) return
+        state = State.COMMAND
+        connectedPhase = ConnectedPhase.PPP
+        pppStarted = false
+        commandBuffer.clear()
+        commandParseState = CommandParseState.SEEKING_AT
+        loginBuffer.clear()
+        pendingLoginUsername = null
+        setCarrierPresent(false)
+        try {
+            pppHandler.disconnected()
+        } catch (e: Exception) {
+            logger("PPP !! Cleanup after hangup failed: ${e.javaClass.simpleName}: ${e.message}")
+        }
+        respond("NO CARRIER")
     }
 
     private fun receiveLogin(bytes: ByteArray) {
         var index = 0
         while (index < bytes.size) {
             if (connectedPhase == ConnectedPhase.PPP) {
-                pppHandler.receive(bytes.copyOfRange(index, bytes.size))
+                receivePpp(bytes.copyOfRange(index, bytes.size))
                 return
             }
 

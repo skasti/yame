@@ -132,7 +132,7 @@ class TuiYameObserver(
     var stopRequested: Boolean = false
         private set
 
-    private val commandRegistrations = registerCommands() + registerTransformerCommands(paletteRegistry)
+    private val commandRegistrations = registerCommands() + registerTransformerCommands(paletteRegistry) + registerPppCommands(paletteRegistry)
     private val work = TuiWorkQueue(teardown = ::teardown)
     override val fatalFailure: Throwable? get() = work.fatalFailure
     internal fun awaitIdle() = work.read { Unit }

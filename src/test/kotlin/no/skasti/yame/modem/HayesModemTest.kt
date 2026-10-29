@@ -19,6 +19,55 @@ import kotlin.time.Duration.Companion.seconds
 
 class HayesModemTest {
     @Test
+    fun `hangup does not suppress serial output failure`() {
+        var failWrites = false
+        val output = object : OutputStream() {
+            override fun write(value: Int) {
+                if (failWrites) throw java.io.IOException("serial write failed")
+            }
+        }
+        val modem = HayesModem(output, 115200,
+            config = HayesModemConfig(toneSimulationEnabled = false),
+            logger = {}, pppHandler = FakePppHandler(terminated = true))
+        try {
+            modem.receive("ATD123\r".toByteArray())
+            failWrites = true
+            val failure = assertFailsWith<java.io.IOException> { modem.receive(byteArrayOf(1)) }
+            assertEquals("serial write failed", failure.message)
+        } finally {
+            modem.close()
+        }
+    }
+
+    @Test
+    fun `PPP cleanup failure does not prevent AT commands or redial`() {
+        val output = ByteArrayOutputStream()
+        val logs = mutableListOf<String>()
+        val handler = FakePppHandler(
+            onDisconnected = { throw java.io.IOException("cleanup failed") },
+            terminated = true,
+        )
+        val modem = HayesModem(output, 115200,
+            config = HayesModemConfig(toneSimulationEnabled = false),
+            logger = logs::add, pppHandler = handler)
+        try {
+            modem.receive("ATE0\rATD123\r".toByteArray())
+            output.reset()
+            modem.receive(byteArrayOf(1))
+            assertEquals(HayesModem.State.COMMAND, modem.state)
+            assertEquals("\r\nNO CARRIER\r\n", output.toString())
+            assertTrue(logs.any { it.contains("IOException: cleanup failed") })
+            output.reset()
+            modem.receive("AT\rATD123\r".toByteArray())
+            assertEquals("\r\nOK\r\n\r\nCONNECT 115200\r\n", output.toString())
+            assertEquals(HayesModem.State.CONNECTED, modem.state)
+            assertEquals(2, handler.connectedCalls)
+        } finally {
+            modem.close()
+        }
+    }
+
+    @Test
     fun `AT returns OK`() {
         val output = ByteArrayOutputStream()
         val modem = HayesModem(output, 115200, config = HayesModemConfig(), logger = {})
@@ -683,6 +732,8 @@ private class FakeTonePlayer(
 
 private class FakePppHandler(
     private val onConnected: () -> Unit = {},
+    private val onDisconnected: () -> Unit = {},
+    private val terminated: Boolean = false,
 ) : PppHandler {
     var attachedOutput: OutputStream? = null
         private set
@@ -704,9 +755,12 @@ private class FakePppHandler(
         onConnected()
     }
 
-    override fun receive(bytes: ByteArray) {
+    override fun receive(bytes: ByteArray): Boolean {
         received += bytes
+        return terminated
     }
+
+    override fun disconnected() = onDisconnected()
 
     override fun close() {
         closed = true

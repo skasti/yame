@@ -264,6 +264,13 @@ switches do not rewrite embedded HTML templates. Unterminated tags or raw-text
 elements retain the remaining content unchanged. Attribute cleanup preserves
 IDs used by fragment links and form associations.
 
+Use `/ppp-disconnect-on-terminate on` or `/ppp-disconnect-on-terminate off`
+to control whether an acknowledged peer PPP termination drops modem carrier.
+The command palette also offers nested `on` and `off` choices with the current
+value marked. The default is `on`; changes are saved as
+`[ppp] disconnect-on-terminate` and apply immediately to the active PPP handler.
+Changing the setting itself does not hang up or reconnect the serial connection.
+
 Open `/transformers` in the command palette to enable or disable the four HTML
 cleanup stages. Within that palette, type `/style-remover off` or select
 `/style-remover` and then `off`. A full path such as
