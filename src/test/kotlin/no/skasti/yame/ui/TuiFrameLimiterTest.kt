@@ -142,7 +142,6 @@ class TuiFrameLimiterTest : InstalledConfigTest() {
 
     @Test fun `invalid rates are rejected without changing active interval`() {
         val store = installedStore()
-        val configStore = ConfigStore()
         var now = 0L
         val deadlines = mutableListOf<Long>()
         val limiter = TuiFrameLimiter(
@@ -150,8 +149,8 @@ class TuiFrameLimiterTest : InstalledConfigTest() {
             schedule = { delay, _ -> deadlines += delay },
             draw = {},
         )
-        assertFailsWith<IllegalArgumentException> { configStore.set(TuiSettings.MaxFps to 0) }
-        assertFailsWith<IllegalArgumentException> { configStore.set(TuiSettings.MaxFps to 144) }
+        assertFailsWith<IllegalArgumentException> { store.set(TuiSettings.MaxFps to 0) }
+        assertFailsWith<IllegalArgumentException> { store.set(TuiSettings.MaxFps to 144) }
         limiter.request()
         limiter.request()
         assertEquals(listOf(16_666_667L), deadlines)
@@ -159,7 +158,6 @@ class TuiFrameLimiterTest : InstalledConfigTest() {
 
     @Test fun `configuration callbacks use worker dispatch and unsubscribe on close`() {
         val store = installedStore()
-        val configStore = ConfigStore()
         val actions = ArrayDeque<() -> Unit>()
         val scheduled = mutableListOf<Long>()
         var now = 0L
