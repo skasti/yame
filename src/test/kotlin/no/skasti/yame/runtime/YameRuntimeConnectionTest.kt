@@ -50,7 +50,7 @@ class YameRuntimeConnectionTest : InstalledConfigTest() {
     private lateinit var subscription: AutoCloseable
 
     @BeforeTest fun setUpEvents() {
-        broker = EventBroker()
+        broker = EventBroker(initialCapacity = 4096, initialPublishTimeout = java.time.Duration.ofMillis(10), initialMaxSubscribers = 64)
         installation = YameEvents.install(broker)
         subscription = YameEvents.subscribe("runtime-resource-test") { resourceEvents += it }
     }
