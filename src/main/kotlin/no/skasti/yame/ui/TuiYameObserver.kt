@@ -1314,11 +1314,15 @@ internal enum class DashboardDetailPanel(val title: String) {
 private const val WIDE_DASHBOARD_THRESHOLD = 149
 private const val MIN_QUEUE_BAR_HEIGHT = 30
 
-/** Queue occupancy excludes the currently executing event or work slot. */
+/**
+ * Queue occupancy excludes the currently executing event or work slot.
+ * A live capacity reduction may temporarily leave queued > capacity;
+ * retain the true count while the existing work drains.
+ */
 internal data class QueueOccupancy(val queued: Int, val capacity: Int) {
     init {
         require(capacity > 0)
-        require(queued in 0..capacity)
+        require(queued >= 0)
     }
 }
 
