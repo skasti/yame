@@ -330,7 +330,16 @@ Expanded host with known resource paths:
 
 ![YAME TUI with expanded proxy host](docs/assets/tui-proxy-expanded.svg)
 
-Useful palette commands include `/port`, `/baud`, `/flow-control`, `/dns-upstream`, `/http-proxy`, `/tone`, `/login`, `/reconnect`, `/disconnect`, `/refresh-ports`, `/clear-log`, and `/quit`. Choose `on` or `off` after `/tone`, or type `/tone on` or `/tone off` directly.
+Useful palette commands include `/port`, `/baud`, `/flow-control`, `/dns-upstream`, `/http-proxy`, `/fps`, `/tone`, `/login`, `/reconnect`, `/disconnect`, `/clear-log`, and `/quit`. Choose `on` or `off` after `/tone`, or type `/tone on` or `/tone off` directly.
+
+The TUI limits terminal redraws to **60 FPS by default**, with choices of **15, 30, 60, or 120 FPS**. Open `/fps` and select a rate, or enter `/fps/15`, `/fps/30`, `/fps/60`, or `/fps/120` directly. The current rate is marked `current`. Changes take effect without restarting or reconnecting and are saved in `yame.ini`:
+
+```ini
+[tui]
+max-fps=30
+```
+
+This setting caps screen **painting**, not YAME's event processing. Actual FPS may be lower if the terminal is slow; resource and networking events are still processed in order.
 
 Set or replace the serial terminal login from the TUI with:
 
