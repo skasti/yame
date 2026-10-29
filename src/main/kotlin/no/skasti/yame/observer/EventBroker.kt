@@ -54,15 +54,15 @@ class EventBroker(
     // Explicit constructor values are initial values; subsequent ConfigStore
     // changes always reach the owning broker. Standalone tests with no installed
     // process store can still provide explicit values.
-    private val settingsSubscription = runCatching { ConfigStore.current }.getOrNull()?.let { store ->
+    private val settingsSubscription = runCatching { ConfigStore.onChange[EventBrokerSettings.Group] }.getOrNull()?.let { events ->
         // The initial notification closes the gap between these reads and
         // subscription registration. Ignore unchanged initial values so an
         // explicitly supplied constructor override is not silently replaced.
-        val observedCapacity = store[EventBrokerSettings.QueueCapacity]
-        val observedTimeout = store[EventBrokerSettings.PublishTimeoutMillis]
-        val observedSubscribers = store[EventBrokerSettings.MaxSubscribers]
+        val observedCapacity = ConfigStore[EventBrokerSettings.QueueCapacity]
+        val observedTimeout = ConfigStore[EventBrokerSettings.PublishTimeoutMillis]
+        val observedSubscribers = ConfigStore[EventBrokerSettings.MaxSubscribers]
         var firstNotification = true
-        store.onChange[EventBrokerSettings.Group].subscribe(initial = true) { changes ->
+        events.subscribe(initial = true) { changes ->
             lock.withLock {
                 val initial = firstNotification
                 firstNotification = false
