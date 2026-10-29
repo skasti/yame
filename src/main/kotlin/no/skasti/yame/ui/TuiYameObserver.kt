@@ -138,7 +138,7 @@ class TuiYameObserver(
     internal fun awaitIdle() = work.read { Unit }
 
     private val configurationSubscription = ConfigStore.onChange.subscribe(initial = true) { changes ->
-        work.submitRequired {
+        work.submitRequired(kind = "ConfigChanged") {
             changes[SerialSettings.Port]?.let { portName = it.value }
             changes[SerialSettings.Baud]?.let { baud = it.value }
             changes[SerialSettings.FlowControl]?.let { flowControl = it.value }
@@ -163,7 +163,7 @@ class TuiYameObserver(
         commandPalette?.let { it.copy(options = it.options.toList()) }
     }
 
-    internal fun handleKey(key: String) { work.submitRequired { applyKey(key) } }
+    internal fun handleKey(key: String) { work.submitRequired(kind = "KeyboardInput") { applyKey(key) } }
 
     private fun applyKey(key: String) {
         try {
@@ -185,14 +185,14 @@ class TuiYameObserver(
         }
     }
 
-    fun start() { work.submitRequired { startScreen() } }
+    fun start() { work.submitRequired(kind = "StartScreen") { startScreen() } }
 
     private fun startScreen() {
         if (closed || screenStarted) return
         screenStarted = true
         headerStartedNanos = System.nanoTime()
         headerTimer.scheduleAtFixedRate(
-            { work.submitRequired { render() } }, 5, 5, java.util.concurrent.TimeUnit.SECONDS,
+            { work.submitRequired(kind = "HeaderRefresh") { render() } }, 5, 5, java.util.concurrent.TimeUnit.SECONDS,
         )
         enterScreen()
         render()
@@ -227,7 +227,7 @@ class TuiYameObserver(
     internal fun updateAvailablePorts(ports: List<SerialPortDescriptor>) {
         if (!work.isWorker) {
             val snapshot = ports.toList()
-            work.submitRequired { updateAvailablePorts(snapshot) }
+            work.submitRequired(kind = "PortUpdate") { updateAvailablePorts(snapshot) }
             return
         }
         val previousPalette = commandPalette
@@ -262,7 +262,7 @@ class TuiYameObserver(
     }
 
     fun onLog(message: String) {
-        if (!work.isWorker) { work.submitRequired { onLog(message) }; return }
+        if (!work.isWorker) { work.submitRequired(kind = "DiagnosticLog") { onLog(message) }; return }
         appendLog(message)
         render()
     }
@@ -280,7 +280,7 @@ class TuiYameObserver(
 
     fun onEvent(event: YameEvent) {
         // Production events already own immutable payloads at the publication boundary.
-        work.submitRequired { processEvent(event) }
+        work.submitRequired(kind = event.javaClass.simpleName) { processEvent(event) }
     }
 
     private fun processEvent(event: YameEvent) {
