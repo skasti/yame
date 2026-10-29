@@ -1,6 +1,8 @@
 package no.skasti.yame.lifecycle
 
-import no.skasti.yame.logging.DiagnosticMessage
+import no.skasti.yame.logging.LogEntry
+import no.skasti.yame.logging.YameLogModule
+import no.skasti.yame.logging.YameLogLevel
 import no.skasti.yame.observer.*
 import java.time.Duration
 import java.util.concurrent.CopyOnWriteArrayList
@@ -29,7 +31,7 @@ class ApplicationEventLifecycleTest {
             queue.submit { entered.countDown(); release.await() }
             assertTrue(entered.await(2, TimeUnit.SECONDS))
             queue.submit {}
-            broker.publish(DiagnosticMessage("interrupted"))
+            broker.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "interrupted"))
             assertEquals(BrokerWaitResult.COMPLETED, broker.drain().await(Duration.ofSeconds(2)))
             assertTrue(restored.get())
             assertIs<InterruptedException>(queue.fatalFailure)
@@ -58,7 +60,7 @@ class ApplicationEventLifecycleTest {
             queue.submit { entered.countDown(); release.await() }
             assertTrue(entered.await(2, TimeUnit.SECONDS))
             queue.submit {}
-            broker.publish(DiagnosticMessage("overflow"))
+            broker.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "overflow"))
             assertEquals(1, exits.poll(2, TimeUnit.SECONDS))
             assertNotNull(queue.fatalFailure)
             assertNull(broker.status.failure)
@@ -112,9 +114,9 @@ class ApplicationEventLifecycleTest {
         val order = CopyOnWriteArrayList<String>()
         val owner = ApplicationEventLifecycle(broker, sealFacade = { order += "seal" },
             report = { order += it }, terminate = { order += "exit-$it" })
-        val subscription = broker.subscribe("console") { order += (it as DiagnosticMessage).message }
+        val subscription = broker.subscribe("console") { order += (it as LogEntry).message }
         owner.consumer(AutoCloseable { subscription.close(); order += "consumer" })
-        owner.producer(AutoCloseable { order += "stop"; broker.publish(DiagnosticMessage("final")) })
+        owner.producer(AutoCloseable { order += "stop"; broker.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "final")) })
         owner.close()
         assertEquals(listOf("stop", "final", "consumer", "seal"), order.toList())
         assertTrue(broker.status.terminated)
@@ -133,14 +135,14 @@ class ApplicationEventLifecycleTest {
         broker.subscribe("blocked-tui") { entered.countDown(); check(release.await(5, TimeUnit.SECONDS)) }
         owner.producer(AutoCloseable { stopped.countDown() })
         try {
-            broker.publish(DiagnosticMessage("render"))
+            broker.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "render"))
             assertTrue(entered.await(5, TimeUnit.SECONDS))
             // Publication on a different thread returns even though rendering has not returned.
-            val publisher = Thread { broker.publish(DiagnosticMessage("pending")) }.apply { start() }
+            val publisher = Thread { broker.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "pending")) }.apply { start() }
             publisher.join(1_000)
             assertFalse(publisher.isAlive)
             assertEquals(1, broker.status.queuedEvents)
-            assertFailsWith<QueueFullException> { broker.publish(DiagnosticMessage("overflow")) }
+            assertFailsWith<QueueFullException> { broker.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "overflow")) }
             assertTrue(stopped.await(2, TimeUnit.SECONDS))
             assertEquals(1, exits.poll(2, TimeUnit.SECONDS))
             assertTrue(reports.any { it.contains("fatal event broker failure") })
@@ -157,8 +159,8 @@ class ApplicationEventLifecycleTest {
         val seen = CopyOnWriteArrayList<String>()
         val owner = ApplicationEventLifecycle(broker, sealFacade = {}, terminate = { fail("unexpected exit $it") })
         broker.subscribe("failed-console") { error("broken console") }
-        broker.subscribe("healthy") { seen += (it as DiagnosticMessage).message }
-        broker.publish(DiagnosticMessage("message"))
+        broker.subscribe("healthy") { seen += (it as LogEntry).message }
+        broker.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "message"))
         owner.close()
         assertEquals(listOf("message"), seen.toList())
         assertEquals(1, broker.status.subscriberFailures)
@@ -354,10 +356,10 @@ class ApplicationEventLifecycleTest {
             report = { release.await(5, TimeUnit.SECONDS) }, terminate = { exits.offer(it) })
         broker.subscribe("blocked") { entered.countDown(); release.await(5, TimeUnit.SECONDS) }
         try {
-            broker.publish(DiagnosticMessage("first"))
+            broker.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "first"))
             assertTrue(entered.await(5, TimeUnit.SECONDS))
-            broker.publish(DiagnosticMessage("pending"))
-            runCatching { broker.publish(DiagnosticMessage("overflow")) }
+            broker.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "pending"))
+            runCatching { broker.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "overflow")) }
             assertEquals(1, exits.poll(2, TimeUnit.SECONDS))
         } finally {
             release.countDown()
@@ -391,10 +393,10 @@ object FatalBrokerProcess {
         ApplicationEventLifecycle(broker, timeout = Duration.ofMillis(200), sealFacade = {})
         val entered = CountDownLatch(1)
         broker.subscribe("permanently-blocked") { entered.countDown(); CountDownLatch(1).await() }
-        broker.publish(DiagnosticMessage("first"))
+        broker.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "first"))
         check(entered.await(5, TimeUnit.SECONDS))
-        broker.publish(DiagnosticMessage("pending"))
-        runCatching { broker.publish(DiagnosticMessage("overflow")) }
+        broker.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "pending"))
+        runCatching { broker.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "overflow")) }
         CountDownLatch(1).await()
     }
 }
