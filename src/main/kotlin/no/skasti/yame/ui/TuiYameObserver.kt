@@ -401,7 +401,8 @@ class TuiYameObserver(
 
             is TransferStarted -> {
                 val key = transferKey(event, event.flowId, event.transferIdentity)
-                if (key in retiredTransfers || key in transfers) return
+                if (key in retiredTransfers || (event.transferIdentity != null && key in transfers)) return
+                transfers.remove(key)
                 transfers[key] = DashboardTransfer(
                     flowId = event.flowId,
                     destination = event.destination,
@@ -487,6 +488,16 @@ class TuiYameObserver(
 
     private fun deferTransfer(flowId: String, event: YameEvent) {
         if (flowId in retiredTransfers) return
+        if (pendingTransferCount >= 128) {
+            // Optional metadata must not displace required byte/state observations.
+            val entry = pendingTransfers.entries.firstOrNull { (_, events) -> events.any { it is TransferResourceChanged } }
+            val metadata = entry?.value?.firstOrNull { it is TransferResourceChanged }
+            if (entry != null && metadata != null) {
+                entry.value.remove(metadata)
+                pendingTransferCount--
+                if (entry.value.isEmpty()) pendingTransfers.remove(entry.key)
+            }
+        }
         check(pendingTransferCount < 128) { "TUI transfer dependency buffer exhausted" }
         pendingTransfers.getOrPut(flowId) { mutableListOf() }.add(event)
         pendingTransferCount++
@@ -2044,14 +2055,15 @@ internal object YameDashboardRenderer {
 
     private fun clipTransferName(value: String, width: Int): String {
         val safe = sanitizeTerminalText(value)
-        val points = safe.codePoints().toArray()
-        if (points.size <= width) return safe
+        if (safe.length <= width) return safe
         if (width <= 0) return ""
         if (width == 1) return "…"
         val extension = safe.substringAfterLast('.', "").takeIf { it.length in 1..8 }
             ?.let { ".$it" }.orEmpty()
         val suffix = if (extension.length + 2 <= width) extension else ""
-        return String(points, 0, width - suffix.length - 1) + "…" + suffix
+        var end = width - suffix.length - 1
+        if (end > 0 && safe[end - 1].isHighSurrogate() && safe[end].isLowSurrogate()) end--
+        return safe.substring(0, end) + "…" + suffix
     }
 
     private fun clip(

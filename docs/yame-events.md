@@ -333,7 +333,8 @@ metadata and no replay/bootstrap for late subscribers.
   `observationFailure`, and is also recorded by broker subscriber status.
   Optional HTTP metadata is coalesced to one snapshot per unknown transfer in
   that same buffer; excess unknown metadata is discarded rather than failing
-  the projection. It never creates a row without a transfer start.
+  the projection, and required byte/state observations can evict pending optional
+  metadata to make room. Metadata never creates a row without a transfer start.
 - `RefreshPorts` is `FunctionKey<Unit, List<SerialPortDescriptor>>`. It returns an
   unmodifiable snapshot immediately. The existing port palette uses that result,
   without a request/result event protocol. Startup and the port monitor independently

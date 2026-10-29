@@ -108,6 +108,18 @@ class RuntimeObservationProjectionTest : InstalledConfigTest() {
         }
     }
 
+    @Test fun `unknown metadata remains bounded and yields buffer capacity to required observations`() {
+        observer().use { ui ->
+            val session = PppSessionIdentity(1, 1)
+            repeat(300) { ui.onEvent(metadata(TransferIdentity.create(session, 0), "unknown.exe")) }
+            val identity = TransferIdentity.create(session, 0)
+            ui.onEvent(TransferBytes("known", TransferDirection.TO_PEER, 99, session, transferIdentity = identity))
+            ui.onEvent(TransferStarted("known", "host", "test", TransferKind.TCP, session, transferIdentity = identity))
+            assertEquals(99, ui.transferProjectionSnapshot().single().toPeerBytes)
+            assertNull(ui.observationFailure)
+        }
+    }
+
     @Test fun `eviction prefers closed rows and late metadata never resurrects removed transfers`() {
         observer().use { ui ->
             val session = PppSessionIdentity(1, 1)

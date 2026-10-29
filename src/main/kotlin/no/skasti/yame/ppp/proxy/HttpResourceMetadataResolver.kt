@@ -62,9 +62,9 @@ internal object HttpResourceMetadataResolver {
         val cleaned = buildString {
             leaf.codePoints().forEach { point ->
                 if (!Character.isISOControl(point) &&
-                    Character.getType(point) !in setOf(
-                        Character.FORMAT.toInt(), Character.LINE_SEPARATOR.toInt(), Character.PARAGRAPH_SEPARATOR.toInt(),
-                    )) appendCodePoint(point)
+                    Character.getType(point) != Character.FORMAT.toInt() &&
+                    Character.getType(point) != Character.LINE_SEPARATOR.toInt() &&
+                    Character.getType(point) != Character.PARAGRAPH_SEPARATOR.toInt()) appendCodePoint(point)
             }
         }.trim()
         if (cleaned.isEmpty() || cleaned == "." || cleaned == "..") return null

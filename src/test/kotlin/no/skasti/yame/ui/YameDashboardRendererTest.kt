@@ -29,7 +29,7 @@ class YameDashboardRendererTest {
                 uri, uri, it, Instant.EPOCH) })
         val state = DashboardState(portName = null, baud = 115200, connected = true,
             dnsUpstream = "8.8.8.8", httpProxyEnabled = true, logs = emptyList(), dnsLookups = emptyList(),
-            transfers = listOf(transfer("WINZIP95.EXE"), transfer("blåbær-".repeat(30) + ".exe"), transfer(null)),
+            transfers = listOf(transfer("WINZIP95.EXE"), transfer("blåbær-".repeat(30) + ".exe"), transfer(null), transfer("😀".repeat(100) + ".exe")),
             httpHosts = emptyList(), selectedHttpHostIndex = 0, commandPalette = null,
             activeDetailPanel = DashboardDetailPanel.TRANSFERS)
         for ((width, height) in listOf(100 to 30, 200 to 80, 300 to 100)) {
@@ -41,7 +41,7 @@ class YameDashboardRendererTest {
             assertContains(frame, "….exe")
             assertContains(frame, "10.0.0.9:80")
             val lines = frame.lines().filter { "WINZIP95.EXE" in it || "….exe" in it }
-            assertEquals(2, lines.size)
+            assertEquals(3, lines.size)
             assertTrue(lines.all { "↑256" in it && "↓32.0K" in it }, lines.toString())
         }
     }
