@@ -55,7 +55,7 @@ class YameLogManager(
     private val logDirectory: Path = Path.of("logs"),
     private val maxActiveLogBytes: Long = 10L * 1024L * 1024L,
     private val maxArchivesPerModule: Int = 5,
-    private val publishEntry: (LogEntry) -> Unit = YameEvents::publish,
+    private val publishEntry: (LogEntry) -> Unit = { YameEvents.publish(it) },
 ) : AutoCloseable {
     init {
         require(maxActiveLogBytes > 0) { "maxActiveLogBytes must be positive" }
