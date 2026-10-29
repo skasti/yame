@@ -67,7 +67,7 @@ class EventContractTest {
 
     @Test fun `publication and typed access do not read generic payload`() {
         assertNull(AbstractYameEvent.cachedMetadataFor(TypedProbe::class.java))
-        val broker = EventBroker()
+        val broker = EventBroker(initialCapacity = 4096, initialPublishTimeout = java.time.Duration.ofMillis(10), initialMaxSubscribers = 64)
         val delivered = CountDownLatch(1)
         try {
             broker.subscribeTyped<TypedProbe>("probe") { assertEquals(5, it.id); delivered.countDown() }
