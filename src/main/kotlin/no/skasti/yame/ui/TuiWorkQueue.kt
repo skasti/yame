@@ -1,5 +1,6 @@
 package no.skasti.yame.ui
 
+import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.lifecycle.FatalFailureSource
 import no.skasti.yame.lifecycle.DeadlineCloseable
 import java.time.Duration
@@ -12,12 +13,14 @@ import kotlin.concurrent.withLock
 
 /** FIFO is successful admission order. No admission lock is held while work or terminal IO runs. */
 internal class TuiWorkQueue(
-    private val capacity: Int = 256,
+    capacity: Int = ConfigStore[TuiSettings.QueueCapacity],
     private val admissionWait: Duration = Duration.ofMillis(50),
     private val drainWait: Duration = Duration.ofSeconds(3),
     private val teardown: () -> Unit = {},
 ) : DeadlineCloseable, FatalFailureSource {
+
     private val lock = ReentrantLock()
+    private var capacity = capacity
     private val changed = lock.newCondition()
     private val admissionWaiting = lock.newCondition()
     private data class WorkAction(val kind: String, val action: () -> Unit)
@@ -32,15 +35,36 @@ internal class TuiWorkQueue(
     private val fatal = AtomicReference<Throwable?>()
     override val fatalFailure: Throwable? get() = fatal.get()
     val isWorker: Boolean get() = Thread.currentThread() === worker
-
-    /** Snapshot queued work slots, not batched event/action counts or the executing slot. */
+    /** Lock-protected live capacity for diagnostics and tests. */
+    internal val configuredCapacity: Int get() = lock.withLock { capacity }
+    /** Occupancy uses the live capacity, including temporary over-capacity after shrink. */
     val occupancy: QueueOccupancy get() = lock.withLock {
         QueueOccupancy(queued = pending.size, capacity = capacity)
     }
 
     init {
-        require(capacity > 0)
+        (TuiSettings.QueueCapacity to capacity).validate()
         require(!admissionWait.isNegative && !drainWait.isNegative)
+    }
+
+    // Direct lock-protected updates avoid inserting configuration events into
+    // the queue being resized, including when it is saturated. Already accepted
+    // slots are never removed on shrink.
+    // An explicit initial capacity does not opt out of later configuration changes.
+    // Isolated tests may construct a queue without installing a process ConfigStore.
+    private val capacitySubscription = runCatching { ConfigStore.onChange[TuiSettings.Group] }.getOrNull()?.let { events ->
+        val observedCapacity = ConfigStore[TuiSettings.QueueCapacity]
+        var firstNotification = true
+        events.subscribe(initial = true) { changes ->
+            changes[TuiSettings.QueueCapacity]?.let { change ->
+                lock.withLock {
+                    val initial = firstNotification
+                    firstNotification = false
+                    if (!initial || change.value != observedCapacity) this@TuiWorkQueue.capacity = change.value
+                    changed.signalAll()
+                }
+            }
+        }
     }
 
     private val worker = Thread({
@@ -67,6 +91,7 @@ internal class TuiWorkQueue(
         } catch (error: Throwable) {
             fail(error)
         } finally {
+            capacitySubscription?.close()
             try { teardown() } catch (error: Throwable) { fail(error) }
             stopped.countDown()
         }
@@ -136,7 +161,7 @@ internal class TuiWorkQueue(
         }
         if (appendToTail()) return true
         var remaining = admissionWait.toNanos()
-        while (pending.size == capacity && accepting) {
+        while (pending.size >= capacity && accepting) {
             // Synchronous config callbacks can reenter from a command. Never wait on ourselves.
             if (isWorker || remaining <= 0) {
                 val error = IllegalStateException("TUI queue admission timed out (${queueSnapshot(kind)})")
@@ -193,6 +218,7 @@ internal class TuiWorkQueue(
     override fun close() = closeBefore(System.nanoTime() + drainWait.toNanos())
 
     override fun closeBefore(deadlineNanos: Long) {
+        capacitySubscription?.close()
         lock.withLock { accepting = false; changed.signalAll() }
         if (isWorker) return // The worker drains and tears down after the current action returns.
         val drained = try {

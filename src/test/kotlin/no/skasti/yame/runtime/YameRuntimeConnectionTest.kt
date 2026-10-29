@@ -1,5 +1,6 @@
 package no.skasti.yame.runtime
 
+import no.skasti.yame.observer.testEventBroker
 import no.skasti.yame.config.InstalledConfigTest
 import no.skasti.yame.ui.handleKeyAndAwait
 import com.github.ajalt.mordant.terminal.Terminal
@@ -50,7 +51,7 @@ class YameRuntimeConnectionTest : InstalledConfigTest() {
     private lateinit var subscription: AutoCloseable
 
     @BeforeTest fun setUpEvents() {
-        broker = EventBroker()
+        broker = testEventBroker()
         installation = YameEvents.install(broker)
         subscription = YameEvents.subscribe("runtime-resource-test") { resourceEvents += it }
     }

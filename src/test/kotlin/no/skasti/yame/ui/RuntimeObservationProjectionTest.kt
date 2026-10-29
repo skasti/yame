@@ -9,8 +9,8 @@ import no.skasti.yame.serial.*
 import no.skasti.yame.logging.LogEntry
 import no.skasti.yame.logging.YameLogModule
 import no.skasti.yame.logging.YameLogLevel
+import no.skasti.yame.observer.testEventBroker
 import no.skasti.yame.observer.EventBroker
-import no.skasti.yame.observer.EventBrokerConfig
 import no.skasti.yame.observer.BrokerWaitResult
 import no.skasti.yame.ppp.proxy.TransferResourceChanged
 import no.skasti.yame.ppp.proxy.TransferResourcePhase
@@ -228,7 +228,7 @@ class RuntimeObservationProjectionTest : InstalledConfigTest() {
         assertNotNull(ui.fatalFailure)
     }
     @Test fun `actual TUI admission proceeds without the observer monitor`() {
-        val broker = EventBroker(EventBrokerConfig(capacity = 1))
+        val broker = testEventBroker(capacity = 1)
         val entered = CountDownLatch(1)
         val locked = CountDownLatch(1)
         val release = CountDownLatch(1)

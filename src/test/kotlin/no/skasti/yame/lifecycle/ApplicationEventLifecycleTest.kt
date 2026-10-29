@@ -13,7 +13,7 @@ import kotlin.test.*
 
 class ApplicationEventLifecycleTest {
     @Test fun `interrupted required handoff cannot be hidden by broker subscriber exception isolation`() {
-        val broker = EventBroker()
+        val broker = testEventBroker()
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
         val restored = java.util.concurrent.atomic.AtomicBoolean()
@@ -47,7 +47,7 @@ class ApplicationEventLifecycleTest {
     }
 
     @Test fun `caught TUI admission failure is supervised independently of blocked TUI worker`() {
-        val broker = EventBroker()
+        val broker = testEventBroker()
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
         val exits = LinkedBlockingQueue<Int>()
@@ -74,7 +74,7 @@ class ApplicationEventLifecycleTest {
     }
 
     @Test fun `concurrent shutdown closes each owner once and rejects newly created components safely`() {
-        val broker = EventBroker()
+        val broker = testEventBroker()
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
         val producersClosed = java.util.concurrent.atomic.AtomicInteger()
@@ -110,7 +110,7 @@ class ApplicationEventLifecycleTest {
     }
 
     @Test fun `normal shutdown stops producers before draining and releases consumers last`() {
-        val broker = EventBroker()
+        val broker = testEventBroker()
         val order = CopyOnWriteArrayList<String>()
         val owner = ApplicationEventLifecycle(broker, sealFacade = { order += "seal" },
             report = { order += it }, terminate = { order += "exit-$it" })
@@ -123,8 +123,8 @@ class ApplicationEventLifecycleTest {
     }
 
     @Test fun `caught full queue still triggers independent fatal supervision while TUI is blocked`() {
-        val broker = EventBroker(EventBrokerConfig(capacity = 1))
-        assertEquals(Duration.ofMillis(10), broker.config.publishTimeout)
+        val broker = testEventBroker(capacity = 1)
+        assertEquals(Duration.ofMillis(10), broker.publishTimeout)
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
         val stopped = CountDownLatch(1)
@@ -155,7 +155,7 @@ class ApplicationEventLifecycleTest {
     }
 
     @Test fun `failed subscriber does not prevent later diagnostics or graceful shutdown`() {
-        val broker = EventBroker()
+        val broker = testEventBroker()
         val seen = CopyOnWriteArrayList<String>()
         val owner = ApplicationEventLifecycle(broker, sealFacade = {}, terminate = { fail("unexpected exit $it") })
         broker.subscribe("failed-console") { error("broken console") }
@@ -167,7 +167,7 @@ class ApplicationEventLifecycleTest {
     }
 
     @Test fun `failed producer preserves reverse cleanup order and prevents premature facade sealing`() {
-        val broker = EventBroker()
+        val broker = testEventBroker()
         val order = CopyOnWriteArrayList<String>()
         val exits = mutableListOf<Int>()
         val owner = ApplicationEventLifecycle(broker, sealFacade = { order += "seal" },
@@ -186,7 +186,7 @@ class ApplicationEventLifecycleTest {
     }
 
     @Test fun `failed consumer does not prevent remaining consumers or safe facade sealing`() {
-        val broker = EventBroker()
+        val broker = testEventBroker()
         val order = CopyOnWriteArrayList<String>()
         val exits = mutableListOf<Int>()
         val owner = ApplicationEventLifecycle(broker, sealFacade = { order += "seal" },
@@ -205,7 +205,7 @@ class ApplicationEventLifecycleTest {
     }
 
     @Test fun `throwing reporter cannot interrupt cleanup or conceal its failures`() {
-        val broker = EventBroker()
+        val broker = testEventBroker()
         val order = CopyOnWriteArrayList<String>()
         val reports = java.util.concurrent.atomic.AtomicInteger()
         val exits = mutableListOf<Int>()
@@ -226,7 +226,7 @@ class ApplicationEventLifecycleTest {
 
     @Test fun `broker close and wait exceptions still allow cleanup when termination is confirmed`() {
         for (failureAt in listOf("close", "wait")) {
-            val broker = EventBroker()
+            val broker = testEventBroker()
             val order = CopyOnWriteArrayList<String>()
             val exits = mutableListOf<Int>()
             val owner = ApplicationEventLifecycle(broker, sealFacade = { order += "seal" },
@@ -257,7 +257,7 @@ class ApplicationEventLifecycleTest {
     }
 
     @Test fun `unconfirmed broker termination skips consumer resources and facade sealing`() {
-        val broker = EventBroker()
+        val broker = testEventBroker()
         val order = CopyOnWriteArrayList<String>()
         val reports = CopyOnWriteArrayList<String>()
         val exits = mutableListOf<Int>()
@@ -281,7 +281,7 @@ class ApplicationEventLifecycleTest {
     }
 
     @Test fun `facade sealing failure preserves cleanup failure status`() {
-        val broker = EventBroker()
+        val broker = testEventBroker()
         val order = CopyOnWriteArrayList<String>()
         val exits = mutableListOf<Int>()
         val owner = ApplicationEventLifecycle(broker, sealFacade = { order += "seal"; error("seal failed") },
@@ -297,7 +297,7 @@ class ApplicationEventLifecycleTest {
     }
 
     @Test fun `blocked reporting and a full diagnostic backlog cannot delay remaining cleanup`() {
-        val broker = EventBroker()
+        val broker = testEventBroker()
         val reportEntered = CountDownLatch(1)
         val releaseReport = CountDownLatch(1)
         val closedConsumers = java.util.concurrent.atomic.AtomicInteger()
@@ -316,7 +316,7 @@ class ApplicationEventLifecycleTest {
     }
 
     @Test fun `blocked producer cannot prevent deadline enforcement or cause premature sealing`() {
-        val broker = EventBroker()
+        val broker = testEventBroker()
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
         val sealed = CountDownLatch(1)
@@ -348,7 +348,7 @@ class ApplicationEventLifecycleTest {
     }
 
     @Test fun `blocked cleanup or diagnostic reporting cannot prevent bounded fatal exit`() {
-        val broker = EventBroker(EventBrokerConfig(capacity = 1, publishTimeout = Duration.ZERO))
+        val broker = testEventBroker(capacity = 1, publishTimeout = Duration.ZERO)
         val release = CountDownLatch(1)
         val entered = CountDownLatch(1)
         val exits = LinkedBlockingQueue<Int>()
@@ -389,7 +389,7 @@ class ApplicationEventLifecycleTest {
 /** Separate process: use production halt, not a test replacement for process termination. */
 object FatalBrokerProcess {
     @JvmStatic fun main(args: Array<String>) {
-        val broker = EventBroker(EventBrokerConfig(capacity = 1))
+        val broker = testEventBroker(capacity = 1)
         ApplicationEventLifecycle(broker, timeout = Duration.ofMillis(200), sealFacade = {})
         // The isolated JVM has a minimal classpath: avoid event types that pull in
         // logging configuration and kotlinx.serialization during class loading.

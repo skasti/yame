@@ -23,7 +23,7 @@ class YameRuntimeLifecycleTest : InstalledConfigTest() {
     private lateinit var broker: EventBroker
     private lateinit var installation: AutoCloseable
     @BeforeTest fun install() {
-        broker = EventBroker()
+        broker = testEventBroker()
         installation = YameEvents.install(broker)
     }
     @AfterTest fun release() {

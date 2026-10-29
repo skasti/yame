@@ -53,7 +53,7 @@ class ApplicationPresentationTest : InstalledConfigTest() {
     }
 
     @Test fun `plain presentation receives observations without a runtime or TUI`() {
-        val broker = EventBroker()
+        val broker = testEventBroker()
         val installation = YameEvents.install(broker)
         val seen = CopyOnWriteArrayList<String>()
         try {
@@ -74,7 +74,7 @@ class ApplicationPresentationTest : InstalledConfigTest() {
     }
 
     @Test fun `core remains usable without presentation and releases injected registrations`() {
-        val broker = EventBroker()
+        val broker = testEventBroker()
         val installation = YameEvents.install(broker)
         val directory = Files.createTempDirectory("yame-headless")
         val functions = FunctionStore()
@@ -105,7 +105,7 @@ object MainStartupProcess {
     @JvmStatic fun main(args: Array<String>) {
         val scenario = args.single()
         val directory = Files.createTempDirectory("yame-main-startup")
-        val broker = EventBroker()
+        val broker = testEventBroker()
         val installation = YameEvents.install(broker)
         val functions = FunctionStore.current
         val trace = CopyOnWriteArrayList<String>()

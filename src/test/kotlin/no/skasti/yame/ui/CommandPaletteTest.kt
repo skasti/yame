@@ -141,6 +141,32 @@ class CommandPaletteTest : InstalledConfigTest() {
     }
 
     @Test
+    fun `queue palette updates configured capacities without replacing or restarting queues`() {
+        var saves = 0
+        val store = ConfigStore(persist = { saves++ })
+        installConfig(store)
+        val brokerKey = no.skasti.yame.observer.EventBrokerSettings.QueueCapacity
+        val observer = TuiYameObserver(FunctionStore(), Terminal(interactive = false))
+        try {
+            observer.type("/queues")
+            observer.handleKeyAndAwait("Enter")
+            assertEquals(listOf("/event-broker", "/tui"), observer.paletteSnapshot()?.options?.map { it.value })
+            observer.type("event-broker")
+            observer.handleKeyAndAwait("Enter")
+            val brokerChoices = assertNotNull(observer.paletteSnapshot()).options
+            assertEquals(listOf("256", "512", "1024", "2048", "4096", "8192"), brokerChoices.map { it.value })
+            assertEquals("current", brokerChoices.single { it.value == "4096" }.description)
+            observer.type("8192")
+            observer.handleKeyAndAwait("Enter")
+            assertEquals(8192, store[brokerKey])
+            observer.type("/queues/tui/512")
+            observer.handleKeyAndAwait("Enter")
+            assertEquals(512, store[TuiSettings.QueueCapacity])
+            assertEquals(2, saves)
+        } finally { observer.close() }
+    }
+
+    @Test
     fun `FPS setting accepts only supported rates and defaults to 60`() {
         val store = ConfigStore()
         installConfig(store)

@@ -1,5 +1,6 @@
 package no.skasti.yame.ui
 
+import no.skasti.yame.observer.testEventBroker
 import no.skasti.yame.config.InstalledConfigTest
 import com.github.ajalt.mordant.terminal.*
 import no.skasti.yame.function.FunctionStore
@@ -66,7 +67,7 @@ class TuiWorkerIntegrationTest : InstalledConfigTest() {
             check(releaseCallback.await(5, TimeUnit.SECONDS))
         })
         val ui = run { installConfig(config); TuiYameObserver(FunctionStore(), Terminal(interactive = false)) }
-        val broker = EventBroker()
+        val broker = testEventBroker()
         val owner = ApplicationEventLifecycle(broker, timeout = Duration.ofMillis(200),
             sealFacade = {}, report = reports::add, terminate = { exits.offer(it) })
         owner.consumer(ui)

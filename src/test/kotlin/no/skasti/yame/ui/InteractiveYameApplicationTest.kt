@@ -23,7 +23,7 @@ class InteractiveYameApplicationTest : InstalledConfigTest() {
     private lateinit var installation: AutoCloseable
     private val timeout = Duration.ofSeconds(5)
     @BeforeTest fun install() {
-        broker = EventBroker()
+        broker = testEventBroker()
         installation = YameEvents.install(broker)
     }
     @AfterTest fun release() {
