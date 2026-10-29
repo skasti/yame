@@ -75,13 +75,16 @@ class ResourceLifecycleEvent(
     val graphUsageCount: Long,
     val graphLastUsedAt: Instant?,
     val occurredAt: Instant,
+    /** Authoritative, monotonic revision within this graph's resource membership. */
+    val resourceRevision: Long = 1L,
 ) : AbstractYameEvent() {
+    init { require(resourceRevision > 0) }
     /** Independent, unmodifiable copies: neither registry state nor callers can mutate the event. */
     val associations: List<ResourceEdgeSnapshot> = immutableSnapshotList(associations)
     val transformations: List<ResourceTransformationSummary> = immutableSnapshotList(transformations)
 
     override val typeName = "yame.ppp.proxy.resource.lifecycle"
-    override val version = VersionNumber(1, 0, 0)
+    override val version = VersionNumber(1, 1, 0)
 }
 
 internal fun <T> immutableSnapshotList(values: Collection<T>): List<T> =
