@@ -20,7 +20,8 @@ internal class TuiWorkQueue(
     private val lock = ReentrantLock()
     private val changed = lock.newCondition()
     private val admissionWaiting = lock.newCondition()
-    private data class PendingWork(val kind: String, val action: () -> Unit)
+    private data class WorkAction(val kind: String, val action: () -> Unit)
+    private class PendingWork(val actions: MutableList<WorkAction>, val observationBatch: Boolean)
     private val pending = ArrayDeque<PendingWork>()
     private val admittedByKind = linkedMapOf<String, Long>()
     private val completedByKind = linkedMapOf<String, Long>()
@@ -43,16 +44,18 @@ internal class TuiWorkQueue(
                 val next = lock.withLock {
                     while (pending.isEmpty() && accepting) changed.await()
                     if (pending.isEmpty()) null else pending.removeFirst().also {
-                        executingKind = it.kind
                         changed.signalAll()
                     }
                 } ?: break
-                try {
-                    next.action()
-                } finally {
-                    lock.withLock {
-                        completedByKind[next.kind] = (completedByKind[next.kind] ?: 0L) + 1L
-                        executingKind = null
+                for (item in next.actions) {
+                    lock.withLock { executingKind = item.kind }
+                    try {
+                        item.action()
+                    } finally {
+                        lock.withLock {
+                            completedByKind[item.kind] = (completedByKind[item.kind] ?: 0L) + 1L
+                            executingKind = null
+                        }
                     }
                 }
             }
@@ -75,13 +78,22 @@ internal class TuiWorkQueue(
         submit(kind, failOnInterruption = true, action)
 
     /**
+     * Combine only *adjacent* broker observations into small FIFO batches. Each
+     * action still executes, in original order, and an intervening config/keyboard
+     * command breaks the batch. This bounds admission work when one HTML page
+     * discovers hundreds of resources in one synchronous parser pass.
+     */
+    fun submitObservation(kind: String, action: () -> Unit): Boolean =
+        submit(kind, failOnInterruption = true, action = action, observationBatch = true)
+
+    /**
      * Optional redraws may be retried if the FIFO is saturated. Unlike producer
      * observations, skipping admission here does not discard any state transition.
      */
     fun offerRedraw(action: () -> Unit): Boolean = lock.withLock {
         if (!accepting || pending.size >= capacity) return false
         val kind = "FrameRefresh"
-        pending.addLast(PendingWork(kind, action))
+        pending.addLast(PendingWork(mutableListOf(WorkAction(kind, action)), observationBatch = false))
         admittedByKind[kind] = (admittedByKind[kind] ?: 0L) + 1L
         changed.signalAll()
         true
@@ -92,9 +104,9 @@ internal class TuiWorkQueue(
         fun formatCounts(counts: Map<String, Long>): String =
             counts.entries.sortedWith(compareByDescending<Map.Entry<String, Long>> { it.value }.thenBy { it.key })
                 .joinToString(", ") { "${it.key}=${it.value}" }
-        val queuedByKind = pending.groupingBy { it.kind }.eachCount()
+        val queuedByKind = pending.flatMap { it.actions }.groupingBy { it.kind }.eachCount()
             .mapValues { it.value.toLong() }
-        return "capacity=$capacity, pending=${pending.size}, " +
+        return "capacity=$capacity, pending=${pending.size}, queuedActions=${queuedByKind.values.sum()}, " +
             "executing=${executingKind ?: "none"}, rejected=$rejectedKind, " +
             "queuedByKind={${formatCounts(queuedByKind)}}, " +
             "admittedByKind={${formatCounts(admittedByKind)}}, " +
@@ -102,8 +114,22 @@ internal class TuiWorkQueue(
     }
 
     /** Closed callbacks are ignored. Capacity exhaustion is terminal and independently observable. */
-    private fun submit(kind: String, failOnInterruption: Boolean, action: () -> Unit): Boolean = lock.withLock {
+    private fun submit(
+        kind: String,
+        failOnInterruption: Boolean,
+        action: () -> Unit,
+        observationBatch: Boolean = false,
+    ): Boolean = lock.withLock {
         if (!accepting) return false
+        fun appendToTail(): Boolean {
+            if (!observationBatch) return false
+            val tail = pending.lastOrNull() ?: return false
+            if (!tail.observationBatch || tail.actions.size >= MAX_OBSERVATIONS_PER_BATCH) return false
+            tail.actions.add(WorkAction(kind, action))
+            admittedByKind[kind] = (admittedByKind[kind] ?: 0L) + 1L
+            return true
+        }
+        if (appendToTail()) return true
         var remaining = admissionWait.toNanos()
         while (pending.size == capacity && accepting) {
             // Synchronous config callbacks can reenter from a command. Never wait on ourselves.
@@ -123,10 +149,15 @@ internal class TuiWorkQueue(
             }
         }
         if (!accepting) return false
-        pending.addLast(PendingWork(kind, action))
+        if (appendToTail()) return true
+        pending.addLast(PendingWork(mutableListOf(WorkAction(kind, action)), observationBatch))
         admittedByKind[kind] = (admittedByKind[kind] ?: 0L) + 1L
         changed.signalAll()
         true
+    }
+
+    private companion object {
+        const val MAX_OBSERVATIONS_PER_BATCH = 64
     }
 
     /** Explicit serialized inspection; no observer monitor or arbitrary cross-thread state read. */
