@@ -129,12 +129,15 @@ repository reads and writes the INI file through that feature definition. See th
 for the format and editing behavior.
 
 Live on/off and PNG compatibility settings are separate from the immutable INI
-rules. At the start of each HTTP request, the handler reads feature-owned keys
-through the installed global `ConfigStore` facade (`ConfigStore[key]`) and builds one immutable
-`ResourceTransformationSettings` value. The store intentionally has no atomic
-multi-key snapshot API; a concurrent commit may land between individual reads.
-Once built, the request retains its settings value. Its transformation profile and
-transformed-cache/in-flight-work keys include the HTML switches and PNG mode.
+rules. YameRuntime initializes one `ResourceTransformationSettings` snapshot
+from feature-owned keys through the installed global `ConfigStore` facade. Its
+existing configuration subscription updates the cached values from relevant
+`ConfigChanges` and publishes one immutable replacement per change batch. The
+HTTP handler reads the current snapshot once when a request starts; that request
+retains its settings value. It does not read `ConfigStore` for every request.
+The profile and transformed-cache/in-flight-work keys include the HTML switches
+and PNG mode. `ConfigStore` has no atomic multi-key read API for initialization,
+but committed change batches are applied together.
 Element simplification requires both the rule file's general `enabled` setting
 and the `/transformers` switch. The same source bytes under different settings
 never share transformed output. Source acquisition may still be coalesced
