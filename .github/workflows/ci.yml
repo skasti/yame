@@ -216,7 +216,7 @@ jobs:
 
       # Diagnostics only: real Linux PPP client and Chrome exercise a live YAME
       # TUI under subresource-heavy browsing, rather than HTGET's single fetch.
-      # External TEST_URLS may be unavailable; do not gate otherwise healthy PRs.
+      # Browser setup and deterministic resource loading must succeed; external sites are best-effort.
       - name: Install Linux PPP for TUI browser stress diagnostic
         if: needs.preview-gate.outputs.reuse != 'true'
         run: sudo apt-get install --yes ppp
