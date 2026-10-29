@@ -704,9 +704,12 @@ private class FakePppHandler(
         onConnected()
     }
 
-    override fun receive(bytes: ByteArray) {
+    override fun receive(bytes: ByteArray): Boolean {
         received += bytes
+        return false
     }
+
+    override fun disconnected() = Unit
 
     override fun close() {
         closed = true

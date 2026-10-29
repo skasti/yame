@@ -1,5 +1,7 @@
 package no.skasti.yame.ppp
 
+import no.skasti.yame.modem.HayesModem
+import no.skasti.yame.modem.HayesModemConfig
 import no.skasti.yame.ppp.lcp.LcpPacket
 import no.skasti.yame.ppp.proxy.NavigationResourceRegistry
 import no.skasti.yame.ppp.proxy.ResourceState
@@ -176,6 +178,91 @@ class RetroPppHandlerTest {
 
         assertEquals(0, output.size())
     }
+
+    @Test
+    fun `modem acknowledges termination before dropping carrier and supports redial`() {
+        val output = ByteArrayOutputStream()
+        val carrierDrops = mutableListOf<ByteArray>()
+        val handler = isolatedHandler()
+        val modem = HayesModem(
+            output, 115200,
+            config = HayesModemConfig(toneSimulationEnabled = false),
+            logger = {},
+            pppHandler = handler,
+            setCarrierPresent = { present -> if (!present) carrierDrops += output.toByteArray() },
+        )
+        try {
+            modem.receive("ATE0\rATD123\r".toByteArray())
+            assertEquals(HayesModem.State.CONNECTED, modem.state)
+            assertTrue(output.toString().contains("CONNECT 115200"))
+            output.reset()
+            modem.receive(peerConfigureRequestWire())
+            val firstNegotiation = decode(output.toByteArray())
+            assertEquals(2, firstNegotiation.size)
+            assertEquals(HayesModem.State.CONNECTED, modem.state)
+
+            output.reset()
+            carrierDrops.clear()
+            val terminate = terminationWire()
+            // A repeated termination and another frame in the same read must not restart LCP.
+            modem.receive(terminate + terminate + peerConfigureRequestWire())
+            val ackWire = carrierDrops.single()
+            val ack = requireNotNull(LcpPacket.parse(decode(ackWire).single().payload))
+            assertEquals(LcpPacket.TERMINATE_ACK, ack.code)
+            assertEquals(42, ack.identifier)
+            assertContentEquals(ackWire + "\r\nNO CARRIER\r\n".toByteArray(), output.toByteArray())
+            assertEquals(HayesModem.State.COMMAND, modem.state)
+
+            output.reset()
+            modem.receive(terminate) // Late binary traffic must not leave a partial AT command.
+            modem.receive("AT\r".toByteArray())
+            assertEquals("\r\nOK\r\n", output.toString()) // Echo remains disabled.
+            output.reset()
+            modem.receive("ATD123\r".toByteArray())
+            assertEquals("\r\nCONNECT 115200\r\n", output.toString())
+            output.reset()
+            modem.receive(peerConfigureRequestWire())
+            val secondNegotiation = decode(output.toByteArray())
+            assertEquals(firstNegotiation.map { it.protocol }, secondNegotiation.map { it.protocol })
+            firstNegotiation.zip(secondNegotiation).forEach { (first, second) ->
+                assertContentEquals(first.payload, second.payload)
+            }
+        } finally {
+            modem.close()
+        }
+    }
+
+    @Test
+    fun `termination as first frame is acknowledged without starting negotiation`() {
+        val output = ByteArrayOutputStream()
+        val handler = isolatedHandler()
+        handler.attachOutput(output)
+        try {
+            handler.connected()
+            assertFalse(handler.receive(PppEncoder().encode(PppFrame(
+                PppSession.LCP_PROTOCOL, byteArrayOf(5, 42, 0, 8),
+            ))))
+            output.reset()
+            assertTrue(handler.receive(terminationWire()))
+            val ack = requireNotNull(LcpPacket.parse(decode(output.toByteArray()).single().payload))
+            assertEquals(LcpPacket.TERMINATE_ACK, ack.code)
+            handler.disconnected()
+            handler.disconnected()
+            output.reset()
+            handler.receive(terminationWire())
+            assertEquals(0, output.size())
+            handler.connected()
+            assertFalse(handler.receive(peerConfigureRequestWire()))
+            assertEquals(2, decode(output.toByteArray()).size)
+        } finally {
+            handler.close()
+        }
+    }
+
+    private fun terminationWire(): ByteArray = PppEncoder().encode(PppFrame(
+        PppSession.LCP_PROTOCOL,
+        LcpPacket(LcpPacket.TERMINATE_REQUEST, 42, byteArrayOf()).encode(),
+    ))
 
     private fun peerConfigureRequestWire(): ByteArray =
         PppEncoder().encode(
