@@ -175,6 +175,28 @@ class TuiWorkQueueTest {
         }
     }
 
+    @Test fun `queue occupancy counts pending work slots including batches but not executing work`() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val queue = TuiWorkQueue(capacity = 4)
+        try {
+            queue.submitRequired("Running") { entered.countDown(); release.await() }
+            entered.awaitReady()
+            assertEquals(QueueOccupancy(0, 4), queue.occupancy)
+            repeat(100) {
+                assertTrue(queue.submitObservation("ResourceLifecycleEvent") {})
+            }
+            // 100 observations are stored in two adjacent batches, not 100 slots.
+            assertEquals(QueueOccupancy(2, 4), queue.occupancy)
+            assertTrue(queue.submitRequired("KeyboardInput") {})
+            assertEquals(QueueOccupancy(3, 4), queue.occupancy)
+        } finally {
+            release.countDown()
+            queue.close()
+        }
+        assertEquals(QueueOccupancy(0, 4), queue.occupancy)
+    }
+
     @Test fun `hundreds of resource observations preserve FIFO order without saturating work slots`() {
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
@@ -210,6 +232,7 @@ class TuiWorkQueueTest {
     @Test fun `optional redraw never poisons the queue when required observations fill it`() {
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
+        val secondCompleted = CountDownLatch(1)
         val accepted = mutableListOf<String>()
         val queue = TuiWorkQueue(capacity = 1, admissionWait = Duration.ZERO)
         try {
@@ -219,10 +242,17 @@ class TuiWorkQueueTest {
                 accepted += "first"
             }
             entered.awaitReady()
-            assertTrue(queue.submitRequired(kind = "ResourceLifecycleEvent") { accepted += "second" })
+            assertTrue(queue.submitRequired(kind = "ResourceLifecycleEvent") {
+                accepted += "second"
+                secondCompleted.countDown()
+            })
             assertFalse(queue.offerRedraw { fail("a redraw must not replace required work") })
             assertNull(queue.fatalFailure)
             release.countDown()
+            // The queue has capacity one and admissionWait=ZERO; asking read()
+            // to enqueue while the second action is still waiting can cause a
+            // spurious fatal timeout. Wait for that accepted action first.
+            secondCompleted.awaitReady()
             queue.read { assertEquals(listOf("first", "second"), accepted) }
             assertTrue(queue.offerRedraw { accepted += "redraw" })
             queue.close()

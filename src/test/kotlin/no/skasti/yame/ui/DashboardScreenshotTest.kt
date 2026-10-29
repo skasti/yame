@@ -27,9 +27,18 @@ class DashboardScreenshotTest {
             logs = listOf("10:00:00  YAME started", "10:00:00  Serial port opened; waiting for client"),
             dnsLookups = emptyList(), transfers = emptyList(), httpHosts = emptyList(),
             selectedHttpHostIndex = 0, commandPalette = null,
+            // Arbitrary fixture values stay fixed so screenshot diffs are reproducible.
+            queueBars = QueueBars(
+                broker = QueueOccupancy(1379, 4096),
+                tui = QueueOccupancy(193, 256),
+            ),
         )
         val active = startup.copy(
             connected = true,
+            queueBars = QueueBars(
+                broker = QueueOccupancy(3769, 4096),
+                tui = QueueOccupancy(87, 256),
+            ),
             logs = listOf(
                 "10:00:01  PPP session established at 57600 baud",
                 "10:00:02  DNS example.test A -> 93.184.216.34",

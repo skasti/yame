@@ -108,6 +108,74 @@ class YameDashboardRendererTest {
     }
 
     @Test
+    fun wideDashboardShowsLiveQueueCapacityBarsWithoutChangingFrameDimensions() {
+        val state = DashboardState(
+            portName = null, baud = 115200, connected = false,
+            dnsUpstream = "8.8.8.8", httpProxyEnabled = true,
+            logs = emptyList(), dnsLookups = emptyList(), transfers = emptyList(),
+            httpHosts = emptyList(), selectedHttpHostIndex = 0, commandPalette = null,
+            queueBars = QueueBars(
+                broker = QueueOccupancy(2048, 4096),
+                tui = QueueOccupancy(192, 256),
+            ),
+        )
+        val wide = YameDashboardRenderer.render(state, width = 150, height = 30)
+        val lines = wide.lines()
+        assertEquals(30, lines.size)
+        assertTrue(lines.all { it.length == 150 })
+        // Exactly one bar row, with two meters and their labels *inside* the tracks.
+        assertContains(lines[28], "Event broker 2048/4096 events (50%)")
+        assertContains(lines[28], "TUI work 192/256 slots (75%)")
+        assertEquals(4, lines[28].count { it == '[' || it == ']' })
+        assertContains(lines[29], "[/] commands")
+        assertEquals(1, wide.lines().count { it.contains("░") && it.contains("█") })
+        // The same two lines work with the large layouts too.
+        val large = YameDashboardRenderer.render(state, width = 200, height = 80)
+        assertEquals(80, large.lines().size)
+        assertTrue(large.lines().all { it.length == 200 })
+        assertContains(large.lines()[78], "Event broker")
+        assertContains(large.lines()[78], "TUI work")
+        assertFalse(large.lines()[77].contains("Event broker"))
+    }
+
+    @Test
+    fun queueBarsAreOmittedOnSmallTerminalsAndShortWideTerminals() {
+        val state = DashboardState(
+            portName = null, baud = 115200, connected = false,
+            dnsUpstream = "8.8.8.8", httpProxyEnabled = true,
+            logs = emptyList(), dnsLookups = emptyList(), transfers = emptyList(),
+            httpHosts = emptyList(), selectedHttpHostIndex = 0, commandPalette = null,
+            queueBars = QueueBars(QueueOccupancy(1, 4096), QueueOccupancy(256, 256)),
+        )
+        for ((width, height) in listOf(100 to 30, 149 to 40, 150 to 29, 72 to 22)) {
+            val rendered = YameDashboardRenderer.render(state, width, height)
+            assertFalse(rendered.contains("Event broker"), "${width}x$height")
+            assertFalse(rendered.contains("TUI work"), "${width}x$height")
+            assertEquals(height, rendered.lines().size)
+            assertTrue(rendered.lines().all { it.length == width })
+        }
+        val wide = YameDashboardRenderer.render(state, 150, 30)
+        assertContains(wide, "1/4096 events (0%)")
+        assertContains(wide, "256/256 slots (100%)")
+    }
+
+    @Test
+    fun queueBarsShowTemporaryOverCapacityAfterResizingWithoutCrashing() {
+        val state = DashboardState(
+            portName = null, baud = 115200, connected = false,
+            dnsUpstream = "8.8.8.8", httpProxyEnabled = true,
+            logs = emptyList(), dnsLookups = emptyList(), transfers = emptyList(),
+            httpHosts = emptyList(), selectedHttpHostIndex = 0, commandPalette = null,
+            queueBars = QueueBars(QueueOccupancy(3000, 1024), QueueOccupancy(200, 100)),
+        )
+        val output = YameDashboardRenderer.render(state, width = 150, height = 30)
+        assertContains(output.lines()[28], "3000/1024 events (292%)")
+        assertContains(output.lines()[28], "200/100 slots (200%)")
+        assertEquals(30, output.lines().size)
+        assertTrue(output.lines().all { it.length == 150 })
+    }
+
+    @Test
     fun rendersAllOperationalPanels() {
         val state = DashboardState(
             portName = "COM3",
