@@ -234,9 +234,10 @@ class HayesModem(
         setCarrierPresent(false)
         try {
             pppHandler.disconnected()
-        } finally {
-            respond("NO CARRIER")
+        } catch (e: Exception) {
+            logger("PPP !! Cleanup after hangup failed: ${e.javaClass.simpleName}: ${e.message}")
         }
+        respond("NO CARRIER")
     }
 
     private fun receiveLogin(bytes: ByteArray) {

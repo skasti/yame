@@ -1,5 +1,8 @@
 package no.skasti.yame.ppp
 
+import no.skasti.yame.ppp.ip.Ipv4Address
+import no.skasti.yame.ppp.ip.Ipv4Cidr
+import no.skasti.yame.ppp.session.PppSessionEnded
 import no.skasti.yame.modem.HayesModem
 import no.skasti.yame.modem.HayesModemConfig
 import no.skasti.yame.ppp.lcp.LcpPacket
@@ -183,7 +186,14 @@ class RetroPppHandlerTest {
     fun `modem acknowledges termination before dropping carrier and supports redial`() {
         val output = ByteArrayOutputStream()
         val carrierDrops = mutableListOf<ByteArray>()
-        val handler = isolatedHandler()
+        val ended = mutableListOf<PppSessionEnded>()
+        val logs = mutableListOf<String>()
+        val handler = RetroPppHandler(
+            logger = logs::add,
+            diagnosticSink = { if (it is PppSessionEnded) ended += it },
+            ipConfig = PppIpConfig(Ipv4Cidr.parse("10.0.0.0/30")),
+            resourceGraphs = NavigationResourceRegistry(),
+        )
         val modem = HayesModem(
             output, 115200,
             config = HayesModemConfig(toneSimulationEnabled = false),
@@ -200,6 +210,8 @@ class RetroPppHandlerTest {
             val firstNegotiation = decode(output.toByteArray())
             assertEquals(2, firstNegotiation.size)
             assertEquals(HayesModem.State.CONNECTED, modem.state)
+            completeIpcp(modem, output, firstNegotiation)
+            assertEquals(1, logs.count { it.contains("IPCP open:") })
 
             output.reset()
             carrierDrops.clear()
@@ -212,6 +224,10 @@ class RetroPppHandlerTest {
             assertEquals(42, ack.identifier)
             assertContentEquals(ackWire + "\r\nNO CARRIER\r\n".toByteArray(), output.toByteArray())
             assertEquals(HayesModem.State.COMMAND, modem.state)
+            assertEquals(1, ended.size) // Emitted after session proxy shutdown/quiescence.
+            output.reset()
+            handler.receive(peerConfigureRequestWire())
+            assertEquals(0, output.size()) // Released session cannot process traffic.
 
             output.reset()
             modem.receive(terminate) // Late binary traffic must not leave a partial AT command.
@@ -227,9 +243,14 @@ class RetroPppHandlerTest {
             firstNegotiation.zip(secondNegotiation).forEach { (first, second) ->
                 assertContentEquals(first.payload, second.payload)
             }
+            completeIpcp(modem, output, secondNegotiation)
+            assertEquals(2, logs.count { it.contains("IPCP open:") })
+            assertEquals(1, ended.size)
         } finally {
             modem.close()
         }
+        assertEquals(2, ended.size)
+        assertTrue(ended[0].session != ended[1].session)
     }
 
     @Test
@@ -257,6 +278,31 @@ class RetroPppHandlerTest {
         } finally {
             handler.close()
         }
+    }
+
+    private fun completeIpcp(modem: HayesModem, output: ByteArrayOutputStream, lcpFrames: List<PppFrame>) {
+        fun send(protocol: Int, packet: PppControlPacket) {
+            modem.receive(PppEncoder().encode(PppFrame(protocol, packet.encode())))
+        }
+        val request = lcpFrames.mapNotNull { LcpPacket.parse(it.payload) }
+            .single { it.code == LcpPacket.CONFIGURE_REQUEST }
+        output.reset()
+        send(PppSession.LCP_PROTOCOL, request.copy(code = LcpPacket.CONFIGURE_ACK))
+        val localIpcp = decode(output.toByteArray())
+            .single { it.protocol == PppSession.IPCP_PROTOCOL }
+            .let { requireNotNull(PppControlPacket.parse(it.payload)) }
+        assertEquals(PppControlPacket.CONFIGURE_REQUEST, localIpcp.code)
+        output.reset()
+        val peerIpcp = PppControlPacket(PppControlPacket.CONFIGURE_REQUEST, 9,
+            PppControlOption(3, Ipv4Address.parse("10.0.0.2").toByteArray()).encode() +
+                PppControlOption(129, Ipv4Address.parse("10.0.0.1").toByteArray()).encode())
+        send(PppSession.IPCP_PROTOCOL, peerIpcp)
+        val ack = decode(output.toByteArray()).single { it.protocol == PppSession.IPCP_PROTOCOL }
+            .let { requireNotNull(PppControlPacket.parse(it.payload)) }
+        assertEquals(PppControlPacket.CONFIGURE_ACK, ack.code)
+        assertEquals(peerIpcp.identifier, ack.identifier)
+        assertContentEquals(peerIpcp.data, ack.data)
+        send(PppSession.IPCP_PROTOCOL, localIpcp.copy(code = PppControlPacket.CONFIGURE_ACK))
     }
 
     private fun terminationWire(): ByteArray = PppEncoder().encode(PppFrame(
