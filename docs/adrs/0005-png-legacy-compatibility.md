@@ -36,7 +36,7 @@ bounded processing and the established default behavior.
   over-limit and decoder/encoder-failure cases retain the PNG and log why the
   conversion was skipped.
 - Build one immutable transformation-settings value at the start of each HTTP
-  request from feature-owned keys read through its explicit `ConfigStore`.
+  request from feature-owned keys read through the installed global `ConfigStore` facade (`ConfigStore[key]`). Production code does not inject or retain a store reference.
   `ConfigStore` intentionally has no atomic multi-key snapshot API, so a
   concurrent commit may land between reads. Include the captured mode in the
   transformation profile/cache key. Preserve upstream source validators and
