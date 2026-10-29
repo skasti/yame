@@ -4,7 +4,9 @@ import no.skasti.yame.config.InstalledConfigTest
 import com.github.ajalt.mordant.terminal.*
 import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.lifecycle.ApplicationEventLifecycle
-import no.skasti.yame.logging.DiagnosticMessage
+import no.skasti.yame.logging.LogEntry
+import no.skasti.yame.logging.YameLogModule
+import no.skasti.yame.logging.YameLogLevel
 import no.skasti.yame.observer.*
 import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.serial.SerialSettings
@@ -42,7 +44,7 @@ class TuiShutdownIntegrationTest : InstalledConfigTest() {
         val reports = CopyOnWriteArrayList<String>()
         val exits = CopyOnWriteArrayList<Int>()
         broker.subscribe("pause-before-tui") {
-            if ((it as DiagnosticMessage).message == "captured-before-close") {
+            if ((it as LogEntry).message == "captured-before-close") {
                 callbackEntered.countDown()
                 check(releaseCallback.await(5, TimeUnit.SECONDS))
             }
@@ -51,15 +53,15 @@ class TuiShutdownIntegrationTest : InstalledConfigTest() {
         val owner = ApplicationEventLifecycle(broker, sealFacade = {}, report = reports::add, terminate = exits::add,
             awaitBrokerClosed = { remaining -> brokerClosing.countDown(); broker.awaitClosed(remaining) })
         owner.consumer(app)
-        owner.producer(AutoCloseable { YameEvents.publish(DiagnosticMessage("producer-final")) })
+        owner.producer(AutoCloseable { YameEvents.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "producer-final")) })
         val failures = CopyOnWriteArrayList<Throwable>()
         val closers = List(2) { Thread { try { owner.close() } catch (error: Throwable) { failures += error } } }
         try {
             app.start()
             terminal.entered.awaitReady()
-            YameEvents.publish(DiagnosticMessage("captured-before-close"))
+            YameEvents.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "captured-before-close"))
             callbackEntered.awaitReady()
-            YameEvents.publish(DiagnosticMessage("queued-before-close"))
+            YameEvents.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "queued-before-close"))
             closers.forEach(Thread::start)
             brokerClosing.awaitReady()
             assertFalse(broker.status.terminated, "the in-flight callback must finish before consumer close")
@@ -82,7 +84,7 @@ class TuiShutdownIntegrationTest : InstalledConfigTest() {
             app.start()
             app.close()
             config.set(SerialSettings.Baud to 57600)
-            assertFailsWith<BrokerClosedException> { YameEvents.publish(DiagnosticMessage("too-late")) }
+            assertFailsWith<BrokerClosedException> { YameEvents.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "too-late")) }
             assertEquals(prints, terminal.prints.size, "no terminal IO after teardown")
         } finally {
             releaseCallback.countDown(); terminal.release.countDown()
@@ -112,7 +114,7 @@ class TuiShutdownIntegrationTest : InstalledConfigTest() {
         try {
             app.start()
             terminal.entered.awaitReady()
-            YameEvents.publish(DiagnosticMessage("accepted-before-deadline"))
+            YameEvents.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "accepted-before-deadline"))
             assertEquals(BrokerWaitResult.COMPLETED, broker.drain().await(timeout))
             closer.start()
             producerEntered.awaitReady()
@@ -148,9 +150,9 @@ class TuiShutdownIntegrationTest : InstalledConfigTest() {
         try {
             app.start()
             terminal.entered.awaitReady()
-            repeat(256) { YameEvents.publish(DiagnosticMessage("accepted-$it")) }
+            repeat(256) { YameEvents.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "accepted-$it")) }
             assertEquals(BrokerWaitResult.COMPLETED, broker.drain().await(timeout))
-            YameEvents.publish(DiagnosticMessage("overflow"))
+            YameEvents.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "overflow"))
             assertEquals(1, exits.poll(2, TimeUnit.SECONDS))
             assertNotNull(app.fatalFailure)
             assertTrue(reports.any { it.contains("fatal presentation failure") })
