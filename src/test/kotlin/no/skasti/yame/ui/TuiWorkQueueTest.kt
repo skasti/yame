@@ -1,5 +1,7 @@
 package no.skasti.yame.ui
 
+import no.skasti.yame.config.ConfigStore
+import no.skasti.yame.config.InstalledConfigTest
 import java.time.Duration
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CompletableFuture
@@ -8,8 +10,56 @@ import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.*
 
-class TuiWorkQueueTest {
+class TuiWorkQueueTest : InstalledConfigTest() {
     private fun CountDownLatch.awaitReady() = assertTrue(await(2, TimeUnit.SECONDS))
+
+    @Test fun `TUI queue owns its configured default and live resizing preserves pending slots`() {
+        val store = ConfigStore(listOf(TuiSettings.QueueCapacity to 3))
+        installConfig(store)
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val completed = CountDownLatch(4)
+        val seen = mutableListOf<Int>()
+        val queue = TuiWorkQueue()
+        try {
+            assertEquals(3, queue.configuredCapacity)
+            queue.submitRequired("Hold") { entered.countDown(); release.await(); seen += 1; completed.countDown() }
+            entered.awaitReady()
+            for (id in 2..4) {
+                assertTrue(queue.submitRequired("Pending") { seen += id; completed.countDown() })
+            }
+            store.set(TuiSettings.QueueCapacity to 1)
+            assertEquals(1, queue.configuredCapacity)
+            assertNull(queue.fatalFailure)
+            store.set(TuiSettings.QueueCapacity to 4)
+            assertEquals(4, queue.configuredCapacity)
+            release.countDown()
+            assertTrue(completed.await(2, TimeUnit.SECONDS))
+            queue.read { assertEquals(listOf(1, 2, 3, 4), seen) }
+            assertNull(queue.fatalFailure)
+        } finally { release.countDown(); queue.close() }
+        store.set(TuiSettings.QueueCapacity to 10)
+        assertEquals(4, queue.configuredCapacity, "queue must unsubscribe on close")
+    }
+
+    @Test fun `explicit TUI queue capacity ignores process settings`() {
+        val store = ConfigStore()
+        installConfig(store)
+        val queue = TuiWorkQueue(capacity = 2)
+        try {
+            store.set(TuiSettings.QueueCapacity to 1024)
+            assertEquals(2, queue.configuredCapacity)
+        } finally { queue.close() }
+    }
+
+    @Test fun `queue settings reject nonpositive and excessive capacities`() {
+        val store = ConfigStore()
+        installConfig(store)
+        for (value in listOf(-1, 0, 65_537)) {
+            assertFailsWith<IllegalArgumentException> { store.set(TuiSettings.QueueCapacity to value) }
+        }
+        assertEquals(256, store[TuiSettings.QueueCapacity])
+    }
 
     @Test fun `interrupted admission rejects only that attempt and restores the interrupt flag`() {
         val entered = CountDownLatch(1)
