@@ -287,7 +287,7 @@ class TuiYameObserver(
 
     fun onEvent(event: YameEvent) {
         // Production events already own immutable payloads at the publication boundary.
-        work.submitRequired(kind = event.javaClass.simpleName) { processEvent(event) }
+        work.submitObservation(kind = event.javaClass.simpleName) { processEvent(event) }
     }
 
     private fun processEvent(event: YameEvent) {
