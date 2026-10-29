@@ -247,10 +247,10 @@ def capture_tui_snapshot():
     if not path.is_file():
         return None
     diagnostics = path.read_text(encoding="utf-8", errors="replace")
-    match = re.search(r"TUI queue admission timed out \\([^\\r\\n]*\\)", diagnostics)
+    match = re.search(r"TUI queue admission timed out \([^\r\n]*\)", diagnostics)
     if match:
         snapshot = match.group(0)
-        (REPORT / "tui-queue-snapshot.txt").write_text(snapshot + "\\n", encoding="utf-8")
+        (REPORT / "tui-queue-snapshot.txt").write_text(snapshot + "\n", encoding="utf-8")
         return snapshot
     return None
 
