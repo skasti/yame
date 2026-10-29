@@ -332,7 +332,23 @@ Expanded host with known resource paths:
 
 ![YAME TUI with expanded proxy host](docs/assets/tui-proxy-expanded.svg)
 
-Useful palette commands include `/port`, `/baud`, `/flow-control`, `/dns-upstream`, `/http-proxy`, `/fps`, `/tone`, `/login`, `/reconnect`, `/disconnect`, `/clear-log`, and `/quit`. Choose `on` or `off` after `/tone`, or type `/tone on` or `/tone off` directly.
+Useful palette commands include `/port`, `/baud`, `/flow-control`, `/dns-upstream`, `/http-proxy`, `/fps`, `/queues`, `/tone`, `/login`, `/reconnect`, `/disconnect`, `/clear-log`, and `/quit`. Choose `on` or `off` after `/tone`, or type `/tone on` or `/tone off` directly.
+
+Both bounded event queues have independently configurable capacities. Defaults are **4096 pending EventBroker events** and **256 pending TUI worker slots**; the executing item does not count toward the limit. Adjacent observations can be batched into one TUI slot. For example:
+
+```ini
+[events]
+queue-capacity=8192
+publish-timeout-ms=10
+max-subscribers=64
+
+[tui]
+queue-capacity=512
+```
+
+The broker also owns `publish-timeout-ms` (0–60000, default 10 ms) and `max-subscribers` (1–4096, default 64). Like capacity, their validation belongs to the feature-owned setting keys and changes apply to the active broker.
+
+Set capacities from 1 to 65536 in `yame.ini` before startup, or use `/queues/event-broker` and `/queues/tui` in the command palette to choose common values (256–8192 events and 64–2048 TUI slots). Palette changes are persisted through `ConfigStore` and immediately applied by the queue components themselves, without restart. Lowering a limit does **not** remove already accepted work: the queue drains under the new bound before admitting more items. A saturated queue can still time out and trigger fatal overload; increasing capacity is not a substitute for addressing sustained overload.
 
 The TUI limits terminal redraws to **60 FPS by default**, with choices of **15, 30, 60, or 120 FPS**. Open `/fps` and select a rate, or enter `/fps/15`, `/fps/30`, `/fps/60`, or `/fps/120` directly. The current rate is marked `current`. Changes take effect without restarting or reconnecting and are saved in `yame.ini`:
 
