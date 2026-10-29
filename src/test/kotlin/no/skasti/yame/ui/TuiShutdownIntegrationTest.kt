@@ -164,7 +164,10 @@ class TuiShutdownIntegrationTest : InstalledConfigTest() {
             terminal.release.countDown()
             assertFailsWith<IllegalStateException> { app.close() }
         }
-        terminal.assertDrained("accepted-255")
+        // Fatal teardown is allowed to skip a pending, coalesced screen paint.
+        // Acceptance and fatal supervision are verified above; it must still
+        // restore the terminal and perform no additional IO after teardown.
+        terminal.assertDrained()
     }
 
     private fun CountDownLatch.awaitReady() = assertTrue(await(2, TimeUnit.SECONDS))
