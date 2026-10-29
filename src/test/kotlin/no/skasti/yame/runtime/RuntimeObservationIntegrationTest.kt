@@ -89,9 +89,9 @@ class RuntimeObservationIntegrationTest : InstalledConfigTest() {
         val release = CountDownLatch(1)
         broker.subscribe("blocked") { entered.countDown(); release.await(5, TimeUnit.SECONDS) }
         try {
-            broker.publish(DiagnosticMessage("blocked"))
+            broker.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "blocked"))
             assertTrue(entered.await(5, TimeUnit.SECONDS))
-            broker.publish(DiagnosticMessage("pending"))
+            broker.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "pending"))
             YameLogManager(no.skasti.yame.logging.LoggingConfig(), root).use { logs ->
                 val session = PppSession(sendFrame = {}, logger = {}, diagnosticSink = logs::eventSink)
                 try {
