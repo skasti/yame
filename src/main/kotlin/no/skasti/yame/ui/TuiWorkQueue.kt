@@ -20,7 +20,11 @@ internal class TuiWorkQueue(
     private val lock = ReentrantLock()
     private val changed = lock.newCondition()
     private val admissionWaiting = lock.newCondition()
-    private val pending = ArrayDeque<() -> Unit>()
+    private data class PendingWork(val kind: String, val action: () -> Unit)
+    private val pending = ArrayDeque<PendingWork>()
+    private val admittedByKind = linkedMapOf<String, Long>()
+    private val completedByKind = linkedMapOf<String, Long>()
+    private var executingKind: String? = null
     private var accepting = true
     private var waitingAdmissions = 0
     private val stopped = CountDownLatch(1)
@@ -38,9 +42,19 @@ internal class TuiWorkQueue(
             while (true) {
                 val next = lock.withLock {
                     while (pending.isEmpty() && accepting) changed.await()
-                    if (pending.isEmpty()) null else pending.removeFirst().also { changed.signalAll() }
+                    if (pending.isEmpty()) null else pending.removeFirst().also {
+                        executingKind = it.kind
+                        changed.signalAll()
+                    }
                 } ?: break
-                next()
+                try {
+                    next.action()
+                } finally {
+                    lock.withLock {
+                        completedByKind[next.kind] = (completedByKind[next.kind] ?: 0L) + 1L
+                        executingKind = null
+                    }
+                }
             }
         } catch (error: Throwable) {
             fail(error)
@@ -51,22 +65,37 @@ internal class TuiWorkQueue(
     }, "yame-tui-worker").apply { isDaemon = true; start() }
 
     /** Interruption rejects this attempt without poisoning the queue, as in EventBroker.publish. */
-    fun submit(action: () -> Unit): Boolean = submit(failOnInterruption = false, action)
+    fun submit(action: () -> Unit): Boolean = submit("Other", failOnInterruption = false, action)
 
     /**
      * Live callbacks cannot replay a rejected observation/action. Retain that failure even if
      * their caller isolates exceptions. Once admission is closed, rejection is ordinary shutdown.
      */
-    fun submitRequired(action: () -> Unit): Boolean = submit(failOnInterruption = true, action)
+    fun submitRequired(kind: String = "Other", action: () -> Unit): Boolean =
+        submit(kind, failOnInterruption = true, action)
+
+    /** Capture labels only, never event objects or HTTP/packet payloads. Called with lock held. */
+    private fun queueSnapshot(rejectedKind: String): String {
+        fun formatCounts(counts: Map<String, Long>): String =
+            counts.entries.sortedWith(compareByDescending<Map.Entry<String, Long>> { it.value }.thenBy { it.key })
+                .joinToString(", ") { "${it.key}=${it.value}" }
+        val queuedByKind = pending.groupingBy { it.kind }.eachCount()
+            .mapValues { it.value.toLong() }
+        return "capacity=$capacity, pending=${pending.size}, " +
+            "executing=${executingKind ?: "none"}, rejected=$rejectedKind, " +
+            "queuedByKind={${formatCounts(queuedByKind)}}, " +
+            "admittedByKind={${formatCounts(admittedByKind)}}, " +
+            "completedByKind={${formatCounts(completedByKind)}}"
+    }
 
     /** Closed callbacks are ignored. Capacity exhaustion is terminal and independently observable. */
-    private fun submit(failOnInterruption: Boolean, action: () -> Unit): Boolean = lock.withLock {
+    private fun submit(kind: String, failOnInterruption: Boolean, action: () -> Unit): Boolean = lock.withLock {
         if (!accepting) return false
         var remaining = admissionWait.toNanos()
         while (pending.size == capacity && accepting) {
             // Synchronous config callbacks can reenter from a command. Never wait on ourselves.
             if (isWorker || remaining <= 0) {
-                val error = IllegalStateException("TUI queue admission timed out (capacity $capacity)")
+                val error = IllegalStateException("TUI queue admission timed out (${queueSnapshot(kind)})")
                 fail(error)
                 throw error
             }
@@ -81,7 +110,8 @@ internal class TuiWorkQueue(
             }
         }
         if (!accepting) return false
-        pending.addLast(action)
+        pending.addLast(PendingWork(kind, action))
+        admittedByKind[kind] = (admittedByKind[kind] ?: 0L) + 1L
         changed.signalAll()
         true
     }
