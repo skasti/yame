@@ -1401,7 +1401,7 @@ internal object YameDashboardRenderer {
             return renderStackedBody(state, renderWidth, renderHeight, styles)
         }
         val showQueueBars = state.queueBars != null && renderHeight >= MIN_QUEUE_BAR_HEIGHT
-        val queueBarHeight = if (showQueueBars) 2 else 0
+        val queueBarHeight = if (showQueueBars) 1 else 0
         val bodyHeight = renderHeight - headerHeight - footerHeight - queueBarHeight
         val gap = 1
         val leftWidth = (renderWidth * 55 / 100)
@@ -1492,13 +1492,20 @@ internal object YameDashboardRenderer {
 
         val queueFooter = if (showQueueBars) {
             val queues = requireNotNull(state.queueBars)
-            "\n" + queueBar("Event broker", queues.broker, "events", renderWidth, styles) +
-                "\n" + queueBar("TUI work", queues.tui, "slots", renderWidth, styles)
+            val space = "  "
+            val firstWidth = (renderWidth - space.length) / 2
+            val secondWidth = renderWidth - space.length - firstWidth
+            "\\n" + queueBar("Event broker", queues.broker, "events", firstWidth, styles) +
+                space + queueBar("TUI work", queues.tui, "slots", secondWidth, styles)
         } else ""
-        return "$header\n$body$queueFooter\n$footer"
+        return "$header\\n$body$queueFooter\\n$footer"
     }
 
-    /** The bars represent queued capacity (not transfer progress or work completed). */
+    /**
+     * A compact single-row meter with its title, queue usage and percentage
+     * centered *inside* the track. The underlying filled/unfilled cells are
+     * preserved on either side of the caption.
+     */
     private fun queueBar(
         label: String,
         usage: QueueOccupancy,
@@ -1507,19 +1514,26 @@ internal object YameDashboardRenderer {
         styles: DashboardStyles,
     ): String {
         val percent = (usage.queued.toLong() * 100 / usage.capacity).toInt()
-        val prefix = label.padEnd(14) + "["
-        val suffix = "] " + usage.queued + "/" + usage.capacity + " " + unit + " (" + percent + "%)"
-        val barWidth = (width - prefix.length - suffix.length).coerceAtLeast(1)
+        val trackWidth = width - 2 // Opening and closing brackets.
         val filled = if (usage.queued == 0) 0 else
-            ((usage.queued.toLong() * barWidth + usage.capacity - 1) / usage.capacity)
-                .toInt().coerceIn(1, barWidth)
+            ((usage.queued.toLong() * trackWidth + usage.capacity - 1) / usage.capacity)
+                .toInt().coerceIn(1, trackWidth)
+        val caption = "$label ${usage.queued}/${usage.capacity} $unit ($percent%)"
+        require(caption.length <= trackWidth) { "Queue bar too narrow for its caption" }
+        val captionStart = (trackWidth - caption.length) / 2
         val paint = when {
             percent >= 90 -> styles.danger
             percent >= 70 -> styles.warning
             else -> styles.success
         }
-        val padding = " ".repeat((width - prefix.length - barWidth - suffix.length).coerceAtLeast(0))
-        return prefix + paint("█".repeat(filled)) + styles.muted("░".repeat(barWidth - filled)) + suffix + padding
+        fun trackSegment(from: Int, until: Int): String {
+            val full = (filled - from).coerceIn(0, until - from)
+            val empty = until - from - full
+            return (if (full > 0) paint("█".repeat(full)) else "") +
+                (if (empty > 0) styles.muted("░".repeat(empty)) else "")
+        }
+        return "[" + trackSegment(0, captionStart) + styles.accent(caption) +
+            trackSegment(captionStart + caption.length, trackWidth) + "]"
     }
 
     private fun renderStackedBody(
