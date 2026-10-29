@@ -241,17 +241,25 @@ def site_urls():
             yield page
 
 
-def check_tui_overload(stage):
-    """Surface the actual fatal rather than misreporting a failed page load."""
+def capture_tui_snapshot():
+    """Persist the admission-failure queue histogram, never event payloads."""
     path = REPORT / "yame-stderr.log"
     if not path.is_file():
-        return
+        return None
     diagnostics = path.read_text(encoding="utf-8", errors="replace")
-    if "TUI queue admission timed out" in diagnostics:
-        raise RuntimeError(
-            f"REPRODUCED TUI OVERLOAD during {stage}: "
-            "TUI queue admission timed out (capacity 256); see yame-stderr.log"
-        )
+    match = re.search(r"TUI queue admission timed out \\([^\\r\\n]*\\)", diagnostics)
+    if match:
+        snapshot = match.group(0)
+        (REPORT / "tui-queue-snapshot.txt").write_text(snapshot + "\\n", encoding="utf-8")
+        return snapshot
+    return None
+
+
+def check_tui_overload(stage):
+    """Surface the actual fatal rather than misreporting a failed page load."""
+    snapshot = capture_tui_snapshot()
+    if snapshot:
+        raise RuntimeError(f"REPRODUCED TUI OVERLOAD during {stage}: {snapshot}")
 
 
 def browser(namespace, url, label, user):
@@ -384,6 +392,7 @@ def main():
         log("A pass does not prove that Raspberry Pi HDMI rendering cannot saturate its queue.")
     finally:
         if terminal:
+            capture_tui_snapshot()
             terminal.stop()
         for proc, output in reversed(children):
             stop(proc, output)
