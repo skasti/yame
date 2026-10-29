@@ -140,6 +140,7 @@ class TuiYameObserver(
         nowNanos = System::nanoTime,
         schedule = ::scheduleFrame,
         draw = ::renderNow,
+        initialFps = ConfigStore[TuiSettings.MaxFps],
     )
     override val fatalFailure: Throwable? get() = work.fatalFailure
     internal fun awaitIdle() = work.read { Unit }
@@ -152,6 +153,7 @@ class TuiYameObserver(
             changes[DnsSettings.Upstream]?.let { dnsUpstream = it.value.toString() }
             changes[ProxySettings.Enabled]?.let { httpProxyEnabled = it.value }
             changes[ModemSettings.Tone]?.let { toneSimulationEnabled = it.value }
+            changes[TuiSettings.MaxFps]?.let { frames.updateFrameRate(it.value) }
             LogSettings.Levels.forEach { (module, key) -> changes[key]?.let { logLevels[module] = it.value } }
             LogSettings.CaptureLimits.forEach { (kind, key) -> changes[key]?.let { captureLimits = kind.apply(captureLimits, it.value) } }
             render()
@@ -1022,6 +1024,12 @@ class TuiYameObserver(
             add("/dns-upstream", "Change upstream resolver and reconnect", ::openDnsPalette)
             add("/http-proxy", "Enable or disable HTTP/TLS compatibility", ::openHttpPalette)
             add(TUI_TONE_COMMAND, "Enable or disable modem tones", ::openTonePalette)
+            TuiSettings.SupportedFrameRates.forEach { fps ->
+                handles += paletteRegistry.add(
+                    "/fps/$fps",
+                    { if (ConfigStore[TuiSettings.MaxFps] == fps) "current" else "" },
+                ) { ConfigStore.set(TuiSettings.MaxFps to fps) }
+            }
             add(TUI_LOGIN_COMMAND, "Set terminal login credentials", ::openLoginAddPalette)
             PacketCaptureLimitKind.entries.forEach { kind ->
                 add("/${kind.commandName}", "Maximum packet captures") {
@@ -1074,17 +1082,17 @@ class TuiYameObserver(
     }
 
     /** Timer never touches presentation state and cannot fatally overflow the event FIFO. */
-    private fun scheduleFrame(delayNanos: Long) {
-        headerTimer.schedule({ enqueueFrame() }, delayNanos, java.util.concurrent.TimeUnit.NANOSECONDS)
+    private fun scheduleFrame(delayNanos: Long, generation: Long) {
+        headerTimer.schedule({ enqueueFrame(generation) }, delayNanos, java.util.concurrent.TimeUnit.NANOSECONDS)
     }
 
-    private fun enqueueFrame() {
+    private fun enqueueFrame(generation: Long) {
         if (closed || work.fatalFailure != null) return
-        if (!work.offerRedraw { frames.onDeadline() }) {
+        if (!work.offerRedraw { frames.onDeadline(generation) }) {
             // A full FIFO is still processing observations. Retry the redraw,
             // rather than competing with required events for bounded admission.
             if (!closed && work.fatalFailure == null) {
-                headerTimer.schedule({ enqueueFrame() }, 5, java.util.concurrent.TimeUnit.MILLISECONDS)
+                headerTimer.schedule({ enqueueFrame(generation) }, 5, java.util.concurrent.TimeUnit.MILLISECONDS)
             }
         }
     }
