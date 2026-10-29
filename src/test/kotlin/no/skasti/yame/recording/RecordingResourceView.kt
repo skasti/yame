@@ -71,8 +71,11 @@ class RecordingResourceView {
                     // a timestamp or the system wall clock moves backwards.
                     if (previous == null || event.resourceRevision > previous.resourceRevision) {
                         graph.resources[event.canonicalResourceKey] = event
+                        // Rejected stale snapshots must not add obsolete edges.
+                        graph.associations.addAll(event.associations.filterNot {
+                            it in graph.removedAssociations
+                        })
                     }
-                    graph.associations.addAll(event.associations.filterNot { it in graph.removedAssociations })
                 }
             }
         }
