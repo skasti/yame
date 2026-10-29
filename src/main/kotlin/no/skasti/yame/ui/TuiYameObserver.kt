@@ -5,7 +5,7 @@ import no.skasti.yame.ppp.session.PppSessionEnded
 import no.skasti.yame.serial.AvailablePortsChanged
 import no.skasti.yame.serial.ConnectionStateChanged
 import no.skasti.yame.serial.ConnectionState
-import no.skasti.yame.logging.DiagnosticMessage
+import no.skasti.yame.logging.LogEntry
 import no.skasti.yame.ppp.session.UnhandledPacket
 import no.skasti.yame.ppp.session.DnsQuery
 import no.skasti.yame.ppp.session.DnsResponse
@@ -304,7 +304,7 @@ class TuiYameObserver(
             pendingTransferCount = 0
         }
         when (event) {
-            is DiagnosticMessage -> appendLog(event.message)
+            is LogEntry -> appendLog(event.message)
             is AvailablePortsChanged -> { updateAvailablePorts(event.ports); return }
             is ConnectionStateChanged -> {
                 if (event.state == ConnectionState.DISCONNECTED) {
