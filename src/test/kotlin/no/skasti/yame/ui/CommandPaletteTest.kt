@@ -141,6 +141,60 @@ class CommandPaletteTest : InstalledConfigTest() {
     }
 
     @Test
+    fun `FPS setting accepts only supported rates and defaults to 60`() {
+        val store = ConfigStore()
+        installConfig(store)
+        assertEquals(60, store[TuiSettings.MaxFps])
+        for (fps in TuiSettings.SupportedFrameRates) {
+            store.set(TuiSettings.MaxFps to fps)
+            assertEquals(fps, store[TuiSettings.MaxFps])
+        }
+        for (invalid in listOf(0, 24, 75, 144, -15)) {
+            assertFailsWith<IllegalArgumentException> {
+                store.set(TuiSettings.MaxFps to invalid)
+            }
+        }
+        assertEquals(120, store[TuiSettings.MaxFps])
+    }
+
+    @Test
+    fun `FPS palette persists choices updates live and unregisters on shutdown`() {
+        val persisted = mutableListOf<Int>()
+        val store = ConfigStore(persist = { changes ->
+            persisted += changes[TuiSettings.MaxFps]!!.value
+        })
+        installConfig(store)
+        val ui = TuiYameObserver(FunctionStore(), Terminal(interactive = false))
+        try {
+            ui.type("/fps")
+            assertEquals(listOf("/fps"), ui.paletteSnapshot()?.options?.map { it.value })
+            ui.handleKeyAndAwait("Enter")
+            assertEquals(listOf("15", "30", "60", "120"), ui.paletteSnapshot()?.options?.map { it.value })
+            assertEquals(listOf("", "", "current", ""), ui.paletteSnapshot()?.options?.map { it.description })
+            ui.type("120")
+            ui.handleKeyAndAwait("Enter")
+            assertEquals(120, store[TuiSettings.MaxFps])
+            assertEquals(listOf(120), persisted)
+            // The ConfigStore subscription applies an out-of-band change to
+            // the running observer; palette selection reads the same setting.
+            store.set(TuiSettings.MaxFps to 15)
+            ui.awaitIdle()
+            ui.type("/fps")
+            ui.handleKeyAndAwait("Enter")
+            assertEquals(listOf("current", "", "", ""), ui.paletteSnapshot()?.options?.map { it.description })
+            ui.handleKeyAndAwait("Escape")
+            ui.type("/fps/30")
+            ui.handleKeyAndAwait("Enter")
+            assertEquals(30, store[TuiSettings.MaxFps])
+            assertEquals(listOf(120, 15, 30), persisted)
+        } finally {
+            ui.close()
+        }
+        val field = TuiYameObserver::class.java.getDeclaredField("paletteRegistry").apply { isAccessible = true }
+        assertNull((field.get(ui) as CommandPalette).find("/fps"))
+    }
+
+    @Test
     fun `PPP commands persist shared settings and update active handler without reconnecting`() {
         val saved = mutableListOf<Boolean>()
         val store = ConfigStore(persist = { saved += it[PppSettings.DisconnectOnTerminate]!!.value })
