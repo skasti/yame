@@ -10,7 +10,6 @@ import no.skasti.yame.logging.LogEntry
 import no.skasti.yame.logging.YameLogModule
 import no.skasti.yame.logging.YameLogLevel
 import no.skasti.yame.observer.EventBroker
-import no.skasti.yame.observer.EventBrokerConfig
 import no.skasti.yame.observer.BrokerWaitResult
 import java.time.Duration
 import java.util.concurrent.CountDownLatch
@@ -81,7 +80,7 @@ class RuntimeObservationProjectionTest : InstalledConfigTest() {
         assertNotNull(ui.fatalFailure)
     }
     @Test fun `actual TUI admission proceeds without the observer monitor`() {
-        val broker = EventBroker(EventBrokerConfig(capacity = 1))
+        val broker = EventBroker(initialCapacity = 1, initialPublishTimeout = java.time.Duration.ofMillis(10), initialMaxSubscribers = 64)
         val entered = CountDownLatch(1)
         val locked = CountDownLatch(1)
         val release = CountDownLatch(1)
