@@ -7,8 +7,12 @@ import no.skasti.yame.tone.DialString
 import no.skasti.yame.tone.JavaSoundTonePlayer
 import no.skasti.yame.tone.TonePlayer
 import no.skasti.yame.tone.ToneProgress
+import java.io.ByteArrayOutputStream
 import java.io.Closeable
 import java.io.OutputStream
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 import java.nio.charset.StandardCharsets
 
 class HayesModem(
@@ -31,12 +35,15 @@ class HayesModem(
         proxyLogger = proxyLogger,
         diagnosticSink = diagnosticSink,
     ),
-    private var setCarrierPresent: (Boolean) -> Unit = { /* no-op */ }
+    private var setCarrierPresent: (Boolean) -> Unit = { /* no-op */ },
+    private val escapeGuardMillis: Long = 1_000,
 ) : Closeable {
     enum class State {
         COMMAND,
         DIALING,
         CONNECTED,
+        /** Modem call is still active, but Hayes AT commands are accepted. */
+        ONLINE_COMMAND,
     }
 
     var state: State = State.COMMAND
@@ -56,6 +63,12 @@ class HayesModem(
     }
 
     private val commandBuffer = StringBuilder()
+    private val escapeScheduler = Executors.newSingleThreadScheduledExecutor { task ->
+        Thread(task, "yame-modem-escape").apply { isDaemon = true }
+    }
+    private var escapeTask: ScheduledFuture<*>? = null
+    private var escapePluses = 0
+    private var lastPppByteAt = System.nanoTime()
     private var commandParseState = CommandParseState.SEEKING_AT
     private var pendingCommandA = 'A'
     private var echo = true
@@ -70,13 +83,15 @@ class HayesModem(
     private var connectedLoginCredentials = loginCredentials
 
     init {
+        require(escapeGuardMillis > 0) { "Escape guard must be positive" }
         output?.let(pppHandler::attachOutput)
         setCarrierPresent(false)
     }
 
+    @Synchronized
     fun receive(bytes: ByteArray) {
         when (state) {
-            State.COMMAND -> receiveCommands(bytes)
+            State.COMMAND, State.ONLINE_COMMAND -> receiveCommands(bytes)
             State.DIALING -> Unit
             State.CONNECTED -> receiveConnected(bytes)
         }
@@ -133,15 +148,13 @@ class HayesModem(
                             }
                         }
 
-                        13 -> { // carriage return terminates an AT command
+                        13, 10 -> { // Accept both CR and LF (Trumpet BYE.CMD sends LF).
                             if (echo) writeRaw("\r")
                             val command = selectCommandCandidate(commandBuffer.toString())
                             commandBuffer.clear()
                             commandParseState = CommandParseState.SEEKING_AT
                             handleCommand(command)
                         }
-
-                        10 -> Unit // Ignore LF. Most modem software terminates commands with CR.
 
                         else -> {
                             when {
@@ -221,11 +234,84 @@ class HayesModem(
     }
 
     private fun receivePpp(bytes: ByteArray) {
-        if (pppHandler.receive(bytes)) hangup()
+        // Silence before and after +++ is mandatory. Buffer only candidate escape
+        // bytes; forward ordinary binary PPP traffic unchanged.
+        val forward = ByteArrayOutputStream(bytes.size + 3)
+        for (index in bytes.indices) {
+            val now = System.nanoTime()
+            val idle = now - lastPppByteAt >= TimeUnit.MILLISECONDS.toNanos(escapeGuardMillis)
+            if (escapePluses == 3 && idle) {
+                if (forward.size() > 0 && pppHandler.receive(forward.toByteArray())) {
+                    hangup()
+                    return
+                }
+                enterOnlineCommand()
+                receiveCommands(bytes.copyOfRange(index, bytes.size))
+                return
+            }
+            lastPppByteAt = now
+            val byte = bytes[index]
+            if (escapePluses > 0) {
+                if (byte == '+'.code.toByte() && escapePluses < 3) {
+                    escapePluses++
+                    scheduleEscapeCheck()
+                } else {
+                    repeat(escapePluses) { forward.write('+'.code) }
+                    clearEscape()
+                    forward.write(byte.toInt())
+                }
+            } else if (byte == '+'.code.toByte() && idle) {
+                escapePluses = 1
+                scheduleEscapeCheck()
+            } else {
+                forward.write(byte.toInt())
+            }
+        }
+        if (forward.size() > 0 && pppHandler.receive(forward.toByteArray())) hangup()
     }
 
-    fun hangup() {
-        if (state != State.CONNECTED) return
+    private fun scheduleEscapeCheck() {
+        escapeTask?.cancel(false)
+        escapeTask = escapeScheduler.schedule({
+            synchronized(this) {
+                if (state == State.CONNECTED && connectedPhase == ConnectedPhase.PPP && escapePluses > 0) {
+                    val elapsed = System.nanoTime() - lastPppByteAt
+                    val guard = TimeUnit.MILLISECONDS.toNanos(escapeGuardMillis)
+                    if (elapsed < guard) {
+                        scheduleEscapeCheck()
+                    } else if (escapePluses == 3) {
+                        enterOnlineCommand()
+                    } else {
+                        val pluses = ByteArray(escapePluses) { '+'.code.toByte() }
+                        clearEscape()
+                        if (pppHandler.receive(pluses)) hangup()
+                    }
+                }
+            }
+        }, escapeGuardMillis + 10, TimeUnit.MILLISECONDS)
+    }
+
+    private fun clearEscape() {
+        escapeTask?.cancel(false)
+        escapeTask = null
+        escapePluses = 0
+    }
+
+    private fun enterOnlineCommand() {
+        clearEscape()
+        state = State.ONLINE_COMMAND
+        commandBuffer.clear()
+        commandParseState = CommandParseState.SEEKING_AT
+        logger("MODEM online command mode")
+        respond("OK")
+    }
+
+    @Synchronized
+    fun hangup() = hangup(announceNoCarrier = true)
+
+    private fun hangup(announceNoCarrier: Boolean) {
+        if (state != State.CONNECTED && state != State.ONLINE_COMMAND) return
+        clearEscape()
         state = State.COMMAND
         connectedPhase = ConnectedPhase.PPP
         pppStarted = false
@@ -239,7 +325,7 @@ class HayesModem(
         } catch (e: Exception) {
             logger("PPP !! Cleanup after hangup failed: ${e.javaClass.simpleName}: ${e.message}")
         }
-        respond("NO CARRIER")
+        if (announceNoCarrier) respond("NO CARRIER")
     }
 
     private fun receiveLogin(bytes: ByteArray) {
@@ -348,6 +434,8 @@ class HayesModem(
     private fun startPpp() {
         if (pppStarted) return
 
+        clearEscape()
+        lastPppByteAt = System.nanoTime()
         loginBuffer.clear()
         pendingLoginUsername = null
         connectedPhase = ConnectedPhase.PPP
@@ -383,11 +471,18 @@ class HayesModem(
 
         when {
             upper == "AT" -> respond("OK")
+            upper == "ATO" && state == State.ONLINE_COMMAND -> {
+                state = State.CONNECTED
+                lastPppByteAt = System.nanoTime()
+                respond("CONNECT $baudRate")
+            }
             upper == "ATZ" || upper.startsWith("ATZ") -> {
+                if (state == State.ONLINE_COMMAND) hangup(announceNoCarrier = false)
                 reset()
                 respond("OK")
             }
             upper == "AT&F" || upper.startsWith("AT&F") -> {
+                if (state == State.ONLINE_COMMAND) hangup(announceNoCarrier = false)
                 reset()
                 respond("OK")
             }
@@ -400,9 +495,11 @@ class HayesModem(
                 respond("OK")
             }
             upper.startsWith("ATH") -> {
-                reset()
+                if (state == State.ONLINE_COMMAND) hangup(announceNoCarrier = false)
+                else reset()
                 respond("OK")
             }
+            upper.startsWith("ATD") && state == State.ONLINE_COMMAND -> respond("ERROR")
             upper.startsWith("ATD") -> dial(command.substring(3))
             else -> {
                 // Old modem drivers often send long initialization strings.
@@ -504,7 +601,10 @@ class HayesModem(
         return true
     }
 
+    @Synchronized
     override fun close() {
+        clearEscape()
+        escapeScheduler.shutdownNow()
         setCarrierPresent(false)
         try { pppHandler.close() } finally { tonePlayer.close() }
     }

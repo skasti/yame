@@ -9,4 +9,6 @@ interface SerialTransport : Closeable {
     fun open()
     fun startReading(onBytes: (ByteArray) -> Unit, onStopped: (Throwable?) -> Unit = {})
     fun setCarrierPresent(carrierPresent: Boolean)
+    /** Called on a falling peer DTR signal when the cable exposes it as DSR/DCD. */
+    fun onPeerDtrDropped(callback: () -> Unit) = Unit
 }

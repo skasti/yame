@@ -10,14 +10,15 @@ del HTTP.OUT >NUL 2>NUL
 del SMOKE.OK >NUL 2>NUL
 del SMOKE.OUT >NUL 2>NUL
 
-rem DOSBox's transparent nullmodem carries bytes but not DCD.  Let LSppp
-rem perform the real Hayes dial first; after CONNECT it exits because it
-rem cannot observe carrier, leaving YAME in connected data mode.
-echo Dialing YAME with LSppp...
-LSPPP.EXE /d:1 /n:2 /B:19200 /V:60 /S:10.64.0.2 /D:5,1,0
+rem DOSBox's transparent nullmodem does not carry modem DCD status.
+rem Dial YAME directly through the DOS COM2 device rather than using LSppp
+rem dial mode, which sends +++ and ATH on its carrier-detection timeout.
+rem Hayes escape/hangup now correctly closes the modem call.
+echo Dialing YAME over COM2...
+echo ATDT1>COM2
 
-rem Continue on the already-connected serial line in LSppp local mode.
-rem This skips modem control only; LCP/IPCP are still negotiated normally.
+rem Start LSppp in local mode once YAME has entered data mode.
+rem This skips carrier detection; LCP/IPCP are still negotiated normally.
 echo Starting PPP on connected serial line...
 LSPPP.EXE /l /n:2 /B:19200 /V:60 /S:10.64.0.2 /N:10.64.0.1
 if errorlevel 1 goto ppp_failed

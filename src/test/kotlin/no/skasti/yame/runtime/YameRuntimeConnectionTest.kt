@@ -70,11 +70,65 @@ class YameRuntimeConnectionTest : InstalledConfigTest() {
         private val onClose: () -> Unit = {},
     ) : SerialTransport {
         override val output = ByteArrayOutputStream()
+        private var incoming: ((ByteArray) -> Unit)? = null
+        private var peerDtrDropped: (() -> Unit)? = null
+        fun receive(bytes: String) = checkNotNull(incoming) { "Serial reader not attached" }(bytes.toByteArray())
+        fun dropPeerDtr() = checkNotNull(peerDtrDropped) { "Peer DTR callback not attached" }()
         var closed = false
         override fun open() { onOpen(); failure?.let { throw it } }
         override fun setCarrierPresent(carrierPresent: Boolean) = Unit
-        override fun startReading(onBytes: (ByteArray) -> Unit, onStopped: (Throwable?) -> Unit) = onReadingStarted()
+        override fun onPeerDtrDropped(callback: () -> Unit) { peerDtrDropped = callback }
+        override fun startReading(onBytes: (ByteArray) -> Unit, onStopped: (Throwable?) -> Unit) {
+            incoming = onBytes
+            onReadingStarted()
+        }
         override fun close() { closed = true; onClose() }
+    }
+
+    @Test
+    fun `peer DTR drop hangs up only the modem call and permits redial on the same serial transport`() {
+        val directory = Files.createTempDirectory("yame-peer-dtr")
+        try {
+            val store = ConfigStore(listOf(
+                SerialSettings.Port to "COM1",
+                no.skasti.yame.modem.ModemSettings.Tone to false,
+            ))
+            val portReady = CountDownLatch(1)
+            val port = Port(onReadingStarted = { portReady.countDown() })
+            var opens = 0
+            val failures = Collections.synchronizedList(mutableListOf<Throwable>())
+            YameLogManager(no.skasti.yame.logging.LoggingConfig(), logDirectory = directory).use { logs ->
+                val functions = FunctionStore()
+                run { installConfig(store); YameRuntime(
+                    functions = functions, logManager = logs, resourceGraphs = NavigationResourceRegistry(),
+                    portProvider = { listOf(SerialPortDescriptor("COM1", "test port")) },
+                    connectionFactory = { _, _, _, _ -> opens++; port },
+                ) }.use { runtime ->
+                    val worker = thread {
+                        try { runtime.run() } catch (error: Throwable) { failures += error }
+                    }
+                    try {
+                        assertTrue(portReady.await(5, TimeUnit.SECONDS))
+                        port.receive("ATE0\rATD123\r")
+                        assertTrue(port.output.toString().contains("CONNECT"))
+                        port.output.reset()
+                        port.dropPeerDtr()
+                        assertEquals("\r\nNO CARRIER\r\n", port.output.toString())
+                        assertFalse(port.closed)
+                        port.output.reset()
+                        port.receive("AT\rATD123\r")
+                        assertTrue(port.output.toString().contains("OK"))
+                        assertTrue(port.output.toString().contains("CONNECT"))
+                        assertEquals(1, opens)
+                    } finally {
+                        runtime.close()
+                        worker.join(5_000)
+                        assertFalse(worker.isAlive)
+                    }
+                }
+            }
+            assertTrue(failures.isEmpty(), failures.toString())
+        } finally { directory.toFile().deleteRecursively() }
     }
 
     @Test
