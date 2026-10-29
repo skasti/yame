@@ -8,8 +8,8 @@ data class PppIpConfig(
     val configuredSubnet: Ipv4Cidr? = null,
 ) {
     companion object {
-        fun fromConfigStore(store: ConfigStore = ConfigStore.current): PppIpConfig =
-            PppIpConfig(configuredSubnet = store[PppSettings.Subnet])
+        fun fromConfigStore(): PppIpConfig =
+            PppIpConfig(configuredSubnet = ConfigStore[PppSettings.Subnet])
     }
 
     init {

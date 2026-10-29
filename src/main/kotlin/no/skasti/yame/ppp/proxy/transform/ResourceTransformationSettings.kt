@@ -8,10 +8,10 @@ data class ResourceTransformationSettings(
     val pngCompatibilityMode: PngCompatibilityMode = PngCompatibilityMode.OPTIMIZE,
 ) {
     companion object {
-        fun fromConfigStore(store: ConfigStore = ConfigStore.current): ResourceTransformationSettings =
+        fun fromConfigStore(): ResourceTransformationSettings =
             ResourceTransformationSettings(
-                htmlTransformers = HtmlTransformerSettings.fromConfigStore(store),
-                pngCompatibilityMode = PngCompatibilityMode.parse(store[TransformerSettings.PngCompatibility]),
+                htmlTransformers = HtmlTransformerSettings.fromConfigStore(),
+                pngCompatibilityMode = PngCompatibilityMode.parse(ConfigStore[TransformerSettings.PngCompatibility]),
             )
     }
 

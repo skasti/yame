@@ -162,18 +162,25 @@ unbounded buffering.
 
 ## Component configuration pattern
 
+- Prefer direct `ConfigStore[key]` reads for individual settings. Use an immutable
+  component config only when its interface benefits from grouped values; do not
+  introduce a mandatory wrapper for every feature or group of keys.
+
 - Keep a component's immutable configuration type beside its owning component.
-- Provide `ConfigType.fromConfigStore(store: ConfigStore = ConfigStore.current)`
-  on its companion object. Read owned `SettingKey` values directly through
-  `store[key]`; these reads trigger lazy loading. Pass an available store
-  explicitly to `fromConfigStore(store)`. The `ConfigStore.current` default is
-  convenient when constructing a component without an explicit store.
+- Provide `ConfigType.fromConfigStore()` on its companion object. Read owned
+  keys through the global `ConfigStore[key]` facade, which delegates to the one
+  installed process store and triggers lazy loading. Production code must not
+  accept, retain, pass around or construct local ConfigStore instances. Bootstrap
+  constructs the one instance directly for installation. Tests may construct local
+  stores and install one for each scenario. See ADR 0011.
 - Accept an explicitly constructed immutable config independently of any store.
   A non-null constructor default such as
   `config: ConfigType = ConfigType.fromConfigStore()` is useful when appropriate,
-  but is not the only construction pattern. Composition with an explicit store
-  can inject `ConfigType.fromConfigStore(store)` instead. Do not use a nullable
-  config argument merely to implement a fallback.
+  and is the production construction pattern for configured components. Main
+  installs ConfigStore before parsing CLI flags or constructing any component;
+  components resolve their own default config from that installed store. Explicit
+  immutable config values remain injectable for isolated component tests. Do not
+  use a nullable config argument merely to implement a fallback.
 - Explicit config must allow isolated tests without installing or modifying a
   global store. Config data-class defaults remain ordinary standalone defaults.
 - Factories produce immutable component configuration values without retaining
@@ -183,13 +190,12 @@ unbounded buffering.
   Hold the returned installation handle for the application's lifetime and close it
   after runtime/frontends stop. A second installation is rejected. Multiple
   frontends share the existing store; they never install a replacement.
-- Runtime and presentation constructors default to `ConfigStore.current` and
-  the lazy process-owned `FunctionStore.current` ([ADR 0009](docs/adrs/0009-lazy-global-function-store.md)).
-  Production bootstrap installs configuration but creates no function store.
-  Explicit stores bypass their respective defaults and must be used consistently
-  for internal operations and composed children. Never add function-store
-  installation, replacement or reset. Do not duplicate initial setting values or
-  pass the persistent application configuration tree to components.
+- Runtime and presentation always use the global ConfigStore facade. They may
+  accept an explicit FunctionStore, defaulting to FunctionStore.current
+  ([ADR 0009](docs/adrs/0009-lazy-global-function-store.md)). Configuration-store
+  injection is not supported. Never add function-store installation, replacement
+  or reset. Do not duplicate initial setting values or pass an application-wide
+  configuration tree to components.
 - `ConfigStore` is the single authoritative source of configuration values.
   Components read settings directly through typed keys; multi-key read snapshots
   are intentionally unsupported. YAME accepts the negligible possibility that a
@@ -211,7 +217,9 @@ unbounded buffering.
   DNS, and HTTP compatibility are independent component configs.
 - HTML transformation settings and rules live in `ppp.proxy.transform`, alongside
   the transformation implementation. The shared repository reads their INI file
-  through `ElementSimplifierSettings`; the older reader remains for compatibility.
+  through `ElementSimplifierSettings`. First-run creation uses ConfigStore and the
+  same generic INI repository and the feature-owned key defaults and mappings.
+  Do not introduce feature-specific file stores or alternative user-file readers.
 - Feature-owned `Settings` definitions own their identity, optional logical
   `file` name, static groups, typed keys, and optional dynamic-section mapping.
   A group's ID is its canonical INI section. Keys declare relative names and
@@ -224,8 +232,12 @@ unbounded buffering.
   `file = null` uses the configured primary file; `SeparateSettings(id)` uses a
   separate file named after its ID. Use a bare name such as `shared-settings`,
   never an extension or path. `IniConfigurationRepository` resolves it to
-  `shared-settings.ini`. Definitions may share a logical file and must not claim
-  the same property. The generic ConfigStore registers only definitions requested
+  `shared-settings.ini`. Definitions may share a logical file, but each declared
+  `(Settings.file, SettingGroup.id)` belongs to one group instance. ConfigStore
+  checks loaded definitions and the candidate before repository IO; repeated keys
+  in one group are allowed, distinct groups for the same logical section are not.
+  INI mappings still validate physical claims, including dynamic structural
+  sections. See ADR 0013. Definitions must not claim the same physical property. The generic ConfigStore registers only definitions requested
   by components; it never enumerates all features.
 - INI reads accept `[serial] baud=115200` and the equivalent root property
   `serial.baud=115200`. A conflict is an error. Writes emit only the section
@@ -247,15 +259,16 @@ unbounded buffering.
   composes only valid tag sections; unrelated sections and root-flat entries
   remain unclaimed. The separate file's `[element-simplifier.general] enabled`
   setting and the live `TransformerSettings.Elements` switch both gate the
-  element simplifier. `HtmlTransformerSettings.fromConfigStore(store)` reads
+  element simplifier. `HtmlTransformerSettings.fromConfigStore()` reads
   both directly for each new request; its effective value determines the
   transformation profile. The repository applies owner-only POSIX
   permissions to all INI files on read/write because a lazy, unregistered feature
   may already have sensitive values in a shared file.
-- `YameConfiguration` and `YameConfigurationBindings` remain compatibility and CLI
-  adapters. New persistence mappings live in their owning feature definitions.
-- Application persistence may reuse immutable feature config values. This does not
-  authorize a feature to import the application schema or nest unrelated configs.
+- Startup and CLI parsing use the runtime ConfigStore directly. CLI overrides are
+  one transient typed batch; invocation options must not become a configuration
+  aggregate. Persistence mappings live in feature definitions. See ADR 0010.
+- Serial transport and logging may use immutable feature-owned values; never nest
+  these or unrelated PPP/DNS/proxy settings inside Hayes modem configuration.
 - `YameRuntime` composes serial, modem, PPP, DNS, proxy, and logging behavior. TUI
   and plain mode use that same runtime, ConfigStore, and FunctionStore.
 - A user selecting unchanged serial settings expresses a reconnect action through
@@ -271,3 +284,13 @@ unbounded buffering.
   have ordinary standalone child defaults. Application composition explicitly
   injects each configured dependency. Supplying an explicit modem config must not
   indirectly consult a process store for unrelated PPP configuration.
+
+- Descriptions belong in public feature-owned Settings, SettingGroup and SettingKey
+  metadata. The shared INI writer owns only explicitly marked `##### @yame`
+  documentation blocks; preserve unmarked user comments and ambiguous markers.
+  Settings overviews use independently owned `<id> settings:` blocks beside the
+  first owned section in document order; structural descriptions join that owner's
+  overview. Never regenerate a shared file header from lazily loaded definitions.
+  Preserve legacy file markers conservatively. Keep documentation synchronization
+  independent of value changes and notifications; never add templates or
+  feature-specific comment writers.

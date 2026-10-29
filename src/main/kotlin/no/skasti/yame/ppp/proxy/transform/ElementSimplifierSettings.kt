@@ -3,13 +3,31 @@ package no.skasti.yame.ppp.proxy.transform
 import no.skasti.yame.config.*
 
 /** Dynamic tag sections in the existing element-simplifier.ini. */
-object ElementSimplifierSettings : SeparateSettings("element-simplifier") {
+object ElementSimplifierSettings : SeparateSettings("element-simplifier", description = "HTML element simplification. Edit rules and restart YAME to apply external changes.\nThis file contains the complete mapping; remove a section to leave that tag unchanged.") {
+    private val defaultRules by lazy {
+        ElementSimplifierConfiguration(linkedMapOf(
+            "main" to ElementSimplifierRule("div"),
+            "article" to ElementSimplifierRule("div"),
+            "section" to ElementSimplifierRule("div"),
+            "nav" to ElementSimplifierRule("div"),
+            "header" to ElementSimplifierRule("div"),
+            "footer" to ElementSimplifierRule("div"),
+            "aside" to ElementSimplifierRule("div"),
+            "figure" to ElementSimplifierRule("div"),
+            "hgroup" to ElementSimplifierRule("div"),
+            "figcaption" to ElementSimplifierRule("p"),
+            "time" to ElementSimplifierRule("span"),
+            "mark" to ElementSimplifierRule("span"),
+            "details" to ElementSimplifierRule("div"),
+            "summary" to ElementSimplifierRule("p", "font-weight:bold;"),
+        ))
+    }
     val General = SettingGroup("element-simplifier.general", this)
     /** General rule-file switch; both this and TransformerSettings.Elements must be enabled. */
-    val Enabled = SettingKey<Boolean>("enabled", General, default = { true })
+    val Enabled = SettingKey<Boolean>("enabled", General, description = "Enable the rules in this file. The main transformer switch must also be enabled.", default = { true })
     val Group = SettingGroup(this)
     val Rules = SettingKey<ElementSimplifierConfiguration>("rules", Group, structural = true,
-        default = { ElementSimplifierConfiguration.defaults() })
+        description = "HTML element simplification rules.\nEach section names an HTML tag to transform.\ntarget: Replacement HTML element.\nstyle: Optional CSS applied to the replacement.", default = { defaultRules })
 
     override fun loadFromIni(context: IniReadContext): List<ConfigChange<*>> {
         val ordinary = super.loadFromIni(context)
@@ -31,7 +49,7 @@ object ElementSimplifierSettings : SeparateSettings("element-simplifier") {
             }
             if (rule != null) rules[section] = rule
         }
-        return ordinary + (Rules to if (context.existed) ElementSimplifierConfiguration(rules) else ElementSimplifierConfiguration.defaults())
+        return ordinary + (Rules to if (context.existed) ElementSimplifierConfiguration(rules) else Rules.default())
     }
 
     override fun saveToIni(context: IniWriteContext) {

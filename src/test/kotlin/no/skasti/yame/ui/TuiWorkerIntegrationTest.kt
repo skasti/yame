@@ -1,11 +1,11 @@
 package no.skasti.yame.ui
 
+import no.skasti.yame.config.InstalledConfigTest
 import com.github.ajalt.mordant.terminal.*
 import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.lifecycle.ApplicationEventLifecycle
 import no.skasti.yame.observer.EventBroker
-import no.skasti.yame.persistence.YameConfiguration
-import no.skasti.yame.persistence.applicationConfigStore
+import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.serial.ConnectionState
 import no.skasti.yame.serial.ConnectionStateChanged
 import no.skasti.yame.serial.SerialSettings
@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicReference
 import java.time.Duration
 import kotlin.test.*
 
-class TuiWorkerIntegrationTest {
+class TuiWorkerIntegrationTest : InstalledConfigTest() {
     private fun TuiYameObserver.chooseNextBaud() {
         "/baud".forEach { handleKeyAndAwait(it.toString()) }
         handleKeyAndAwait("Enter")
@@ -29,8 +29,8 @@ class TuiWorkerIntegrationTest {
     @Test fun `baud command commits synchronously and reentrant notification updates presentation in FIFO order`() {
         val recorder = TerminalRecorder(outputInteractive = true, inputInteractive = false)
         val savingThread = AtomicReference<Thread>()
-        val config = applicationConfigStore(YameConfiguration(), save = { savingThread.set(Thread.currentThread()) })
-        TuiYameObserver(config, FunctionStore(), Terminal(terminalInterface = recorder)).use { ui ->
+        val config = ConfigStore(persist = { savingThread.set(Thread.currentThread()) })
+        run { installConfig(config); TuiYameObserver(FunctionStore(), Terminal(terminalInterface = recorder)) }.use { ui ->
             ui.start()
             ui.chooseNextBaud()
             ui.handleKeyAndAwait("Enter")
@@ -53,13 +53,13 @@ class TuiWorkerIntegrationTest {
         val callbackFailure = AtomicReference<Throwable>()
         val exits = LinkedBlockingQueue<Int>()
         val reports = CopyOnWriteArrayList<String>()
-        val config = applicationConfigStore(YameConfiguration(), save = {
+        val config = ConfigStore(persist = {
             saving.countDown(); check(save.await(5, TimeUnit.SECONDS))
         }, onSubscriberFailure = {
             callbackFailure.set(it); caught.countDown()
             check(releaseCallback.await(5, TimeUnit.SECONDS))
         })
-        val ui = TuiYameObserver(config, FunctionStore(), Terminal(interactive = false))
+        val ui = run { installConfig(config); TuiYameObserver(FunctionStore(), Terminal(interactive = false)) }
         val broker = EventBroker()
         val owner = ApplicationEventLifecycle(broker, timeout = Duration.ofMillis(200),
             sealFacade = {}, report = reports::add, terminate = { exits.offer(it) })
@@ -95,7 +95,7 @@ class TuiWorkerIntegrationTest {
             check(release.await(5, TimeUnit.SECONDS))
             ui.close()
         }.use {
-            ui = TuiYameObserver(applicationConfigStore(YameConfiguration()), functions, Terminal(interactive = false))
+            ui = run { installConfig(ConfigStore()); TuiYameObserver(functions, Terminal(interactive = false)) }
             try {
                 "/disconnect".forEach { ui.handleKey(it.toString()) }
                 ui.handleKey("Enter")
@@ -124,8 +124,8 @@ class TuiWorkerIntegrationTest {
                 recorder.completePrintRequest(request)
             }
         }
-        val config = applicationConfigStore(YameConfiguration())
-        val ui = TuiYameObserver(config, FunctionStore(), Terminal(terminalInterface = output))
+        val config = ConfigStore()
+        val ui = run { installConfig(config); TuiYameObserver(FunctionStore(), Terminal(terminalInterface = output)) }
         try {
             ui.start()
             assertTrue(blocked.await(2, TimeUnit.SECONDS))

@@ -1,10 +1,11 @@
 package no.skasti.yame.runtime
 
+import no.skasti.yame.config.InstalledConfigTest
+import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.lifecycle.ApplicationFunctions
 import no.skasti.yame.logging.*
 import no.skasti.yame.observer.*
-import no.skasti.yame.persistence.*
 import no.skasti.yame.ppp.proxy.NavigationResourceRegistry
 import no.skasti.yame.serial.*
 import java.io.ByteArrayOutputStream
@@ -18,7 +19,7 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 import kotlin.test.*
 
-class YameRuntimeLifecycleTest {
+class YameRuntimeLifecycleTest : InstalledConfigTest() {
     private lateinit var broker: EventBroker
     private lateinit var installation: AutoCloseable
     @BeforeTest fun install() {
@@ -53,14 +54,14 @@ class YameRuntimeLifecycleTest {
     private class Fixture(
         source: () -> List<SerialPortDescriptor> = { emptyList() },
         factory: () -> SerialTransport = { Port() },
-        config: YameConfiguration = YameConfiguration(portName = "COM1"),
+        val store: ConfigStore = ConfigStore(listOf(no.skasti.yame.serial.SerialSettings.Port to "COM1")),
     ) : AutoCloseable {
         val directory = Files.createTempDirectory("yame-runtime-lifecycle")
-        val logs = YameLogManager(YameLogManager.defaultLevels(), directory)
-        val store = applicationConfigStore(config)
+        val logs = YameLogManager(no.skasti.yame.logging.LoggingConfig(), directory)
         val functions = FunctionStore()
         val ports = RuntimeTestPorts(source)
-        val runtime = YameRuntime(store, functions, logs, NavigationResourceRegistry(), ports::scan,
+        private val configInstallation = ConfigStore.install(store)
+        val runtime = YameRuntime(functions, logs, NavigationResourceRegistry(), ports::scan,
             connectionFactory = { _, _, _, _ -> factory() })
         var expectedCloseFailure: Throwable? = null
         fun run() = RuntimeTestRun(runtime, ports)
@@ -69,7 +70,7 @@ class YameRuntimeLifecycleTest {
             try {
                 val expected = expectedCloseFailure
                 if (expected == null) runtime.close() else assertSame(expected, assertFails { runtime.close() })
-            } finally { logs.close(); directory.toFile().deleteRecursively() }
+            } finally { logs.close(); configInstallation.close(); directory.toFile().deleteRecursively() }
         }
     }
 
@@ -164,7 +165,7 @@ class YameRuntimeLifecycleTest {
     @Test fun `automatic port selection and its configuration callback create one connection`() {
         val port = Port()
         Fixture(source = { listOf(SerialPortDescriptor("COM1", "test")) }, factory = { port },
-            config = YameConfiguration()).use { f ->
+            store = ConfigStore()).use { f ->
             f.run().use {
                 f.functions.invoke(ConnectionFunctions.Reconnect)
                 assertEquals("COM1", f.store[SerialSettings.Port])
@@ -361,7 +362,7 @@ class YameRuntimeLifecycleTest {
                     catch (error: InterruptedException) { monitorInterrupted.countDown(); throw error }
                 }
                 emptyList()
-            }, factory = { port }, config = YameConfiguration()).use { f ->
+            }, factory = { port }, store = ConfigStore()).use { f ->
                 val runner = Worker { f.runtime.run() }
                 f.ports.awaitStartup()
                 f.ports.releaseStartup()

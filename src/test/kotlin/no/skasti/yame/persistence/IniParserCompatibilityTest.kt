@@ -1,5 +1,6 @@
 package no.skasti.yame.persistence
 
+import no.skasti.yame.config.withInstalledConfig
 import no.skasti.yame.config.ini.IniParser
 import no.skasti.yame.serial.SerialSettings
 import java.io.StringReader
@@ -64,13 +65,11 @@ class IniParserCompatibilityTest {
 
         val path = directory.resolve("yame.ini")
         Files.writeString(path, content)
-        val legacy = YameConfigurationStore(path).load()
         val runtime = lazyApplicationConfigStore(path)
-        assertEquals(57_600, legacy.baudRate)
-        assertEquals(legacy.baudRate, runtime[SerialSettings.Baud])
-        assertEquals(legacy.portName, runtime[SerialSettings.Port])
+        assertEquals(57_600, runtime[SerialSettings.Baud])
+        assertEquals("COM 4", runtime[SerialSettings.Port])
         // Historical login.* is intentionally not an alias for modem.login.*.
-        assertEquals(null, no.skasti.yame.modem.HayesModemConfig.fromConfigStore(runtime).username)
+        assertEquals(null, withInstalledConfig(runtime) { no.skasti.yame.modem.HayesModemConfig.fromConfigStore() }.username)
     }
 
     @Test fun `writing one setting keeps unknown escaped values continuation and comments`() {
@@ -99,14 +98,14 @@ class IniParserCompatibilityTest {
             assertEquals(original.getProperty(key), updated.getProperty(key), key)
         }
         assertEquals("115200", IniParser.parse(written).get("serial", "baud"))
-        assertEquals(115_200, YameConfigurationStore(path).load().baudRate)
+        assertEquals(115_200, lazyApplicationConfigStore(path)[SerialSettings.Baud])
     }
 
-    @Test fun `legacy save preserves unknown Java Properties records`() {
+    @Test fun `store save preserves unknown Java Properties records`() {
         val path = directory.resolve("yame.ini")
         val untouched = "# keep\nfuture\\ key:old\\ value  \nfuture.more=one\\\n  two\n"
         Files.writeString(path, untouched + "serial.baud=9600\n")
-        YameConfigurationStore(path).save(YameConfiguration(baudRate = 57_600))
+        lazyApplicationConfigStore(path).set(SerialSettings.Baud to 57_600)
         assertTrue(Files.readString(path).startsWith(untouched))
     }
 
@@ -124,7 +123,10 @@ class IniParserCompatibilityTest {
         val second = lazyApplicationConfigStore(unterminated)
         second[SerialSettings.Baud]
         second.set(SerialSettings.Baud to 57_600)
-        assertEquals("# keep\n[serial]\nbaud=57600", Files.readString(unterminated))
+        val updated = Files.readString(unterminated)
+        assertTrue(updated.startsWith("# keep\n"))
+        assertTrue(updated.contains("##### @yame serial\n"))
+        assertTrue(updated.endsWith("[serial]\nbaud=57600"))
     }
 
     @Test fun `malformed Unicode escape reports file and physical line`() {

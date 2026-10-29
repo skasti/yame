@@ -124,7 +124,6 @@ internal class SystemHttpCompatibilityHandler(
                 active = { connection.isActive },
                 transformationSettings = transformerSettings?.invoke() ?: ResourceTransformationSettings(
                     htmlTransformers = config.htmlTransformers,
-                    pngCompatibilityMode = config.pngCompatibilityMode,
                 ),
             )
         return processRequest(state, request)

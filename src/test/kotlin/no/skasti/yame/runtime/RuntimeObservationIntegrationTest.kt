@@ -1,11 +1,11 @@
 package no.skasti.yame.runtime
 
+import no.skasti.yame.config.InstalledConfigTest
 import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.lifecycle.ApplicationFunctions
 import no.skasti.yame.logging.*
 import no.skasti.yame.observer.*
-import no.skasti.yame.persistence.YameConfiguration
-import no.skasti.yame.persistence.applicationConfigStore
+import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.ppp.PppFrame
 import no.skasti.yame.ppp.proxy.NavigationResourceRegistry
 import no.skasti.yame.ppp.session.*
@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 import kotlin.test.*
 
-class RuntimeObservationIntegrationTest {
+class RuntimeObservationIntegrationTest : InstalledConfigTest() {
     private fun isolated(config: EventBrokerConfig = EventBrokerConfig(), body: (EventBroker) -> Unit) {
         val broker = EventBroker(config)
         val installation = YameEvents.install(broker)
@@ -41,9 +41,9 @@ class RuntimeObservationIntegrationTest {
             if (events.size == 1) initial.countDown() else changed.countDown()
         }
         try {
-            YameLogManager(YameLogManager.defaultLevels(), root).use { logs ->
-                YameRuntime(applicationConfigStore(YameConfiguration()), functions, logs,
-                    resourceGraphs = NavigationResourceRegistry(), portProvider = source::get).use { runtime ->
+            YameLogManager(no.skasti.yame.logging.LoggingConfig(), root).use { logs ->
+                run { installConfig(ConfigStore()); YameRuntime(functions, logs,
+                    resourceGraphs = NavigationResourceRegistry(), portProvider = source::get) }.use { runtime ->
                     val worker = thread { runtime.run() }
                     try {
                         assertTrue(initial.await(5, TimeUnit.SECONDS))
@@ -92,7 +92,7 @@ class RuntimeObservationIntegrationTest {
             broker.publish(DiagnosticMessage("blocked"))
             assertTrue(entered.await(5, TimeUnit.SECONDS))
             broker.publish(DiagnosticMessage("pending"))
-            YameLogManager(YameLogManager.defaultLevels(), root).use { logs ->
+            YameLogManager(no.skasti.yame.logging.LoggingConfig(), root).use { logs ->
                 val session = PppSession(sendFrame = {}, logger = {}, diagnosticSink = logs::eventSink)
                 try {
                     assertFailsWith<QueueFullException> { session.receive(PppFrame(0x8057, byteArrayOf(1, 2, 3))) }

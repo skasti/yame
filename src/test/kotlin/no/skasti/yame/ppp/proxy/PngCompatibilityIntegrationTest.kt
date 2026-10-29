@@ -1,6 +1,8 @@
 package no.skasti.yame.ppp.proxy
 
 import com.sun.net.httpserver.HttpServer
+import no.skasti.yame.config.ConfigStore
+import no.skasti.yame.config.withInstalledConfig
 import no.skasti.yame.ppp.http.HttpConnection
 import no.skasti.yame.ppp.http.HttpRequest
 import no.skasti.yame.ppp.http.HttpResponse
@@ -49,10 +51,10 @@ class PngCompatibilityIntegrationTest {
             }
         }
         server.start()
-        val store = no.skasti.yame.persistence.applicationConfigStore(no.skasti.yame.persistence.YameConfiguration())
+        val store = ConfigStore()
         val handler = SystemHttpCompatibilityHandler(
             config = PppHttpCompatibilityConfig(),
-            transformerSettings = { ResourceTransformationSettings.fromConfigStore(store) },
+            transformerSettings = { withInstalledConfig(store) { ResourceTransformationSettings.fromConfigStore() } },
         )
         val flow = TcpProxyFlow(TcpFlowKey(
             Ipv4Address.parse("10.0.0.2"), 2402, Ipv4Address.parse("127.0.0.1"), 80,

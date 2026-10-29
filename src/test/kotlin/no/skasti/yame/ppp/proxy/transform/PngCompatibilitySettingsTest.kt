@@ -1,7 +1,7 @@
 package no.skasti.yame.ppp.proxy.transform
 
+import no.skasti.yame.config.withInstalledConfig
 import no.skasti.yame.persistence.lazyApplicationConfigStore
-import no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.Test
@@ -28,7 +28,7 @@ class PngCompatibilitySettingsTest {
         )
         assertEquals(
             PngCompatibilityMode.REQUIRE_LEGACY_FORMAT,
-            PppHttpCompatibilityConfig.fromConfigStore(reloaded).pngCompatibilityMode,
+            withInstalledConfig(reloaded) { ResourceTransformationSettings.fromConfigStore() }.pngCompatibilityMode,
         )
     }
 

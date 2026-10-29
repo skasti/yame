@@ -31,14 +31,15 @@ abstraction:
    release the configuration installation and close logging. A shutdown hook and
    fatal-event supervisor use that same idempotent owner.
 
-Production presentation/runtime construction omits both stores. Constructors for
-`InteractiveYameApplication`, `TuiYameObserver` and `YameRuntime` default to
-`ConfigStore.current` (the explicitly installed process store) and
-`FunctionStore.current` (the lazy process-owned registry from
-[ADR 0009](adrs/0009-lazy-global-function-store.md)). Main creates no function
-store. Explicit constructor arguments bypass the defaults independently; a
-component retains those instances for its operations and passes them to children
-when composing them. It never replaces an injected store with a global lookup.
+Production code accesses configuration exclusively through the global
+`ConfigStore` facade, including `ConfigStore[key]`, `set`, and `onChange`.
+Runtime, presentation, CLI parsing and component factories have no ConfigStore
+parameters or retained store references. Bootstrap creates and installs the one
+process instance. Tests may construct isolated stores and install one for the
+scenario; explicit immutable component config values remain available.
+[ADR 0011](adrs/0011-global-configuration-access.md) records this boundary.
+FunctionStore injection remains independent: constructors default to its lazy
+process-owned registry and may accept an explicit function registry.
 
 `InteractiveYameApplication` owns only `TuiYameObserver` and its subscription.
 Neither the TUI nor plain diagnostics owns a runtime or resource registry.
@@ -89,7 +90,7 @@ path with plain diagnostics, and plain mode without a port still prints usage.
 ## Typed settings and ownership
 
 `SettingKey<T>` is invariant and has a member `to(T)` operator. Consequently
-`store.set(SerialSettings.Baud to 9600, ModemSettings.Tone to false)` compiles,
+`ConfigStore.set(SerialSettings.Baud to 9600, ModemSettings.Tone to false)` compiles,
 whereas passing `SerialSettings.Baud to "9600"` to `set` is rejected. `ConfigChanges[key]` returns a
 typed `ConfigChange<T>?`, including for nullable settings, in average O(1) time.
 Iteration preserves the caller's batch order. Keys use identity; registering or
@@ -105,11 +106,11 @@ custom mapping. `Settings` defines ownership, while `ConfigStore` holds current
 values and immutable component `*Config` objects carry values into components;
 component configs do not inherit `Settings`. The generic store contains no central
 list of keys.
-A direct `store[key]` read requests the definition attached to the key's group,
+A direct `ConfigStore[key]` read requests the definition attached to the key's group,
 loading that definition on first use. Component `fromConfigStore()` factories
 read only their owned keys through the supplied store.
-The `persistence` package retains compatibility adapters for existing callers and
-CLI composition. They do not register features or supply the runtime's settings.
+The `persistence` package supplies the generic INI repository and a store factory.
+Startup and CLI parsing use the same typed store as runtime and presentation.
 INI ownership lives in `IniConfigurationRepository`, scoped to its store. Each
 logical `(file, section, property)` belongs to at most one `SettingKey`, including
 conventional keys, composite children and dynamic rule attributes. Two keys may
@@ -126,9 +127,15 @@ when `Rules` had previously claimed their attributes. Each affected document is
 prepared and validated before the first replacement; an actual filesystem failure
 in a later replacement still reports partial disk state while the typed store
 remains uncommitted.
-`YameConfiguration` is used only during startup/CLI parsing and file persistence.
-It reuses immutable feature values as sibling fields without putting PPP, DNS, or
-HTTP configuration inside the modem config. The new section-based `yame.ini` names are owned by feature definitions.
+`ConfigStore` is the sole configuration state holder. CLI flags become typed
+transient changes, validated and applied as one batch after parsing. Invocation
+options contain only mode, tone-test number, port-listing choice and log directory.
+Individual settings normally use direct `ConfigStore[key]` reads, including serial
+baud and flow control. Config types are optional value objects for component
+interfaces that benefit from grouped values: `LoggingConfig` supplies initial log
+levels and capture limits to YameLogManager without retaining a store or
+subscriptions. Hayes, PPP, DNS and proxy values remain
+independent. Section-based `yame.ini` names are owned by feature definitions.
 Version checks, CLI precedence, credential permissions, and safe replacement remain.
 The repository restricts every existing INI file to owner-only POSIX permissions
 when reading it and writes replacements with the same permissions. A file may
@@ -168,9 +175,9 @@ the existing filesystem/store guarantees.
 
 ## Notifications and lifecycle
 
-Subscribe with `store.onChange[group].subscribe { changes -> ... }` and close the
+Subscribe with `ConfigStore.onChange[group].subscribe { changes -> ... }` and close the
 returned handle on shutdown. `+= handler` / `-= handler` are also supported.
-Global listeners use `store.onChange.subscribe`. A cross-group transaction is
+Global listeners use `ConfigStore.onChange.subscribe`. A cross-group transaction is
 fully committed before delivery; each group receives one precomputed indexed view
 containing only its changed keys. Global listeners receive the whole batch.
 
@@ -275,8 +282,8 @@ Multi-key read snapshots are intentionally unsupported. YAME accepts the negligi
 possibility that a value changes between individual reads. `ConfigStore.current`
 fails fast until `Main` installs a process store. `install` returns an idempotent
 lifetime handle, rejects an existing owner, and releases the store on close.
-`Main` closes that handle after the runtime and frontend. Multiple frontends take
-shared store instances; they do not replace global state. Explicit constructor
+`Main` closes that handle after the runtime and frontend. Multiple frontends use
+the same global configuration facade; they do not replace global state. Explicit constructor
 configurations never require installation, including the modem's standalone PPP
 child defaults. Element-simplifier rules are a typed setting in a separate INI file
 loaded from its separate INI file; runtime writes use the repository.
@@ -288,7 +295,7 @@ loaded from its separate INI file; runtime writes use the repository.
 | `config`, `function` | Typed generic stores, changes, subscriptions and operations; no concrete features or persistence |
 | `serial`, `modem`, `ppp`, `ppp.dns`, `ppp.proxy`, `logging` | Their own keys, groups, value validation and immutable component configs |
 | `ppp.proxy.transform` | HTML switches, element rules/INI, transformation policy and implementation |
-| `persistence` | Generic INI repository and legacy CLI/DTO adapters; feature definitions own mappings |
+| `persistence` | Generic INI repository and store factory; feature definitions own mappings |
 | `Main` | Load file, apply CLI precedence, install configuration, construct/register/start presentation before constructing/registering/running runtime; close the lifecycle owner in its outer finally |
 | `ApplicationEventLifecycle` | Supervise fatal broker failure, own registered producers/consumers and order shutdown |
 | `YameRuntime` | Construct component configs from direct store reads, observe committed batches, own connections and registered functions |
@@ -337,7 +344,7 @@ port without requiring serial hardware or process-global configuration.
 
 ## Lazy configuration definitions (issue #96)
 
-A typed read such as `store[SerialSettings.Baud]` loads only the owning
+A typed read such as `ConfigStore[SerialSettings.Baud]` loads only the owning
 `Settings` definition on first use. `Settings` discovers public `SettingKey`
 properties (including keys in collections) once, lazily and thread-safely.
 `settingKeys` and `compositeSettingKeys` partition that discovery. There is no
@@ -348,8 +355,23 @@ external path as `group.id + "." + name`.
 `Settings.file = null` selects the primary file (`yame.ini` or `--config`).
 `SeparateSettings("element-simplifier")` selects `element-simplifier.ini` beside
 it. A logical file name has no extension, path separator, traversal, or non-ASCII
-characters. Multiple definitions can share a file or section if they claim
-different properties. The repository resolves files and performs all IO.
+characters. Multiple definitions may share a file, but each declared logical
+section has one owning `SettingGroup` instance. Before repository IO,
+`ConfigStore.ensureLoaded()` checks `(Settings.file, SettingGroup.id)` against
+already loaded definitions and the candidate's own groups under its transaction
+lock. `null` identifies the primary file; named logical files are independent, so
+they may reuse group IDs and property paths. Repeated references to the same group
+are allowed; distinct groups with the same identity are rejected, even inside one
+definition. Rejection installs no values, definition or repository claims and
+publishes no notifications. The check derives ownership from loaded definitions,
+without an additional mutable registry. See
+[ADR 0013](adrs/0013-exclusive-setting-group-ownership.md).
+
+The repository resolves files and performs all IO. It still validates actual
+physical property/section claims, including structural mappings whose dynamic
+section names differ from their declared group. ConfigStore does not parse INI
+or infer physical sections. Logical declaration validation and physical mapping
+validation remain separate responsibilities.
 
 For each key, reads accept either `[serial]` with `baud=115200` or root-level
 `serial.baud=115200`. Equal duplicates are accepted; different values fail with
@@ -386,7 +408,7 @@ serializers. Durations specifically use `Duration.toString()` and
 `CompositeSetting<T>` maps one logical key to child properties relative to that
 key; `LoginCredentials` is `[modem] login.username/password`. ElementSimplifier
 delegates static settings to `Settings` and maps dynamically named rule sections
-through its override. A missing rule file uses bundled defaults; an existing
+through its override. A missing rule file uses feature-owned defaults; an existing
 empty file has no rules. It preserves rule ordering and validation.
 
 Historical names such as `http-https-proxy.enabled`, `ppp.dns.upstream`, and
@@ -404,14 +426,117 @@ Transactions spanning multiple files are not atomic across the filesystem:
 `PartialIniWriteException` reports replaced files and the process should
 restart to reconcile disk and memory.
 
-### Legacy adapter boundary
+### Startup and standalone stores
 
-| API | Responsibility | Future |
-| --- | --- | --- |
-| `YameConfiguration` | CLI defaults and older aggregate callers | Retain until CLI callers migrate to typed keys |
-| `YameConfigurationBindings` / `applicationConfigStore` | Translate fields exposed by that existing aggregate into feature keys; no registration role | Internal compatibility bridge, removable with aggregate callers |
-| `YameConfigurationStore` | Older file API and first-run file creation; its new-format save delegates mappings to feature definitions | Keep while public callers need the API; historic flat-format load remains a compatibility path |
+The aggregate configuration DTO and its binding/projection layer have been
+removed; [ADR 0010](adrs/0010-component-owned-configuration.md) records the boundary.
+Adding a key requires only its feature definition and consumers.
+`installApplicationConfigStore(path)` constructs and installs the process store
+with an INI repository; it returns only the installation lifetime handle and
+contains no feature registry. Startup reads only the features needed by the
+selected mode. Help and port listing use an in-memory store and do not open INI
+files. Tone tests do not load PPP, DNS or proxy definitions unless a CLI flag
+explicitly addresses one of those features. HTTP transformations load when their
+owner requests them.
 
-Feature definitions are the source of truth for runtime defaults, validation,
-and persistence. Adding a feature key does not require changing the aggregate or
-central bindings unless a particular legacy API explicitly exposes that field.
+A store without a repository lazily supplies feature-key defaults. Explicitly
+seeded values take precedence over these defaults. Local instances are confined
+to infrastructure tests. Tests exercising production consumers install their
+chosen store for the scenario; those consumers always use the global facade.
+Writes also request the owning definition before validation.
+
+On first normal startup, `saveLoadedValues()` persists the requested features'
+saved baseline, excluding CLI overrides. Unrequested defaults need no file entries;
+features supply them when first read. The primary INI version marker and existing
+section/key names are retained. Existing files are not rewritten on startup.
+`ConfigStore.createFileIfMissing(definition)` delegates first-run file creation to
+`IniConfigurationRepository`. The feature's key defaults are validated and
+serialized through its normal INI mapping and the shared writer. Creation uses a
+permission-restricted temporary file and a move without replacement; existing
+files, including empty or malformed files, remain untouched. This does not
+register the definition, change live values or publish notifications.
+`ElementSimplifierSettings` owns its typed default rules. File creation, loading
+and edits use the shared infrastructure; there are no feature-specific INI
+parsers, writers, resource loaders or initial-file template hooks.
+
+Production bootstrap installs the store before CLI parsing and component
+construction, including tone-test mode. Main uses the global `ConfigStore` facade for its
+own reads; component constructors resolve optional config arguments from the
+installed store. For example, `YameLogManager(logDirectory = path)` defaults its
+`config` argument to `LoggingConfig.fromConfigStore()`. Explicit immutable configs
+remain available for isolated tests. The installation is released on parse/load
+failure and after lifecycle cleanup, with logging and presentation stopped first.
+ToneTest owns the standalone modem and its forced tone-enabled configuration.
+
+## Configuration descriptions
+
+Feature-owned `Settings.description` documents its definition,
+`SettingGroup.description` documents a section, and `SettingKey.description`
+documents a value. All are optional public, frontend-neutral metadata suitable for
+future configuration frontends. Add descriptions only when they provide useful
+information. Leave Settings and group descriptions unset when they merely repeat
+section names or individual setting descriptions; use them for shared context,
+such as interactions, prerequisites or constraints.
+Documentation ownership follows the feature even
+when several definitions share a file or only some definitions have loaded.
+[ADR 0012](adrs/0012-feature-local-ini-documentation.md) records this decision.
+
+The shared writer uses mapping claims to associate descriptions with actual
+property names, including composite children and dynamically named sections.
+Structural key descriptions join their owning Settings overview once, rather than
+repeating long descriptions for every dynamic section. Features use ordinary
+mapping contexts and never write comments themselves.
+
+For example, a serial section containing only `baud` is documented as follows:
+
+```ini
+##### @yame serial
+# baud: Serial port baud rate in bits per second.
+[serial]
+baud=38400
+```
+
+`SerialSettings` defines neither a Settings description nor a group description,
+so this example contains only the property description. Definition and section
+documentation use independently owned blocks, even when their IDs match.
+The exact `##### @yame <settings-id> settings:` marker owns the definition overview.
+It appears once immediately before that definition's first existing section and
+its section documentation. The first section is chosen in document order using
+mapping ownership, including structural claims; groups need not be adjacent.
+Existing sections are never reordered. A root-only mapping places its overview
+before its first owned root property instead. With no owned section or property,
+no overview is inserted. Descriptions without meaningful text are omitted.
+
+The section marker `##### @yame <section-id>` owns the contiguous comment block
+immediately above that header. Group descriptions appear first, followed by
+property descriptions in property order. Multiline continuations are indented
+inside full-line `#` comments, so apparent INI syntax remains comment text.
+Settings overviews have one separating empty line; consecutive Settings and
+section markers are recognized as separate units even without that separator.
+
+**Comments inside an explicitly marked block are generated content and may be
+replaced.** Keep personal notes outside these blocks. Settings blocks end at the
+separating blank line or the next section/documentation block. Unmarked `#` and
+`;` comments elsewhere remain user-owned, even if their text matches metadata.
+Unknown, mismatched, malformed and incomplete markers are preserved. An overview
+can be updated, removed, or relocated when its first section changes using its
+explicit owner marker, without matching description text or moving user comments.
+Legacy `##### @yame file` blocks are conservatively retained: they do not identify
+their contributing definitions and may contain documentation from unloaded owners.
+
+Persistent value changes synchronize documentation for the changed definitions.
+`ConfigStore.synchronizeDocumentation(definition, ...)` explicitly synchronizes
+requested definitions even when values have not changed. Neither path rewrites
+documentation belonging to unrelated or unloaded definitions; no registry of all
+features or shared overview is involved. Documentation-only synchronization uses
+the same fresh bounded reads, ownership claims, staged size validation and
+replacement pipeline. It changes no effective values, transient overrides or
+saved baselines, persists no unrelated values and emits no change notifications.
+No-op value updates remain no-ops. Repeated synchronization is byte-stable and
+skips physical replacement when the content is unchanged.
+
+New properties follow their section's last property, ahead of trailing whitespace
+or user comments. Newly appended sections have two empty lines between them.
+Existing layout, section order and LF/CRLF conventions remain intact; startup does
+not implicitly rewrite existing files. There are no templates, central metadata
+registry, persistent documentation state or feature-specific INI writers.

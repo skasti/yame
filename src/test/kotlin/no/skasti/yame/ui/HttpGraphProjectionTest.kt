@@ -1,5 +1,6 @@
 package no.skasti.yame.ui
 
+import no.skasti.yame.config.InstalledConfigTest
 import com.github.ajalt.mordant.terminal.Terminal
 import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.observer.*
@@ -7,8 +8,7 @@ import java.time.Duration
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
-import no.skasti.yame.persistence.YameConfiguration
-import no.skasti.yame.persistence.applicationConfigStore
+import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.ppp.proxy.*
 import no.skasti.yame.ppp.proxy.transform.ResourceTransformationSummary
 import no.skasti.yame.ppp.session.PppSessionEnded
@@ -19,7 +19,7 @@ import java.net.URI
 import java.time.Instant
 import kotlin.test.*
 
-class HttpGraphProjectionTest {
+class HttpGraphProjectionTest : InstalledConfigTest() {
     private val time = Instant.parse("2026-10-25T12:00:00Z")
     private val root = URI("http://site.test/")
     private val child = URI("http://cdn.test/image.gif")
@@ -38,8 +38,7 @@ class HttpGraphProjectionTest {
         ResourceLifecycleEvent(change, id, rootUri, LegacyHttpUrl.requestObservableKey(uri), uri,
             URI("https://${uri.host}${uri.path}"), ReferenceRole.SUBRESOURCE, kind, null,
             state, prefetch, attempt, attempt, edges, transforms, count, usedAt, at)
-    private fun observer() = TuiYameObserver(applicationConfigStore(YameConfiguration()),
-        FunctionStore(), Terminal(interactive = false))
+    private fun observer() = run { installConfig(ConfigStore()); TuiYameObserver(FunctionStore(), Terminal(interactive = false)) }
 
     @Test fun `resource and use before creation are deferred and duplicate creation is incremental`() {
         val projection = HttpGraphProjection()

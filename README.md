@@ -243,7 +243,7 @@ file itself take effect after a restart.
 
 The file is the complete mapping, not an override layered over defaults:
 remove a section to leave that tag unchanged, or use an empty file to disable
-element mapping. A missing file uses the bundled defaults. Tag names and keys
+element mapping. A missing file uses the feature-owned default mappings. Tag names and keys
 are case insensitive. `;` and `#` start comments only at the beginning of a
 line; CSS semicolons and values containing `=` are preserved. Invalid or
 duplicate rules stop startup with a configuration error. The file is limited

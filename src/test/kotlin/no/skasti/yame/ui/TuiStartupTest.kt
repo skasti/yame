@@ -1,21 +1,20 @@
 package no.skasti.yame.ui
 
+import no.skasti.yame.config.InstalledConfigTest
 import com.github.ajalt.mordant.terminal.Terminal
 import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.lifecycle.ApplicationFunctions
 import no.skasti.yame.modem.ModemSettings
-import no.skasti.yame.persistence.YameConfiguration
-import no.skasti.yame.persistence.applicationConfigStore
 import no.skasti.yame.serial.ConnectionFunctions
 import no.skasti.yame.serial.SerialPortDescriptor
 import kotlin.test.*
 
-class TuiStartupTest {
+class TuiStartupTest : InstalledConfigTest() {
     @Test fun `empty function store does not stop input and later registrations work`() {
         val functions = FunctionStore()
-        val config = applicationConfigStore(YameConfiguration())
-        TuiYameObserver(config, functions, Terminal(interactive = false)).use { ui ->
+        val config = ConfigStore()
+        run { installConfig(config); TuiYameObserver(functions, Terminal(interactive = false)) }.use { ui ->
             ui.start()
             assertTrue(functions.keys().isEmpty(), "starting UI must not create runtime functions")
             for (key in listOf("q", "Ctrl+C")) {
@@ -32,7 +31,7 @@ class TuiStartupTest {
             ui.command("/tone off")
             assertFalse(config[ModemSettings.Tone], "settings input must survive unavailable operations")
             assertFailsWith<IllegalArgumentException> { functions.invoke(ApplicationFunctions.Quit) }
-            assertFailsWith<IllegalStateException> { ConfigStore.current }
+            assertEquals(config, ConfigStore.current)
 
             var refreshes = 0
             var disconnects = 0

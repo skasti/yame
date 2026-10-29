@@ -124,7 +124,8 @@ when the HTTP configuration first needs them, then passed through it into the
 pipeline. Neither request handling nor transformation reads the file. Restarting
 YAME applies edits and creates fresh representation caches, preserving the
 stable-pipeline assumption for source validators and cached transformed output.
-The bundled INI file is the single source of default mappings. See the README
+ElementSimplifierSettings owns the typed default mappings. The shared configuration
+repository reads and writes the INI file through that feature definition. See the README
 for the format and editing behavior.
 
 Live on/off and PNG compatibility settings are separate from the immutable INI

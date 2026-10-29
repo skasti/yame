@@ -1,5 +1,6 @@
 package no.skasti.yame.runtime
 
+import no.skasti.yame.config.InstalledConfigTest
 import no.skasti.yame.ui.handleKeyAndAwait
 import com.github.ajalt.mordant.terminal.Terminal
 import no.skasti.yame.logging.DiagnosticMessage
@@ -23,8 +24,6 @@ import no.skasti.yame.ppp.proxy.SystemRoutingTcpProxy
 import no.skasti.yame.ppp.tcp.TcpFlowKey
 import no.skasti.yame.ppp.tcp.TcpProxyEvent
 import no.skasti.yame.ppp.tcp.TcpProxyFlow
-import no.skasti.yame.persistence.YameConfiguration
-import no.skasti.yame.persistence.applicationConfigStore
 import no.skasti.yame.persistence.lazyApplicationConfigStore
 import no.skasti.yame.ppp.ip.Ipv4Address
 import no.skasti.yame.serial.*
@@ -44,7 +43,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 import kotlin.test.*
 
-class YameRuntimeConnectionTest {
+class YameRuntimeConnectionTest : InstalledConfigTest() {
     private val resourceEvents = Collections.synchronizedList(mutableListOf<YameEvent>())
     private lateinit var broker: EventBroker
     private lateinit var installation: AutoCloseable
@@ -102,16 +101,15 @@ class YameRuntimeConnectionTest {
                 messages += message
                 if (message.contains("YAME ready on COM1 at 57600 baud")) secondReady.countDown()
             }
-            YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
-                YameRuntime(
-                    configStore = store, functions = functions, logManager = logs,
+            YameLogManager(no.skasti.yame.logging.LoggingConfig(), logDirectory = directory).use { logs ->
+                run { installConfig(store); YameRuntime(functions = functions, logManager = logs,
                     resourceGraphs = NavigationResourceRegistry(),
                     portProvider = { listOf(SerialPortDescriptor("COM1", "test port")) },
                     connectionFactory = { _, baud, _, _ ->
                         openedBauds += baud
                         if (baud == 38_400) first else Port()
                     },
-                ).use { runtime ->
+                ) }.use { runtime ->
                     assertEquals(YameLogLevel.DEBUG, logs.level(YameLogModule.MODEM))
                     val worker = thread {
                         try { runtime.run() } catch (error: Throwable) { failures += error }
@@ -145,14 +143,13 @@ class YameRuntimeConnectionTest {
         try {
             for (constructionFails in listOf(true, false)) {
                 val functions = FunctionStore()
-                val store = applicationConfigStore(YameConfiguration(portName = "invalid"))
+                val store = ConfigStore(listOf(no.skasti.yame.serial.SerialSettings.Port to "invalid"))
                 val failure = IOException(if (constructionFails) "invalid port" else "port busy")
                 val port = Port(failure)
                 var attempts = 0
                 val messages = mutableListOf<String>()
-                YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
-                    YameRuntime(
-                        configStore = store, functions = functions, logManager = logs,
+                YameLogManager(no.skasti.yame.logging.LoggingConfig(), logDirectory = directory).use { logs ->
+                    run { installConfig(store); YameRuntime(functions = functions, logManager = logs,
                         resourceGraphs = NavigationResourceRegistry(),
                         portProvider = { emptyList() }, failFastStartup = true,
                         connectionFactory = { _, _, _, _ ->
@@ -160,7 +157,7 @@ class YameRuntimeConnectionTest {
                             if (constructionFails) throw failure
                             port
                         },
-                    ).use { runtime ->
+                    ) }.use { runtime ->
                         assertSame(failure, assertFailsWith<IOException> { runtime.run() })
                         assertEquals(1, attempts)
                         broker.drain().await(Duration.ofSeconds(5))
@@ -169,6 +166,7 @@ class YameRuntimeConnectionTest {
                     }
                 }
                 assertTrue(functions.keys().isEmpty())
+                releaseTestConfig()
             }
         } finally { directory.toFile().deleteRecursively() }
     }
@@ -179,24 +177,22 @@ class YameRuntimeConnectionTest {
         try {
             var saves = 0
             var events = 0
-            val store = applicationConfigStore(YameConfiguration(portName = "COM1"), save = { saves++ })
+            val store = ConfigStore(listOf(no.skasti.yame.serial.SerialSettings.Port to "COM1"), persist = { saves++ })
             val functions = FunctionStore()
             val ports = listOf(SerialPortDescriptor("COM1", "test port"))
             val opened = mutableListOf<Triple<String, Int, SerialFlowControl>>()
             store.onChange.subscribe { events++ }.use {
-                YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
+                YameLogManager(no.skasti.yame.logging.LoggingConfig(), logDirectory = directory).use { logs ->
                     val testPorts = RuntimeTestPorts { ports }
-                    YameRuntime(
-                        configStore = store,
-                        functions = functions, logManager = logs,
+                    run { installConfig(store); YameRuntime(functions = functions, logManager = logs,
                         resourceGraphs = NavigationResourceRegistry(), portProvider = testPorts::scan,
                         connectionFactory = { port, baud, flow, _ ->
                             opened += Triple(port, baud, flow)
                             Port()
                         },
-                    ).use { runtime ->
+                    ) }.use { runtime ->
                         RuntimeTestRun(runtime, testPorts).use {
-                            TuiYameObserver(store, functions, Terminal(interactive = false)).use { ui ->
+                            run { installConfig(store); TuiYameObserver(functions, Terminal(interactive = false)) }.use { ui ->
                                 ui.updateAvailablePorts(ports)
                                 for (command in listOf("/port", "/baud", "/flow-control")) {
                                     functions.invoke(ConnectionFunctions.Disconnect)
@@ -212,7 +208,7 @@ class YameRuntimeConnectionTest {
                     }
                 }
             }
-            assertFailsWith<IllegalStateException> { ConfigStore.current }
+            assertSame(store, ConfigStore.current)
         } finally { directory.toFile().deleteRecursively() }
     }
 
@@ -249,7 +245,7 @@ class YameRuntimeConnectionTest {
         }
         try {
             val functions = FunctionStore()
-            val store = applicationConfigStore(YameConfiguration(portName = "COM1"))
+            val store = ConfigStore(listOf(no.skasti.yame.serial.SerialSettings.Port to "COM1"))
             val registry = NavigationResourceRegistry(maxContexts = 4)
             val httpConfig = PppHttpCompatibilityConfig(enabled = true, requestTimeoutMillis = 2_000)
 
@@ -290,11 +286,9 @@ class YameRuntimeConnectionTest {
             var attempts = 0
             val ports = listOf(SerialPortDescriptor("COM1", "test port"))
 
-            YameLogManager(YameLogManager.defaultLevels(), logDirectory = directory).use { logs ->
+            YameLogManager(no.skasti.yame.logging.LoggingConfig(), logDirectory = directory).use { logs ->
                 val testPorts = RuntimeTestPorts { ports }
-                val runtime = YameRuntime(
-                    configStore = store,
-                    functions = functions,
+                val runtime = run { installConfig(store); YameRuntime(functions = functions,
                     logManager = logs,
                     resourceGraphs = registry,
                     portProvider = testPorts::scan,
@@ -302,7 +296,7 @@ class YameRuntimeConnectionTest {
                         attempts++
                         Port(onReadingStarted = { readingStarted++ })
                     },
-                )
+                ) }
                 val run = RuntimeTestRun(runtime, testPorts)
                 try {
                     functions.invoke(ConnectionFunctions.Reconnect)

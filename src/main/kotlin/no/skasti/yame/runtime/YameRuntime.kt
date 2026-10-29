@@ -37,12 +37,11 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 internal class YameRuntime(
-    val configStore: ConfigStore = ConfigStore.current,
     val functions: FunctionStore = FunctionStore.current,
     private val logManager: YameLogManager,
     private val resourceGraphs: NavigationResourceRegistry =
         YameRegistries.navigationResources(
-            PppHttpCompatibilityConfig.fromConfigStore(configStore),
+            PppHttpCompatibilityConfig.fromConfigStore(),
         ),
     private val portProvider: () -> List<no.skasti.yame.serial.SerialPortDescriptor> =
         SerialConnection::availablePortDescriptors,
@@ -68,9 +67,9 @@ internal class YameRuntime(
     private var autoConnectEnabled = true
 
     // Initial logging subscription must include its definition even for a fresh lazy store.
-    init { configStore[LogSettings.Levels.getValue(YameLogModule.MODEM)] }
+    init { ConfigStore[LogSettings.Levels.getValue(YameLogModule.MODEM)] }
 
-    private val selectedPortName: String? get() = configStore[SerialSettings.Port]
+    private val selectedPortName: String? get() = ConfigStore[SerialSettings.Port]
 
     private var generation = 0
     private var connectionId = 0L
@@ -211,7 +210,7 @@ internal class YameRuntime(
         startConnection(candidate, failFast)
     }
 
-    private val configurationSubscription = configStore.onChange.subscribe(initial = true) { changes ->
+    private val configurationSubscription = ConfigStore.onChange.subscribe(initial = true) { changes ->
         val restart = synchronized(lock) {
             if (closed.get()) return@subscribe
             changes[ModemSettings.Tone]?.let { activeModem?.updateToneSimulationEnabled(it.value) }
@@ -264,7 +263,7 @@ internal class YameRuntime(
             // Store notifications can synchronously restart connection work.
             // Let that work win, then reject this attempt by its old generation.
             if (selectedPortName == null) {
-                configStore.setTransient(SerialSettings.Port to portName)
+                ConfigStore.setTransient(SerialSettings.Port to portName)
                 observeLog("Auto-selected serial port $portName")
             }
             val attempt = synchronized(lock) {
@@ -280,12 +279,12 @@ internal class YameRuntime(
             }
             val connectionGeneration = attempt.first
             val connectionIdentity = attempt.second
-            val baud = configStore[SerialSettings.Baud]
-            val flowControl = configStore[SerialSettings.FlowControl]
-            val config = HayesModemConfig.fromConfigStore(configStore)
-            val ipConfig = PppIpConfig.fromConfigStore(configStore)
-            val dnsConfig = PppDnsConfig.fromConfigStore(configStore)
-            val httpConfig = PppHttpCompatibilityConfig.fromConfigStore(configStore)
+            val baud = ConfigStore[SerialSettings.Baud]
+            val flowControl = ConfigStore[SerialSettings.FlowControl]
+            val config = HayesModemConfig.fromConfigStore()
+            val ipConfig = PppIpConfig.fromConfigStore()
+            val dnsConfig = PppDnsConfig.fromConfigStore()
+            val httpConfig = PppHttpCompatibilityConfig.fromConfigStore()
             val modemLogger = diagnosticLogger(logManager.logger(YameLogModule.MODEM))
             val pppLogger = diagnosticLogger(logManager.logger(YameLogModule.PPP))
             val dnsLogger = diagnosticLogger(logManager.debugLogger(YameLogModule.DNS))
@@ -298,7 +297,7 @@ internal class YameRuntime(
                 proxyLogger = proxyLogger, diagnosticSink = logManager::eventSink,
                 resourceGraphs = resourceGraphs, ipConfig = ipConfig, dnsConfig = dnsConfig,
                 httpCompatibilityConfig = httpConfig,
-                transformerSettings = { ResourceTransformationSettings.fromConfigStore(configStore) },
+                transformerSettings = { ResourceTransformationSettings.fromConfigStore() },
             )
             val createdModem = try {
                 HayesModem(
@@ -343,7 +342,7 @@ internal class YameRuntime(
                 }
                 if (!running || closed.get() || generation != connectionGeneration ||
                     connectionAttemptGeneration != connectionGeneration) return
-                val latestConfig = HayesModemConfig.fromConfigStore(configStore)
+                val latestConfig = HayesModemConfig.fromConfigStore()
                 createdModem.updateLoginCredentials(latestConfig.username, latestConfig.password)
                 createdModem.updateToneSimulationEnabled(latestConfig.toneSimulationEnabled)
                 // No initializer uses the resources after this ownership transfer.
