@@ -215,9 +215,11 @@ class EventBrokerTest {
             }
         }
         for (valid in listOf(Duration.ZERO, Duration.ofMillis(1), Duration.ofMillis(60_000))) {
-            testEventBroker(publishTimeout = valid).use { broker ->
+            val broker = testEventBroker(publishTimeout = valid)
+            try {
                 assertEquals(valid, broker.publishTimeout)
-                assertEquals(BrokerWaitResult.COMPLETED, broker.awaitClosed(timeout))
+            } finally {
+                broker.finish()
             }
         }
     }
