@@ -17,7 +17,7 @@ import kotlin.test.*
 
 /** Runs with an installed broker in its own JVM, like the other facade integration tests. */
 class HttpTransferMetadataTest {
-    private val broker = EventBroker()
+    private val broker = testEventBroker()
     private val installation = YameEvents.install(broker)
     private val observed = CopyOnWriteArrayList<TransferResourceChanged>()
     private val subscription = YameEvents.subscribe("transfer-metadata") { if (it is TransferResourceChanged) observed += it }
