@@ -145,13 +145,17 @@ class TerminalProcess:
 
 
 def find_command(name):
-    """Ubuntu keeps administrative programs in /usr/sbin outside runner's PATH."""
+    """Find installed programs, including privileged pppd (root:dip, mode 4754).
+
+    pppd is executed by root through sudo/ip netns exec, so checking whether
+    the unprivileged CI runner can execute it gives a false 'missing' result.
+    """
     found = shutil.which(name)
     if found:
         return found
     for directory in ("/usr/sbin", "/sbin", "/usr/bin", "/bin"):
         candidate = Path(directory) / name
-        if candidate.is_file() and os.access(candidate, os.X_OK):
+        if candidate.is_file():
             return str(candidate)
     raise RuntimeError(f"Required tool missing: {name}")
 
