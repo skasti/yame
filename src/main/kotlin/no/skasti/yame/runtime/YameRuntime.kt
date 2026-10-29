@@ -30,8 +30,6 @@ import no.skasti.yame.serial.ConnectionIds
 import no.skasti.yame.serial.ConnectionState
 import no.skasti.yame.serial.ConnectionStateChanged
 import no.skasti.yame.observer.YameEvents
-import no.skasti.yame.logging.DiagnosticMessage
-import no.skasti.yame.logging.diagnosticLogger
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -285,12 +283,12 @@ internal class YameRuntime(
             val ipConfig = PppIpConfig.fromConfigStore()
             val dnsConfig = PppDnsConfig.fromConfigStore()
             val httpConfig = PppHttpCompatibilityConfig.fromConfigStore()
-            val modemLogger = diagnosticLogger(logManager.logger(YameLogModule.MODEM))
-            val pppLogger = diagnosticLogger(logManager.logger(YameLogModule.PPP))
-            val dnsLogger = diagnosticLogger(logManager.debugLogger(YameLogModule.DNS))
-            val transferLogger = diagnosticLogger(logManager.debugLogger(YameLogModule.TRANSFERS))
-            val proxyLogger = diagnosticLogger(logManager.debugLogger(YameLogModule.PROXY))
-            val serialLogger = diagnosticLogger(logManager.logger(YameLogModule.SERIAL))
+            val modemLogger = logManager.logger(YameLogModule.MODEM)
+            val pppLogger = logManager.logger(YameLogModule.PPP)
+            val dnsLogger = logManager.debugLogger(YameLogModule.DNS)
+            val transferLogger = logManager.debugLogger(YameLogModule.TRANSFERS)
+            val proxyLogger = logManager.debugLogger(YameLogModule.PROXY)
+            val serialLogger = logManager.logger(YameLogModule.SERIAL)
             val pppHandler = RetroPppHandler(
                 connectionId = connectionIdentity,
                 logger = pppLogger, dnsLogger = dnsLogger, transferLogger = transferLogger,
@@ -470,7 +468,12 @@ internal class YameRuntime(
         lock.notifyAll()
     }
 
-    private fun observeLog(message: String) { YameEvents.publish(DiagnosticMessage(message)) }
+    private fun observeLog(message: String) {
+        val level = if (message.startsWith("Could not open") || message.startsWith("Serial connection lost"))
+            no.skasti.yame.logging.YameLogLevel.ERROR
+        else no.skasti.yame.logging.YameLogLevel.INFO
+        logManager.log(YameLogModule.SERIAL, level, message)
+    }
 
     private fun observeConnection(state: ConnectionState) = synchronized(lock) {
         if (running && !closed.get()) YameEvents.publish(ConnectionStateChanged(connectionId, state))

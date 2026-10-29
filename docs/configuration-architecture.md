@@ -327,11 +327,13 @@ feature value types rather than introducing duplicate file-only versions of them
 There are no feature-to-persistence dependencies or obsolete compatibility wrappers.
 
 Plain mode propagates initial connection construction/open errors so scripts exit with a
-failure. TUI mode logs failed attempts and permits retry. Every core logger,
-including HTTP proxy diagnostics, writes its module file independently before
-publishing `DiagnosticMessage` for the early plain/TUI subscriber. Producer-owned
-domain events likewise retain an independent single-write diagnostic tee before
-`YameEvents.publish`. `RuntimeObserver` has been removed. Both modes and tone-test
+failure. TUI mode logs failed attempts and permits retry. `YameLogManager`
+applies each module's configured level before writing to its file and publishing
+a typed `LogEntry` observation for the early plain/TUI subscriber. Module output
+is independent of file availability, and event publication happens outside the
+file-writer lock. Producer-owned domain events retain an independent single-write
+diagnostic tee before `YameEvents.publish`. `RuntimeObserver` has been removed.
+Both modes and tone-test
 startup share application event supervision and bounded shutdown;
 see [YameEvents](yame-events.md).
 Reselecting unchanged port, baud, or flow-control settings commits normally and

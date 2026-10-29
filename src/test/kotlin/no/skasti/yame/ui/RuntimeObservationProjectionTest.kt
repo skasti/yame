@@ -6,7 +6,9 @@ import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.ppp.session.*
 import no.skasti.yame.serial.*
-import no.skasti.yame.logging.DiagnosticMessage
+import no.skasti.yame.logging.LogEntry
+import no.skasti.yame.logging.YameLogModule
+import no.skasti.yame.logging.YameLogLevel
 import no.skasti.yame.observer.EventBroker
 import no.skasti.yame.observer.EventBrokerConfig
 import no.skasti.yame.observer.BrokerWaitResult
@@ -90,10 +92,10 @@ class RuntimeObservationProjectionTest : InstalledConfigTest() {
             try {
                 assertTrue(locked.await(5, TimeUnit.SECONDS))
                 broker.subscribe("actual-tui") { entered.countDown(); ui.onEvent(it) }
-                broker.publish(DiagnosticMessage("render"))
+                broker.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "render"))
                 assertTrue(entered.await(5, TimeUnit.SECONDS))
                 assertEquals(BrokerWaitResult.COMPLETED, broker.drain().await(Duration.ofSeconds(2)))
-                broker.publish(DiagnosticMessage("pending"))
+                broker.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "pending"))
                 assertEquals(BrokerWaitResult.COMPLETED, broker.drain().await(Duration.ofSeconds(2)))
                 ui.awaitIdle()
                 assertEquals(0, broker.status.queuedEvents)

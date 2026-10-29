@@ -440,7 +440,7 @@ class YameRuntimeLifecycleTest : InstalledConfigTest() {
                 val states = observed.filterIsInstance<ConnectionStateChanged>()
                 val identity = states.single { it.state == ConnectionState.CONNECTED }.connectionId
                 assertEquals(1, states.count { it.connectionId == identity && it.state == ConnectionState.DISCONNECTED })
-                assertFalse(observed.filterIsInstance<DiagnosticMessage>().any { it.message == "Serial connection closed" },
+                assertFalse(observed.filterIsInstance<LogEntry>().any { it.message == "Serial connection closed" },
                     "failed physical cleanup must not be reported as successful")
             }
         }

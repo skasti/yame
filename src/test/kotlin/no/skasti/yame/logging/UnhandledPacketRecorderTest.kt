@@ -117,7 +117,7 @@ class UnhandledPacketRecorderTest {
         val event = UnhandledPacket("icmp-type-3", "egress type=3 code=1 not handled", 33, bytes)
         bytes.fill(42)
         event.bytes().fill(43)
-        YameLogManager(no.skasti.yame.logging.LoggingConfig(), root).use { it.eventSink(event) }
+        YameLogManager(no.skasti.yame.logging.LoggingConfig(), root, publishEntry = { }).use { it.eventSink(event) }
         val captures = Files.list(root.resolve("unhandled/icmp-type-3")).use { it.toList() }
         assertEquals(1, captures.size)
         val properties = captures.single().readText().lineSequence().filter { it.isNotBlank() }.associate {

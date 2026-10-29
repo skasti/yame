@@ -103,15 +103,19 @@ internal class HttpGraphProjection(private val maxPending: Int = 256) {
             }
             return
         }
-        // Current domain semantics: a removed membership is terminal for this graph lifetime.
+        // Removal is terminal within this graph lifetime. No older resource
+        // observation may reintroduce either the resource or its associations.
         if (key in graph.removedResources) return
+        val current = graph.resources[key]
+        if (current != null && compareResourceObservations(event, current) <= 0) return
+
+        // Accept the resource snapshot before projecting its incident edges.
+        // Edges can be shared by other resources, so accumulate them rather
+        // than replacing the graph's set; REMOVED prunes incident edges.
+        graph.resources[key] = event
         graph.associations += event.associations.filter { edge ->
             LegacyHttpUrl.requestObservableKey(edge.parentLegacyUri) !in graph.removedResources &&
                 LegacyHttpUrl.requestObservableKey(edge.childLegacyUri) !in graph.removedResources
-        }
-        val current = graph.resources[key]
-        if (current == null || compareResourceObservations(event, current) > 0) {
-            graph.resources[key] = event
         }
     }
 
@@ -143,41 +147,30 @@ internal class HttpGraphProjection(private val maxPending: Int = 256) {
 }
 
 /**
- * Compare complete observations of the same membership. Domain progress wins over wall time.
- * Equal-time conflicting metadata without causal evidence is ambiguous, never last-delivery-wins.
+ * Compare authoritative snapshots of the same resource membership.
+ * The revision is assigned at the mutation boundary, not by broker admission,
+ * dispatch, or the wall clock. Equal revisions must describe the same state.
  */
 internal fun compareResourceObservations(new: ResourceLifecycleEvent, old: ResourceLifecycleEvent): Int {
-    val attempt = (new.fetchAttemptNumber ?: 0).compareTo(old.fetchAttemptNumber ?: 0)
-    if (attempt != 0) return attempt
-    check(new.fetchAttemptId == old.fetchAttemptId) { "Conflicting proxy fetch identities" }
-    fun rank(state: ResourceState) = when (state) {
-        ResourceState.DISCOVERED -> 0
-        ResourceState.FETCHING -> 1
-        ResourceState.SOURCE_READY -> 2
-        ResourceState.TRANSFORMING -> 3
-        ResourceState.READY, ResourceState.FAILED -> 4
+    val order = new.resourceRevision.compareTo(old.resourceRevision)
+    if (order != 0) return order
+
+    check(new.resourceLegacyUri == old.resourceLegacyUri &&
+        new.upstreamUri == old.upstreamUri &&
+        new.role == old.role &&
+        new.kind == old.kind &&
+        new.contentBase == old.contentBase &&
+        new.state == old.state &&
+        new.prefetched == old.prefetched &&
+        new.fetchAttemptId == old.fetchAttemptId &&
+        new.fetchAttemptNumber == old.fetchAttemptNumber &&
+        new.transformations == old.transformations &&
+        new.associations.toSet() == old.associations.toSet()
+    ) {
+        "Conflicting equal-revision proxy resource observations"
     }
-    val state = rank(new.state).compareTo(rank(old.state))
-    if (state != 0) return state
-    check(new.state == old.state) { "Conflicting terminal states in one proxy fetch attempt" }
-    // These values can only grow within a membership, even when the clock moves backwards.
-    val newEdges = new.associations.toSet()
-    val oldEdges = old.associations.toSet()
-    fun extends(a: ResourceLifecycleEvent, b: ResourceLifecycleEvent,
-                aEdges: Set<ResourceEdgeSnapshot>, bEdges: Set<ResourceEdgeSnapshot>) =
-        aEdges.containsAll(bEdges) && (a.prefetched || !b.prefetched) &&
-            (a.role == ReferenceRole.NAVIGATION || b.role != ReferenceRole.NAVIGATION)
-    val newExtends = extends(new, old, newEdges, oldEdges)
-    val oldExtends = extends(old, new, oldEdges, newEdges)
-    if (newExtends != oldExtends) return if (newExtends) 1 else -1
-    check(newExtends) { "Conflicting proxy membership progress" }
-    val time = new.occurredAt.compareTo(old.occurredAt)
-    if (time != 0) return time
-    check(new.upstreamUri == old.upstreamUri && new.role == old.role && new.kind == old.kind &&
-        new.contentBase == old.contentBase && new.prefetched == old.prefetched &&
-        new.transformations == old.transformations && newEdges == oldEdges) {
-        "Ambiguous equal-time proxy resource observations"
-    }
+    // The change reason, occurrence time and graph usage may differ between
+    // otherwise identical snapshots: they do not version resource state.
     return 0
 }
 

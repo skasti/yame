@@ -5,7 +5,7 @@ import no.skasti.yame.ppp.session.PppSessionEnded
 import no.skasti.yame.serial.AvailablePortsChanged
 import no.skasti.yame.serial.ConnectionStateChanged
 import no.skasti.yame.serial.ConnectionState
-import no.skasti.yame.logging.DiagnosticMessage
+import no.skasti.yame.logging.LogEntry
 import no.skasti.yame.ppp.session.UnhandledPacket
 import no.skasti.yame.ppp.session.DnsQuery
 import no.skasti.yame.ppp.session.DnsResponse
@@ -134,11 +134,18 @@ class TuiYameObserver(
 
     private val commandRegistrations = registerCommands() + registerTransformerCommands(paletteRegistry) + registerPppCommands(paletteRegistry)
     private val work = TuiWorkQueue(teardown = ::teardown)
+    // All state changes are still processed in FIFO order. Only screen painting is
+    // coalesced, so a burst of resource discovery cannot force one frame per event.
+    private val frames = TuiFrameLimiter(
+        nowNanos = System::nanoTime,
+        schedule = ::scheduleFrame,
+        draw = ::renderNow,
+    )
     override val fatalFailure: Throwable? get() = work.fatalFailure
     internal fun awaitIdle() = work.read { Unit }
 
     private val configurationSubscription = ConfigStore.onChange.subscribe(initial = true) { changes ->
-        work.submitRequired {
+        work.submitRequired(kind = "ConfigChanged") {
             changes[SerialSettings.Port]?.let { portName = it.value }
             changes[SerialSettings.Baud]?.let { baud = it.value }
             changes[SerialSettings.FlowControl]?.let { flowControl = it.value }
@@ -163,7 +170,7 @@ class TuiYameObserver(
         commandPalette?.let { it.copy(options = it.options.toList()) }
     }
 
-    internal fun handleKey(key: String) { work.submitRequired { applyKey(key) } }
+    internal fun handleKey(key: String) { work.submitRequired(kind = "KeyboardInput") { applyKey(key) } }
 
     private fun applyKey(key: String) {
         try {
@@ -185,14 +192,14 @@ class TuiYameObserver(
         }
     }
 
-    fun start() { work.submitRequired { startScreen() } }
+    fun start() { work.submitRequired(kind = "StartScreen") { startScreen() } }
 
     private fun startScreen() {
         if (closed || screenStarted) return
         screenStarted = true
         headerStartedNanos = System.nanoTime()
         headerTimer.scheduleAtFixedRate(
-            { work.submitRequired { render() } }, 5, 5, java.util.concurrent.TimeUnit.SECONDS,
+            { work.submitRequired(kind = "HeaderRefresh") { render() } }, 5, 5, java.util.concurrent.TimeUnit.SECONDS,
         )
         enterScreen()
         render()
@@ -227,7 +234,7 @@ class TuiYameObserver(
     internal fun updateAvailablePorts(ports: List<SerialPortDescriptor>) {
         if (!work.isWorker) {
             val snapshot = ports.toList()
-            work.submitRequired { updateAvailablePorts(snapshot) }
+            work.submitRequired(kind = "PortUpdate") { updateAvailablePorts(snapshot) }
             return
         }
         val previousPalette = commandPalette
@@ -262,7 +269,7 @@ class TuiYameObserver(
     }
 
     fun onLog(message: String) {
-        if (!work.isWorker) { work.submitRequired { onLog(message) }; return }
+        if (!work.isWorker) { work.submitRequired(kind = "DiagnosticLog") { onLog(message) }; return }
         appendLog(message)
         render()
     }
@@ -280,7 +287,7 @@ class TuiYameObserver(
 
     fun onEvent(event: YameEvent) {
         // Production events already own immutable payloads at the publication boundary.
-        work.submitRequired { processEvent(event) }
+        work.submitObservation(kind = event.javaClass.simpleName) { processEvent(event) }
     }
 
     private fun processEvent(event: YameEvent) {
@@ -304,7 +311,7 @@ class TuiYameObserver(
             pendingTransferCount = 0
         }
         when (event) {
-            is DiagnosticMessage -> appendLog(event.message)
+            is LogEntry -> appendLog(event.message)
             is AvailablePortsChanged -> { updateAvailablePorts(event.ports); return }
             is ConnectionStateChanged -> {
                 if (event.state == ConnectionState.DISCONNECTED) {
@@ -1063,6 +1070,26 @@ class TuiYameObserver(
     }
 
     private fun render() {
+        if (!closed && screenStarted) frames.request()
+    }
+
+    /** Timer never touches presentation state and cannot fatally overflow the event FIFO. */
+    private fun scheduleFrame(delayNanos: Long) {
+        headerTimer.schedule({ enqueueFrame() }, delayNanos, java.util.concurrent.TimeUnit.NANOSECONDS)
+    }
+
+    private fun enqueueFrame() {
+        if (closed || work.fatalFailure != null) return
+        if (!work.offerRedraw { frames.onDeadline() }) {
+            // A full FIFO is still processing observations. Retry the redraw,
+            // rather than competing with required events for bounded admission.
+            if (!closed && work.fatalFailure == null) {
+                headerTimer.schedule({ enqueueFrame() }, 5, java.util.concurrent.TimeUnit.MILLISECONDS)
+            }
+        }
+    }
+
+    private fun renderNow() {
         try { renderFrame() } catch (error: Throwable) {
             work.fail(error)
             throw error
@@ -1115,13 +1142,19 @@ class TuiYameObserver(
     }
 
     private fun teardown() {
-        closed = true
-        headerTimer.shutdownNow()
-        commandRegistrations.forEach(AutoCloseable::close)
-        keyboardInput?.close()
-        keyboardInput = null
-        animation.stop()
-        if (screenStarted) leaveScreen()
+        // A pending scheduled redraw might not have entered the FIFO before
+        // shutdown; paint all already-accepted observations one last time.
+        try {
+            if (work.fatalFailure == null && screenStarted) frames.flush()
+        } finally {
+            closed = true
+            headerTimer.shutdownNow()
+            commandRegistrations.forEach(AutoCloseable::close)
+            keyboardInput?.close()
+            keyboardInput = null
+            animation.stop()
+            if (screenStarted) leaveScreen()
+        }
     }
 
     private companion object {

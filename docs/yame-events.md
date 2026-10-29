@@ -75,9 +75,16 @@ The proxy registry owns two immutable event contracts:
   state, kind, transformation and removal changes. It includes the graph ID and
   root, normalized resource key and display URL, upstream/content-base URLs,
   incident parent/relation associations, state, kind, sticky prefetch state,
-  transformation summaries, and fetch-attempt ID and number.
+  transformation summaries, fetch-attempt ID and number, and an authoritative
+  per-resource `resourceRevision`. The revision advances with observable resource
+  state and association changes under the registry lock. It is scoped to one
+  resource membership within a graph lifetime, so revisions must not be compared
+  across different graphs. It is independent of graph usage counts, delivery
+  order and wall-clock resolution.
 
-Each type has a stable `typeName` and v1 schema. Resource collections are copied
+Each type has a stable `typeName`; the resource lifecycle event now uses
+schema version 1.1.0 (additive `resourceRevision` field), while the graph lifecycle
+event remains 1.0.0. Resource collections are copied
 into unmodifiable snapshots. `occurredAt` is a UTC `Instant` captured by the
 registry at the authoritative state transition; event publication and consumer
 delivery happen afterward. A graph's usage count increments for graph creation,
@@ -85,7 +92,9 @@ reuse and accepted resource discovery, matching the registry's existing root-use
 observations. Fetch attempts move the authoritative state back to `FETCHING`;
 the attempt number distinguishes a legitimate retry from a delayed event from
 an earlier attempt. The registry rejects stale attempt updates before emitting
-an event.
+an event. TUI and independent recording projections prefer the resource revision
+when choosing between older and newer snapshots: equal revisions with different
+resource contents are conflicting observations, even when their timestamps match.
 
 The registry publishes through `YameEvents` outside its state lock. It does not
 create a second queue or suppress publication failures. First publication
@@ -320,13 +329,18 @@ metadata and no replay/bootstrap for late subscribers.
   without a request/result event protocol. Startup and the port monitor independently
   publish `AvailablePortsChanged` only when the observed list changes; its list
   is also an unmodifiable defensive copy. An open palette consumes those changes.
-- `DiagnosticMessage` is a presentation observation. Module text logging happens
-  first on the producer with its existing severity. PPP/HTTP event diagnostics go
-  through the independent `diagnosticSink` tee exactly once before direct facade
-  publication. Packet capture retains its own bounded executor. Subscriber failure
-  or rejected observation admission cannot suppress or duplicate these writes;
-  there is no module-file logging subscriber on the broker worker. A failed
-  diagnostic tee is reported independently and does not suppress publication.
+- `YameLogManager` is the sole publisher of `LogEntry` observations
+  (`yame.logging.entry` v1), carrying module, severity and message. Module
+  filtering happens **before** file output and event publication, so DEBUG
+  packet traces are not delivered to the TUI at the default INFO level.
+  Accepted entries are published outside the file-writer lock, even when the
+  underlying log file cannot be written. The previous `DiagnosticMessage`
+  (`yame.diagnostic.message`) contract is replaced, not aliased.
+- PPP/HTTP domain event diagnostics still go through the independent
+  `diagnosticSink` tee exactly once before direct facade publication.
+  Packet capture retains its own bounded executor. The sink ignores `LogEntry`,
+  preventing recursive log publication. A failed diagnostic tee is reported
+  independently and does not suppress publication of the domain event.
 
 The tone-test path uses the same early subscription, diagnostic tee, supervision
 and shutdown composition as plain mode.

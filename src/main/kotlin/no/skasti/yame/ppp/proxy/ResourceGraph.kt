@@ -54,6 +54,7 @@ internal data class ResourceNodeSnapshot(
     val transformations: List<ResourceTransformationSummary> = emptyList(),
     val fetchAttemptId: Long? = null,
     val fetchAttemptNumber: Long? = null,
+    val revision: Long = 1L,
 )
 
 data class ResourceEdgeSnapshot(
@@ -98,6 +99,7 @@ internal class NavigationResourceGraph(
         var transformations: List<ResourceTransformationSummary>,
         var fetchAttemptId: Long?,
         var fetchAttemptNumber: Long?,
+        var revision: Long,
     )
 
     private val nodes = linkedMapOf<String, MutableNode>()
@@ -138,7 +140,13 @@ internal class NavigationResourceGraph(
             transformations = emptyList(),
         )
         val edge = ResourceEdgeSnapshot(parentLegacyUri, childLegacyUri, relation)
-        if (edge in edges || edges.size < maxEdges) edges += edge
+        if (edges.size < maxEdges && edges.add(edge)) {
+            // An association belongs to both endpoints' observable snapshots.
+            val parent = nodes[key(parentLegacyUri)]
+            val child = nodes[key(childLegacyUri)]
+            parent?.let(::advanceRevision)
+            if (child !== parent) child?.let(::advanceRevision)
+        }
         return true
     }
 
@@ -180,12 +188,14 @@ internal class NavigationResourceGraph(
             )
         }
         val node = requireNotNull(nodes[key(legacyUri)])
+        val before = node.copy()
         node.upstreamUri = upstreamUri
         node.contentBase = contentBase
         node.state = ResourceState.FETCHING
         node.prefetched = node.prefetched || prefetched
         node.fetchAttemptId = attemptId
         node.fetchAttemptNumber = attemptNumber
+        if (node != before) advanceRevision(node)
         return true
     }
 
@@ -201,6 +211,7 @@ internal class NavigationResourceGraph(
         node.upstreamUri = upstreamUri
         node.contentBase = contentBase
         node.state = state
+        advanceRevision(node)
         return true
     }
 
@@ -230,6 +241,7 @@ internal class NavigationResourceGraph(
                 transformations = immutableSnapshotList(it.transformations),
                 fetchAttemptId = it.fetchAttemptId,
                 fetchAttemptNumber = it.fetchAttemptNumber,
+                revision = it.revision,
             )
         }
 
@@ -260,6 +272,7 @@ internal class NavigationResourceGraph(
                     transformations = immutableSnapshotList(it.transformations),
                     fetchAttemptId = it.fetchAttemptId,
                     fetchAttemptNumber = it.fetchAttemptNumber,
+                    revision = it.revision,
                 )
             },
             edges = immutableSnapshotList(edges),
@@ -290,8 +303,10 @@ internal class NavigationResourceGraph(
                     immutableSnapshotList(transformations),
                     null,
                     null,
+                    1L,
                 )
         } else {
+            val before = previous.copy()
             if (role == ReferenceRole.NAVIGATION) {
                 previous.role = ReferenceRole.NAVIGATION
                 previous.kind = kind
@@ -303,6 +318,7 @@ internal class NavigationResourceGraph(
             if (state.ordinal > previous.state.ordinal) previous.state = state
             previous.prefetched = previous.prefetched || prefetched
             if (transformations.isNotEmpty()) previous.transformations = immutableSnapshotList(transformations)
+            if (previous != before) advanceRevision(previous)
         }
     }
 
@@ -314,6 +330,7 @@ internal class NavigationResourceGraph(
         val node = nodes[key(legacyUri)] ?: return false
         if (node.transformations == transformations) return false
         node.transformations = immutableSnapshotList(transformations)
+        advanceRevision(node)
         return true
     }
 
@@ -322,7 +339,14 @@ internal class NavigationResourceGraph(
         val node = nodes[key(legacyUri)] ?: return false
         if (node.kind == kind) return false
         node.kind = kind
+        advanceRevision(node)
         return true
+    }
+
+    private fun advanceRevision(node: MutableNode) {
+        // Fail rather than wrap and make a newer snapshot look stale.
+        check(node.revision < Long.MAX_VALUE) { "Resource revision exhausted" }
+        node.revision++
     }
 
     private fun canAdmit(legacyUri: URI): Boolean =
@@ -493,6 +517,7 @@ internal class NavigationResourceRegistry(
             graphUsageCount = usageCount,
             graphLastUsedAt = lastUsedAt,
             occurredAt = occurredAt,
+            resourceRevision = resource.revision,
         )
     }
 

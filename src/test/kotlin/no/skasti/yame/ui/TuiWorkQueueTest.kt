@@ -175,6 +175,90 @@ class TuiWorkQueueTest {
         }
     }
 
+    @Test fun `hundreds of resource observations preserve FIFO order without saturating work slots`() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val seen = mutableListOf<String>()
+        val queue = TuiWorkQueue(capacity = 24, admissionWait = Duration.ZERO)
+        try {
+            queue.submitRequired(kind = "StartScreen") { entered.countDown(); release.await() }
+            entered.awaitReady()
+            repeat(480) { i ->
+                assertTrue(queue.submitObservation("ResourceLifecycleEvent") { seen += "resource-$i" })
+            }
+            assertTrue(queue.submitRequired(kind = "KeyboardInput") { seen += "keyboard" })
+            repeat(480) { i ->
+                assertTrue(queue.submitObservation("ResourceGraphLifecycleEvent") { seen += "graph-$i" })
+            }
+            // 16 bounded batches plus the keyboard must fit, while 960 independent
+            // queue entries would exceed capacity 24. No observations are removed.
+            assertNull(queue.fatalFailure)
+            release.countDown()
+            queue.read {
+                assertEquals(
+                    (0 until 480).map { "resource-$it" } + "keyboard" +
+                        (0 until 480).map { "graph-$it" },
+                    seen,
+                )
+            }
+        } finally {
+            release.countDown()
+            queue.close()
+        }
+    }
+
+    @Test fun `optional redraw never poisons the queue when required observations fill it`() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val accepted = mutableListOf<String>()
+        val queue = TuiWorkQueue(capacity = 1, admissionWait = Duration.ZERO)
+        try {
+            queue.submitRequired(kind = "LogEntry") {
+                entered.countDown()
+                release.await()
+                accepted += "first"
+            }
+            entered.awaitReady()
+            assertTrue(queue.submitRequired(kind = "ResourceLifecycleEvent") { accepted += "second" })
+            assertFalse(queue.offerRedraw { fail("a redraw must not replace required work") })
+            assertNull(queue.fatalFailure)
+            release.countDown()
+            queue.read { assertEquals(listOf("first", "second"), accepted) }
+            assertTrue(queue.offerRedraw { accepted += "redraw" })
+            queue.close()
+            assertEquals(listOf("first", "second", "redraw"), accepted)
+        } finally { release.countDown(); queue.close() }
+    }
+
+    @Test fun `saturated queue reports pending event types and active work without event contents`() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val queue = TuiWorkQueue(capacity = 2, admissionWait = Duration.ZERO)
+        try {
+            queue.submitRequired(kind = "DiagnosticMessage") {
+                entered.countDown()
+                release.await()
+            }
+            entered.awaitReady()
+            assertTrue(queue.submitRequired(kind = "TransferBytes") {})
+            assertTrue(queue.submitRequired(kind = "TransferBytes") {})
+            val failure = assertFailsWith<IllegalStateException> {
+                queue.submitRequired(kind = "DnsQuery") {}
+            }
+            val message = failure.message.orEmpty()
+            assertContains(message, "TUI queue admission timed out")
+            assertContains(message, "capacity=2, pending=2")
+            assertContains(message, "executing=DiagnosticMessage")
+            assertContains(message, "rejected=DnsQuery")
+            assertContains(message, "queuedByKind={TransferBytes=2}")
+            assertContains(message, "admittedByKind={TransferBytes=2, DiagnosticMessage=1}")
+            assertSame(failure, queue.fatalFailure)
+        } finally {
+            release.countDown()
+            assertFailsWith<IllegalStateException> { queue.close() }
+        }
+    }
+
     @Test fun `external admission times out after its bounded capacity wait`() {
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)

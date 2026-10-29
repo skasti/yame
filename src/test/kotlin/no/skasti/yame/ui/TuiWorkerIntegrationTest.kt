@@ -37,6 +37,12 @@ class TuiWorkerIntegrationTest : InstalledConfigTest() {
             ui.awaitIdle() // The configuration callback can be admitted after the first read barrier.
             assertEquals(57600, config[SerialSettings.Baud])
             assertEquals("yame-tui-worker", savingThread.get().name)
+            // FIFO state is updated immediately; painting may be deferred to the next
+            // 60 FPS tick. Wait for the actual frame rather than assuming read() paints.
+            val renderDeadline = System.nanoTime() + Duration.ofSeconds(2).toNanos()
+            while ("57600" !in recorder.output() && System.nanoTime() < renderDeadline) {
+                Thread.sleep(5)
+            }
             assertContains(recorder.output(), "57600")
             assertNull(ui.fatalFailure)
             "/baud".forEach { ui.handleKeyAndAwait(it.toString()) }

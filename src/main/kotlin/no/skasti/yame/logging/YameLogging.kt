@@ -14,6 +14,7 @@ import no.skasti.yame.ppp.proxy.HttpProxyAction
 import no.skasti.yame.ppp.proxy.HttpProxyActionKind
 
 import no.skasti.yame.observer.YameEvent
+import no.skasti.yame.observer.YameEvents
 import java.io.BufferedWriter
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
@@ -54,6 +55,7 @@ class YameLogManager(
     private val logDirectory: Path = Path.of("logs"),
     private val maxActiveLogBytes: Long = 10L * 1024L * 1024L,
     private val maxArchivesPerModule: Int = 5,
+    private val publishEntry: (LogEntry) -> Unit = { YameEvents.publish(it) },
 ) : AutoCloseable {
     init {
         require(maxActiveLogBytes > 0) { "maxActiveLogBytes must be positive" }
@@ -195,27 +197,32 @@ class YameLogManager(
 
     fun log(module: YameLogModule, level: YameLogLevel, message: String) {
         val target = writers[module] ?: return
-        if (level.priority > target.level.priority || target.writeFailed) return
+        if (level.priority > target.level.priority) return
 
+        // Do not hold the file-writer lock while publishing to the bounded event broker.
+        // A failed log file does not prevent the presentation from receiving an accepted entry.
         synchronized(lock) {
-            if (target.writeFailed) return
-            val writer = target.writer ?: return
-            try {
-                writer
-                    .append(LocalDateTime.now().format(LOG_TIME_FORMAT))
-                    .append(" ")
-                    .append(level.name)
-                    .append(" ")
-                    .append(message)
-                writer.newLine()
-                writer.flush()
-                rotateIfNeeded(module, target)
-            } catch (e: Exception) {
-                target.writeFailed = true
-                reportLoggingFailure(module.fileName, "write", e)
-                runCatching { writer.close() }
+            if (!target.writeFailed) {
+                target.writer?.let { writer ->
+                    try {
+                        writer
+                            .append(LocalDateTime.now().format(LOG_TIME_FORMAT))
+                            .append(" ")
+                            .append(level.name)
+                            .append(" ")
+                            .append(message)
+                        writer.newLine()
+                        writer.flush()
+                        rotateIfNeeded(module, target)
+                    } catch (e: Exception) {
+                        target.writeFailed = true
+                        reportLoggingFailure(module.fileName, "write", e)
+                        runCatching { writer.close() }
+                    }
+                }
             }
         }
+        publishEntry(LogEntry(module, level, message))
     }
 
     override fun close() {

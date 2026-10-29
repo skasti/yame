@@ -4,7 +4,9 @@ import no.skasti.yame.config.InstalledConfigTest
 import com.github.ajalt.mordant.terminal.Terminal
 import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.function.FunctionStore
-import no.skasti.yame.logging.DiagnosticMessage
+import no.skasti.yame.logging.LogEntry
+import no.skasti.yame.logging.YameLogModule
+import no.skasti.yame.logging.YameLogLevel
 import no.skasti.yame.logging.YameLogManager
 import no.skasti.yame.main as applicationMain
 import no.skasti.yame.observer.*
@@ -56,12 +58,12 @@ class ApplicationPresentationTest : InstalledConfigTest() {
         val seen = CopyOnWriteArrayList<String>()
         try {
             PlainPresentation(seen::add).use {
-                YameEvents.publish(DiagnosticMessage("before start"))
+                YameEvents.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "before start"))
                 it.start()
-                YameEvents.publish(DiagnosticMessage("after start"))
+                YameEvents.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "after start"))
                 assertEquals(BrokerWaitResult.COMPLETED, broker.drain().await(Duration.ofSeconds(5)))
             }
-            YameEvents.publish(DiagnosticMessage("after close"))
+            YameEvents.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "after close"))
             assertEquals(BrokerWaitResult.COMPLETED, broker.drain().await(Duration.ofSeconds(5)))
             assertEquals(listOf("before start", "after start"), seen.toList())
         } finally {

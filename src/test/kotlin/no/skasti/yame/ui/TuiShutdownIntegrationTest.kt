@@ -4,7 +4,9 @@ import no.skasti.yame.config.InstalledConfigTest
 import com.github.ajalt.mordant.terminal.*
 import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.lifecycle.ApplicationEventLifecycle
-import no.skasti.yame.logging.DiagnosticMessage
+import no.skasti.yame.logging.LogEntry
+import no.skasti.yame.logging.YameLogModule
+import no.skasti.yame.logging.YameLogLevel
 import no.skasti.yame.observer.*
 import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.serial.SerialSettings
@@ -42,7 +44,7 @@ class TuiShutdownIntegrationTest : InstalledConfigTest() {
         val reports = CopyOnWriteArrayList<String>()
         val exits = CopyOnWriteArrayList<Int>()
         broker.subscribe("pause-before-tui") {
-            if ((it as DiagnosticMessage).message == "captured-before-close") {
+            if ((it as LogEntry).message == "captured-before-close") {
                 callbackEntered.countDown()
                 check(releaseCallback.await(5, TimeUnit.SECONDS))
             }
@@ -51,15 +53,15 @@ class TuiShutdownIntegrationTest : InstalledConfigTest() {
         val owner = ApplicationEventLifecycle(broker, sealFacade = {}, report = reports::add, terminate = exits::add,
             awaitBrokerClosed = { remaining -> brokerClosing.countDown(); broker.awaitClosed(remaining) })
         owner.consumer(app)
-        owner.producer(AutoCloseable { YameEvents.publish(DiagnosticMessage("producer-final")) })
+        owner.producer(AutoCloseable { YameEvents.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "producer-final")) })
         val failures = CopyOnWriteArrayList<Throwable>()
         val closers = List(2) { Thread { try { owner.close() } catch (error: Throwable) { failures += error } } }
         try {
             app.start()
             terminal.entered.awaitReady()
-            YameEvents.publish(DiagnosticMessage("captured-before-close"))
+            YameEvents.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "captured-before-close"))
             callbackEntered.awaitReady()
-            YameEvents.publish(DiagnosticMessage("queued-before-close"))
+            YameEvents.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "queued-before-close"))
             closers.forEach(Thread::start)
             brokerClosing.awaitReady()
             assertFalse(broker.status.terminated, "the in-flight callback must finish before consumer close")
@@ -82,7 +84,7 @@ class TuiShutdownIntegrationTest : InstalledConfigTest() {
             app.start()
             app.close()
             config.set(SerialSettings.Baud to 57600)
-            assertFailsWith<BrokerClosedException> { YameEvents.publish(DiagnosticMessage("too-late")) }
+            assertFailsWith<BrokerClosedException> { YameEvents.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "too-late")) }
             assertEquals(prints, terminal.prints.size, "no terminal IO after teardown")
         } finally {
             releaseCallback.countDown(); terminal.release.countDown()
@@ -112,7 +114,7 @@ class TuiShutdownIntegrationTest : InstalledConfigTest() {
         try {
             app.start()
             terminal.entered.awaitReady()
-            YameEvents.publish(DiagnosticMessage("accepted-before-deadline"))
+            YameEvents.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "accepted-before-deadline"))
             assertEquals(BrokerWaitResult.COMPLETED, broker.drain().await(timeout))
             closer.start()
             producerEntered.awaitReady()
@@ -129,7 +131,9 @@ class TuiShutdownIntegrationTest : InstalledConfigTest() {
             assertEquals(1L, terminal.tornDown.count)
             terminal.release.countDown()
             assertFailsWith<IllegalStateException> { app.close() }
-            terminal.assertDrained("accepted-before-deadline")
+            // Fatal shutdown may not have painted the accepted but still dirty
+            // frame. Validate terminal teardown, not synchronous log visibility.
+            terminal.assertDrained()
         } finally {
             releaseProducer.countDown(); terminal.release.countDown()
             if (closer.state != Thread.State.NEW) closer.join(5_000)
@@ -137,32 +141,36 @@ class TuiShutdownIntegrationTest : InstalledConfigTest() {
         }
     }
 
-    @Test fun `broker isolated TUI overload still enforces fatal deadline while terminal rendering is blocked`() {
+    @Test fun `bursty broker observations remain ordered while terminal rendering is blocked`() {
         val terminal = BlockedTerminal()
         val app = run { installConfig(ConfigStore()); InteractiveYameApplication(FunctionStore(), terminal.terminal) }
         val exits = LinkedBlockingQueue<Int>()
         val reports = CopyOnWriteArrayList<String>()
-        val owner = ApplicationEventLifecycle(broker, timeout = Duration.ofMillis(200),
+        val owner = ApplicationEventLifecycle(broker, timeout = Duration.ofSeconds(3),
             sealFacade = {}, report = reports::add, terminate = { exits.offer(it) })
         owner.consumer(app)
         try {
             app.start()
             terminal.entered.awaitReady()
-            repeat(256) { YameEvents.publish(DiagnosticMessage("accepted-$it")) }
+            repeat(256) { YameEvents.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "accepted-$it")) }
+            YameEvents.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "after-burst"))
             assertEquals(BrokerWaitResult.COMPLETED, broker.drain().await(timeout))
-            YameEvents.publish(DiagnosticMessage("overflow"))
-            assertEquals(1, exits.poll(2, TimeUnit.SECONDS))
-            assertNotNull(app.fatalFailure)
-            assertTrue(reports.any { it.contains("fatal presentation failure") })
-            assertEquals(1L, broker.status.subscriberFailures)
-            assertNull(broker.status.failure, "the broker's separate fatal contract is unchanged")
-            assertEquals(1L, terminal.release.count)
-            assertEquals(1L, terminal.tornDown.count, "the blocked worker cannot delay independent fatal exit")
+            // Bounded observation batching no longer consumes one FIFO slot per
+            // entry. The screen may still be blocked without failing admission.
+            assertNull(app.fatalFailure)
+            assertNull(broker.status.failure)
+            assertEquals(0L, broker.status.subscriberFailures)
+            terminal.release.countDown()
+            owner.close()
+            assertTrue(reports.isEmpty(), reports.toString())
+            assertTrue(exits.isEmpty(), exits.toString())
+            assertNull(app.fatalFailure)
+            terminal.assertDrained("accepted-255", "after-burst")
         } finally {
             terminal.release.countDown()
-            assertFailsWith<IllegalStateException> { app.close() }
+            owner.close()
+            app.close()
         }
-        terminal.assertDrained("accepted-255")
     }
 
     private fun CountDownLatch.awaitReady() = assertTrue(await(2, TimeUnit.SECONDS))

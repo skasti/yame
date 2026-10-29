@@ -67,11 +67,15 @@ class RecordingResourceView {
                     graph.associations.removeAll(event.associations.toSet())
                 } else if (event.canonicalResourceKey !in graph.removedResources) {
                     val previous = graph.resources[event.canonicalResourceKey]
-                    // Fixtures use controlled occurrence times; this recorder is not a general reorder engine.
-                    if (previous == null || event.occurredAt > previous.occurredAt) {
+                    // Use authoritative resource order, even when occurrences share
+                    // a timestamp or the system wall clock moves backwards.
+                    if (previous == null || event.resourceRevision > previous.resourceRevision) {
                         graph.resources[event.canonicalResourceKey] = event
+                        // Rejected stale snapshots must not add obsolete edges.
+                        graph.associations.addAll(event.associations.filterNot {
+                            it in graph.removedAssociations
+                        })
                     }
-                    graph.associations.addAll(event.associations.filterNot { it in graph.removedAssociations })
                 }
             }
         }
@@ -90,6 +94,8 @@ class RecordingResourceView {
             .map { (name, members) ->
                 val contributingGraphs = members.map { it.first }.distinctBy { it.id }
                 val resources = members.groupBy { it.second.canonicalResourceKey }.mapValues { (_, copies) ->
+                    // Revisions are local to a graph membership and cannot be
+                    // compared for the same URL across distinct graph lifetimes.
                     copies.maxWith(compareBy<Pair<Graph, ResourceLifecycleEvent>> { it.second.occurredAt }
                         .thenBy { it.first.id }).second
                 }

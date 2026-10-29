@@ -3,7 +3,7 @@ package no.skasti.yame.runtime
 import no.skasti.yame.config.InstalledConfigTest
 import no.skasti.yame.ui.handleKeyAndAwait
 import com.github.ajalt.mordant.terminal.Terminal
-import no.skasti.yame.logging.DiagnosticMessage
+import no.skasti.yame.logging.LogEntry
 import no.skasti.yame.observer.YameEvent
 import no.skasti.yame.observer.YameEvents
 import no.skasti.yame.observer.EventBroker
@@ -96,8 +96,8 @@ class YameRuntimeConnectionTest : InstalledConfigTest() {
                 firstEntered.countDown()
                 check(releaseFirst.await(5, TimeUnit.SECONDS))
             }, onClose = { firstClosed.countDown() })
-            val readySubscription = YameEvents.subscribe("ready-test", { it is DiagnosticMessage }) {
-                val message = (it as DiagnosticMessage).message
+            val readySubscription = YameEvents.subscribe("ready-test", { it is LogEntry }) {
+                val message = (it as LogEntry).message
                 messages += message
                 if (message.contains("YAME ready on COM1 at 57600 baud")) secondReady.countDown()
             }
@@ -161,7 +161,7 @@ class YameRuntimeConnectionTest : InstalledConfigTest() {
                         assertSame(failure, assertFailsWith<IOException> { runtime.run() })
                         assertEquals(1, attempts)
                         broker.drain().await(Duration.ofSeconds(5))
-                        assertTrue(resourceEvents.filterIsInstance<DiagnosticMessage>().any { it.message.contains("Could not open invalid") })
+                        assertTrue(resourceEvents.filterIsInstance<LogEntry>().any { it.message.contains("Could not open invalid") })
                         if (!constructionFails) assertTrue(port.closed)
                     }
                 }

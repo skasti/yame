@@ -151,6 +151,34 @@ class InteractiveYameApplicationTest : InstalledConfigTest() {
         }
     }
 
+    @Test fun `stale resource associations never enter the TUI or independent recording view`() {
+        val recorder = RecordingResourceView()
+        broker.subscribe("independent-stale-associations", handler = recorder::accept).use {
+            withApp { app ->
+                val root = URI("http://snapshot.test/")
+                val resource = URI("http://snapshot.test/image.gif")
+                val keep = ResourceEdgeSnapshot(root, resource, ResourceRelation.IMG_SRC)
+                val obsolete = ResourceEdgeSnapshot(root, resource, ResourceRelation.CSS_URL)
+                val time = Instant.parse("2026-10-29T12:00:00Z")
+                fun observation(revision: Long, edges: List<ResourceEdgeSnapshot>) =
+                    ResourceLifecycleEvent(ResourceLifecycleChange.DISCOVERED, 101, root,
+                        LegacyHttpUrl.requestObservableKey(resource), resource, null,
+                        ReferenceRole.SUBRESOURCE, ResourceKind.IMAGE, null,
+                        ResourceState.DISCOVERED, false, null, null, edges, emptyList(),
+                        1, time, time, revision)
+
+                YameEvents.publish(ResourceGraphLifecycleEvent(
+                    ResourceGraphChange.CREATED, 101, root, time, 1, time))
+                YameEvents.publish(observation(3, listOf(keep)))
+                YameEvents.publish(observation(2, listOf(keep, obsolete)))
+                drain()
+                assertEquivalentViews(recorder, app)
+                assertEquals(setOf(keep), recorder.graphs.getValue(101).associations)
+                assertEquals(setOf(keep), app.resourceGraphMetadataSnapshot().getValue(101).associations)
+            }
+        }
+    }
+
     @Test fun `public resource removal cleans all incident associations without removing shared host survivors`() {
         val recorder = RecordingResourceView()
         broker.subscribe("independent-removal", handler = recorder::accept).use {

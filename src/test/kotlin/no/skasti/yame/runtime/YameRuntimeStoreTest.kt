@@ -16,7 +16,7 @@ class YameRuntimeStoreTest : InstalledConfigTest() {
         val functions = FunctionStore()
         try {
             functions.register(ConnectionFunctions.Disconnect) {}.use {
-                YameLogManager(no.skasti.yame.logging.LoggingConfig(), logDirectory = directory).use { logs ->
+                YameLogManager(no.skasti.yame.logging.LoggingConfig(), logDirectory = directory, publishEntry = { }).use { logs ->
                     assertFailsWith<IllegalArgumentException> {
                         run { installConfig(store); YameRuntime(functions, logs, NavigationResourceRegistry(), { emptyList() }) }.run()
                     }
@@ -37,7 +37,7 @@ class YameRuntimeStoreTest : InstalledConfigTest() {
         try {
             val store = ConfigStore()
             val functions = FunctionStore()
-            YameLogManager(no.skasti.yame.logging.LoggingConfig(), logDirectory = directory).use { logs ->
+            YameLogManager(no.skasti.yame.logging.LoggingConfig(), logDirectory = directory, publishEntry = { }).use { logs ->
                 val ports = RuntimeTestPorts()
                 val runtime = run { installConfig(store); YameRuntime(functions, logManager = logs,
                     resourceGraphs = NavigationResourceRegistry(), portProvider = ports::scan,
