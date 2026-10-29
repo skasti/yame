@@ -394,11 +394,19 @@ def main():
 
         user = getpass.getuser()
         http_preflight(NAMESPACE, f"http://{address}/index.html", user)
-        smoke_url = "data:text/html,%3Chtml%3E%3Cbody%3EYAME%20SMOKE%3C/body%3E%3C/html%3E"
+        # The CI host and network namespace share their filesystem. A file://
+        # smoke page isolates Chromium startup from every network dependency.
+        smoke_file = WORK / "chromium-smoke.html"
+        smoke_file.write_text(
+            "<!doctype html><html><head><title>YAME smoke</title></head>"
+            "<body>YAME SMOKE</body></html>",
+            encoding="utf-8",
+        )
+        smoke_url = smoke_file.resolve().as_uri()
         if not browser(None, smoke_url, "host-smoke", user):
-            raise RuntimeError("Chromium cannot render a data: URL on the CI host")
+            raise RuntimeError("Chromium cannot render a local HTML file on the CI host")
         if not browser(NAMESPACE, smoke_url, "namespace-smoke", user):
-            raise RuntimeError("Chromium cannot render a data: URL inside the PPP network namespace")
+            raise RuntimeError("Chromium cannot render a local HTML file inside the PPP network namespace")
         baseline = browser(NAMESPACE, f"http://{address}/index.html", "fixture", user)
         log(f"Deterministic image page: requests observed by origin={Fixture.count}")
         check_tui_overload("deterministic browser load")
