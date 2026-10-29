@@ -66,7 +66,7 @@ class TuiWorkerIntegrationTest : InstalledConfigTest() {
             check(releaseCallback.await(5, TimeUnit.SECONDS))
         })
         val ui = run { installConfig(config); TuiYameObserver(FunctionStore(), Terminal(interactive = false)) }
-        val broker = EventBroker()
+        val broker = EventBroker(initialCapacity = 4096, initialPublishTimeout = java.time.Duration.ofMillis(10), initialMaxSubscribers = 64)
         val owner = ApplicationEventLifecycle(broker, timeout = Duration.ofMillis(200),
             sealFacade = {}, report = reports::add, terminate = { exits.offer(it) })
         owner.consumer(ui)
