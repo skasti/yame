@@ -130,7 +130,7 @@ for the format and editing behavior.
 
 Live on/off and PNG compatibility settings are separate from the immutable INI
 rules. At the start of each HTTP request, the handler reads feature-owned keys
-through its explicitly injected `ConfigStore` and builds one immutable
+through the installed global `ConfigStore` facade (`ConfigStore[key]`) and builds one immutable
 `ResourceTransformationSettings` value. The store intentionally has no atomic
 multi-key snapshot API; a concurrent commit may land between individual reads.
 Once built, the request retains its settings value. Its transformation profile and
