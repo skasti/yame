@@ -75,9 +75,14 @@ The proxy registry owns two immutable event contracts:
   state, kind, transformation and removal changes. It includes the graph ID and
   root, normalized resource key and display URL, upstream/content-base URLs,
   incident parent/relation associations, state, kind, sticky prefetch state,
-  transformation summaries, and fetch-attempt ID and number.
+  transformation summaries, fetch-attempt ID and number, and an authoritative
+  per-resource `resourceRevision`. The revision advances with observable resource
+  state and association changes under the registry lock. It is independent of
+  graph usage counts, delivery order and wall-clock resolution.
 
-Each type has a stable `typeName` and v1 schema. Resource collections are copied
+Each type has a stable `typeName`; the resource lifecycle event now uses
+schema version 1.1.0 (additive `resourceRevision` field), while the graph lifecycle
+event remains 1.0.0. Resource collections are copied
 into unmodifiable snapshots. `occurredAt` is a UTC `Instant` captured by the
 registry at the authoritative state transition; event publication and consumer
 delivery happen afterward. A graph's usage count increments for graph creation,
@@ -85,7 +90,9 @@ reuse and accepted resource discovery, matching the registry's existing root-use
 observations. Fetch attempts move the authoritative state back to `FETCHING`;
 the attempt number distinguishes a legitimate retry from a delayed event from
 an earlier attempt. The registry rejects stale attempt updates before emitting
-an event.
+an event. TUI and independent recording projections prefer the resource revision
+when choosing between older and newer snapshots: equal revisions with different
+resource contents are conflicting observations, even when their timestamps match.
 
 The registry publishes through `YameEvents` outside its state lock. It does not
 create a second queue or suppress publication failures. First publication
