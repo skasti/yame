@@ -144,6 +144,18 @@ class TerminalProcess:
         self.stderr.close()
 
 
+def find_command(name):
+    """Ubuntu keeps administrative programs in /usr/sbin outside runner's PATH."""
+    found = shutil.which(name)
+    if found:
+        return found
+    for directory in ("/usr/sbin", "/sbin", "/usr/bin", "/bin"):
+        candidate = Path(directory) / name
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    raise RuntimeError(f"Required tool missing: {name}")
+
+
 def start(command, log_name, *, sudo=False):
     actual = ["sudo", "-n", *command] if sudo else command
     output = (REPORT / log_name).open("wb")
@@ -253,9 +265,9 @@ def main():
         raise RuntimeError(f"Missing packaged distribution: {YAME}")
     if not (shutil.which("google-chrome") or shutil.which("chromium")):
         raise RuntimeError("No Chrome/Chromium on the CI runner")
-    for item in ("socat", "pppd", "chat", "ip", "sudo", "runuser"):
-        if not shutil.which(item):
-            raise RuntimeError(f"Required tool missing: {item}")
+    programs = {item: find_command(item) for item in
+                ("socat", "pppd", "chat", "ip", "sudo", "runuser")}
+    log("PPP executables: pppd=" + programs["pppd"] + ", chat=" + programs["chat"])
 
     fixture = http.server.ThreadingHTTPServer(("127.0.0.1", 18081), Fixture)
     worker = threading.Thread(target=fixture.serve_forever, daemon=True)
@@ -305,11 +317,11 @@ def main():
             raise RuntimeError("YAME exited before PPP negotiation")
 
         pppd, out = start([
-            "ip", "netns", "exec", NAMESPACE, "pppd", os.path.realpath(client_pty),
+            programs["ip"], "netns", "exec", NAMESPACE, programs["pppd"], os.path.realpath(client_pty),
             str(BAUD), "local", "noauth", "noipdefault", "noccp", "novj",
             "defaultroute", "ipcp-accept-local", "ipcp-accept-remote",
             "nodetach", "debug", "10.64.0.2:10.64.0.1",
-            "connect", "/usr/sbin/chat -v -t 15 '' ATD1 CONNECT",
+            "connect", f"{programs['chat']} -v -t 15 '' ATD1 CONNECT",
         ], "pppd.log", sudo=True)
         children.append((pppd, out))
         wait_for(lambda: pppd.poll() is not None or
