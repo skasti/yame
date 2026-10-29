@@ -103,15 +103,19 @@ internal class HttpGraphProjection(private val maxPending: Int = 256) {
             }
             return
         }
-        // Current domain semantics: a removed membership is terminal for this graph lifetime.
+        // Removal is terminal within this graph lifetime. No older resource
+        // observation may reintroduce either the resource or its associations.
         if (key in graph.removedResources) return
+        val current = graph.resources[key]
+        if (current != null && compareResourceObservations(event, current) <= 0) return
+
+        // Accept the resource snapshot before projecting its incident edges.
+        // Edges can be shared by other resources, so accumulate them rather
+        // than replacing the graph's set; REMOVED prunes incident edges.
+        graph.resources[key] = event
         graph.associations += event.associations.filter { edge ->
             LegacyHttpUrl.requestObservableKey(edge.parentLegacyUri) !in graph.removedResources &&
                 LegacyHttpUrl.requestObservableKey(edge.childLegacyUri) !in graph.removedResources
-        }
-        val current = graph.resources[key]
-        if (current == null || compareResourceObservations(event, current) > 0) {
-            graph.resources[key] = event
         }
     }
 
