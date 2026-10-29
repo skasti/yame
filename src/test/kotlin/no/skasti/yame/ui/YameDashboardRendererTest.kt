@@ -90,18 +90,19 @@ class YameDashboardRendererTest {
         val lines = wide.lines()
         assertEquals(30, lines.size)
         assertTrue(lines.all { it.length == 150 })
-        assertContains(lines[27], "Event broker")
-        assertContains(lines[27], "2048/4096 events (50%)")
-        assertContains(lines[28], "TUI work")
-        assertContains(lines[28], "192/256 slots (75%)")
+        // Exactly one bar row, with two meters and their labels *inside* the tracks.
+        assertContains(lines[28], "Event broker 2048/4096 events (50%)")
+        assertContains(lines[28], "TUI work 192/256 slots (75%)")
+        assertEquals(4, lines[28].count { it == '[' || it == ']' })
         assertContains(lines[29], "[/] commands")
-        assertEquals(2, wide.lines().count { it.contains("░") && it.contains("█") })
+        assertEquals(1, wide.lines().count { it.contains("░") && it.contains("█") })
         // The same two lines work with the large layouts too.
         val large = YameDashboardRenderer.render(state, width = 200, height = 80)
         assertEquals(80, large.lines().size)
         assertTrue(large.lines().all { it.length == 200 })
-        assertContains(large.lines()[77], "Event broker")
+        assertContains(large.lines()[78], "Event broker")
         assertContains(large.lines()[78], "TUI work")
+        assertFalse(large.lines()[77].contains("Event broker"))
     }
 
     @Test
