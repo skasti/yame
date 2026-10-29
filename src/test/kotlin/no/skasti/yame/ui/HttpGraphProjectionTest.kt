@@ -300,7 +300,7 @@ class HttpGraphProjectionTest : InstalledConfigTest() {
     }
 
     @Test fun `observer monitor ownership cannot block broker admission or presentation processing`() {
-        val broker = EventBroker(EventBrokerConfig(capacity = 1, publishTimeout = Duration.ZERO))
+        val broker = EventBroker(initialCapacity = 1, initialPublishTimeout = Duration.ZERO, initialMaxSubscribers = 64)
         val locked = CountDownLatch(1)
         val entered = CountDownLatch(1)
         val resume = CountDownLatch(1)
