@@ -276,8 +276,11 @@ def http_preflight(namespace, url, user):
          "runuser", "-u", user, "--", sys.executable, "-c", probe, url],
         capture_output=True, text=True, timeout=25,
     )
+    (REPORT / "http-preflight.stdout").write_text(result.stdout[:100000], encoding="utf-8")
+    (REPORT / "http-preflight.stderr").write_text(result.stderr[:100000], encoding="utf-8")
     log(f"PPP HTTP preflight: exit={result.returncode}; "
         f"origin requests={Fixture.count}; {result.stdout.strip() or result.stderr.strip()[:600]}")
+    check_tui_overload("PPP HTTP preflight")
     if result.returncode != 0 or "html=True" not in result.stdout:
         raise RuntimeError("PPP HTTP preflight failed before Chromium; "
                            "check routing, YAME proxy and fixture-forwarder logs")
