@@ -391,12 +391,18 @@ object FatalBrokerProcess {
     @JvmStatic fun main(args: Array<String>) {
         val broker = EventBroker(EventBrokerConfig(capacity = 1))
         ApplicationEventLifecycle(broker, timeout = Duration.ofMillis(200), sealFacade = {})
+        // The isolated JVM has a minimal classpath: avoid event types that pull in
+        // logging configuration and kotlinx.serialization during class loading.
+        val signal = object : AbstractYameEvent() {
+            override val typeName = "test.lifecycle.fatal"
+            override val version = VersionNumber(1, 0, 0)
+        }
         val entered = CountDownLatch(1)
         broker.subscribe("permanently-blocked") { entered.countDown(); CountDownLatch(1).await() }
-        broker.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "first"))
+        broker.publish(signal)
         check(entered.await(5, TimeUnit.SECONDS))
-        broker.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "pending"))
-        runCatching { broker.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "overflow")) }
+        broker.publish(signal)
+        runCatching { broker.publish(signal) }
         CountDownLatch(1).await()
     }
 }
