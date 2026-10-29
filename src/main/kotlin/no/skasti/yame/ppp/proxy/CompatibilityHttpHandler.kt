@@ -137,6 +137,7 @@ internal class SystemHttpCompatibilityHandler(
             ensureActive(state)
             val legacyUri = legacyUri(state.flow, request)
             val upstreamUri = originRoutes.resolve(state.flow, legacyUri)
+            publishTransferResource(state, legacyUri, upstreamUri, TransferResourcePhase.REQUEST)
             fetchLegacyUri = legacyUri
             fetchUpstreamUri = upstreamUri
             if (!request.method.equals("HEAD", ignoreCase = true)) {
@@ -582,6 +583,8 @@ internal class SystemHttpCompatibilityHandler(
             )
         }
         resourceReady = true
+        ensureActive(state)
+        publishTransferResource(state, response.legacyUri, response.uri, TransferResourcePhase.RESPONSE, clientHeaders)
         return clientResponse
         } catch (error: Throwable) {
             if (!resourceReady) {
@@ -1428,6 +1431,31 @@ internal class SystemHttpCompatibilityHandler(
         resourceCache.clear()
         inFlightResourceWork.clear()
         inFlightResourceFetchWork.clear()
+    }
+
+    private fun publishTransferResource(
+        state: FlowState,
+        requestUri: URI,
+        effectiveUri: URI,
+        phase: TransferResourcePhase,
+        headers: List<Pair<String, String>> = emptyList(),
+    ) {
+        val identity = state.flow.transferIdentity ?: return
+        val occurredAt = Instant.now()
+        val event = TransferResourceChanged(
+            transferIdentity = identity,
+            // HttpTcpProxy serves exactly one downstream request before Connection: close.
+            requestNumber = 1,
+            phase = phase,
+            requestUri = requestUri,
+            effectiveUri = effectiveUri,
+            displayFilename = HttpResourceMetadataResolver.filename(effectiveUri, headers),
+            occurredAt = occurredAt,
+        )
+        runCatching { diagnosticSink(event) }.onFailure {
+            System.err.println("YAME independent event diagnostic failed: ${it.javaClass.simpleName}")
+        }
+        YameEvents.publish(event)
     }
 
     private fun emitEvent(

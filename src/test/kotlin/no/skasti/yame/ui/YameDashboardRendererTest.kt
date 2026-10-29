@@ -3,6 +3,12 @@ package no.skasti.yame.ui
 import no.skasti.yame.ppp.session.TransferKind
 import no.skasti.yame.ppp.session.TransferState
 
+import no.skasti.yame.ppp.proxy.TransferResourceChanged
+import no.skasti.yame.ppp.proxy.TransferResourcePhase
+import no.skasti.yame.ppp.session.TransferIdentity
+import no.skasti.yame.ppp.session.PppSessionIdentity
+import java.net.URI
+import java.time.Instant
 import no.skasti.yame.ppp.proxy.ResourceKind
 import no.skasti.yame.ppp.proxy.ResourceState
 import no.skasti.yame.ppp.proxy.transform.ResourceTransformationSummary
@@ -13,6 +19,33 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class YameDashboardRendererTest {
+    @Test
+    fun filenamesFitCompactAndWidePanelsWithoutHidingConnectionCounters() {
+        val identity = TransferIdentity.create(PppSessionIdentity(1, 1), 0)
+        val uri = URI("https://downloads.test/download")
+        fun transfer(name: String?) = DashboardTransfer("flow", "10.0.0.9:80", "10.0.0.9:80",
+            TransferKind.TCP, TransferState.OPEN, 256, 32768, 1, 1_000_000_001, null,
+            resource = name?.let { TransferResourceChanged(identity, 1, TransferResourcePhase.RESPONSE,
+                uri, uri, it, Instant.EPOCH) })
+        val state = DashboardState(portName = null, baud = 115200, connected = true,
+            dnsUpstream = "8.8.8.8", httpProxyEnabled = true, logs = emptyList(), dnsLookups = emptyList(),
+            transfers = listOf(transfer("WINZIP95.EXE"), transfer("blåbær-".repeat(30) + ".exe"), transfer(null), transfer("😀".repeat(100) + ".exe")),
+            httpHosts = emptyList(), selectedHttpHostIndex = 0, commandPalette = null,
+            activeDetailPanel = DashboardDetailPanel.TRANSFERS)
+        for ((width, height) in listOf(100 to 30, 200 to 80, 300 to 100)) {
+            val frame = YameDashboardRenderer.render(state, width, height)
+            assertEquals(height, frame.lines().size)
+            assertTrue(frame.lines().all { it.length == width }, frame)
+            assertContains(frame, "WINZIP95.EXE")
+            assertContains(frame, "blåbær-")
+            assertContains(frame, "….exe")
+            assertContains(frame, "10.0.0.9:80")
+            val lines = frame.lines().filter { "WINZIP95.EXE" in it || "….exe" in it }
+            assertEquals(3, lines.size)
+            assertTrue(lines.all { "↑256" in it && "↓32.0K" in it }, lines.toString())
+        }
+    }
+
     @Test
     fun narrowDashboardShowsFullWidthLogAndOnlySelectedDetail() {
         val base = DashboardState(

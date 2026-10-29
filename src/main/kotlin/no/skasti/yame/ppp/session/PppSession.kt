@@ -909,6 +909,7 @@ class PppSession(
                 connectAddress = connectAddress,
                 connectPort = connectPort,
                 readTimeoutMillis = readTimeoutMillis,
+                transferIdentity = TransferIdentity.create(sessionIdentity, ipcpGeneration),
             )
             val context = TcpContext(
                 proxyFlow = proxyFlow,
@@ -920,7 +921,8 @@ class PppSession(
             emitEvent(
                 TransferStarted(
                     session = sessionIdentity,
-                    flowId = flowId(key),
+                    flowId = flowId(key, context.proxyFlow.generation),
+                    transferIdentity = context.proxyFlow.transferIdentity,
                     destination = "${key.remoteAddress}:${key.remotePort}",
                     via = "$connectAddress:$connectPort",
                     kind = if (localDns) TransferKind.DNS else TransferKind.TCP,
@@ -965,7 +967,8 @@ class PppSession(
                     emitEvent(
                         TransferStateChanged(
                             session = sessionIdentity,
-                            flowId = flowId(key),
+                            flowId = flowId(key, context.proxyFlow.generation),
+                            transferIdentity = context.proxyFlow.transferIdentity,
                             state = TransferState.OPEN,
                         ),
                     )
@@ -980,7 +983,8 @@ class PppSession(
                     emitEvent(
                         TransferBytes(
                             session = sessionIdentity,
-                            flowId = flowId(key),
+                            flowId = flowId(key, context.proxyFlow.generation),
+                            transferIdentity = context.proxyFlow.transferIdentity,
                             direction = TransferDirection.TO_HOST,
                             bytes = event.payload.size,
                         ),
@@ -1006,7 +1010,8 @@ class PppSession(
                         emitEvent(
                             TransferStateChanged(
                                 session = sessionIdentity,
-                                flowId = flowId(key),
+                                flowId = flowId(key, context.proxyFlow.generation),
+                                transferIdentity = context.proxyFlow.transferIdentity,
                                 state = TransferState.CLOSED,
                             ),
                         )
@@ -1058,7 +1063,8 @@ class PppSession(
                 emitEvent(
                     TransferBytes(
                         session = sessionIdentity,
-                        flowId = flowId(flow.key),
+                        flowId = flowId(flow.key, flow.generation),
+                        transferIdentity = flow.transferIdentity,
                         direction = TransferDirection.TO_PEER,
                         bytes = event.bytes.size,
                     ),
@@ -1281,7 +1287,8 @@ class PppSession(
         emitEvent(
             TransferStateChanged(
                 session = sessionIdentity,
-                flowId = flowId(context.proxyFlow.key),
+                flowId = flowId(context.proxyFlow.key, context.proxyFlow.generation),
+                transferIdentity = context.proxyFlow.transferIdentity,
                 state = TransferState.FAILED,
                 detail = reason,
             ),
@@ -1881,6 +1888,7 @@ class PppSession(
                 TransferStateChanged(
                     session = sessionIdentity,
                     flowId = flowId(key, context.proxyFlow.generation),
+                    transferIdentity = context.proxyFlow.transferIdentity,
                     state = TransferState.CLOSED,
                     detail = "IPCP renegotiated",
                 ),

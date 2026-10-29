@@ -3,6 +3,12 @@ package no.skasti.yame.ui
 import no.skasti.yame.ppp.session.TransferKind
 import no.skasti.yame.ppp.session.TransferState
 
+import no.skasti.yame.ppp.proxy.TransferResourceChanged
+import no.skasti.yame.ppp.proxy.TransferResourcePhase
+import no.skasti.yame.ppp.session.TransferIdentity
+import no.skasti.yame.ppp.session.PppSessionIdentity
+import java.net.URI
+import java.time.Instant
 import no.skasti.yame.BuildInfo
 import no.skasti.yame.ppp.proxy.ResourceKind
 import no.skasti.yame.ppp.proxy.ResourceState
@@ -53,11 +59,18 @@ class DashboardScreenshotTest {
                 DashboardHttpResource("http://example.test/assets/banner.jpg", ResourceState.FETCHING, ResourceKind.IMAGE),
             ), expanded = true)),
         )
+        val identity = TransferIdentity.create(PppSessionIdentity(1, 1), 0)
+        val uri = URI("https://example.test/download")
+        val downloads = active.copy(transfers = listOf("WINZIP95.EXE", "blåbær-".repeat(30) + ".exe", null).mapIndexed { index, name ->
+            active.transfers.single().copy(flowId = "file-$index", resource = name?.let {
+                TransferResourceChanged(identity, 1, TransferResourcePhase.RESPONSE, uri, uri, it, Instant.EPOCH)
+            })
+        })
         for ((rows, columns) in listOf(30 to 100, 45 to 135, 50 to 150)) {
             writeScreenshot(startup, columns, rows, File(directory, "${rows}x${columns}.ansi"))
             for (panel in DashboardDetailPanel.entries) {
                 if (columns > 149 && panel != DashboardDetailPanel.PROXY) continue
-                writeScreenshot(active.copy(activeDetailPanel = panel), columns, rows,
+                writeScreenshot(downloads.copy(activeDetailPanel = panel), columns, rows,
                     File(directory, "${rows}x${columns}-${panel.name.lowercase()}.ansi"))
             }
         }
