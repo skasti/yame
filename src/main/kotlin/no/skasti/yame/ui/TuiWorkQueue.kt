@@ -74,6 +74,19 @@ internal class TuiWorkQueue(
     fun submitRequired(kind: String = "Other", action: () -> Unit): Boolean =
         submit(kind, failOnInterruption = true, action)
 
+    /**
+     * Optional redraws may be retried if the FIFO is saturated. Unlike producer
+     * observations, skipping admission here does not discard any state transition.
+     */
+    fun offerRedraw(action: () -> Unit): Boolean = lock.withLock {
+        if (!accepting || pending.size >= capacity) return false
+        val kind = "FrameRefresh"
+        pending.addLast(PendingWork(kind, action))
+        admittedByKind[kind] = (admittedByKind[kind] ?: 0L) + 1L
+        changed.signalAll()
+        true
+    }
+
     /** Capture labels only, never event objects or HTTP/packet payloads. Called with lock held. */
     private fun queueSnapshot(rejectedKind: String): String {
         fun formatCounts(counts: Map<String, Long>): String =
