@@ -320,13 +320,18 @@ metadata and no replay/bootstrap for late subscribers.
   without a request/result event protocol. Startup and the port monitor independently
   publish `AvailablePortsChanged` only when the observed list changes; its list
   is also an unmodifiable defensive copy. An open palette consumes those changes.
-- `DiagnosticMessage` is a presentation observation. Module text logging happens
-  first on the producer with its existing severity. PPP/HTTP event diagnostics go
-  through the independent `diagnosticSink` tee exactly once before direct facade
-  publication. Packet capture retains its own bounded executor. Subscriber failure
-  or rejected observation admission cannot suppress or duplicate these writes;
-  there is no module-file logging subscriber on the broker worker. A failed
-  diagnostic tee is reported independently and does not suppress publication.
+- `YameLogManager` is the sole publisher of `LogEntry` observations
+  (`yame.logging.entry` v1), carrying module, severity and message. Module
+  filtering happens **before** file output and event publication, so DEBUG
+  packet traces are not delivered to the TUI at the default INFO level.
+  Accepted entries are published outside the file-writer lock, even when the
+  underlying log file cannot be written. The previous `DiagnosticMessage`
+  (`yame.diagnostic.message`) contract is replaced, not aliased.
+- PPP/HTTP domain event diagnostics still go through the independent
+  `diagnosticSink` tee exactly once before direct facade publication.
+  Packet capture retains its own bounded executor. The sink ignores `LogEntry`,
+  preventing recursive log publication. A failed diagnostic tee is reported
+  independently and does not suppress publication of the domain event.
 
 The tone-test path uses the same early subscription, diagnostic tee, supervision
 and shutdown composition as plain mode.
