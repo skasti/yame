@@ -7,15 +7,28 @@ package no.skasti.yame.ui
  */
 internal class TuiFrameLimiter(
     private val nowNanos: () -> Long,
-    private val schedule: (delayNanos: Long) -> Unit,
+    private val schedule: (delayNanos: Long, generation: Long) -> Unit,
     private val draw: () -> Unit,
-    private val intervalNanos: Long = 16_666_667L, // ceil(1 second / 60 FPS)
+    initialFps: Int = 60,
 ) {
-    init { require(intervalNanos > 0) }
-
+    private var intervalNanos = frameIntervalNanos(initialFps)
     private var dirty = false
-    private var scheduled = false
+    private var scheduledGeneration: Long? = null
+    private var nextGeneration = 0L
     private var lastDrawNanos: Long? = null
+
+    /** Apply configuration changes without restarting the presentation. */
+    fun updateFrameRate(fps: Int) {
+        val interval = frameIntervalNanos(fps)
+        if (interval == intervalNanos) return
+        intervalNanos = interval
+        if (dirty && lastDrawNanos != null) {
+            // A previously scheduled callback may still arrive. Its token is
+            // obsolete, so it cannot redraw or disturb the replacement timer.
+            scheduledGeneration = null
+            scheduleIfNeeded()
+        }
+    }
 
     fun request() {
         dirty = true
@@ -30,8 +43,9 @@ internal class TuiFrameLimiter(
     }
 
     /** Invoked by the worker, not directly from the timer thread. */
-    fun onDeadline() {
-        scheduled = false
+    fun onDeadline(generation: Long) {
+        if (generation != scheduledGeneration) return
+        scheduledGeneration = null
         if (!dirty) return
         val elapsed = nowNanos() - requireNotNull(lastDrawNanos)
         if (elapsed >= intervalNanos) flush() else scheduleIfNeeded()
@@ -43,14 +57,23 @@ internal class TuiFrameLimiter(
         dirty = false
         draw()
         // The interval starts after the terminal operation finishes; otherwise
-        // a paint slower than 16 ms would immediately permit the next one.
+        // a slow paint would immediately permit the next one.
         lastDrawNanos = nowNanos()
     }
 
     private fun scheduleIfNeeded() {
-        if (!dirty || scheduled) return
+        if (!dirty || scheduledGeneration != null) return
         val sinceLast = nowNanos() - requireNotNull(lastDrawNanos)
-        scheduled = true
-        schedule((intervalNanos - sinceLast).coerceAtLeast(0))
+        check(nextGeneration < Long.MAX_VALUE) { "TUI frame timer generation exhausted" }
+        val generation = ++nextGeneration
+        scheduledGeneration = generation
+        schedule((intervalNanos - sinceLast).coerceAtLeast(0), generation)
+    }
+
+    private companion object {
+        fun frameIntervalNanos(fps: Int): Long {
+            require(fps in TuiSettings.SupportedFrameRates)
+            return (1_000_000_000L + fps - 1) / fps
+        }
     }
 }
