@@ -127,6 +127,22 @@ class YameDashboardRendererTest {
     }
 
     @Test
+    fun queueBarsShowTemporaryOverCapacityAfterResizingWithoutCrashing() {
+        val state = DashboardState(
+            portName = null, baud = 115200, connected = false,
+            dnsUpstream = "8.8.8.8", httpProxyEnabled = true,
+            logs = emptyList(), dnsLookups = emptyList(), transfers = emptyList(),
+            httpHosts = emptyList(), selectedHttpHostIndex = 0, commandPalette = null,
+            queueBars = QueueBars(QueueOccupancy(3000, 1024), QueueOccupancy(200, 100)),
+        )
+        val output = YameDashboardRenderer.render(state, width = 150, height = 30)
+        assertContains(output.lines()[28], "3000/1024 events (292%)")
+        assertContains(output.lines()[28], "200/100 slots (200%)")
+        assertEquals(30, output.lines().size)
+        assertTrue(output.lines().all { it.length == 150 })
+    }
+
+    @Test
     fun rendersAllOperationalPanels() {
         val state = DashboardState(
             portName = "COM3",
