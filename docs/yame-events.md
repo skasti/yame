@@ -77,8 +77,10 @@ The proxy registry owns two immutable event contracts:
   incident parent/relation associations, state, kind, sticky prefetch state,
   transformation summaries, fetch-attempt ID and number, and an authoritative
   per-resource `resourceRevision`. The revision advances with observable resource
-  state and association changes under the registry lock. It is independent of
-  graph usage counts, delivery order and wall-clock resolution.
+  state and association changes under the registry lock. It is scoped to one
+  resource membership within a graph lifetime, so revisions must not be compared
+  across different graphs. It is independent of graph usage counts, delivery
+  order and wall-clock resolution.
 
 Each type has a stable `typeName`; the resource lifecycle event now uses
 schema version 1.1.0 (additive `resourceRevision` field), while the graph lifecycle
