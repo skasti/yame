@@ -232,6 +232,7 @@ class TuiWorkQueueTest {
     @Test fun `optional redraw never poisons the queue when required observations fill it`() {
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
+        val secondCompleted = CountDownLatch(1)
         val accepted = mutableListOf<String>()
         val queue = TuiWorkQueue(capacity = 1, admissionWait = Duration.ZERO)
         try {
@@ -241,10 +242,17 @@ class TuiWorkQueueTest {
                 accepted += "first"
             }
             entered.awaitReady()
-            assertTrue(queue.submitRequired(kind = "ResourceLifecycleEvent") { accepted += "second" })
+            assertTrue(queue.submitRequired(kind = "ResourceLifecycleEvent") {
+                accepted += "second"
+                secondCompleted.countDown()
+            })
             assertFalse(queue.offerRedraw { fail("a redraw must not replace required work") })
             assertNull(queue.fatalFailure)
             release.countDown()
+            // The queue has capacity one and admissionWait=ZERO; asking read()
+            // to enqueue while the second action is still waiting can cause a
+            // spurious fatal timeout. Wait for that accepted action first.
+            secondCompleted.awaitReady()
             queue.read { assertEquals(listOf("first", "second"), accepted) }
             assertTrue(queue.offerRedraw { accepted += "redraw" })
             queue.close()
