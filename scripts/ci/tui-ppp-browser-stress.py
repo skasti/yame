@@ -340,7 +340,7 @@ def main():
 
         pppd, out = start([
             programs["ip"], "netns", "exec", NAMESPACE, programs["pppd"], os.path.realpath(client_pty),
-            str(BAUD), "local", "noauth", "noipdefault", "noccp", "novj",
+            str(BAUD), "local", "noauth", "noipdefault", "noccp", "novj", "noipv6",
             "defaultroute", "ipcp-accept-local", "ipcp-accept-remote",
             "nodetach", "debug", "10.64.0.2:10.64.0.1",
             "connect", f"{programs['chat']} -v -t 15 '' ATD1 CONNECT",
