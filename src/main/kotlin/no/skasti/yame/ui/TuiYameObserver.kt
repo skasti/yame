@@ -134,6 +134,13 @@ class TuiYameObserver(
 
     private val commandRegistrations = registerCommands() + registerTransformerCommands(paletteRegistry) + registerPppCommands(paletteRegistry)
     private val work = TuiWorkQueue(teardown = ::teardown)
+    // All state changes are still processed in FIFO order. Only screen painting is
+    // coalesced, so a burst of resource discovery cannot force one frame per event.
+    private val frames = TuiFrameLimiter(
+        nowNanos = System::nanoTime,
+        schedule = ::scheduleFrame,
+        draw = ::renderNow,
+    )
     override val fatalFailure: Throwable? get() = work.fatalFailure
     internal fun awaitIdle() = work.read { Unit }
 
@@ -1063,6 +1070,26 @@ class TuiYameObserver(
     }
 
     private fun render() {
+        if (!closed && screenStarted) frames.request()
+    }
+
+    /** Timer never touches presentation state and cannot fatally overflow the event FIFO. */
+    private fun scheduleFrame(delayNanos: Long) {
+        headerTimer.schedule({ enqueueFrame() }, delayNanos, java.util.concurrent.TimeUnit.NANOSECONDS)
+    }
+
+    private fun enqueueFrame() {
+        if (closed || work.fatalFailure != null) return
+        if (!work.offerRedraw { frames.onDeadline() }) {
+            // A full FIFO is still processing observations. Retry the redraw,
+            // rather than competing with required events for bounded admission.
+            if (!closed && work.fatalFailure == null) {
+                headerTimer.schedule({ enqueueFrame() }, 5, java.util.concurrent.TimeUnit.MILLISECONDS)
+            }
+        }
+    }
+
+    private fun renderNow() {
         try { renderFrame() } catch (error: Throwable) {
             work.fail(error)
             throw error
@@ -1115,13 +1142,19 @@ class TuiYameObserver(
     }
 
     private fun teardown() {
-        closed = true
-        headerTimer.shutdownNow()
-        commandRegistrations.forEach(AutoCloseable::close)
-        keyboardInput?.close()
-        keyboardInput = null
-        animation.stop()
-        if (screenStarted) leaveScreen()
+        // A pending scheduled redraw might not have entered the FIFO before
+        // shutdown; paint all already-accepted observations one last time.
+        try {
+            if (work.fatalFailure == null && screenStarted) frames.flush()
+        } finally {
+            closed = true
+            headerTimer.shutdownNow()
+            commandRegistrations.forEach(AutoCloseable::close)
+            keyboardInput?.close()
+            keyboardInput = null
+            animation.stop()
+            if (screenStarted) leaveScreen()
+        }
     }
 
     private companion object {
