@@ -11,7 +11,6 @@ import no.skasti.yame.logging.YameLogModule
 import no.skasti.yame.logging.YameLogLevel
 import no.skasti.yame.observer.testEventBroker
 import no.skasti.yame.observer.EventBroker
-import no.skasti.yame.observer.EventBrokerConfig
 import no.skasti.yame.observer.BrokerWaitResult
 import no.skasti.yame.ppp.proxy.TransferResourceChanged
 import no.skasti.yame.ppp.proxy.TransferResourcePhase
