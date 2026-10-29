@@ -60,7 +60,7 @@ internal class TuiWorkQueue(
                 lock.withLock {
                     val initial = firstNotification
                     firstNotification = false
-                    if (!initial || change.value != observedCapacity) capacity = change.value
+                    if (!initial || change.value != observedCapacity) this@TuiWorkQueue.capacity = change.value
                     changed.signalAll()
                 }
             }
