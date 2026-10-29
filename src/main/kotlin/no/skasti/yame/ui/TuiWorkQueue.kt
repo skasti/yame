@@ -52,10 +52,10 @@ internal class TuiWorkQueue(
     // slots are never removed on shrink.
     // An explicit initial capacity does not opt out of later configuration changes.
     // Isolated tests may construct a queue without installing a process ConfigStore.
-    private val capacitySubscription = runCatching { ConfigStore.current }.getOrNull()?.let { store ->
-        val observedCapacity = store[TuiSettings.QueueCapacity]
+    private val capacitySubscription = runCatching { ConfigStore.onChange[TuiSettings.Group] }.getOrNull()?.let { events ->
+        val observedCapacity = ConfigStore[TuiSettings.QueueCapacity]
         var firstNotification = true
-        store.onChange[TuiSettings.Group].subscribe(initial = true) { changes ->
+        events.subscribe(initial = true) { changes ->
             changes[TuiSettings.QueueCapacity]?.let { change ->
                 lock.withLock {
                     val initial = firstNotification
