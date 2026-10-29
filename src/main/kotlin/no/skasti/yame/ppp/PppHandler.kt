@@ -1,5 +1,6 @@
 package no.skasti.yame.ppp
 
+import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.observer.YameEvent
 import no.skasti.yame.ppp.dns.PppDnsConfig
 import no.skasti.yame.ppp.proxy.NavigationResourceRegistry
@@ -24,6 +25,8 @@ interface PppHandler : Closeable {
 }
 
 internal class RetroPppHandler(
+    @Volatile var disconnectOnTerminate: Boolean = ConfigStore[PppSettings.DisconnectOnTerminate],
+    subscribeToConfiguration: Boolean = true,
     private val connectionId: Long = 0,
     private val logger: (String) -> Unit = ::println,
     private val dnsLogger: (String) -> Unit = logger,
@@ -37,6 +40,12 @@ internal class RetroPppHandler(
     internal val resourceGraphs: NavigationResourceRegistry =
         YameRegistries.navigationResources(httpCompatibilityConfig),
 ) : PppHandler {
+    private val configurationSubscription = if (subscribeToConfiguration) {
+        ConfigStore.onChange[PppSettings.Group].subscribe { changes ->
+            changes[PppSettings.DisconnectOnTerminate]?.let { disconnectOnTerminate = it.value }
+        }
+    } else null
+
     private var output: OutputStream? = null
     private var encoder = PppEncoder()
     private var framer = createFramer()
@@ -120,7 +129,7 @@ internal class RetroPppHandler(
 
         session.receive(frame)
         syncNegotiatedOptions(session)
-        if (frame.protocol == PppSession.LCP_PROTOCOL &&
+        if (disconnectOnTerminate && frame.protocol == PppSession.LCP_PROTOCOL &&
             LcpPacket.parse(frame.payload)?.code == LcpPacket.TERMINATE_REQUEST
         ) {
             // Session processing, including writing/flushing Terminate-Ack, is complete.
@@ -162,5 +171,8 @@ internal class RetroPppHandler(
         active?.close()
     }
 
-    override fun close() = disconnected()
+    override fun close() {
+        configurationSubscription?.close()
+        disconnected()
+    }
 }

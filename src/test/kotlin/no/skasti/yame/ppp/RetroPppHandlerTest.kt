@@ -20,7 +20,10 @@ import kotlin.test.assertFalse
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
-class RetroPppHandlerTest {
+class RetroPppHandlerTest : no.skasti.yame.config.InstalledConfigTest() {
+    @org.junit.jupiter.api.BeforeEach
+    fun configure() = installConfig(no.skasti.yame.config.ConfigStore())
+
     @Test
     fun `connected waits for peer PPP traffic before starting LCP`() {
         val output = ByteArrayOutputStream()

@@ -1,5 +1,16 @@
 package no.skasti.yame.ui
 
+import no.skasti.yame.ppp.PppSettings
+import no.skasti.yame.function.FunctionStore
+import no.skasti.yame.serial.ConnectionFunctions
+import no.skasti.yame.ppp.RetroPppHandler
+import no.skasti.yame.modem.HayesModemConfig
+import no.skasti.yame.modem.HayesModem
+import no.skasti.yame.ppp.PppEncoder
+import no.skasti.yame.ppp.PppFrame
+import no.skasti.yame.ppp.session.PppSession
+import no.skasti.yame.ppp.lcp.LcpPacket
+import java.io.ByteArrayOutputStream
 import no.skasti.yame.config.InstalledConfigTest
 import no.skasti.yame.config.ConfigStore
 import com.github.ajalt.mordant.terminal.Terminal
@@ -129,6 +140,89 @@ class CommandPaletteTest : InstalledConfigTest() {
         assertNull(CommandPalette.find("/")?.item("baud"))
     }
 
+    @Test
+    fun `PPP commands persist shared settings and update active handler without reconnecting`() {
+        val saved = mutableListOf<Boolean>()
+        val store = ConfigStore(persist = { saved += it[PppSettings.DisconnectOnTerminate]!!.value })
+        installConfig(store)
+        val key = PppSettings.DisconnectOnTerminate
+        val functions = FunctionStore()
+        var disconnects = 0
+        var reconnects = 0
+        functions.register(ConnectionFunctions.Disconnect) { disconnects++ }
+        functions.register(ConnectionFunctions.Reconnect) { reconnects++ }
+        val handler = RetroPppHandler(logger = {})
+        val output = ByteArrayOutputStream()
+        val modem = HayesModem(output, 115200,
+            config = HayesModemConfig(toneSimulationEnabled = false),
+            logger = {}, pppHandler = handler)
+        try {
+            modem.receive("ATE0\rATD123\r".toByteArray())
+            TuiYameObserver(functions, Terminal(interactive = false)).use { ui ->
+                ui.type("/ppp-disconnect-on-terminate")
+                assertEquals(listOf("/ppp-disconnect-on-terminate"), ui.paletteSnapshot()?.options?.map { it.value })
+                ui.handleKeyAndAwait("Enter")
+                val options = assertNotNull(ui.paletteSnapshot()).options
+                assertEquals(listOf("on", "off"), options.map { it.value })
+                assertEquals(listOf("current", ""), options.map { it.description })
+                ui.type("off")
+                ui.handleKeyAndAwait("Enter")
+                assertFalse(store[key])
+                assertFalse(ConfigStore[key])
+                assertFalse(handler.disconnectOnTerminate)
+                assertEquals(HayesModem.State.CONNECTED, modem.state)
+
+                output.reset()
+                val termination = PppEncoder().encode(PppFrame(
+                    PppSession.LCP_PROTOCOL,
+                    LcpPacket(LcpPacket.TERMINATE_REQUEST, 42, byteArrayOf()).encode()))
+                modem.receive(termination)
+                assertEquals(HayesModem.State.CONNECTED, modem.state)
+                assertTrue(output.size() > 0) // Termination is still acknowledged when carrier is retained.
+
+                ui.type("/ppp-disconnect-on-terminate")
+                ui.handleKeyAndAwait("Enter")
+                assertEquals(listOf("", "current"), ui.paletteSnapshot()?.options?.map { it.description })
+                ui.handleKeyAndAwait("Escape")
+                ui.type("/ppp-disconnect-on-terminate on")
+                ui.handleKeyAndAwait("Enter")
+                assertTrue(store[key])
+                assertTrue(handler.disconnectOnTerminate)
+                assertEquals(HayesModem.State.CONNECTED, modem.state)
+                ui.type("/ppp-disconnect-on-terminate off")
+                ui.handleKeyAndAwait("Enter")
+                assertFalse(handler.disconnectOnTerminate)
+                ui.type("/ppp-disconnect-on-terminate on")
+                ui.handleKeyAndAwait("Enter")
+                assertEquals(listOf(false, true, false, true), saved)
+                assertEquals(0, disconnects)
+                assertEquals(0, reconnects)
+                modem.receive(termination)
+                assertEquals(HayesModem.State.COMMAND, modem.state)
+            }
+        } finally { modem.close() }
+        store.set(key to false)
+        assertTrue(handler.disconnectOnTerminate) // Handler released its subscription on close.
+    }
+
+    @Test
+    fun `PPP palette registrations are released with presentation`() {
+        val registry = CommandPalette()
+        installConfig(ConfigStore())
+        val registrations = registerPppCommands(registry)
+        assertEquals(listOf("on", "off"), registry.find("/ppp-disconnect-on-terminate")?.items()?.map { it.command })
+        registrations.forEach(AutoCloseable::close)
+        assertNull(registry.find("/ppp-disconnect-on-terminate"))
+        val ui = TuiYameObserver(FunctionStore(), Terminal(interactive = false))
+        ui.type("/ppp-disconnect-on-terminate")
+        ui.handleKeyAndAwait("Enter")
+        assertEquals(2, ui.paletteSnapshot()?.options?.size)
+        ui.close()
+        // Closing a presentation removes its registrations, including those held by an open palette.
+        val field = TuiYameObserver::class.java.getDeclaredField("paletteRegistry").apply { isAccessible = true }
+        assertNull((field.get(ui) as CommandPalette).find("/ppp-disconnect-on-terminate"))
+    }
+
     private fun observer(
         onTone: (Boolean) -> Unit = {},
         onLogin: (String, String) -> Unit = { _, _ -> },
@@ -138,7 +232,7 @@ class CommandPaletteTest : InstalledConfigTest() {
             changes[no.skasti.yame.modem.ModemSettings.Tone]?.let { onTone(it.value) }
             changes[no.skasti.yame.modem.ModemSettings.Login]?.let { onLogin(it.value.username!!, it.value.password!!) }
         }
-        return run { installConfig(configStore); TuiYameObserver(functions = no.skasti.yame.function.FunctionStore(), terminal = Terminal(interactive = false),
+        return run { installConfig(configStore); TuiYameObserver(functions = FunctionStore(), terminal = Terminal(interactive = false),
         ) }
     }
 

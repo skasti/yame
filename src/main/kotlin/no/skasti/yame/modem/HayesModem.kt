@@ -23,6 +23,8 @@ class HayesModem(
     private val proxyLogger: (String) -> Unit = pppLogger,
     private val diagnosticSink: (YameEvent) -> Unit = {},
     private val pppHandler: PppHandler = RetroPppHandler(
+        disconnectOnTerminate = true,
+        subscribeToConfiguration = false,
         logger = pppLogger,
         dnsLogger = dnsLogger,
         transferLogger = transferLogger,
