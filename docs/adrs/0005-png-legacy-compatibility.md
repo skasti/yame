@@ -35,11 +35,16 @@ bounded processing and the established default behavior.
   bytes by the same encoded-byte limit. Malformed, animated, encoded,
   over-limit and decoder/encoder-failure cases retain the PNG and log why the
   conversion was skipped.
-- Build one immutable transformation-settings value at the start of each HTTP
-  request from feature-owned keys read through the installed global `ConfigStore` facade (`ConfigStore[key]`). Production code does not inject or retain a store reference.
-  `ConfigStore` intentionally has no atomic multi-key snapshot API, so a
-  concurrent commit may land between reads. Include the captured mode in the
-  transformation profile/cache key. Preserve upstream source validators and
+- Keep one runtime-owned `ResourceTransformationSettings` snapshot, initialized
+  once from feature-owned keys through the installed global `ConfigStore` facade
+  (`ConfigStore[key]`). Update it from relevant `ConfigChanges` in YameRuntime's
+  existing `ConfigStore` subscription, publishing one immutable replacement
+  for each change batch. HTTP requests read the cached snapshot once and retain
+  it for their lifetime. Production code does not inject or retain a store
+  reference, and no additional transformer subscription is needed.
+- `ConfigStore` has no atomic multi-key read API, so initial reads are separate;
+  committed change batches are applied together. Include the captured mode in
+  the transformation profile/cache key. Preserve upstream source validators and
   remove byte-specific source digests and lengths after conversion.
 
 ## Alternatives considered
