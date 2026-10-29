@@ -97,7 +97,7 @@ class HttpGraphProjectionTest : InstalledConfigTest() {
         assertSame(latest, projection.graphSnapshot().getValue(1).resources.getValue(child.toString()))
     }
 
-    @Test fun `growing associations dominate older membership snapshots across a clock adjustment`() {
+    @Test fun `higher resource revisions preserve newer associations across clock adjustments`() {
         val projection = HttpGraphProjection()
         projection.accept(graph())
         val first = resource(at = time.plusSeconds(1), revision = 2)
@@ -109,6 +109,62 @@ class HttpGraphProjectionTest : InstalledConfigTest() {
         val graph = projection.graphSnapshot().getValue(1)
         assertSame(expanded, graph.resources.values.single())
         assertEquals(setOf(edge, secondEdge), graph.associations)
+    }
+
+    @Test fun `stale observations cannot introduce edges absent from a newer resource snapshot`() {
+        val projection = HttpGraphProjection()
+        projection.accept(graph())
+        val staleEdge = ResourceEdgeSnapshot(root, child, ResourceRelation.CSS_URL)
+        val newest = resource(state = ResourceState.READY, attempt = 1, revision = 4,
+            edges = listOf(edge), count = 2, usedAt = time.plusSeconds(1))
+        val stale = resource(state = ResourceState.DISCOVERED, revision = 3,
+            at = time.plusSeconds(10), edges = listOf(edge, staleEdge),
+            count = 3, usedAt = time.plusSeconds(2))
+
+        projection.accept(newest)
+        projection.accept(stale)
+        val state = projection.graphSnapshot().getValue(1)
+        assertSame(newest, state.resources.getValue(child.toString()))
+        assertEquals(setOf(edge), state.associations)
+        // Graph usage is authoritative and independent of the resource revision.
+        assertEquals(3L, state.usageCount)
+        assertEquals(time.plusSeconds(2), state.lastUsedAt)
+
+        val accepted = resource(state = ResourceState.READY, attempt = 1,
+            revision = 5, edges = listOf(edge, staleEdge))
+        projection.accept(accepted)
+        assertSame(accepted, state.resources.getValue(child.toString()))
+        assertEquals(setOf(edge, staleEdge), state.associations)
+        assertNull(projection.failure)
+    }
+
+    @Test fun `shared associations survive stale updates and removal of another resource`() {
+        val projection = HttpGraphProjection()
+        projection.accept(graph())
+        val sibling = URI("http://cdn.test/second.gif")
+        val siblingEdge = ResourceEdgeSnapshot(root, sibling, ResourceRelation.IMG_SRC)
+        val staleEdge = ResourceEdgeSnapshot(root, child, ResourceRelation.CSS_URL)
+
+        projection.accept(resource(uri = root, kind = ResourceKind.DOCUMENT,
+            edges = listOf(edge, siblingEdge), revision = 4))
+        projection.accept(resource(uri = child, edges = listOf(edge), revision = 2))
+        projection.accept(resource(uri = sibling, edges = listOf(siblingEdge), revision = 2))
+        // A delayed root snapshot must not add an obsolete association.
+        projection.accept(resource(uri = root, kind = ResourceKind.DOCUMENT,
+            edges = listOf(edge, siblingEdge, staleEdge), revision = 3))
+        val state = projection.graphSnapshot().getValue(1)
+        assertEquals(setOf(edge, siblingEdge), state.associations)
+
+        projection.accept(resource(uri = child, change = ResourceLifecycleChange.REMOVED,
+            edges = listOf(edge), revision = 5))
+        assertEquals(setOf(siblingEdge), state.associations)
+        // Newer root snapshots can still mention a removed endpoint, but the
+        // tombstone prevents that edge from reappearing.
+        projection.accept(resource(uri = root, kind = ResourceKind.DOCUMENT,
+            edges = listOf(edge, siblingEdge), revision = 6))
+        assertEquals(setOf(siblingEdge), state.associations)
+        assertEquals(setOf(root.toString(), sibling.toString()), state.resources.keys)
+        assertNull(projection.failure)
     }
 
     @Test fun `removal dominates delayed updates creates and use regardless of occurrence time`() {
