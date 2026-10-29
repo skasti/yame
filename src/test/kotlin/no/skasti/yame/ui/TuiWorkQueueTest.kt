@@ -175,6 +175,28 @@ class TuiWorkQueueTest {
         }
     }
 
+    @Test fun `queue occupancy counts pending work slots including batches but not executing work`() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val queue = TuiWorkQueue(capacity = 4)
+        try {
+            queue.submitRequired("Running") { entered.countDown(); release.await() }
+            entered.awaitReady()
+            assertEquals(QueueOccupancy(0, 4), queue.occupancy)
+            repeat(100) {
+                assertTrue(queue.submitObservation("ResourceLifecycleEvent") {})
+            }
+            // 100 observations are stored in two adjacent batches, not 100 slots.
+            assertEquals(QueueOccupancy(2, 4), queue.occupancy)
+            assertTrue(queue.submitRequired("KeyboardInput") {})
+            assertEquals(QueueOccupancy(3, 4), queue.occupancy)
+        } finally {
+            release.countDown()
+            queue.close()
+        }
+        assertEquals(QueueOccupancy(0, 4), queue.occupancy)
+    }
+
     @Test fun `hundreds of resource observations preserve FIFO order without saturating work slots`() {
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
