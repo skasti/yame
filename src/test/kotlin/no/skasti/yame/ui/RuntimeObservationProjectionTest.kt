@@ -12,6 +12,10 @@ import no.skasti.yame.logging.YameLogLevel
 import no.skasti.yame.observer.EventBroker
 import no.skasti.yame.observer.EventBrokerConfig
 import no.skasti.yame.observer.BrokerWaitResult
+import no.skasti.yame.ppp.proxy.TransferResourceChanged
+import no.skasti.yame.ppp.proxy.TransferResourcePhase
+import java.net.URI
+import java.time.Instant
 import java.time.Duration
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -58,6 +62,67 @@ class RuntimeObservationProjectionTest : InstalledConfigTest() {
             ui.onEvent(ConnectionStateChanged(2, ConnectionState.DISCONNECTED))
             ui.onEvent(ConnectionStateChanged(2, ConnectionState.CONNECTED))
             assertFalse(ui.connectedSnapshot())
+        }
+    }
+
+    private fun metadata(identity: TransferIdentity, name: String, phase: TransferResourcePhase = TransferResourcePhase.RESPONSE,
+                         request: Long = 1) = TransferResourceChanged(identity, request, phase,
+        URI("http://download.test/original"), URI("https://download.test/$name"), name, Instant.EPOCH)
+
+    @Test fun `resource metadata is deferred and response wins over delayed request without changing counters or state`() {
+        observer().use { ui ->
+            val session = PppSessionIdentity(1, 1)
+            val identity = TransferIdentity.create(session, 0)
+            ui.onEvent(metadata(identity, "WINZIP95.EXE"))
+            ui.onEvent(metadata(identity, "original", TransferResourcePhase.REQUEST))
+            ui.onEvent(TransferStarted("same", "host", "test", TransferKind.TCP, session, transferIdentity = identity))
+            ui.onEvent(TransferBytes("same", TransferDirection.TO_PEER, 123, session, transferIdentity = identity))
+            ui.onEvent(TransferStateChanged("same", TransferState.CLOSED, session = session, transferIdentity = identity))
+            ui.onEvent(metadata(identity, "latest.exe", request = 2))
+            ui.onEvent(metadata(identity, "old.exe"))
+            val transfer = ui.transferProjectionSnapshot().single()
+            assertEquals("latest.exe", transfer.resource?.displayFilename)
+            assertEquals(123, transfer.toPeerBytes)
+            assertEquals(TransferState.CLOSED, transfer.state)
+        }
+    }
+
+    @Test fun `reused tuples generations and reconnects keep their metadata on their own row`() {
+        observer().use { ui ->
+            val session = PppSessionIdentity(1, 1)
+            val first = TransferIdentity.create(session, 0)
+            val reused = TransferIdentity.create(session, 0)
+            val renegotiated = TransferIdentity.create(session, 1)
+            val reconnected = TransferIdentity.create(PppSessionIdentity(2, 2), 0)
+            for ((index, identity) in listOf(first, reused, renegotiated, reconnected).withIndex()) {
+                ui.onEvent(TransferStarted("same", "host$index", "test", TransferKind.TCP,
+                    identity.session, transferIdentity = identity))
+                ui.onEvent(metadata(identity, "file$index.exe"))
+            }
+            // Previous session observations are rejected, and same-session old tuple
+            // metadata cannot overwrite the later tuple's resource either.
+            ui.onEvent(metadata(first, "obsolete.exe", request = 2))
+            val history = ui.transferProjectionSnapshot()
+            assertEquals(listOf("file0.exe", "file1.exe", "file2.exe", "file3.exe"), history.map { it.resource?.displayFilename })
+            assertEquals(TransferState.CONNECTING, history.last().state)
+        }
+    }
+
+    @Test fun `eviction prefers closed rows and late metadata never resurrects removed transfers`() {
+        observer().use { ui ->
+            val session = PppSessionIdentity(1, 1)
+            val identities = (0..20).map { TransferIdentity.create(session, 0) }
+            identities.forEachIndexed { index, identity ->
+                ui.onEvent(TransferStarted("flow$index", "host$index", "test", TransferKind.TCP, session, transferIdentity = identity))
+                if (index == 1) ui.onEvent(TransferStateChanged("flow1", TransferState.CLOSED,
+                    session = session, transferIdentity = identity))
+            }
+            assertEquals(20, ui.transferProjectionSnapshot().size)
+            assertTrue(ui.transferProjectionSnapshot().any { it.destination == "host0" })
+            assertFalse(ui.transferProjectionSnapshot().any { it.destination == "host1" })
+            repeat(300) { ui.onEvent(metadata(identities[1], "late.exe")) }
+            assertEquals(20, ui.transferProjectionSnapshot().size)
+            assertNull(ui.observationFailure)
         }
     }
 

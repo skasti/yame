@@ -313,10 +313,17 @@ metadata and no replay/bootstrap for late subscribers.
 - `ConnectionStateChanged` carries a process-monotonic connection ID, state and
   occurrence time. `PppSessionEnded` and PPP observations carry a process-unique
   `PppSessionIdentity` containing that connection ID. Serial reconnect counters
-  and repeated TCP endpoints are not global identities. Transfer flow IDs also
-  include the IPCP generation, so a renegotiation does not reuse its old flow key.
+  and repeated TCP endpoints are not global identities. The legacy transfer flowId
+  includes IPCP generation. Transfer events v1.2 also carry an optional
+  `TransferIdentity(session, generation, instanceId)`; production PPP sessions
+  allocate it once per TCP connection and pass it through `TcpProxyFlow`. It
+  distinguishes reused endpoint tuples even within the same generation. Legacy
+  flowId remains available for diagnostics and consumers of older observations.
 - TUI projection keys qualify DNS/transfer IDs with their connection/session
-  identity, preserving bounded closed-transfer and DNS history across reconnects.
+  identity, using TransferIdentity when present and preserving bounded history
+  across reconnects. The transfer projection retains at most 20 rows, removing
+  completed rows before active rows. Recently removed keys are remembered in a
+  bounded set of 128 entries so delayed observations cannot resurrect them.
   Connection/session high-water marks reject old observations. Terminal
   states dominate delayed open notifications for the same identity. A new PPP
   observation can precede its connection notification; no producer-specific
@@ -324,6 +331,9 @@ metadata and no replay/bootstrap for late subscribers.
   before their start are deferred locally (at most 128 events), then applied on
   start. Buffer exhaustion exposes a local projection failure in the log and
   `observationFailure`, and is also recorded by broker subscriber status.
+  Optional HTTP metadata is coalesced to one snapshot per unknown transfer in
+  that same buffer; excess unknown metadata is discarded rather than failing
+  the projection. It never creates a row without a transfer start.
 - `RefreshPorts` is `FunctionKey<Unit, List<SerialPortDescriptor>>`. It returns an
   unmodifiable snapshot immediately. The existing port palette uses that result,
   without a request/result event protocol. Startup and the port monitor independently
@@ -344,3 +354,40 @@ metadata and no replay/bootstrap for late subscribers.
 
 The tone-test path uses the same early subscription, diagnostic tee, supervision
 and shutdown composition as plain mode.
+
+## HTTP filenames in Transfers
+
+`SystemHttpCompatibilityHandler` publishes immutable `TransferResourceChanged`
+v1.0 observations through `YameEvents`, carrying the same TransferIdentity as PPP
+byte/state observations. No consumer parses `HttpProxyAction.message`. Metadata
+is emitted once when a downstream request is resolved and once when its complete
+client response is prepared, before TCP delivery. Emission is outside shared
+upstream fetch/transformation work so each downstream connection is described.
+
+Each snapshot includes request and effective upstream URIs, an optional sanitized
+display filename, a downstream request number, REQUEST/RESPONSE phase, and an
+occurrence time captured at resolution/preparation. The current HTTP transport
+serves one request and closes the connection, so requestNumber is 1. Consumers
+prefer higher request numbers and RESPONSE over REQUEST within one request;
+equal snapshots do not regress state. They do not order by wall-clock receipt.
+Metadata can enrich retained closed rows without reopening them or changing their
+byte counters, rate timestamps or state. Old PPP sessions are rejected by the
+existing session gate. No late-subscriber replay or separate HTTP registry exists.
+
+The HTTP-owned resolver prefers valid Content-Disposition `filename*` (UTF-8 or
+ISO-8859-1), then `filename`, then the last nonempty effective URL path segment.
+Malformed/ambiguous parameters fall back safely. Percent decoding preserves `+`,
+query and fragment are excluded from names, path components and control/format
+characters are removed, and names are limited to 256 code points with an 8192
+character parsing bound. The full URI remains separate from its display name.
+Internally followed redirects describe the final response; visible redirects
+remain on their own transfer. Root URLs without a filename, DNS, arbitrary TCP
+and opaque HTTPS retain the destination fallback. HTTPS fetched upstream through
+the port-80 compatibility path is inspected normally; direct TLS interception is
+not added.
+
+The Transfers panel prioritizes filenames, preserves connection byte/rate fields
+when truncating long names, and shows the upstream host when space permits.
+Its title identifies the counters as connection totals, not per-file progress.
+This observation-only feature adds no ConfigStore settings or FunctionStore
+operations; existing configuration and presentation lifecycle ownership remains.

@@ -20,6 +20,7 @@ data class TcpProxyFlow(
     val connectAddress: Ipv4Address = key.remoteAddress,
     val connectPort: Int = key.remotePort,
     val readTimeoutMillis: Int = 0,
+    val transferIdentity: no.skasti.yame.ppp.session.TransferIdentity? = null,
 ) {
     init {
         require(connectPort in 1..0xffff) { "TCP connect port must be 1..65535" }

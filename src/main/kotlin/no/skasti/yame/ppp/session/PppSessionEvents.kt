@@ -96,9 +96,10 @@ data class TransferStarted(
     val kind: TransferKind,
     override val session: PppSessionIdentity = PppSessionIdentity.UNSCOPED,
     val occurredAt: Instant = Instant.now(),
+    val transferIdentity: TransferIdentity? = null,
 ) : AbstractYameEvent(), PppObservation {
     override val typeName = "yame.ppp.transfer.started"
-    override val version = VersionNumber(1, 1, 0)
+    override val version = VersionNumber(1, 2, 0)
 }
 
 data class TransferStateChanged(
@@ -107,9 +108,10 @@ data class TransferStateChanged(
     val detail: String? = null,
     override val session: PppSessionIdentity = PppSessionIdentity.UNSCOPED,
     val occurredAt: Instant = Instant.now(),
+    val transferIdentity: TransferIdentity? = null,
 ) : AbstractYameEvent(), PppObservation {
     override val typeName = "yame.ppp.transfer.state-changed"
-    override val version = VersionNumber(1, 1, 0)
+    override val version = VersionNumber(1, 2, 0)
 }
 
 data class TransferBytes(
@@ -118,7 +120,8 @@ data class TransferBytes(
     val bytes: Int,
     override val session: PppSessionIdentity = PppSessionIdentity.UNSCOPED,
     val occurredAt: Instant = Instant.now(),
+    val transferIdentity: TransferIdentity? = null,
 ) : AbstractYameEvent(), PppObservation {
     override val typeName = "yame.ppp.transfer.bytes"
-    override val version = VersionNumber(1, 1, 0)
+    override val version = VersionNumber(1, 2, 0)
 }

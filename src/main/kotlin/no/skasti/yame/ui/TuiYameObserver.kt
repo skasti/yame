@@ -16,6 +16,8 @@ import no.skasti.yame.ppp.session.TransferBytes
 import no.skasti.yame.ppp.session.TransferDirection
 import no.skasti.yame.ppp.session.TransferKind
 import no.skasti.yame.ppp.session.TransferState
+import no.skasti.yame.ppp.proxy.TransferResourceChanged
+import no.skasti.yame.ppp.session.TransferIdentity
 import no.skasti.yame.ppp.proxy.HttpProxyAction
 import no.skasti.yame.ppp.proxy.ResourceGraphLifecycleEvent
 import no.skasti.yame.ppp.proxy.ResourceLifecycleEvent
@@ -102,6 +104,7 @@ class TuiYameObserver(
     private val sessionGate = SessionObservationGate()
     private val pendingTransfers = linkedMapOf<String, MutableList<YameEvent>>()
     private var pendingTransferCount = 0
+    private val retiredTransfers = linkedSetOf<String>()
 
     private data class HttpSelectionRow(
         val host: String,
@@ -397,8 +400,8 @@ class TuiYameObserver(
             }
 
             is TransferStarted -> {
-                val key = observationKey(event, event.flowId)
-                transfers.remove(key)
+                val key = transferKey(event, event.flowId, event.transferIdentity)
+                if (key in retiredTransfers || key in transfers) return
                 transfers[key] = DashboardTransfer(
                     flowId = event.flowId,
                     destination = event.destination,
@@ -410,6 +413,7 @@ class TuiYameObserver(
                     startedNanos = System.nanoTime(),
                     updatedNanos = System.nanoTime(),
                     detail = null,
+                    transferIdentity = event.transferIdentity,
                 )
                 trimTransfers()
                 pendingTransfers.remove(key)?.let { pending ->
@@ -419,7 +423,7 @@ class TuiYameObserver(
             }
 
             is TransferStateChanged -> {
-                val key = observationKey(event, event.flowId)
+                val key = transferKey(event, event.flowId, event.transferIdentity)
                 val transfer = transfers[key] ?: return deferTransfer(key, event)
                 if (transfer.state in setOf(TransferState.CLOSED, TransferState.FAILED)) return
                 transfers[key] = transfer.copy(
@@ -431,7 +435,7 @@ class TuiYameObserver(
             }
 
             is TransferBytes -> {
-                val key = observationKey(event, event.flowId)
+                val key = transferKey(event, event.flowId, event.transferIdentity)
                 val transfer = transfers[key] ?: return deferTransfer(key, event)
                 transfers[key] = transfer.copy(
                     toHostBytes = transfer.toHostBytes +
@@ -442,6 +446,28 @@ class TuiYameObserver(
                 )
             }
 
+            is TransferResourceChanged -> {
+                val key = transferKey(event, "", event.transferIdentity)
+                if (key in retiredTransfers) return
+                val transfer = transfers[key]
+                if (transfer == null) {
+                    // Metadata is optional: coalesce one snapshot per dependency, and
+                    // discard excess unknown metadata instead of growing the buffer.
+                    val pending = pendingTransfers[key]
+                    val previous = pending?.filterIsInstance<TransferResourceChanged>()?.singleOrNull()
+                    if (pending != null && previous != null) {
+                        if (event.supersedes(previous)) {
+                            pending.remove(previous)
+                            pending.add(event)
+                        }
+                    } else if (pendingTransferCount < 128) deferTransfer(key, event)
+                    return
+                }
+                val previous = transfer.resource
+                if (previous == null || event.supersedes(previous)) {
+                    transfers[key] = transfer.copy(resource = event)
+                }
+            }
             is ResourceGraphLifecycleEvent, is ResourceLifecycleEvent -> {
                 httpGraphs.accept(event)
                 normalizeHttpHostSelection()
@@ -455,7 +481,12 @@ class TuiYameObserver(
     private fun observationKey(event: PppObservation, key: String): String =
         "${event.session.connectionId}:${event.session.id}:$key"
 
+    private fun transferKey(event: PppObservation, legacyId: String, identity: TransferIdentity?): String =
+        if (identity == null) observationKey(event, legacyId)
+        else "${identity.session.connectionId}:${identity.session.id}:${identity.generation}:instance:${identity.instanceId}"
+
     private fun deferTransfer(flowId: String, event: YameEvent) {
+        if (flowId in retiredTransfers) return
         check(pendingTransferCount < 128) { "TUI transfer dependency buffer exhausted" }
         pendingTransfers.getOrPut(flowId) { mutableListOf() }.add(event)
         pendingTransferCount++
@@ -596,16 +627,21 @@ class TuiYameObserver(
 
     private fun trimTransfers() {
         if (transfers.size <= MAX_TRANSFERS) return
-        val removable = transfers.values
-            .filter { it.state == TransferState.CLOSED || it.state == TransferState.FAILED }
-            .sortedBy { it.updatedNanos }
-        for (transfer in removable) {
+        val removable = transfers.entries
+            .filter { it.value.state == TransferState.CLOSED || it.value.state == TransferState.FAILED }
+            .sortedBy { it.value.updatedNanos }
+        for ((key, _) in removable) {
             if (transfers.size <= MAX_TRANSFERS) break
-            transfers.remove(transfer.flowId)
+            retireTransfer(key)
         }
-        while (transfers.size > MAX_TRANSFERS) {
-            transfers.remove(transfers.keys.first())
-        }
+        while (transfers.size > MAX_TRANSFERS) retireTransfer(transfers.keys.first())
+    }
+
+    private fun retireTransfer(key: String) {
+        transfers.remove(key)
+        pendingTransfers.remove(key)?.let { pendingTransferCount -= it.size }
+        retiredTransfers.add(key)
+        while (retiredTransfers.size > 128) retiredTransfers.remove(retiredTransfers.first())
     }
 
     private fun enterScreen() {
@@ -1208,6 +1244,8 @@ internal data class DashboardTransfer(
     val startedNanos: Long,
     val updatedNanos: Long,
     val detail: String?,
+    val transferIdentity: TransferIdentity? = null,
+    val resource: TransferResourceChanged? = null,
 ) {
     val bytesPerSecond: Double?
         get() {
@@ -1414,7 +1452,7 @@ internal object YameDashboardRenderer {
         )
 
         val transfer = panel(
-            title = "Transfers",
+            title = "Transfers · connection totals",
             width = rightWidth,
             height = transferHeight,
             lines = transferLines(
@@ -1500,7 +1538,7 @@ internal object YameDashboardRenderer {
                     styles = styles,
                 )
                 DashboardDetailPanel.TRANSFERS -> panel(
-                    title = DashboardDetailPanel.TRANSFERS.title,
+                    title = "${DashboardDetailPanel.TRANSFERS.title} · connection totals",
                     width = width,
                     height = detailHeight,
                     lines = transferLines(state.transfers, detailHeight - 2, width - 4),
@@ -1664,12 +1702,20 @@ internal object YameDashboardRenderer {
                     TransferState.CLOSED -> "✓"
                     TransferState.FAILED -> "✗"
                 }
-                val text =
-                    "$symbol $kind ${transfer.destination}  " +
-                        "↑${formatBytes(transfer.toHostBytes)} " +
-                        "↓${formatBytes(transfer.toPeerBytes)} " +
-                        formatRate(transfer.bytesPerSecond)
-                DashboardLine(clip(text, contentWidth), transferTone(transfer.state))
+                val statistics = "↑${formatBytes(transfer.toHostBytes)} " +
+                    "↓${formatBytes(transfer.toPeerBytes)} ${formatRate(transfer.bytesPerSecond)}"
+                val prefix = "$symbol $kind "
+                val labelWidth = (contentWidth - prefix.length - statistics.length - 2).coerceAtLeast(0)
+                val name = transfer.resource?.displayFilename
+                val primary = name ?: transfer.destination
+                val secondary = transfer.resource?.effectiveUri?.host ?: transfer.destination
+                val nameWidth = if (name != null && labelWidth >= 60) {
+                    (labelWidth - secondary.length - 3).coerceAtLeast(labelWidth / 2)
+                } else labelWidth
+                val label = if (name != null && labelWidth >= 60) {
+                    "${clipTransferName(primary, nameWidth)} · ${clip(secondary, labelWidth - nameWidth - 3)}"
+                } else clipTransferName(primary, labelWidth)
+                DashboardLine(clip("$prefix$label  $statistics", contentWidth), transferTone(transfer.state))
             }
     }
 
@@ -1956,7 +2002,7 @@ internal object YameDashboardRenderer {
         }
 
     private fun compactTransfer(transfer: DashboardTransfer): String =
-        "${transfer.kind} ${transfer.destination} ↑${formatBytes(transfer.toHostBytes)} ↓${formatBytes(transfer.toPeerBytes)}"
+        "${transfer.kind} ${clipTransferName(transfer.resource?.displayFilename ?: transfer.destination, 22)} ↑${formatBytes(transfer.toHostBytes)} ↓${formatBytes(transfer.toPeerBytes)}"
 
     private fun formatRate(bytesPerSecond: Double?): String =
         when {
@@ -1995,6 +2041,18 @@ internal object YameDashboardRenderer {
             DashboardTone.RESOURCE_READY -> styles.resourceReady(text)
             DashboardTone.RESOURCE_FAILED -> styles.resourceFailed(text)
         }
+
+    private fun clipTransferName(value: String, width: Int): String {
+        val safe = sanitizeTerminalText(value)
+        val points = safe.codePoints().toArray()
+        if (points.size <= width) return safe
+        if (width <= 0) return ""
+        if (width == 1) return "…"
+        val extension = safe.substringAfterLast('.', "").takeIf { it.length in 1..8 }
+            ?.let { ".$it" }.orEmpty()
+        val suffix = if (extension.length + 2 <= width) extension else ""
+        return String(points, 0, width - suffix.length - 1) + "…" + suffix
+    }
 
     private fun clip(
         value: String,
