@@ -93,9 +93,14 @@ class TerminalProcess:
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 55, 180, 0, 0))
         self.stderr = (REPORT / "yame-stderr.log").open("wb")
         env = dict(os.environ, TERM="xterm-256color", COLUMNS="180", LINES="55")
+        def become_tty_session():
+            import fcntl
+            os.setsid()
+            fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+
         self.process = subprocess.Popen(
             command, stdin=slave, stdout=slave, stderr=self.stderr,
-            cwd=WORK, env=env, start_new_session=True,
+            cwd=WORK, env=env, preexec_fn=become_tty_session,
         )
         os.close(slave)
         self.done = threading.Event()
@@ -302,6 +307,7 @@ def main():
         pppd, out = start([
             "ip", "netns", "exec", NAMESPACE, "pppd", os.path.realpath(client_pty),
             str(BAUD), "local", "noauth", "noipdefault", "noccp", "novj",
+            "defaultroute", "ipcp-accept-local", "ipcp-accept-remote",
             "nodetach", "debug", "10.64.0.2:10.64.0.1",
             "connect", "/usr/sbin/chat -v -t 15 '' ATD1 CONNECT",
         ], "pppd.log", sudo=True)
