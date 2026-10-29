@@ -31,7 +31,7 @@ class ResourceLifecycleEventTest {
     private val timeout = Duration.ofSeconds(5)
 
     @BeforeTest fun setUp() {
-        broker = EventBroker()
+        broker = EventBroker(initialCapacity = 4096, initialPublishTimeout = java.time.Duration.ofMillis(10), initialMaxSubscribers = 64)
         installation = YameEvents.install(broker)
         subscription = YameEvents.subscribe("resource-test") { events += it }
     }
