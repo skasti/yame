@@ -1105,6 +1105,17 @@ class TuiYameObserver(
 
     private fun renderFrame() {
         if (closed || !screenStarted) return
+        // Read bounded queue depths only while painting the wide layout.
+        // These are snapshots, not observation events added to either queue.
+        val queueBars = if (terminal.size.width > WIDE_DASHBOARD_THRESHOLD &&
+            terminal.size.height >= MIN_QUEUE_BAR_HEIGHT
+        ) {
+            val broker = no.skasti.yame.observer.YameEvents.current
+            QueueBars(
+                broker = QueueOccupancy(broker.status.queuedEvents, broker.config.capacity),
+                tui = work.occupancy,
+            )
+        } else null
         val frame = YameDashboardRenderer.render(
             state = httpHostSnapshots().let { httpHosts ->
                 DashboardState(
@@ -1120,6 +1131,7 @@ class TuiYameObserver(
                     transfers = transfers.values.toList(),
                     httpHosts = httpHosts,
                     proxyStatus = httpGraphs.status,
+                    queueBars = queueBars,
                     selectedHttpHostIndex = httpHosts
                         .indexOfFirst { it.host == selectedHttpHost }
                         .coerceAtLeast(0),
@@ -1298,6 +1310,7 @@ internal data class DashboardState(
     val activeDetailPanel: DashboardDetailPanel = DashboardDetailPanel.PROXY,
     val headerElapsedNanos: Long = 0,
     val proxyStatus: String? = null,
+    val queueBars: QueueBars? = null,
 )
 
 internal enum class DashboardDetailPanel(val title: String) {
@@ -1309,6 +1322,24 @@ internal enum class DashboardDetailPanel(val title: String) {
 }
 
 private const val WIDE_DASHBOARD_THRESHOLD = 149
+private const val MIN_QUEUE_BAR_HEIGHT = 30
+
+/**
+ * Queue occupancy excludes the currently executing event or work slot.
+ * A live capacity reduction may temporarily leave queued > capacity;
+ * retain the true count while the existing work drains.
+ */
+internal data class QueueOccupancy(val queued: Int, val capacity: Int) {
+    init {
+        require(capacity > 0)
+        require(queued >= 0)
+    }
+}
+
+internal data class QueueBars(
+    val broker: QueueOccupancy,
+    val tui: QueueOccupancy,
+)
 
 internal data class DashboardStyles(
     val border: (String) -> String = { it },
@@ -1380,11 +1411,13 @@ internal object YameDashboardRenderer {
 
         val headerHeight = 1
         val footerHeight = 1
-        val bodyHeight = renderHeight - headerHeight - footerHeight
-        val gap = 1
         if (renderWidth <= WIDE_DASHBOARD_THRESHOLD) {
             return renderStackedBody(state, renderWidth, renderHeight, styles)
         }
+        val showQueueBars = state.queueBars != null && renderHeight >= MIN_QUEUE_BAR_HEIGHT
+        val queueBarHeight = if (showQueueBars) 1 else 0
+        val bodyHeight = renderHeight - headerHeight - footerHeight - queueBarHeight
+        val gap = 1
         val leftWidth = (renderWidth * 55 / 100)
             .coerceIn(38, renderWidth - 32)
         val rightWidth = renderWidth - leftWidth - gap
@@ -1471,7 +1504,50 @@ internal object YameDashboardRenderer {
             clip(footerText, renderWidth).padEnd(renderWidth),
         )
 
-        return "$header\n$body\n$footer"
+        val queueFooter = if (showQueueBars) {
+            val queues = requireNotNull(state.queueBars)
+            val space = "  "
+            val firstWidth = (renderWidth - space.length) / 2
+            val secondWidth = renderWidth - space.length - firstWidth
+            "\n" + queueBar("Event broker", queues.broker, "events", firstWidth, styles) +
+                space + queueBar("TUI work", queues.tui, "slots", secondWidth, styles)
+        } else ""
+        return "$header\n$body$queueFooter\n$footer"
+    }
+
+    /**
+     * A compact single-row meter with its title, queue usage and percentage
+     * centered *inside* the track. The underlying filled/unfilled cells are
+     * preserved on either side of the caption.
+     */
+    private fun queueBar(
+        label: String,
+        usage: QueueOccupancy,
+        unit: String,
+        width: Int,
+        styles: DashboardStyles,
+    ): String {
+        val percent = (usage.queued.toLong() * 100 / usage.capacity).toInt()
+        val trackWidth = width - 2 // Opening and closing brackets.
+        val filled = if (usage.queued == 0) 0 else
+            ((usage.queued.toLong() * trackWidth + usage.capacity - 1) / usage.capacity)
+                .toInt().coerceIn(1, trackWidth)
+        val caption = "$label ${usage.queued}/${usage.capacity} $unit ($percent%)"
+        require(caption.length <= trackWidth) { "Queue bar too narrow for its caption" }
+        val captionStart = (trackWidth - caption.length) / 2
+        val paint = when {
+            percent >= 90 -> styles.danger
+            percent >= 70 -> styles.warning
+            else -> styles.success
+        }
+        fun trackSegment(from: Int, until: Int): String {
+            val full = (filled - from).coerceIn(0, until - from)
+            val empty = until - from - full
+            return (if (full > 0) paint("█".repeat(full)) else "") +
+                (if (empty > 0) styles.muted("░".repeat(empty)) else "")
+        }
+        return "[" + trackSegment(0, captionStart) + styles.accent(caption) +
+            trackSegment(captionStart + caption.length, trackWidth) + "]"
     }
 
     private fun renderStackedBody(

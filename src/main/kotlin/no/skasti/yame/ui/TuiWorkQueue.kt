@@ -33,6 +33,11 @@ internal class TuiWorkQueue(
     override val fatalFailure: Throwable? get() = fatal.get()
     val isWorker: Boolean get() = Thread.currentThread() === worker
 
+    /** Snapshot queued work slots, not batched event/action counts or the executing slot. */
+    val occupancy: QueueOccupancy get() = lock.withLock {
+        QueueOccupancy(queued = pending.size, capacity = capacity)
+    }
+
     init {
         require(capacity > 0)
         require(!admissionWait.isNegative && !drainWait.isNegative)
