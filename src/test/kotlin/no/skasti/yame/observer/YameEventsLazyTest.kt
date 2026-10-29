@@ -1,5 +1,6 @@
 package no.skasti.yame.observer
 
+import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.ppp.session.TransferBytes
 import no.skasti.yame.ppp.session.TransferDirection
 import java.time.Duration
@@ -12,6 +13,7 @@ import kotlin.test.*
 /** Run in its own test JVM: the process facade has exactly one first access. */
 class YameEventsLazyTest {
     @Test fun `concurrent facade use shares a real broker and final shutdown cannot restart it`() {
+        val configuration = ConfigStore.install(ConfigStore())
         val pool = Executors.newFixedThreadPool(12)
         val start = CountDownLatch(1)
         val timeout = Duration.ofSeconds(5)
@@ -46,6 +48,6 @@ class YameEventsLazyTest {
                 YameEvents.publish(TransferBytes("after", TransferDirection.TO_HOST, 3))
             }
             assertFailsWith<BrokerClosedException> { YameEvents.current }
-        } finally { start.countDown(); pool.shutdownNow() }
+        } finally { start.countDown(); pool.shutdownNow(); configuration.close() }
     }
 }

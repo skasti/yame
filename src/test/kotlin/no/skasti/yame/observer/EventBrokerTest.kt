@@ -1,5 +1,6 @@
 package no.skasti.yame.observer
 
+import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.ppp.session.UnhandledPacket
 import no.skasti.yame.ppp.session.DnsQuery
 import no.skasti.yame.ppp.session.DnsResponse
@@ -32,13 +33,197 @@ class EventBrokerTest {
         assertEquals(BrokerWaitResult.COMPLETED, awaitClosed(timeout))
     }
 
+    @Test fun `default broker owns configured queue capacity and applies live changes without losing events`() {
+        val store = ConfigStore(listOf(EventBrokerSettings.QueueCapacity to 3))
+        ConfigStore.install(store).use {
+            val broker = EventBroker()
+            val entered = CountDownLatch(1)
+            val release = CountDownLatch(1)
+            val seen = mutableListOf<Int>()
+            try {
+                assertEquals(3, broker.capacity)
+                broker.subscribeTyped<TransferBytes>("hold") {
+                    if (it.bytes == 1) { entered.countDown(); release.reached() }
+                    seen += it.bytes
+                }
+                broker.publish(event(1)); entered.reached()
+                (2..4).forEach { broker.publish(event(it)) }
+                assertEquals(3, broker.status.queuedEvents)
+
+                // Shrinking below the number of already queued events does not
+                // discard them or retroactively fail the broker.
+                store.set(EventBrokerSettings.QueueCapacity to 1)
+                assertEquals(1, broker.capacity)
+                assertEquals(3, broker.status.queuedEvents)
+                assertNull(broker.status.failure)
+                store.set(EventBrokerSettings.QueueCapacity to 4)
+                assertEquals(4, broker.capacity)
+                broker.publish(event(5))
+                assertEquals(4, broker.status.queuedEvents)
+
+                release.countDown()
+                assertEquals(BrokerWaitResult.COMPLETED, broker.drain().await(timeout))
+                assertEquals((1..5).toList(), seen)
+                assertEquals(0, broker.status.queuedEvents)
+            } finally { release.countDown(); broker.finish() }
+            // Closing the broker also removes its configuration subscription.
+            store.set(EventBrokerSettings.QueueCapacity to 6)
+            assertEquals(4, broker.capacity)
+        }
+    }
+
+    @Test fun `shrinking broker capacity blocks new admission until pending events drain below limit`() {
+        val store = ConfigStore(listOf(EventBrokerSettings.QueueCapacity to 3))
+        ConfigStore.install(store).use {
+            val broker = EventBroker(publishTimeout = Duration.ofSeconds(5))
+            val entered = (1..4).associateWith { CountDownLatch(1) }
+            val release = (1..4).associateWith { CountDownLatch(1) }
+            val seen = Collections.synchronizedList(mutableListOf<Int>())
+            val pool = Executors.newSingleThreadExecutor()
+            try {
+                broker.subscribeTyped<TransferBytes>("hold") {
+                    seen += it.bytes
+                    if (it.bytes in 1..4) {
+                        entered.getValue(it.bytes).countDown()
+                        release.getValue(it.bytes).await()
+                    }
+                }
+                broker.publish(event(1)); entered.getValue(1).reached()
+                (2..4).forEach { broker.publish(event(it)) }
+                store.set(EventBrokerSettings.QueueCapacity to 1)
+                assertEquals(3, broker.status.queuedEvents)
+                assertEquals(1, broker.capacity)
+                val started = CountDownLatch(1)
+                val waiting = pool.submit<Long> {
+                    started.countDown()
+                    broker.publish(event(5))
+                }
+                started.reached()
+                assertFailsWith<TimeoutException> { waiting.get(50, TimeUnit.MILLISECONDS) }
+                release.getValue(1).countDown(); entered.getValue(2).reached()
+                assertEquals(2, broker.status.queuedEvents)
+                assertFailsWith<TimeoutException> { waiting.get(50, TimeUnit.MILLISECONDS) }
+                release.getValue(2).countDown(); entered.getValue(3).reached()
+                assertEquals(1, broker.status.queuedEvents)
+                assertFailsWith<TimeoutException> { waiting.get(50, TimeUnit.MILLISECONDS) }
+                release.getValue(3).countDown(); entered.getValue(4).reached()
+                assertEquals(5L, waiting.get(5, TimeUnit.SECONDS))
+                release.getValue(4).countDown()
+                assertEquals(BrokerWaitResult.COMPLETED, broker.drain().await(timeout))
+                assertEquals((1..5).toList(), seen)
+                assertNull(broker.status.failure)
+            } finally {
+                release.values.forEach { it.countDown() }
+                pool.shutdownNow()
+                broker.finish()
+            }
+            store.set(EventBrokerSettings.QueueCapacity to 6)
+            assertEquals(1, broker.capacity, "closed broker must not observe new settings")
+        }
+    }
+
+    @Test fun `explicit broker constructor values are initial values before live settings updates`() {
+        val store = ConfigStore(listOf(EventBrokerSettings.QueueCapacity to 4096))
+        ConfigStore.install(store).use {
+            val broker = EventBroker(capacity = 2, publishTimeout = Duration.ofMillis(25), maxSubscribers = 3)
+            try {
+                assertEquals(2, broker.capacity, "initial subscription must preserve explicit capacity")
+                assertEquals(Duration.ofMillis(25), broker.publishTimeout)
+                assertEquals(3, broker.maxSubscribers)
+                store.set(EventBrokerSettings.QueueCapacity to 1024,
+                    EventBrokerSettings.PublishTimeoutMillis to 40,
+                    EventBrokerSettings.MaxSubscribers to 7)
+                assertEquals(1024, broker.capacity)
+                assertEquals(Duration.ofMillis(40), broker.publishTimeout)
+                assertEquals(7, broker.maxSubscribers)
+            } finally { broker.finish() }
+        }
+    }
+
+    @Test fun `delayed initial settings notification preserves overrides and delivers later updates`() {
+        val store = ConfigStore(listOf(EventBrokerSettings.QueueCapacity to 5))
+        ConfigStore.install(store).use {
+            val blocked = CountDownLatch(1)
+            val resume = CountDownLatch(1)
+            val subscriber = store.onChange[EventBrokerSettings.Group].subscribe {
+                if (it[EventBrokerSettings.QueueCapacity]?.value == 6) {
+                    blocked.countDown()
+                    resume.await()
+                }
+            }
+            val pool = Executors.newFixedThreadPool(2)
+            var broker: EventBroker? = null
+            try {
+                val first = pool.submit { store.set(EventBrokerSettings.QueueCapacity to 6) }
+                blocked.reached()
+                // The initial=true snapshot is queued behind the blocked delivery.
+                // Its unchanged stored value (6) must not overwrite this override.
+                broker = EventBroker(capacity = 2)
+                assertEquals(2, broker.capacity)
+                val next = pool.submit { store.set(EventBrokerSettings.QueueCapacity to 7) }
+                resume.countDown()
+                first.get(5, TimeUnit.SECONDS)
+                next.get(5, TimeUnit.SECONDS)
+                assertEquals(7, broker.capacity)
+            } finally {
+                resume.countDown()
+                broker?.finish()
+                subscriber.close()
+                pool.shutdownNow()
+            }
+        }
+    }
+
     @Test fun `default publish timeout is ten milliseconds`() {
-        assertEquals(Duration.ofMillis(10), EventBrokerConfig().publishTimeout)
-        assertFailsWith<IllegalArgumentException> { EventBrokerConfig(publishTimeout = Duration.ofNanos(-1)) }
+        val store = ConfigStore()
+        ConfigStore.install(store).use {
+            val broker = EventBroker()
+            try {
+                assertEquals(Duration.ofMillis(10), broker.publishTimeout)
+                assertEquals(64, broker.maxSubscribers)
+                store.set(EventBrokerSettings.PublishTimeoutMillis to 50,
+                    EventBrokerSettings.MaxSubscribers to 80)
+                assertEquals(Duration.ofMillis(50), broker.publishTimeout)
+                assertEquals(80, broker.maxSubscribers)
+                for (invalid in listOf(-1, 60_001)) {
+                    assertFailsWith<IllegalArgumentException> { store.set(EventBrokerSettings.PublishTimeoutMillis to invalid) }
+                }
+                assertFailsWith<IllegalArgumentException> { store.set(EventBrokerSettings.MaxSubscribers to 0) }
+            } finally { broker.finish() }
+        }
+    }
+
+    @Test fun `explicit broker values use feature owned setting validation`() {
+        assertFailsWith<IllegalArgumentException> { testEventBroker(capacity = 0) }
+        assertFailsWith<IllegalArgumentException> { testEventBroker(maxSubscribers = 0) }
+        assertFailsWith<IllegalArgumentException> {
+            testEventBroker(publishTimeout = Duration.ofMillis(60_001))
+        }
+    }
+
+    @Test fun `publish timeout requires exactly representable nonnegative whole milliseconds`() {
+        for (invalid in listOf(
+            Duration.ofNanos(-1),
+            Duration.ofMillis(-1),
+            Duration.ofNanos(1),
+            Duration.ofMillis(1).plusNanos(1),
+            Duration.ofMillis(60_001),
+            Duration.ofMillis(Int.MAX_VALUE.toLong() + 1),
+        )) {
+            assertFailsWith<IllegalArgumentException>("invalid timeout: $invalid") {
+                testEventBroker(publishTimeout = invalid)
+            }
+        }
+        for (valid in listOf(Duration.ZERO, Duration.ofMillis(1), Duration.ofMillis(60_000))) {
+            testEventBroker(publishTimeout = valid).use { broker ->
+                assertEquals(valid, broker.publishTimeout)
+                assertEquals(BrokerWaitResult.COMPLETED, broker.awaitClosed(timeout))
+            }
+        }
     }
 
     @Test fun `reentrant publication is queued after all current handlers`() {
-        val broker = EventBroker()
+        val broker = testEventBroker()
         val seen = mutableListOf<String>()
         val published = CountDownLatch(1)
         try {
@@ -60,7 +245,7 @@ class EventBrokerTest {
     }
 
     @Test fun `concurrent producers are delivered in successful admission order`() {
-        val broker = EventBroker(EventBrokerConfig(capacity = 1000))
+        val broker = testEventBroker(capacity = 1000)
         val pool = Executors.newFixedThreadPool(4)
         val admitted = Collections.synchronizedList(mutableListOf<Pair<Long, Int>>())
         val seen = mutableListOf<Int>()
@@ -79,7 +264,7 @@ class EventBrokerTest {
     }
 
     @Test fun `registration skips old queued events and removal permits only existing snapshot`() {
-        val broker = EventBroker()
+        val broker = testEventBroker()
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
         val old = mutableListOf<Int>()
@@ -99,7 +284,7 @@ class EventBrokerTest {
     }
 
     @Test fun `count saturation signals fatal independently of blocked worker and caught exception`() {
-        val broker = EventBroker(EventBrokerConfig(capacity = 1, publishTimeout = Duration.ZERO))
+        val broker = testEventBroker(capacity = 1, publishTimeout = Duration.ZERO)
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
         val supervisor = Executors.newSingleThreadExecutor()
@@ -124,7 +309,7 @@ class EventBrokerTest {
     }
 
     @Test fun `pending slot is freed when worker dequeues regardless of payload size`() {
-        val broker = EventBroker(EventBrokerConfig(capacity = 1))
+        val broker = testEventBroker(capacity = 1)
         val entered = CountDownLatch(1); val release = CountDownLatch(1)
         try {
             broker.subscribe("block") { entered.countDown(); release.reached() }
@@ -138,7 +323,7 @@ class EventBrokerTest {
     }
 
     @Test fun `full queue waits for space then admits in sequence`() {
-        val broker = EventBroker(EventBrokerConfig(capacity = 1, publishTimeout = Duration.ofSeconds(2)))
+        val broker = testEventBroker(capacity = 1, publishTimeout = Duration.ofSeconds(2))
         val pool = Executors.newSingleThreadExecutor()
         val entered = CountDownLatch(1); val release = CountDownLatch(1)
         val started = CountDownLatch(1)
@@ -161,7 +346,7 @@ class EventBrokerTest {
     }
 
     @Test fun `full queue times out and signals fatal after bounded wait`() {
-        val broker = EventBroker(EventBrokerConfig(capacity = 1, publishTimeout = Duration.ofMillis(40)))
+        val broker = testEventBroker(capacity = 1, publishTimeout = Duration.ofMillis(40))
         val entered = CountDownLatch(1); val release = CountDownLatch(1)
         try {
             broker.subscribe("block") { entered.countDown(); release.reached() }
@@ -173,7 +358,7 @@ class EventBrokerTest {
     }
 
     @Test fun `closing broker wakes publishers waiting for capacity`() {
-        val broker = EventBroker(EventBrokerConfig(capacity = 1, publishTimeout = Duration.ofSeconds(5)))
+        val broker = testEventBroker(capacity = 1, publishTimeout = Duration.ofSeconds(5))
         val pool = Executors.newSingleThreadExecutor()
         val entered = CountDownLatch(1); val release = CountDownLatch(1); val started = CountDownLatch(1)
         try {
@@ -192,7 +377,7 @@ class EventBrokerTest {
     }
 
     @Test fun `fatal overload wakes other waiting publishers`() {
-        val broker = EventBroker(EventBrokerConfig(capacity = 1, publishTimeout = Duration.ofMillis(300)))
+        val broker = testEventBroker(capacity = 1, publishTimeout = Duration.ofMillis(300))
         val pool = Executors.newFixedThreadPool(2)
         val entered = CountDownLatch(1); val release = CountDownLatch(1)
         val started = CountDownLatch(2)
@@ -214,7 +399,7 @@ class EventBrokerTest {
     }
 
     @Test fun `drain captures a fixed boundary and does not wait for later callbacks`() {
-        val broker = EventBroker()
+        val broker = testEventBroker()
         val first = CountDownLatch(1); val releaseFirst = CountDownLatch(1)
         val second = CountDownLatch(1); val releaseSecond = CountDownLatch(1)
         try {
@@ -231,7 +416,7 @@ class EventBrokerTest {
     }
 
     @Test fun `worker close and await cannot self deadlock`() {
-        val broker = EventBroker()
+        val broker = testEventBroker()
         val results = mutableListOf<BrokerWaitResult>()
         try {
             broker.subscribe("closer") {
@@ -248,7 +433,7 @@ class EventBrokerTest {
     }
 
     @Test fun `idle worker wakes for events and healthy close`() {
-        val broker = EventBroker()
+        val broker = testEventBroker()
         try {
             assertEquals(BrokerWaitResult.COMPLETED, broker.awaitIdle(timeout))
             broker.publish(event(1))
@@ -261,7 +446,7 @@ class EventBrokerTest {
 
     @Test fun `publication racing close is either delivered or explicitly rejected`() {
         repeat(30) {
-            val broker = EventBroker()
+            val broker = testEventBroker()
             val pool = Executors.newFixedThreadPool(2)
             val gate = CyclicBarrier(2)
             val seen = mutableListOf<Int>()
@@ -280,7 +465,7 @@ class EventBrokerTest {
     }
 
     @Test fun `registration limits and isolated facade installation`() {
-        val first = EventBroker(EventBrokerConfig(maxSubscribers = 1)); val second = EventBroker()
+        val first = testEventBroker(maxSubscribers = 1); val second = testEventBroker()
         val installation = BrokerInstallation()
         try {
             val owner = installation.install(first)
@@ -295,7 +480,7 @@ class EventBrokerTest {
             first.finish()
             owner.close(); owner.close()
             assertFailsWith<BrokerClosedException> { installation.current }
-            val nextBroker = EventBroker()
+            val nextBroker = testEventBroker()
             val next = installation.install(nextBroker)
             owner.close(); assertSame(nextBroker, installation.current)
             nextBroker.finish()
@@ -303,7 +488,7 @@ class EventBrokerTest {
         } finally { first.finish(); second.finish() }
     }
     @Test fun `concurrent saturation latches exactly one failure`() {
-        val broker = EventBroker(EventBrokerConfig(capacity = 1, publishTimeout = Duration.ZERO))
+        val broker = testEventBroker(capacity = 1, publishTimeout = Duration.ZERO)
         val entered = CountDownLatch(1); val release = CountDownLatch(1)
         val pool = Executors.newFixedThreadPool(4); val gate = CyclicBarrier(4)
         try {
@@ -329,7 +514,7 @@ class EventBrokerTest {
     }
 
     @Test fun `brokers have independent consumers and lifecycle`() {
-        val a = EventBroker(); val b = EventBroker()
+        val a = testEventBroker(); val b = testEventBroker()
         val seenA = mutableListOf<Int>(); val seenB = mutableListOf<Int>()
         try {
             a.subscribeTyped<TransferBytes>("same-name") { seenA.add(it.bytes) }
@@ -342,7 +527,7 @@ class EventBrokerTest {
     }
 
     @Test fun `reentrant overflow remains fatal despite handler exception isolation`() {
-        val broker = EventBroker(EventBrokerConfig(capacity = 1, publishTimeout = Duration.ZERO))
+        val broker = testEventBroker(capacity = 1, publishTimeout = Duration.ZERO)
         val entered = CountDownLatch(1); val release = CountDownLatch(1)
         try {
             broker.subscribe("reentrant") {

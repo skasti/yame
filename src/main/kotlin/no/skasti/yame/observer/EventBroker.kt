@@ -1,11 +1,16 @@
 package no.skasti.yame.observer
 
+import no.skasti.yame.config.ConfigStore
 import java.time.Duration
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
 /** One bounded FIFO and one worker. Consumers must hand off expensive work themselves. */
-class EventBroker(val config: EventBrokerConfig = EventBrokerConfig()) : AutoCloseable {
+class EventBroker(
+    capacity: Int = ConfigStore[EventBrokerSettings.QueueCapacity],
+    publishTimeout: Duration = Duration.ofMillis(ConfigStore[EventBrokerSettings.PublishTimeoutMillis].toLong()),
+    maxSubscribers: Int = ConfigStore[EventBrokerSettings.MaxSubscribers],
+) : AutoCloseable {
     private val lock = ReentrantLock()
     private val changed = lock.newCondition()
     private data class Envelope(val sequence: Long, val event: YameEvent)
@@ -26,6 +31,57 @@ class EventBroker(val config: EventBrokerConfig = EventBrokerConfig()) : AutoClo
     private var fatal: BrokerFailure? = null
     private var failures = 0L
     private var lastFailure: SubscriberFailure? = null
+    /** Live broker limits; updated by the broker's own subscription. */
+    @Volatile var capacity: Int = capacity
+        private set
+    @Volatile var publishTimeout: Duration = publishTimeout
+        private set
+    @Volatile var maxSubscribers: Int = maxSubscribers
+        private set
+
+    init {
+        (EventBrokerSettings.QueueCapacity to capacity).validate()
+        // Duration.toMillis truncates nanos: require an exact, nonnegative
+        // millisecond value before applying the SettingKey's range validation.
+        require(!publishTimeout.isNegative) { "Publish timeout must not be negative" }
+        val millis = publishTimeout.toMillis()
+        require(publishTimeout == Duration.ofMillis(millis)) { "Publish timeout must use whole milliseconds" }
+        require(millis == millis.toInt().toLong()) { "Publish timeout cannot be represented as Int milliseconds" }
+        (EventBrokerSettings.PublishTimeoutMillis to millis.toInt()).validate()
+        (EventBrokerSettings.MaxSubscribers to maxSubscribers).validate()
+    }
+
+    // Explicit constructor values are initial values; subsequent ConfigStore
+    // changes always reach the owning broker. Standalone tests with no installed
+    // process store can still provide explicit values.
+    private val settingsSubscription = runCatching { ConfigStore.current }.getOrNull()?.let { store ->
+        // The initial notification closes the gap between these reads and
+        // subscription registration. Ignore unchanged initial values so an
+        // explicitly supplied constructor override is not silently replaced.
+        val observedCapacity = store[EventBrokerSettings.QueueCapacity]
+        val observedTimeout = store[EventBrokerSettings.PublishTimeoutMillis]
+        val observedSubscribers = store[EventBrokerSettings.MaxSubscribers]
+        var firstNotification = true
+        store.onChange[EventBrokerSettings.Group].subscribe(initial = true) { changes ->
+            lock.withLock {
+                val initial = firstNotification
+                firstNotification = false
+                changes[EventBrokerSettings.QueueCapacity]?.let {
+                    if (!initial || it.value != observedCapacity) capacity = it.value
+                }
+                changes[EventBrokerSettings.PublishTimeoutMillis]?.let {
+                    if (!initial || it.value != observedTimeout) {
+                        publishTimeout = Duration.ofMillis(it.value.toLong())
+                    }
+                }
+                changes[EventBrokerSettings.MaxSubscribers]?.let {
+                    if (!initial || it.value != observedSubscribers) maxSubscribers = it.value
+                }
+                changed.signalAll()
+            }
+        }
+    }
+
     private val worker = Thread(::dispatch, "yame-events").apply { isDaemon = true; start() }
 
     data class Status(
@@ -47,13 +103,13 @@ class EventBroker(val config: EventBrokerConfig = EventBrokerConfig()) : AutoClo
 
     /** Waits at most publishTimeout for queue space; never invokes subscribers. */
     fun publish(event: YameEvent): Long = lock.withLock {
-        var remaining = try { config.publishTimeout.toNanos() } catch (_: ArithmeticException) { Long.MAX_VALUE }
+        var remaining = try { publishTimeout.toNanos() } catch (_: ArithmeticException) { Long.MAX_VALUE }
         while (true) {
             fatal?.let { throw BrokerFailedException(it) }
             if (closing) throw BrokerClosedException()
-            if (queue.size < config.capacity) break
+            if (queue.size < capacity) break
             if (remaining <= 0) {
-                val failure = BrokerFailure(BrokerFailure.Reason.QUEUE_FULL, config.capacity, queue.size, active, accepted)
+                val failure = BrokerFailure(BrokerFailure.Reason.QUEUE_FULL, capacity, queue.size, active, accepted)
                 fatal = failure
                 closing = true
                 queue.clear()
@@ -85,7 +141,7 @@ class EventBroker(val config: EventBrokerConfig = EventBrokerConfig()) : AutoClo
         }
         fatal?.let { throw BrokerFailedException(it) }
         if (closing) throw BrokerClosedException()
-        check(registrations.size < config.maxSubscribers) { "Subscriber capacity exceeded" }
+        check(registrations.size < maxSubscribers) { "Subscriber capacity exceeded" }
         check(registrations.none { it.name == name }) { "Duplicate subscriber name: $name" }
         val registration = Registration(name, accepted + 1, filter, handler)
         registrations.add(registration)
@@ -105,9 +161,12 @@ class EventBroker(val config: EventBrokerConfig = EventBrokerConfig()) : AutoClo
     }
 
     /** Graceful while healthy. Never joins, so callbacks may close their own broker. */
-    override fun close() = lock.withLock {
-        closing = true
-        changed.signalAll()
+    override fun close() {
+        settingsSubscription?.close()
+        lock.withLock {
+            closing = true
+            changed.signalAll()
+        }
     }
 
     fun awaitClosed(timeout: Duration): BrokerWaitResult = lock.withLock {
@@ -177,6 +236,7 @@ class EventBroker(val config: EventBrokerConfig = EventBrokerConfig()) : AutoClo
                 }
             }
         } finally {
+            settingsSubscription?.close()
             lock.withLock {
                 active = null
                 idle = false

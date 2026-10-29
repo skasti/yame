@@ -1,5 +1,6 @@
 package no.skasti.yame.ppp.session
 
+import no.skasti.yame.observer.testEventBroker
 import no.skasti.yame.observer.AbstractYameEvent
 import no.skasti.yame.observer.BrokerWaitResult
 import no.skasti.yame.observer.EventBroker
@@ -67,7 +68,7 @@ class EventContractTest {
 
     @Test fun `publication and typed access do not read generic payload`() {
         assertNull(AbstractYameEvent.cachedMetadataFor(TypedProbe::class.java))
-        val broker = EventBroker()
+        val broker = testEventBroker()
         val delivered = CountDownLatch(1)
         try {
             broker.subscribeTyped<TypedProbe>("probe") { assertEquals(5, it.id); delivered.countDown() }

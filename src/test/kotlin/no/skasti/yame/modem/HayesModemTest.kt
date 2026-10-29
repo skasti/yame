@@ -805,8 +805,12 @@ class HayesModemTest {
             setCarrierPresent = carrierStates::add,
         )
 
-        modem.dial("1")
-        modem.close()
+        // Closing a connected modem emits events through the lazy broker.
+        // Install process configuration before the broker is first created.
+        no.skasti.yame.config.ConfigStore.install(no.skasti.yame.config.ConfigStore()).use {
+            modem.dial("1")
+            modem.close()
+        }
 
         assertEquals(false, carrierStates.last())
     }

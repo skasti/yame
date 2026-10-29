@@ -35,7 +35,7 @@ class FunctionStoreDefaultsTest {
             assertEquals("first", first.invoke(key))
             assertFailsWith<IllegalArgumentException> { second.invoke(key) }
         }
-        val broker = EventBroker()
+        val broker = testEventBroker()
         val installation = YameEvents.install(broker)
         val directory = Files.createTempDirectory("yame-function-defaults")
         try {

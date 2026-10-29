@@ -1,5 +1,6 @@
 package no.skasti.yame.ppp.proxy
 
+import no.skasti.yame.observer.testEventBroker
 import no.skasti.yame.observer.YameEvent
 import no.skasti.yame.observer.YameEvents
 import no.skasti.yame.observer.EventBroker
@@ -31,7 +32,7 @@ class ResourceLifecycleEventTest {
     private val timeout = Duration.ofSeconds(5)
 
     @BeforeTest fun setUp() {
-        broker = EventBroker()
+        broker = testEventBroker()
         installation = YameEvents.install(broker)
         subscription = YameEvents.subscribe("resource-test") { events += it }
     }
