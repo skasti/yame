@@ -175,6 +175,29 @@ class TuiWorkQueueTest {
         }
     }
 
+    @Test fun `optional redraw never poisons the queue when required observations fill it`() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val accepted = mutableListOf<String>()
+        val queue = TuiWorkQueue(capacity = 1, admissionWait = Duration.ZERO)
+        try {
+            queue.submitRequired(kind = "LogEntry") {
+                entered.countDown()
+                release.await()
+                accepted += "first"
+            }
+            entered.awaitReady()
+            assertTrue(queue.submitRequired(kind = "ResourceLifecycleEvent") { accepted += "second" })
+            assertFalse(queue.offerRedraw { fail("a redraw must not replace required work") })
+            assertNull(queue.fatalFailure)
+            release.countDown()
+            queue.read { assertEquals(listOf("first", "second"), accepted) }
+            assertTrue(queue.offerRedraw { accepted += "redraw" })
+            queue.close()
+            assertEquals(listOf("first", "second", "redraw"), accepted)
+        } finally { release.countDown(); queue.close() }
+    }
+
     @Test fun `saturated queue reports pending event types and active work without event contents`() {
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
