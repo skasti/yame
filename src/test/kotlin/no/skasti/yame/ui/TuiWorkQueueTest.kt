@@ -175,6 +175,35 @@ class TuiWorkQueueTest {
         }
     }
 
+    @Test fun `saturated queue reports pending event types and active work without event contents`() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val queue = TuiWorkQueue(capacity = 2, admissionWait = Duration.ZERO)
+        try {
+            queue.submitRequired(kind = "DiagnosticMessage") {
+                entered.countDown()
+                release.await()
+            }
+            entered.awaitReady()
+            assertTrue(queue.submitRequired(kind = "TransferBytes") {})
+            assertTrue(queue.submitRequired(kind = "TransferBytes") {})
+            val failure = assertFailsWith<IllegalStateException> {
+                queue.submitRequired(kind = "DnsQuery") {}
+            }
+            val message = failure.message.orEmpty()
+            assertContains(message, "TUI queue admission timed out")
+            assertContains(message, "capacity=2, pending=2")
+            assertContains(message, "executing=DiagnosticMessage")
+            assertContains(message, "rejected=DnsQuery")
+            assertContains(message, "queuedByKind={TransferBytes=2}")
+            assertContains(message, "admittedByKind={TransferBytes=2, DiagnosticMessage=1}")
+            assertSame(failure, queue.fatalFailure)
+        } finally {
+            release.countDown()
+            assertFailsWith<IllegalStateException> { queue.close() }
+        }
+    }
+
     @Test fun `external admission times out after its bounded capacity wait`() {
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
