@@ -11,9 +11,8 @@ internal class TuiFrameLimiter(
     private val nowNanos: () -> Long,
     private val schedule: (delayNanos: Long, generation: Long) -> Unit,
     private val draw: () -> Unit,
-    private val configStore: ConfigStore = ConfigStore.current,
     private val dispatch: (() -> Unit) -> Unit = { action -> action() },
-    initialFps: Int = configStore[TuiSettings.MaxFps],
+    initialFps: Int = ConfigStore[TuiSettings.MaxFps],
 ) : AutoCloseable {
     private var intervalNanos = frameIntervalNanos(initialFps)
     private var dirty = false
@@ -26,7 +25,7 @@ internal class TuiFrameLimiter(
     // its execution context so timer state remains confined to the TUI worker.
     // Subscribing with initial=true closes the read/subscribe race.
     private val configurationSubscription =
-        configStore.onChange[TuiSettings.Group].subscribe(initial = true) { changes ->
+        ConfigStore.onChange[TuiSettings.Group].subscribe(initial = true) { changes ->
             changes[TuiSettings.MaxFps]?.let { change ->
                 dispatch { if (!closed) updateFrameRate(change.value) }
             }
