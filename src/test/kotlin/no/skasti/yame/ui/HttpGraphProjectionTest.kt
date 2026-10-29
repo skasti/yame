@@ -34,10 +34,11 @@ class HttpGraphProjectionTest : InstalledConfigTest() {
                          count: Long = 1, usedAt: Instant = time,
                          kind: ResourceKind = ResourceKind.IMAGE, prefetch: Boolean = false,
                          edges: List<ResourceEdgeSnapshot> = listOf(edge),
-                         transforms: List<ResourceTransformationSummary> = emptyList()) =
+                         transforms: List<ResourceTransformationSummary> = emptyList(),
+                         revision: Long = 1L) =
         ResourceLifecycleEvent(change, id, rootUri, LegacyHttpUrl.requestObservableKey(uri), uri,
             URI("https://${uri.host}${uri.path}"), ReferenceRole.SUBRESOURCE, kind, null,
-            state, prefetch, attempt, attempt, edges, transforms, count, usedAt, at)
+            state, prefetch, attempt, attempt, edges, transforms, count, usedAt, at, revision)
     private fun observer() = run { installConfig(ConfigStore()); TuiYameObserver(FunctionStore(), Terminal(interactive = false)) }
 
     @Test fun `resource and use before creation are deferred and duplicate creation is incremental`() {
@@ -66,17 +67,18 @@ class HttpGraphProjectionTest : InstalledConfigTest() {
     @Test fun `attempt and state semantics reject stale fetch observations even when clocks regress`() {
         val projection = HttpGraphProjection()
         projection.accept(graph())
-        val ready = resource(state = ResourceState.READY, attempt = 1, at = time.plusSeconds(3))
+        val ready = resource(state = ResourceState.READY, attempt = 1, at = time.plusSeconds(3), revision = 3)
         projection.accept(ready)
-        projection.accept(resource(state = ResourceState.FETCHING, attempt = 1, at = time.plusSeconds(4)))
+        projection.accept(resource(state = ResourceState.FETCHING, attempt = 1, at = time.plusSeconds(4), revision = 2))
         assertSame(ready, projection.graphSnapshot().getValue(1).resources.getValue(child.toString()))
         val retry = resource(change = ResourceLifecycleChange.FETCH_RETRIED,
-            state = ResourceState.FETCHING, attempt = 2, at = time.minusSeconds(1), prefetch = true)
+            state = ResourceState.FETCHING, attempt = 2, at = time.minusSeconds(1), prefetch = true, revision = 4)
         projection.accept(retry)
         projection.accept(ready)
         assertSame(retry, projection.graphSnapshot().getValue(1).resources.getValue(child.toString()))
         val transformed = resource(state = ResourceState.READY, attempt = 2, at = time,
-            prefetch = true, transforms = listOf(ResourceTransformationSummary("test", 100, 25)))
+            prefetch = true, transforms = listOf(ResourceTransformationSummary("test", 100, 25)),
+            revision = 5)
         projection.accept(transformed)
         assertEquals(75, projection.graphSnapshot().getValue(1).resources.getValue(child.toString())
             .transformations.single().savedBytes)
@@ -85,12 +87,12 @@ class HttpGraphProjectionTest : InstalledConfigTest() {
     @Test fun `metadata updates do not regress state and older same-state details cannot overwrite newer ones`() {
         val projection = HttpGraphProjection()
         projection.accept(graph())
-        projection.accept(resource(state = ResourceState.READY, attempt = 1))
+        projection.accept(resource(state = ResourceState.READY, attempt = 1, revision = 2))
         val latest = resource(change = ResourceLifecycleChange.KIND_UPDATED, state = ResourceState.READY,
-            attempt = 1, kind = ResourceKind.DOCUMENT, at = time.plusSeconds(2),
+            attempt = 1, kind = ResourceKind.DOCUMENT, at = time.plusSeconds(2), revision = 3,
             transforms = listOf(ResourceTransformationSummary("rewrite", 100, 50)))
         projection.accept(latest)
-        projection.accept(resource(state = ResourceState.READY, attempt = 1, at = time.plusSeconds(1)))
+        projection.accept(resource(state = ResourceState.READY, attempt = 1, at = time.plusSeconds(1), revision = 2))
         projection.accept(resource(state = ResourceState.DISCOVERED))
         assertSame(latest, projection.graphSnapshot().getValue(1).resources.getValue(child.toString()))
     }
@@ -98,9 +100,9 @@ class HttpGraphProjectionTest : InstalledConfigTest() {
     @Test fun `growing associations dominate older membership snapshots across a clock adjustment`() {
         val projection = HttpGraphProjection()
         projection.accept(graph())
-        val first = resource(at = time.plusSeconds(1))
+        val first = resource(at = time.plusSeconds(1), revision = 2)
         val secondEdge = ResourceEdgeSnapshot(root, child, ResourceRelation.CSS_URL)
-        val expanded = resource(at = time.minusSeconds(1), edges = listOf(edge, secondEdge))
+        val expanded = resource(at = time.minusSeconds(1), edges = listOf(edge, secondEdge), revision = 3)
         projection.accept(first)
         projection.accept(expanded)
         projection.accept(first)
@@ -145,7 +147,8 @@ class HttpGraphProjectionTest : InstalledConfigTest() {
             repeat(10) { ui.onEvent(resource(count = 5, usedAt = time.plusSeconds(5), at = time.plusSeconds(5))) }
             val otherEdge = ResourceEdgeSnapshot(URI("http://site.test/frame"), child, ResourceRelation.CSS_URL)
             ui.onEvent(resource(change = ResourceLifecycleChange.ASSOCIATION_ADDED, count = 6,
-                usedAt = time.plusSeconds(6), at = time.plusSeconds(6), edges = listOf(edge, otherEdge)))
+                usedAt = time.plusSeconds(6), at = time.plusSeconds(6), edges = listOf(edge, otherEdge),
+                revision = 2))
             ui.onEvent(graph(id = 2, uri = URI("http://other.test/"), count = 2, at = time.plusSeconds(4)))
             ui.onEvent(resource(id = 2, rootUri = URI("http://other.test/"), count = 2,
                 usedAt = time.plusSeconds(4), at = time.plusSeconds(4), uri = URI("http://CDN.test:80/image.gif#x")))
@@ -170,7 +173,7 @@ class HttpGraphProjectionTest : InstalledConfigTest() {
             ui.onEvent(ConnectionStateChanged(1, ConnectionState.DISCONNECTED))
             ui.onEvent(ConnectionStateChanged(2, ConnectionState.CONNECTED))
             ui.onEvent(resource(state = ResourceState.READY, attempt = 1, prefetch = true,
-                at = time.plusSeconds(1)))
+                at = time.plusSeconds(1), revision = 2))
             val host = ui.httpHostProjectionSnapshot().single()
             assertTrue(host.expanded)
             assertEquals(child.toString(), ui.httpSelectionSnapshot().second)
@@ -206,6 +209,38 @@ class HttpGraphProjectionTest : InstalledConfigTest() {
         assertFailsWith<IllegalStateException> { projection.accept(resource(kind = ResourceKind.SCRIPT)) }
         assertNotNull(projection.failure)
         assertTrue(projection.graphSnapshot().isEmpty())
+    }
+
+    @Test fun `resource revision orders rapid metadata changes regardless of tied or regressing clocks`() {
+        val projection = HttpGraphProjection()
+        projection.accept(graph())
+        val original = resource(revision = 1)
+        val updated = resource(change = ResourceLifecycleChange.KIND_UPDATED,
+            kind = ResourceKind.SCRIPT, revision = 2)
+        val transformed = resource(change = ResourceLifecycleChange.TRANSFORMATIONS_UPDATED,
+            kind = ResourceKind.SCRIPT, revision = 3, at = time.minusSeconds(3),
+            transforms = listOf(ResourceTransformationSummary("rewrite", 40, 20)))
+
+        // A newer revision may arrive first, and its occurrence time may be older.
+        projection.accept(transformed)
+        projection.accept(original)
+        projection.accept(updated)
+        val actual = projection.graphSnapshot().getValue(1).resources.getValue(child.toString())
+        assertSame(transformed, actual)
+        assertNull(projection.failure)
+    }
+
+    @Test fun `equal resource revision permits duplicate snapshots with different timestamps and graph usage`() {
+        val projection = HttpGraphProjection()
+        projection.accept(graph())
+        val first = resource(revision = 5, at = time, count = 1)
+        val duplicate = resource(revision = 5, at = time.plusSeconds(1), count = 2,
+            usedAt = time.plusSeconds(1))
+        projection.accept(first)
+        projection.accept(duplicate)
+        assertEquals(5, projection.graphSnapshot().getValue(1).resources.getValue(child.toString()).resourceRevision)
+        assertEquals(2, projection.graphSnapshot().getValue(1).usageCount)
+        assertNull(projection.failure)
     }
 
     @Test fun `observer monitor ownership cannot block broker admission or presentation processing`() {
@@ -257,8 +292,8 @@ class HttpGraphProjectionTest : InstalledConfigTest() {
     @Test fun `duplicate unresolved observations coalesce without exhausting deferral`() {
         val projection = HttpGraphProjection(maxPending = 1)
         repeat(1000) { projection.accept(resource()) }
-        projection.accept(resource(state = ResourceState.READY, attempt = 1))
-        projection.accept(resource(state = ResourceState.FETCHING, attempt = 1))
+        projection.accept(resource(state = ResourceState.READY, attempt = 1, revision = 3))
+        projection.accept(resource(state = ResourceState.FETCHING, attempt = 1, revision = 2))
         assertEquals(1, projection.pendingCount)
         projection.accept(graph())
         assertEquals(ResourceState.READY, projection.graphSnapshot().getValue(1).resources.values.single().state)
