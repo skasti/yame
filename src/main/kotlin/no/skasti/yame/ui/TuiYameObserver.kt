@@ -132,7 +132,7 @@ class TuiYameObserver(
     var stopRequested: Boolean = false
         private set
 
-    private val commandRegistrations = registerCommands() + registerTransformerCommands(paletteRegistry) + registerPppCommands(paletteRegistry)
+    private val commandRegistrations = registerCommands() + registerTransformerCommands(paletteRegistry) + registerPppCommands(paletteRegistry) + registerQueueCapacityCommands(paletteRegistry)
     private val work = TuiWorkQueue(teardown = ::teardown)
     // All state changes are still processed in FIFO order. Only screen painting is
     // coalesced, so a burst of resource discovery cannot force one frame per event.
@@ -1112,7 +1112,7 @@ class TuiYameObserver(
         ) {
             val broker = no.skasti.yame.observer.YameEvents.current
             QueueBars(
-                broker = QueueOccupancy(broker.status.queuedEvents, broker.config.capacity),
+                broker = QueueOccupancy(broker.status.queuedEvents, broker.capacity),
                 tui = work.occupancy,
             )
         } else null
