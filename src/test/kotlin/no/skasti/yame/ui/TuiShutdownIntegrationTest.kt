@@ -139,35 +139,36 @@ class TuiShutdownIntegrationTest : InstalledConfigTest() {
         }
     }
 
-    @Test fun `broker isolated TUI overload still enforces fatal deadline while terminal rendering is blocked`() {
+    @Test fun `bursty broker observations remain ordered while terminal rendering is blocked`() {
         val terminal = BlockedTerminal()
         val app = run { installConfig(ConfigStore()); InteractiveYameApplication(FunctionStore(), terminal.terminal) }
         val exits = LinkedBlockingQueue<Int>()
         val reports = CopyOnWriteArrayList<String>()
-        val owner = ApplicationEventLifecycle(broker, timeout = Duration.ofMillis(200),
+        val owner = ApplicationEventLifecycle(broker, timeout = Duration.ofSeconds(3),
             sealFacade = {}, report = reports::add, terminate = { exits.offer(it) })
         owner.consumer(app)
         try {
             app.start()
             terminal.entered.awaitReady()
             repeat(256) { YameEvents.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "accepted-$it")) }
+            YameEvents.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "after-burst"))
             assertEquals(BrokerWaitResult.COMPLETED, broker.drain().await(timeout))
-            YameEvents.publish(LogEntry(YameLogModule.PPP, YameLogLevel.INFO, "overflow"))
-            assertEquals(1, exits.poll(2, TimeUnit.SECONDS))
-            assertNotNull(app.fatalFailure)
-            assertTrue(reports.any { it.contains("fatal presentation failure") })
-            assertEquals(1L, broker.status.subscriberFailures)
-            assertNull(broker.status.failure, "the broker's separate fatal contract is unchanged")
-            assertEquals(1L, terminal.release.count)
-            assertEquals(1L, terminal.tornDown.count, "the blocked worker cannot delay independent fatal exit")
+            // Bounded observation batching no longer consumes one FIFO slot per
+            // entry. The screen may still be blocked without failing admission.
+            assertNull(app.fatalFailure)
+            assertNull(broker.status.failure)
+            assertEquals(0L, broker.status.subscriberFailures)
+            terminal.release.countDown()
+            owner.close()
+            assertTrue(reports.isEmpty(), reports.toString())
+            assertTrue(exits.isEmpty(), exits.toString())
+            assertNull(app.fatalFailure)
+            terminal.assertDrained("accepted-255", "after-burst")
         } finally {
             terminal.release.countDown()
-            assertFailsWith<IllegalStateException> { app.close() }
+            owner.close()
+            app.close()
         }
-        // Fatal teardown is allowed to skip a pending, coalesced screen paint.
-        // Acceptance and fatal supervision are verified above; it must still
-        // restore the terminal and perform no additional IO after teardown.
-        terminal.assertDrained()
     }
 
     private fun CountDownLatch.awaitReady() = assertTrue(await(2, TimeUnit.SECONDS))
