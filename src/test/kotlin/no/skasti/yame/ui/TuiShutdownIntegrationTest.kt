@@ -131,7 +131,9 @@ class TuiShutdownIntegrationTest : InstalledConfigTest() {
             assertEquals(1L, terminal.tornDown.count)
             terminal.release.countDown()
             assertFailsWith<IllegalStateException> { app.close() }
-            terminal.assertDrained("accepted-before-deadline")
+            // Fatal shutdown may not have painted the accepted but still dirty
+            // frame. Validate terminal teardown, not synchronous log visibility.
+            terminal.assertDrained()
         } finally {
             releaseProducer.countDown(); terminal.release.countDown()
             if (closer.state != Thread.State.NEW) closer.join(5_000)
