@@ -19,8 +19,12 @@ import kotlin.concurrent.thread
 import kotlin.test.*
 
 class RuntimeObservationIntegrationTest : InstalledConfigTest() {
-    private fun isolated(config: EventBrokerConfig = EventBrokerConfig(), body: (EventBroker) -> Unit) {
-        val broker = EventBroker(config)
+    private fun isolated(capacity: Int = EventBrokerSettings.DefaultQueueCapacity, body: (EventBroker) -> Unit) {
+        val broker = EventBroker(
+            initialCapacity = capacity,
+            initialPublishTimeout = Duration.ofMillis(EventBrokerSettings.DefaultPublishTimeoutMillis.toLong()),
+            initialMaxSubscribers = EventBrokerSettings.DefaultMaxSubscribers,
+        )
         val installation = YameEvents.install(broker)
         try { body(broker) } finally {
             broker.close()
@@ -83,7 +87,7 @@ class RuntimeObservationIntegrationTest : InstalledConfigTest() {
         subscription.close()
     }
 
-    @Test fun `module log and capture execute once even when broker rejects the observation`() = isolated(EventBrokerConfig(capacity = 1)) { broker ->
+    @Test fun `module log and capture execute once even when broker rejects the observation`() = isolated(capacity = 1) { broker ->
         val root = Files.createTempDirectory("yame-independent-capture")
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
