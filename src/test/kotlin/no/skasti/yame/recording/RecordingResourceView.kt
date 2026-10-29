@@ -91,7 +91,9 @@ class RecordingResourceView {
             .map { (name, members) ->
                 val contributingGraphs = members.map { it.first }.distinctBy { it.id }
                 val resources = members.groupBy { it.second.canonicalResourceKey }.mapValues { (_, copies) ->
-                    copies.maxWith(compareBy<Pair<Graph, ResourceLifecycleEvent>> { it.second.resourceRevision }
+                    // Revisions are local to a graph membership and cannot be
+                    // compared for the same URL across distinct graph lifetimes.
+                    copies.maxWith(compareBy<Pair<Graph, ResourceLifecycleEvent>> { it.second.occurredAt }
                         .thenBy { it.first.id }).second
                 }
                 Host(name, resources, contributingGraphs.sumOf { it.usageCount },
