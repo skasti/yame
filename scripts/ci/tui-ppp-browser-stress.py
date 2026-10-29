@@ -240,6 +240,19 @@ def site_urls():
             yield page
 
 
+def check_tui_overload(stage):
+    """Surface the actual fatal rather than misreporting a failed page load."""
+    path = REPORT / "yame-stderr.log"
+    if not path.is_file():
+        return
+    diagnostics = path.read_text(encoding="utf-8", errors="replace")
+    if "TUI queue admission timed out" in diagnostics:
+        raise RuntimeError(
+            f"REPRODUCED TUI OVERLOAD during {stage}: "
+            "TUI queue admission timed out (capacity 256); see yame-stderr.log"
+        )
+
+
 def browser(namespace, url, label, user):
     profile = WORK / f"chrome-{label}"
     profile.mkdir(exist_ok=True)
@@ -247,10 +260,15 @@ def browser(namespace, url, label, user):
         "sudo", "-n", "ip", "netns", "exec", namespace,
         "runuser", "-u", user, "--", shutil.which("google-chrome") or shutil.which("chromium"),
         "--headless=new", "--disable-gpu", "--disable-background-networking",
+        "--disable-component-update", "--disable-default-apps",
+        "--disable-extensions", "--disable-sync", "--disable-translate",
+        "--disable-client-side-phishing-detection",
+        "--safebrowsing-disable-auto-update",
+        "--no-service-autorun", "--no-default-browser-check",
         "--disable-quic", "--no-proxy-server", "--no-first-run",
         "--disable-features=HttpsUpgrades,HttpsFirstModeV2",
         "--blink-settings=scriptEnabled=false",
-        f"--user-data-dir={profile}", "--virtual-time-budget=18000",
+        f"--user-data-dir={profile}",
         "--dump-dom", url,
     ]
     try:
@@ -341,6 +359,7 @@ def main():
         user = getpass.getuser()
         baseline = browser(NAMESPACE, f"http://{address}/index.html", "fixture", user)
         log(f"Deterministic image page: requests observed by origin={Fixture.count}")
+        check_tui_overload("deterministic browser load")
         if not terminal.alive():
             raise RuntimeError(f"YAME exited during deterministic browser load ({terminal.process.returncode})")
         # Treat an inability to exercise the complete path as setup failure,
@@ -351,9 +370,11 @@ def main():
         for i, url in enumerate(site_urls(), start=1):
             browser(NAMESPACE, url, f"external-{i}", user)
             time.sleep(2)
+            check_tui_overload(f"external URL {i}")
             if not terminal.alive():
                 raise RuntimeError(f"YAME exited during external URL {i} ({terminal.process.returncode})")
         time.sleep(3)
+        check_tui_overload("post-load idle")
         if not terminal.alive():
             raise RuntimeError(f"YAME exited after browser load ({terminal.process.returncode})")
         log("PASS: YAME remained running after PPP/browser traffic; TUI queue did not fail in this run.")
