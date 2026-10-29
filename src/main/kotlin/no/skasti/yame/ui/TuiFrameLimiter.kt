@@ -1,8 +1,9 @@
 package no.skasti.yame.ui
 
 /**
- * Coalesces presentation redraws without coalescing or dropping any observations.
- * Called exclusively on the TUI worker; the scheduler posts [onDeadline] back to it.
+ * Coalesces presentation redraws without coalescing or dropping observations.
+ * All methods are invoked on the TUI worker; the scheduler posts [onDeadline]
+ * back to it. Painting itself must not delay the event producer's queue admission.
  */
 internal class TuiFrameLimiter(
     private val nowNanos: () -> Long,
@@ -18,32 +19,38 @@ internal class TuiFrameLimiter(
 
     fun request() {
         dirty = true
-        drawIfDue()
+        // Bootstrap needs a visible screen immediately. Subsequent redraws are
+        // deferred so a slow terminal never blocks the worker between every two
+        // observations in a synchronous graph-discovery burst.
+        if (lastDrawNanos == null) {
+            flush()
+        } else {
+            scheduleIfNeeded()
+        }
     }
 
     /** Invoked by the worker, not directly from the timer thread. */
     fun onDeadline() {
         scheduled = false
-        drawIfDue()
+        if (!dirty) return
+        val elapsed = nowNanos() - requireNotNull(lastDrawNanos)
+        if (elapsed >= intervalNanos) flush() else scheduleIfNeeded()
     }
 
     /** Preserve the final accepted state when the presentation closes normally. */
     fun flush() {
         if (!dirty) return
         dirty = false
-        lastDrawNanos = nowNanos()
         draw()
+        // The interval starts after the terminal operation finishes; otherwise
+        // a paint slower than 16 ms would immediately permit the next one.
+        lastDrawNanos = nowNanos()
     }
 
-    private fun drawIfDue() {
-        if (!dirty) return
-        val now = nowNanos()
-        val remaining = lastDrawNanos?.let { (intervalNanos - (now - it)).coerceAtLeast(0) } ?: 0L
-        if (remaining == 0L) {
-            flush()
-        } else if (!scheduled) {
-            scheduled = true
-            schedule(remaining)
-        }
+    private fun scheduleIfNeeded() {
+        if (!dirty || scheduled) return
+        val sinceLast = nowNanos() - requireNotNull(lastDrawNanos)
+        scheduled = true
+        schedule((intervalNanos - sinceLast).coerceAtLeast(0))
     }
 }
