@@ -262,19 +262,38 @@ def check_tui_overload(stage):
         raise RuntimeError(f"REPRODUCED TUI OVERLOAD during {stage}: {snapshot}")
 
 
+def http_preflight(namespace, url, user):
+    """Distinguish PPP/routing failure from a Chromium launch/navigation problem."""
+    probe = (
+        "import sys, urllib.request; "
+        "opener = urllib.request.build_opener(urllib.request.ProxyHandler({})); "
+        "response = opener.open(sys.argv[1], timeout=15); "
+        "data = response.read(); "
+        "print(f'HTTP {response.status}; bytes={len(data)}; html={b\"<html\" in data.lower()}')"
+    )
+    result = subprocess.run(
+        ["sudo", "-n", "ip", "netns", "exec", namespace,
+         "runuser", "-u", user, "--", sys.executable, "-c", probe, url],
+        capture_output=True, text=True, timeout=25,
+    )
+    log(f"PPP HTTP preflight: exit={result.returncode}; "
+        f"origin requests={Fixture.count}; {result.stdout.strip() or result.stderr.strip()[:600]}")
+    if result.returncode != 0 or "html=True" not in result.stdout:
+        raise RuntimeError("PPP HTTP preflight failed before Chromium; "
+                           "check routing, YAME proxy and fixture-forwarder logs")
+
+
 def browser(namespace, url, label, user):
     # Keep Chrome caches, cookies and other browsing profile data out of CI artifacts.
     profile = Path(tempfile.mkdtemp(prefix=f"yame-chrome-{label}-"))
     cmd = [
         "sudo", "-n", "ip", "netns", "exec", namespace,
         "runuser", "-u", user, "--", shutil.which("google-chrome") or shutil.which("chromium"),
-        "--headless=new", "--disable-gpu", "--disable-background-networking",
+        "--headless=new", "--no-sandbox", "--disable-setuid-sandbox",
+        "--disable-gpu", "--disable-background-networking",
         "--disable-component-update", "--disable-default-apps",
-        "--disable-extensions", "--disable-sync", "--disable-translate",
-        "--disable-client-side-phishing-detection",
-        "--safebrowsing-disable-auto-update",
-        "--no-service-autorun", "--no-default-browser-check",
-        "--disable-quic", "--no-proxy-server", "--no-first-run",
+        "--disable-extensions", "--disable-sync", "--no-first-run",
+        "--disable-quic", "--no-proxy-server",
         "--disable-features=HttpsUpgrades,HttpsFirstModeV2",
         "--blink-settings=scriptEnabled=false",
         f"--user-data-dir={profile}",
@@ -284,7 +303,8 @@ def browser(namespace, url, label, user):
         result = subprocess.run(cmd, text=True, capture_output=True, timeout=65)
         (REPORT / f"chrome-{label}.stdout").write_text(result.stdout[:100000], encoding="utf-8")
         (REPORT / f"chrome-{label}.stderr").write_text(result.stderr[:100000], encoding="utf-8")
-        log(f"{label}: browser exit={result.returncode}; DOM bytes={len(result.stdout)}; URL={url}")
+        log(f"{label}: browser exit={result.returncode}; DOM bytes={len(result.stdout)}; "
+            f"stderr bytes={len(result.stderr)}; URL={url}")
         return result.returncode == 0 and "<html" in result.stdout.lower()
     except subprocess.TimeoutExpired:
         log(f"{label}: browser timeout at {url}")
@@ -368,6 +388,7 @@ def main():
         log(f"PPP opened at configured {BAUD} baud (PTYs do not enforce physical line pacing)")
 
         user = getpass.getuser()
+        http_preflight(NAMESPACE, f"http://{address}/index.html", user)
         baseline = browser(NAMESPACE, f"http://{address}/index.html", "fixture", user)
         log(f"Deterministic image page: requests observed by origin={Fixture.count}")
         check_tui_overload("deterministic browser load")
