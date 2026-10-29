@@ -401,7 +401,10 @@ class TuiYameObserver(
 
             is TransferStarted -> {
                 val key = transferKey(event, event.flowId, event.transferIdentity)
-                if (key in retiredTransfers || (event.transferIdentity != null && key in transfers)) return
+                if (event.transferIdentity == null) {
+                    // A legacy flowId can name a new connection in the same session.
+                    retiredTransfers.remove(key)
+                } else if (key in retiredTransfers || key in transfers) return
                 transfers.remove(key)
                 transfers[key] = DashboardTransfer(
                     flowId = event.flowId,

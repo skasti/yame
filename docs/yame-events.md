@@ -324,6 +324,8 @@ metadata and no replay/bootstrap for late subscribers.
   across reconnects. The transfer projection retains at most 20 rows, removing
   completed rows before active rows. Recently removed keys are remembered in a
   bounded set of 128 entries so delayed observations cannot resurrect them.
+  A new legacy TransferStarted without TransferIdentity clears retirement for its
+  reusable session-qualified flowId; identity-based starts remain protected.
   Connection/session high-water marks reject old observations. Terminal
   states dominate delayed open notifications for the same identity. A new PPP
   observation can precede its connection notification; no producer-specific

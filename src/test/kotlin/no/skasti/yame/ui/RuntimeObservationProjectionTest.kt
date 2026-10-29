@@ -120,6 +120,67 @@ class RuntimeObservationProjectionTest : InstalledConfigTest() {
         }
     }
 
+    @Test fun `legacy flow ID can start fresh after its previous transfer was retired`() {
+        observer().use { ui ->
+            val session = PppSessionIdentity(1, 1)
+            ui.onEvent(TransferStarted("reused", "old", "test", TransferKind.TCP, session))
+            ui.onEvent(TransferBytes("reused", TransferDirection.TO_HOST, 100, session))
+            ui.onEvent(TransferBytes("reused", TransferDirection.TO_PEER, 200, session))
+            ui.onEvent(TransferStateChanged("reused", TransferState.CLOSED, "old connection", session))
+            repeat(20) { index ->
+                ui.onEvent(TransferStarted("other$index", "other$index", "test", TransferKind.TCP, session))
+            }
+            assertEquals(20, ui.transferProjectionSnapshot().size)
+            assertFalse(ui.transferProjectionSnapshot().any { it.flowId == "reused" })
+
+            // Retirement still suppresses details until a new legacy start arrives.
+            ui.onEvent(TransferBytes("reused", TransferDirection.TO_PEER, 999, session))
+            ui.onEvent(TransferStateChanged("reused", TransferState.FAILED, session = session))
+            ui.onEvent(TransferStarted("reused", "new", "test", TransferKind.TCP, session))
+            val fresh = ui.transferProjectionSnapshot().single { it.flowId == "reused" }
+            assertEquals("new", fresh.destination)
+            assertEquals(TransferState.CONNECTING, fresh.state)
+            assertEquals(0, fresh.toHostBytes)
+            assertEquals(0, fresh.toPeerBytes)
+            assertNull(fresh.detail)
+            assertEquals(20, ui.transferProjectionSnapshot().size)
+
+            ui.onEvent(TransferBytes("reused", TransferDirection.TO_HOST, 31, session))
+            ui.onEvent(TransferBytes("reused", TransferDirection.TO_PEER, 47, session))
+            ui.onEvent(TransferStateChanged("reused", TransferState.OPEN, "new connection", session))
+            val updated = ui.transferProjectionSnapshot().single { it.flowId == "reused" }
+            assertEquals(31, updated.toHostBytes)
+            assertEquals(47, updated.toPeerBytes)
+            assertEquals(TransferState.OPEN, updated.state)
+            assertEquals("new connection", updated.detail)
+            assertNull(ui.observationFailure)
+        }
+    }
+
+    @Test fun `retirement retains only the latest 128 evicted transfer identities`() {
+        observer().use { ui ->
+            val session = PppSessionIdentity(1, 1)
+            val identities = (0 until 149).map { TransferIdentity.create(session, 0) }
+            fun start(index: Int) = ui.onEvent(TransferStarted("flow$index", "host$index", "test",
+                TransferKind.TCP, session, transferIdentity = identities[index]))
+            identities.forEachIndexed { index, identity ->
+                start(index)
+                ui.onEvent(TransferStateChanged("flow$index", TransferState.CLOSED,
+                    session = session, transferIdentity = identity))
+            }
+            // Twenty retained rows leave 129 evictions: identity 0 has aged out
+            // of retirement, while identities 1..128 are still protected.
+            assertEquals(20, ui.transferProjectionSnapshot().size)
+            start(1)
+            start(128)
+            assertFalse(ui.transferProjectionSnapshot().any { it.transferIdentity in identities.take(129) })
+            start(0)
+            assertTrue(ui.transferProjectionSnapshot().any { it.transferIdentity == identities[0] })
+            assertEquals(20, ui.transferProjectionSnapshot().size)
+            assertNull(ui.observationFailure)
+        }
+    }
+
     @Test fun `eviction prefers closed rows and late metadata never resurrects removed transfers`() {
         observer().use { ui ->
             val session = PppSessionIdentity(1, 1)
@@ -133,6 +194,15 @@ class RuntimeObservationProjectionTest : InstalledConfigTest() {
             assertTrue(ui.transferProjectionSnapshot().any { it.destination == "host0" })
             assertFalse(ui.transferProjectionSnapshot().any { it.destination == "host1" })
             repeat(300) { ui.onEvent(metadata(identities[1], "late.exe")) }
+            repeat(129) {
+                ui.onEvent(TransferBytes("flow1", TransferDirection.TO_PEER, 1, session,
+                    transferIdentity = identities[1]))
+                ui.onEvent(TransferStateChanged("flow1", TransferState.OPEN, session = session,
+                    transferIdentity = identities[1]))
+            }
+            ui.onEvent(TransferStarted("flow1", "delayed", "test", TransferKind.TCP, session,
+                transferIdentity = identities[1]))
+            assertFalse(ui.transferProjectionSnapshot().any { it.transferIdentity == identities[1] })
             assertEquals(20, ui.transferProjectionSnapshot().size)
             assertNull(ui.observationFailure)
         }
