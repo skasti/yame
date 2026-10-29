@@ -175,6 +175,38 @@ class TuiWorkQueueTest {
         }
     }
 
+    @Test fun `hundreds of resource observations preserve FIFO order without saturating work slots`() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val seen = mutableListOf<String>()
+        val queue = TuiWorkQueue(capacity = 24, admissionWait = Duration.ZERO)
+        try {
+            queue.submitRequired(kind = "StartScreen") { entered.countDown(); release.await() }
+            entered.awaitReady()
+            repeat(480) { i ->
+                assertTrue(queue.submitObservation("ResourceLifecycleEvent") { seen += "resource-$i" })
+            }
+            assertTrue(queue.submitRequired(kind = "KeyboardInput") { seen += "keyboard" })
+            repeat(480) { i ->
+                assertTrue(queue.submitObservation("ResourceGraphLifecycleEvent") { seen += "graph-$i" })
+            }
+            // 16 bounded batches plus the keyboard must fit, while 960 independent
+            // queue entries would exceed capacity 24. No observations are removed.
+            assertNull(queue.fatalFailure)
+            release.countDown()
+            queue.read {
+                assertEquals(
+                    (0 until 480).map { "resource-$it" } + "keyboard" +
+                        (0 until 480).map { "graph-$it" },
+                    seen,
+                )
+            }
+        } finally {
+            release.countDown()
+            queue.close()
+        }
+    }
+
     @Test fun `optional redraw never poisons the queue when required observations fill it`() {
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
