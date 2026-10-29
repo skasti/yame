@@ -67,15 +67,15 @@ class EventBroker(
                 val initial = firstNotification
                 firstNotification = false
                 changes[EventBrokerSettings.QueueCapacity]?.let {
-                    if (!initial || it.value != observedCapacity) capacity = it.value
+                    if (!initial || it.value != observedCapacity) this@EventBroker.capacity = it.value
                 }
                 changes[EventBrokerSettings.PublishTimeoutMillis]?.let {
                     if (!initial || it.value != observedTimeout) {
-                        publishTimeout = Duration.ofMillis(it.value.toLong())
+                        this@EventBroker.publishTimeout = Duration.ofMillis(it.value.toLong())
                     }
                 }
                 changes[EventBrokerSettings.MaxSubscribers]?.let {
-                    if (!initial || it.value != observedSubscribers) maxSubscribers = it.value
+                    if (!initial || it.value != observedSubscribers) this@EventBroker.maxSubscribers = it.value
                 }
                 changed.signalAll()
             }
