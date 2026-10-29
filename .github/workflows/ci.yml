@@ -219,7 +219,17 @@ jobs:
       # Browser setup and deterministic resource loading must succeed; external sites are best-effort.
       - name: Install Linux PPP for TUI browser stress diagnostic
         if: needs.preview-gate.outputs.reuse != 'true'
-        run: sudo apt-get install --yes ppp
+        run: |
+          sudo apt-get install --yes ppp
+          echo '=== PPP package file list ==='
+          dpkg-query -L ppp | grep -E '/(pppd|chat)(-|$)' || true
+          echo '=== Expected executable locations ==='
+          ls -la /usr/sbin/pppd /usr/sbin/chat /sbin/pppd /sbin/chat 2>&1 || true
+          echo '=== Executable resolution ==='
+          command -v pppd || true
+          command -v chat || true
+          echo '=== Package integrity ==='
+          sudo dpkg -V ppp || true
 
       - name: Browser through PPP into live YAME TUI (diagnostic)
         id: tui-browser-stress
