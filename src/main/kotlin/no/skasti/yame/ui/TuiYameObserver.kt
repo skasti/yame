@@ -1098,6 +1098,17 @@ class TuiYameObserver(
 
     private fun renderFrame() {
         if (closed || !screenStarted) return
+        // Read bounded queue depths only while painting the wide layout.
+        // These are snapshots, not observation events added to either queue.
+        val queueBars = if (terminal.size.width > WIDE_DASHBOARD_THRESHOLD &&
+            terminal.size.height >= MIN_QUEUE_BAR_HEIGHT
+        ) {
+            val broker = no.skasti.yame.observer.YameEvents.current
+            QueueBars(
+                broker = QueueOccupancy(broker.status.queuedEvents, broker.config.capacity),
+                tui = work.occupancy,
+            )
+        } else null
         val frame = YameDashboardRenderer.render(
             state = httpHostSnapshots().let { httpHosts ->
                 DashboardState(
@@ -1113,6 +1124,7 @@ class TuiYameObserver(
                     transfers = transfers.values.toList(),
                     httpHosts = httpHosts,
                     proxyStatus = httpGraphs.status,
+                    queueBars = queueBars,
                     selectedHttpHostIndex = httpHosts
                         .indexOfFirst { it.host == selectedHttpHost }
                         .coerceAtLeast(0),
@@ -1288,6 +1300,7 @@ internal data class DashboardState(
     val activeDetailPanel: DashboardDetailPanel = DashboardDetailPanel.PROXY,
     val headerElapsedNanos: Long = 0,
     val proxyStatus: String? = null,
+    val queueBars: QueueBars? = null,
 )
 
 internal enum class DashboardDetailPanel(val title: String) {
@@ -1299,6 +1312,20 @@ internal enum class DashboardDetailPanel(val title: String) {
 }
 
 private const val WIDE_DASHBOARD_THRESHOLD = 149
+private const val MIN_QUEUE_BAR_HEIGHT = 30
+
+/** Queue occupancy excludes the currently executing event or work slot. */
+internal data class QueueOccupancy(val queued: Int, val capacity: Int) {
+    init {
+        require(capacity > 0)
+        require(queued in 0..capacity)
+    }
+}
+
+internal data class QueueBars(
+    val broker: QueueOccupancy,
+    val tui: QueueOccupancy,
+)
 
 internal data class DashboardStyles(
     val border: (String) -> String = { it },
@@ -1370,11 +1397,13 @@ internal object YameDashboardRenderer {
 
         val headerHeight = 1
         val footerHeight = 1
-        val bodyHeight = renderHeight - headerHeight - footerHeight
-        val gap = 1
         if (renderWidth <= WIDE_DASHBOARD_THRESHOLD) {
             return renderStackedBody(state, renderWidth, renderHeight, styles)
         }
+        val showQueueBars = state.queueBars != null && renderHeight >= MIN_QUEUE_BAR_HEIGHT
+        val queueBarHeight = if (showQueueBars) 2 else 0
+        val bodyHeight = renderHeight - headerHeight - footerHeight - queueBarHeight
+        val gap = 1
         val leftWidth = (renderWidth * 55 / 100)
             .coerceIn(38, renderWidth - 32)
         val rightWidth = renderWidth - leftWidth - gap
@@ -1461,7 +1490,36 @@ internal object YameDashboardRenderer {
             clip(footerText, renderWidth).padEnd(renderWidth),
         )
 
-        return "$header\n$body\n$footer"
+        val queueFooter = if (showQueueBars) {
+            val queues = requireNotNull(state.queueBars)
+            "\n" + queueBar("Event broker", queues.broker, "events", renderWidth, styles) +
+                "\n" + queueBar("TUI work", queues.tui, "slots", renderWidth, styles)
+        } else ""
+        return "$header\n$body$queueFooter\n$footer"
+    }
+
+    /** The bars represent queued capacity (not transfer progress or work completed). */
+    private fun queueBar(
+        label: String,
+        usage: QueueOccupancy,
+        unit: String,
+        width: Int,
+        styles: DashboardStyles,
+    ): String {
+        val percent = (usage.queued.toLong() * 100 / usage.capacity).toInt()
+        val prefix = label.padEnd(14) + "["
+        val suffix = "] " + usage.queued + "/" + usage.capacity + " " + unit + " (" + percent + "%)"
+        val barWidth = (width - prefix.length - suffix.length).coerceAtLeast(1)
+        val filled = if (usage.queued == 0) 0 else
+            ((usage.queued.toLong() * barWidth + usage.capacity - 1) / usage.capacity)
+                .toInt().coerceIn(1, barWidth)
+        val paint = when {
+            percent >= 90 -> styles.danger
+            percent >= 70 -> styles.warning
+            else -> styles.success
+        }
+        val padding = " ".repeat((width - prefix.length - barWidth - suffix.length).coerceAtLeast(0))
+        return prefix + paint("█".repeat(filled)) + styles.muted("░".repeat(barWidth - filled)) + suffix + padding
     }
 
     private fun renderStackedBody(
