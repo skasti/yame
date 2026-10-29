@@ -37,6 +37,46 @@ class YameLoggingTest {
     }
 
     @Test
+    fun `publishes typed LogEntry only after module level filtering and without recursion`() {
+        val directory = Files.createTempDirectory("yame-log-entry")
+        val entries = mutableListOf<LogEntry>()
+        YameLogManager(LoggingConfig(), directory, publishEntry = entries::add).use { logs ->
+            logs.log(YameLogModule.PPP, YameLogLevel.DEBUG, "hidden packet detail")
+            logs.log(YameLogModule.PPP, YameLogLevel.INFO, "visible session")
+            logs.log(YameLogModule.PROXY, YameLogLevel.WARN, "proxy warning")
+            assertEquals(2, entries.size)
+            val first = entries.first()
+            assertEquals(YameLogModule.PPP, first.module)
+            assertEquals(YameLogLevel.INFO, first.level)
+            assertEquals("visible session", first.message)
+            assertEquals("yame.logging.entry", first.typeName)
+
+            // Event tee ignores LogEntry: a published entry cannot recursively log itself.
+            logs.eventSink(first)
+            assertEquals(2, entries.size)
+
+            logs.setLevel(YameLogModule.PPP, YameLogLevel.DEBUG)
+            logs.log(YameLogModule.PPP, YameLogLevel.DEBUG, "now visible packet detail")
+            assertEquals(YameLogLevel.DEBUG, entries.last().level)
+            assertEquals("now visible packet detail", entries.last().message)
+        }
+        assertFalse(directory.resolve("ppp.log").readText().contains("hidden packet detail"))
+        assertContains(directory.resolve("ppp.log").readText(), "now visible packet detail")
+    }
+
+    @Test
+    fun `accepted entries still publish when log file is unavailable`() {
+        val directory = Files.createTempFile("yame-unavailable-log-dir", ".txt")
+        val entries = mutableListOf<LogEntry>()
+        YameLogManager(LoggingConfig(), directory, publishEntry = entries::add).use { logs ->
+            logs.log(YameLogModule.PPP, YameLogLevel.DEBUG, "hidden")
+            logs.log(YameLogModule.PPP, YameLogLevel.ERROR, "visible despite file failure")
+        }
+        assertEquals(listOf("visible despite file failure"), entries.map { it.message })
+        assertEquals(YameLogLevel.ERROR, entries.single().level)
+    }
+
+    @Test
     fun `module levels filter independently and all active files are created`() {
         val directory = Files.createTempDirectory("yame-logs")
         val levels = YameLogManager.defaultLevels().toMutableMap().apply {
