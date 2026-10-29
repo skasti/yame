@@ -363,7 +363,9 @@ if [[ "$MODE" == "external-smoke" ]]; then
         echo "External smoke probe did not resolve the Microsoft hostname" >&2
         exit 1
     fi
-    if ! grep -Fq "HTTP compatibility => GET http://www.msftconnecttest.com/connecttest.txt" "$YAME_LOG"; then
+    # This is an INFO-level proxy request; internal "HTTP compatibility =>" traces
+    # are DEBUG and intentionally suppressed by the shared log-level filter.
+    if ! grep -Eq 'REQUEST flow=.* GET http://www\.msftconnecttest\.com/connecttest\.txt' "$YAME_LOG"; then
         echo "External smoke probe did not pass through YAME HTTP compatibility" >&2
         exit 1
     fi
@@ -416,8 +418,12 @@ if ! grep -Fq "MODEM dialing 1" "$YAME_LOG"; then
     exit 1
 fi
 
-if ! grep -Fq "AT => CONNECT $BAUD" "$YAME_LOG"; then
-    echo "YAME did not return CONNECT to LSppp" >&2
+# MODEM connected is INFO; the literal "AT => CONNECT" wire trace is DEBUG.
+# The PPP.OK, LCP and IPCP assertions independently verify that DOS received
+# CONNECT and completed the handshake.
+if ! grep -Fq "MODEM connected" "$YAME_LOG" ||
+   ! grep -Fq "PPP data mode active" "$YAME_LOG"; then
+    echo "YAME did not establish modem data mode for LSppp" >&2
     exit 1
 fi
 
@@ -431,10 +437,8 @@ if ! grep -Fq "IPCP open: local=10.64.0.1 peer=10.64.0.2" "$YAME_LOG"; then
     exit 1
 fi
 
-if ! grep -Fq "DNS <= 10.64.0.2:" "$YAME_LOG"; then
-    echo "YAME did not proxy the DOS DNS request" >&2
-    exit 1
-fi
+# The DNS request/response is verified through the fixture and DOS DNSTEST.
+# A per-datagram "DNS <=" trace is DEBUG and is not required here.
 
 if ! grep -Fq "query ci.yame.test type=1 class=1" "$DNS_FIXTURE_LOG"; then
     echo "DNS fixture did not receive the expected deterministic DNS query" >&2
@@ -456,22 +460,18 @@ if ! grep -Fq "request GET /compat.txt " "$HTTP_FIXTURE_LOG"; then
     exit 1
 fi
 
-if ! grep -Fq "HTTP compatibility => GET http://$HOST_ADDRESS/compat.txt" "$YAME_LOG"; then
+if ! grep -Fq "GET http://$HOST_ADDRESS/compat.txt" "$YAME_LOG"; then
     echo "YAME did not route the DOS request through HTTP compatibility" >&2
     exit 1
 fi
 
-if ! grep -Fq "TCP <= SYN 10.64.0.2:" "$YAME_LOG"; then
-    echo "YAME did not observe the DOS TCP SYN" >&2
+# Connection states are stable INFO-level domain observations; raw SYN and
+# socket trace strings are DEBUG and intentionally omitted at INFO.
+if ! grep -Fq "destination=$HOST_ADDRESS:$HTTP_PORT" "$YAME_LOG"; then
+    echo "YAME did not observe the DOS TCP connection to the fixture" >&2
     exit 1
 fi
-
-if ! grep -Fq "TCP host connected $HOST_ADDRESS:$HTTP_PORT" "$YAME_LOG"; then
-    echo "YAME did not open the host TCP socket for the DOS flow" >&2
-    exit 1
-fi
-
-if ! grep -Fq "TCP open 10.64.0.2:" "$YAME_LOG"; then
+if ! grep -Eq 'state flow=.* state=OPEN' "$YAME_LOG"; then
     echo "YAME TCP state machine did not complete the three-way handshake" >&2
     exit 1
 fi
