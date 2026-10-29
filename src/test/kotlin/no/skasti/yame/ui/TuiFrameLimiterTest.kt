@@ -35,6 +35,9 @@ class TuiFrameLimiterTest {
         assertEquals(2, renders)
         now += 16_666_667L
         limiter.request()
+        assertEquals(2, renders, "even an overdue frame must be scheduled, not block event processing")
+        assertEquals(3, deadlines.size)
+        limiter.onDeadline()
         assertEquals(3, renders)
     }
 
