@@ -16,7 +16,7 @@ class BrokerInstallationTest {
 
     @Test fun `concurrent first access creates exactly one broker and delivers events`() {
         val created = AtomicInteger()
-        val installation = BrokerInstallation(createDefault = { created.incrementAndGet(); EventBroker() })
+        val installation = BrokerInstallation(createDefault = { created.incrementAndGet(); EventBroker(initialCapacity = 4096, initialPublishTimeout = java.time.Duration.ofMillis(10), initialMaxSubscribers = 64) })
         val pool = Executors.newFixedThreadPool(12)
         val start = CountDownLatch(1)
         try {
@@ -45,7 +45,7 @@ class BrokerInstallationTest {
 
     @Test fun `concurrent first publish and subscribe share one broker without replay`() {
         val created = AtomicInteger()
-        val installation = BrokerInstallation(createDefault = { created.incrementAndGet(); EventBroker() })
+        val installation = BrokerInstallation(createDefault = { created.incrementAndGet(); EventBroker(initialCapacity = 4096, initialPublishTimeout = java.time.Duration.ofMillis(10), initialMaxSubscribers = 64) })
         val pool = Executors.newFixedThreadPool(2)
         val start = CountDownLatch(1)
         try {
@@ -65,9 +65,9 @@ class BrokerInstallationTest {
 
     @Test fun `installation wins before first access and can be repeated only after close`() {
         val created = AtomicInteger()
-        val installation = BrokerInstallation(createDefault = { created.incrementAndGet(); EventBroker() })
+        val installation = BrokerInstallation(createDefault = { created.incrementAndGet(); EventBroker(initialCapacity = 4096, initialPublishTimeout = java.time.Duration.ofMillis(10), initialMaxSubscribers = 64) })
         repeat(2) {
-            val broker = EventBroker()
+            val broker = EventBroker(initialCapacity = 4096, initialPublishTimeout = java.time.Duration.ofMillis(10), initialMaxSubscribers = 64)
             val owner = installation.install(broker)
             assertSame(broker, installation.current)
             assertEquals(0, created.get())
@@ -78,7 +78,7 @@ class BrokerInstallationTest {
             assertFailsWith<BrokerClosedException> { installation.current }
         }
         installation.shutdown()
-        val rejected = EventBroker()
+        val rejected = EventBroker(initialCapacity = 4096, initialPublishTimeout = java.time.Duration.ofMillis(10), initialMaxSubscribers = 64)
         assertFailsWith<IllegalStateException> { installation.install(rejected) }
         assertEquals(BrokerWaitResult.COMPLETED, rejected.awaitClosed(timeout))
     }
@@ -86,8 +86,8 @@ class BrokerInstallationTest {
     @Test fun `install racing lazy access has one winner and closes rejected broker`() {
         repeat(20) {
             val created = AtomicInteger()
-            val installation = BrokerInstallation(createDefault = { created.incrementAndGet(); EventBroker() })
-            val candidate = EventBroker()
+            val installation = BrokerInstallation(createDefault = { created.incrementAndGet(); EventBroker(initialCapacity = 4096, initialPublishTimeout = java.time.Duration.ofMillis(10), initialMaxSubscribers = 64) })
+            val candidate = EventBroker(initialCapacity = 4096, initialPublishTimeout = java.time.Duration.ofMillis(10), initialMaxSubscribers = 64)
             val pool = Executors.newFixedThreadPool(2)
             val start = CountDownLatch(1)
             try {
@@ -120,7 +120,7 @@ class BrokerInstallationTest {
 
     @Test fun `fatal overload remains visible and shutdown never resurrects a broker`() {
         val installation = BrokerInstallation()
-        val broker = EventBroker(EventBrokerConfig(capacity = 1, publishTimeout = Duration.ZERO))
+        val broker = EventBroker(initialCapacity = 1, initialPublishTimeout = Duration.ZERO, initialMaxSubscribers = 64)
         val owner = installation.install(broker)
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
