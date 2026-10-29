@@ -1495,10 +1495,10 @@ internal object YameDashboardRenderer {
             val space = "  "
             val firstWidth = (renderWidth - space.length) / 2
             val secondWidth = renderWidth - space.length - firstWidth
-            "\\n" + queueBar("Event broker", queues.broker, "events", firstWidth, styles) +
+            "\n" + queueBar("Event broker", queues.broker, "events", firstWidth, styles) +
                 space + queueBar("TUI work", queues.tui, "slots", secondWidth, styles)
         } else ""
-        return "$header\\n$body$queueFooter\\n$footer"
+        return "$header\n$body$queueFooter\n$footer"
     }
 
     /**
