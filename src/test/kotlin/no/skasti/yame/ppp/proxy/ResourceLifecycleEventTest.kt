@@ -65,7 +65,9 @@ class ResourceLifecycleEventTest {
             .first { it.change == ResourceGraphChange.USED }
 
         assertEquals("yame.ppp.proxy.resource.lifecycle", admitted.typeName)
-        assertEquals(VersionNumber(1, 0, 0), admitted.version)
+        assertEquals(VersionNumber(1, 1, 0), admitted.version)
+        assertTrue(admitted.resourceRevision > 0L)
+        assertEquals(admitted.resourceRevision, admitted["resourceRevision"])
         assertEquals(ResourceLifecycleChange.ADMITTED, admitted.change)
         assertEquals(graph.id, admitted.graphId)
         assertEquals(rootRequest, admitted.resourceLegacyUri)
@@ -175,6 +177,46 @@ class ResourceLifecycleEventTest {
         assertEquals(2L, completion.fetchAttemptNumber)
         assertTrue(completion.prefetched)
         assertEquals(ResourceState.READY, graph.snapshot().nodes.single { it.legacyUri == resource }.state)
+    }
+
+    @Test
+    fun `authoritative resource revisions distinguish changes when clock never advances`() {
+        val clock = MutableClock(Instant.parse("2026-10-24T12:00:00Z"))
+        val registry = NavigationResourceRegistry(clock = clock)
+        val page = URI("http://site.test/index.html")
+        val child = URI("http://cdn.test/image.gif")
+        val upstream = URI("https://cdn.test/image.gif")
+        val graph = registry.startNavigation(page)
+
+        registry.discover(graph, page, child, upstream, ResourceRelation.IMG_SRC, ResourceKind.IMAGE)
+        // Same known edge, no resource change (graph USE still increments).
+        registry.discover(graph, page, child, upstream, ResourceRelation.IMG_SRC, ResourceKind.IMAGE)
+        registry.discover(graph, page, child, upstream, ResourceRelation.CSS_URL, ResourceKind.IMAGE)
+        registry.updateResourceKind(graph, child, ResourceKind.SCRIPT)
+        registry.recordTransformations(child, listOf(ResourceTransformationSummary("rewrite", 100, 50)))
+        val attempt = requireNotNull(registry.beginFetch(graph, child, upstream, upstream))
+        assertTrue(registry.markFetchState(graph, attempt, child, upstream, upstream, ResourceState.READY))
+
+        val observations = observedEvents().filterIsInstance<ResourceLifecycleEvent>()
+            .filter { it.resourceLegacyUri == child }
+        assertEquals(listOf(
+            ResourceLifecycleChange.DISCOVERED,
+            ResourceLifecycleChange.ASSOCIATION_ADDED,
+            ResourceLifecycleChange.KIND_UPDATED,
+            ResourceLifecycleChange.TRANSFORMATIONS_UPDATED,
+            ResourceLifecycleChange.FETCH_STARTED,
+            ResourceLifecycleChange.FETCH_COMPLETED,
+        ), observations.map { it.change })
+        assertEquals(1, observations.map { it.occurredAt }.distinct().size)
+        assertEquals(observations.size, observations.map { it.resourceRevision }.distinct().size)
+        assertEquals(observations.map { it.resourceRevision }.sorted(), observations.map { it.resourceRevision })
+
+        // A new association changes both endpoints' observable association set.
+        val pageResource = requireNotNull(registry.snapshot(graph.id))
+            .nodes.single { it.legacyUri == page }
+        assertTrue(pageResource.revision > 1L)
+        assertEquals(observations.last().resourceRevision, registry.snapshot(graph.id)!!.nodes
+            .single { it.legacyUri == child }.revision)
     }
 
     @Test
