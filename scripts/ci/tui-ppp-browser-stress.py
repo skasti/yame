@@ -286,6 +286,21 @@ def http_preflight(namespace, url, user):
                            "check routing, YAME proxy and fixture-forwarder logs")
 
 
+def chrome_binary():
+    """Prefer the exact Chrome binary installed by setup-chrome in CI."""
+    configured = os.environ.get("YAME_CHROME_BINARY", "").strip()
+    if configured:
+        binary = Path(configured)
+        if not binary.is_file() or not os.access(binary, os.X_OK):
+            raise RuntimeError(f"Configured Chrome is missing or not executable: {binary}")
+        return str(binary.resolve())
+    # Permit standalone local runs without the GitHub Actions setup step.
+    available = shutil.which("google-chrome") or shutil.which("chromium")
+    if not available:
+        raise RuntimeError("No Chrome/Chromium available (set YAME_CHROME_BINARY)")
+    return available
+
+
 def browser(namespace, url, label, user):
     # Keep Chrome caches, cookies and other browsing profile data out of CI artifacts.
     profile = Path(tempfile.mkdtemp(prefix=f"yame-chrome-{label}-"))
@@ -293,7 +308,7 @@ def browser(namespace, url, label, user):
                "runuser", "-u", user, "--"] if namespace else [])
     cmd = prefix + [
         "env", "-u", "DBUS_SESSION_BUS_ADDRESS",
-        shutil.which("google-chrome") or shutil.which("chromium"),
+        chrome_binary(),
         "--headless=new", "--no-sandbox", "--disable-setuid-sandbox",
         "--disable-dev-shm-usage", "--disable-gpu", "--disable-background-networking",
         "--disable-component-update", "--disable-default-apps",
@@ -321,8 +336,12 @@ def browser(namespace, url, label, user):
 def main():
     if not YAME.is_file():
         raise RuntimeError(f"Missing packaged distribution: {YAME}")
-    if not (shutil.which("google-chrome") or shutil.which("chromium")):
-        raise RuntimeError("No Chrome/Chromium on the CI runner")
+    chrome = chrome_binary()
+    version = subprocess.run([chrome, "--version"], capture_output=True, text=True, timeout=10)
+    log(f"Chrome for testing: {chrome}; version={version.stdout.strip() or version.stderr.strip()}; "
+        f"exit={version.returncode}")
+    if version.returncode != 0:
+        raise RuntimeError("Configured Chrome executable failed its version check")
     programs = {item: find_command(item) for item in
                 ("socat", "pppd", "chat", "ip", "sudo", "runuser")}
     log("PPP executables: pppd=" + programs["pppd"] + ", chat=" + programs["chat"])
