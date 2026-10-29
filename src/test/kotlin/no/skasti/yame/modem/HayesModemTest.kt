@@ -19,6 +19,135 @@ import kotlin.time.Duration.Companion.seconds
 
 class HayesModemTest {
     @Test
+    fun `guarded Hayes escape enters online command mode and ATH hangs up without closing serial`() {
+        val output = ByteArrayOutputStream()
+        var disconnects = 0
+        val handler = FakePppHandler(onDisconnected = { disconnects++ })
+        val carrier = mutableListOf<Boolean>()
+        val modem = HayesModem(
+            output, 115200,
+            config = HayesModemConfig(toneSimulationEnabled = false),
+            logger = {},
+            pppHandler = handler,
+            setCarrierPresent = carrier::add,
+            escapeGuardMillis = 40,
+        )
+        try {
+            modem.receive("ATE0\rATD123\r".toByteArray())
+            assertEquals(HayesModem.State.CONNECTED, modem.state)
+            output.reset()
+
+            Thread.sleep(90)
+            modem.receive("+++".toByteArray())
+            Thread.sleep(110)
+            assertEquals(HayesModem.State.ONLINE_COMMAND, modem.state)
+            assertEquals(0, handler.received.size)
+            assertEquals("\r\nOK\r\n", output.toString())
+            assertEquals(0, disconnects)
+
+            output.reset()
+            modem.receive("ATH\n".toByteArray()) // Trumpet BYE.CMD uses LF.
+            assertEquals(HayesModem.State.COMMAND, modem.state)
+            assertEquals("\r\nOK\r\n", output.toString())
+            assertEquals(false, carrier.last())
+            assertEquals(1, disconnects)
+
+            output.reset()
+            modem.receive("ATD123\r".toByteArray())
+            assertEquals(HayesModem.State.CONNECTED, modem.state)
+            assertEquals(2, handler.connectedCalls)
+        } finally {
+            modem.close()
+        }
+    }
+
+    @Test
+    fun `ATO resumes the existing PPP call without opening a new session`() {
+        val output = ByteArrayOutputStream()
+        val handler = FakePppHandler()
+        val modem = HayesModem(
+            output, 115200, config = HayesModemConfig(toneSimulationEnabled = false),
+            logger = {}, pppHandler = handler, escapeGuardMillis = 40,
+        )
+        try {
+            modem.receive("ATE0\rATD123\r".toByteArray())
+            Thread.sleep(90)
+            modem.receive("+++".toByteArray())
+            Thread.sleep(110)
+            assertEquals(HayesModem.State.ONLINE_COMMAND, modem.state)
+
+            output.reset()
+            modem.receive("ATO\r".toByteArray())
+            assertEquals(HayesModem.State.CONNECTED, modem.state)
+            assertEquals("\r\nCONNECT 115200\r\n", output.toString())
+            assertEquals(1, handler.connectedCalls)
+            modem.receive(byteArrayOf(0x7e, 0x7e))
+            assertEquals(listOf(0x7e, 0x7e), handler.received.single().map { it.toInt() and 0xff })
+        } finally {
+            modem.close()
+        }
+    }
+
+    @Test
+    fun `unguarded or interrupted pluses remain PPP data`() {
+        val output = ByteArrayOutputStream()
+        val handler = FakePppHandler()
+        val modem = HayesModem(
+            output, 115200, config = HayesModemConfig(toneSimulationEnabled = false),
+            logger = {}, pppHandler = handler, escapeGuardMillis = 40,
+        )
+        try {
+            modem.receive("ATD123\r".toByteArray())
+            modem.receive("+++".toByteArray()) // No preceding guard.
+            assertEquals(HayesModem.State.CONNECTED, modem.state)
+            assertEquals("+++", handler.received.last().toString(Charsets.US_ASCII))
+
+            Thread.sleep(90)
+            modem.receive("+++".toByteArray())
+            modem.receive(byteArrayOf(0x7e)) // No trailing guard.
+            Thread.sleep(110)
+            assertEquals(HayesModem.State.CONNECTED, modem.state)
+            assertEquals("+++~", handler.received.last().toString(Charsets.US_ASCII))
+
+            Thread.sleep(90)
+            modem.receive("++".toByteArray())
+            Thread.sleep(110)
+            assertEquals(HayesModem.State.CONNECTED, modem.state)
+            assertEquals("++", handler.received.last().toString(Charsets.US_ASCII))
+        } finally {
+            modem.close()
+        }
+    }
+
+    @Test
+    fun `external modem control hangup remains idempotent and supports redial`() {
+        val output = ByteArrayOutputStream()
+        val carrier = mutableListOf<Boolean>()
+        var disconnected = 0
+        val handler = FakePppHandler(onDisconnected = { disconnected++ })
+        val modem = HayesModem(
+            output, 115200, config = HayesModemConfig(toneSimulationEnabled = false),
+            logger = {}, pppHandler = handler, setCarrierPresent = carrier::add,
+        )
+        try {
+            modem.receive("ATD123\r".toByteArray())
+            output.reset()
+            modem.hangup()
+            modem.hangup()
+            assertEquals(HayesModem.State.COMMAND, modem.state)
+            assertEquals("\r\nNO CARRIER\r\n", output.toString())
+            assertEquals(1, disconnected)
+            assertEquals(false, carrier.last())
+
+            modem.receive("ATD123\r".toByteArray())
+            assertEquals(HayesModem.State.CONNECTED, modem.state)
+            assertEquals(2, handler.connectedCalls)
+        } finally {
+            modem.close()
+        }
+    }
+
+    @Test
     fun `hangup does not suppress serial output failure`() {
         var failWrites = false
         val output = object : OutputStream() {
