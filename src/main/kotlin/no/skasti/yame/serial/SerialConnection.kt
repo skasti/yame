@@ -18,6 +18,8 @@ class SerialConnection(
 ) : SerialTransport {
     private val port: SerialPort = SerialPort.getCommPort(portName)
     private var readerThread: Thread? = null
+    private var signalThread: Thread? = null
+    private var onPeerDtrDrop: (() -> Unit)? = null
 
     override val output: OutputStream
         get() {
@@ -45,6 +47,11 @@ class SerialConnection(
         )
     }
 
+    override fun onPeerDtrDropped(callback: () -> Unit) {
+        check(readerThread == null) { "Configure peer DTR monitoring before starting the reader" }
+        onPeerDtrDrop = callback
+    }
+
     override fun startReading(
         onBytes: (ByteArray) -> Unit,
         onStopped: (Throwable?) -> Unit,
@@ -52,6 +59,26 @@ class SerialConnection(
         check(port.isOpen) { "Serial port must be open before starting the reader" }
         check(readerThread == null) { "Serial reader is already running" }
 
+        onPeerDtrDrop?.let { callback ->
+            signalThread = thread(name = "serial-signals-${port.systemPortName}", isDaemon = true) {
+                val monitor = PeerDtrMonitor()
+                while (port.isOpen && !Thread.currentThread().isInterrupted) {
+                    try {
+                        val dropped = monitor.observe(port.getDSR(), port.getDCD())
+                        if (dropped.isNotEmpty()) {
+                            logger("Peer DTR dropped (observed via ${dropped.joinToString()})")
+                            callback()
+                        }
+                        Thread.sleep(50)
+                    } catch (_: InterruptedException) {
+                        break
+                    } catch (error: Exception) {
+                        logger("Serial !! Modem signal monitoring failed: ${error.message}")
+                        break
+                    }
+                }
+            }
+        }
         readerThread = thread(
             name = "serial-reader-${port.systemPortName}",
             isDaemon = false,
@@ -99,6 +126,12 @@ class SerialConnection(
                 logger("Closed ${port.systemPortName}")
             }
         } finally {
+            signalThread?.interrupt()
+            val signal = signalThread
+            if (signal != null && signal !== Thread.currentThread()) {
+                signal.join(2_000)
+                check(!signal.isAlive) { "Serial signal monitor did not stop" }
+            }
             val reader = readerThread
             if (reader != null && reader !== Thread.currentThread()) {
                 reader.join(2_000)
