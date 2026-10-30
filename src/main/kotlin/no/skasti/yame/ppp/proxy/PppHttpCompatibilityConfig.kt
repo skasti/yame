@@ -12,7 +12,7 @@ data class PppHttpCompatibilityConfig(
     val requestTimeoutMillis: Long = 30_000,
     val maxRequestBytes: Int = 16 * 1024 * 1024,
     val maxResponseBytes: Int = 16 * 1024 * 1024,
-    val maxFlows: Int = 4,
+    val maxFlows: Int = 16,
     val maxResourceContexts: Int = 512,
     val maxResourceNodesPerContext: Int = 1_024,
     val maxResourceEdgesPerContext: Int = 2_048,
@@ -26,6 +26,7 @@ data class PppHttpCompatibilityConfig(
         fun fromConfigStore(): PppHttpCompatibilityConfig =
             PppHttpCompatibilityConfig(
                 enabled = ConfigStore[ProxySettings.Enabled],
+                maxFlows = ConfigStore[ProxySettings.MaxFlows],
                 elementSimplifier = ConfigStore[ElementSimplifierSettings.Rules],
                 htmlTransformers = HtmlTransformerSettings.fromConfigStore(),
             )
