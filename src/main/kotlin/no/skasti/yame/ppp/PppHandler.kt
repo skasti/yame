@@ -84,7 +84,6 @@ internal class RetroPppHandler(
             dnsConfig = dnsConfig,
             tcpProxy = SystemRoutingTcpProxy(
                 httpConfig = httpCompatibilityConfig,
-                subscribeToHttpConfiguration = subscribeToConfiguration,
                 transformerSettings = transformerSettings,
                 logger = proxyLogger,
                 diagnosticSink = diagnosticSink,
