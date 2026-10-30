@@ -279,8 +279,10 @@ unbounded buffering.
 - Startup and CLI parsing use the runtime ConfigStore directly. CLI overrides are
   one transient typed batch; invocation options must not become a configuration
   aggregate. Persistence mappings live in feature definitions. See ADR 0010.
-- Serial transport and logging may use immutable feature-owned values; never nest
-  these or unrelated PPP/DNS/proxy settings inside Hayes modem configuration.
+- Serial transport and logging own their settings directly; when their consuming
+  constructors are modified, migrate any old immutable config wrapper as described
+  above. Never nest unrelated PPP/DNS/proxy settings inside Hayes modem
+  configuration.
 - `YameRuntime` composes serial, modem, PPP, DNS, proxy, and logging behavior. TUI
   and plain mode use that same runtime, ConfigStore, and FunctionStore.
 - A user selecting unchanged serial settings expresses a reconnect action through
