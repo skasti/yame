@@ -1,6 +1,7 @@
 package no.skasti.yame.ui
 
 import no.skasti.yame.ppp.PppSettings
+import no.skasti.yame.ppp.proxy.ProxySettings
 import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.serial.ConnectionFunctions
 import no.skasti.yame.ppp.RetroPppHandler
@@ -275,6 +276,39 @@ class CommandPaletteTest : InstalledConfigTest() {
         // Closing a presentation removes its registrations, including those held by an open palette.
         val field = TuiYameObserver::class.java.getDeclaredField("paletteRegistry").apply { isAccessible = true }
         assertNull((field.get(ui) as CommandPalette).find("/ppp-disconnect-on-terminate"))
+    }
+
+    @Test
+    fun `HTTP flow limit palette selects and persists the configured capacity`() {
+        val saved = mutableListOf<Int>()
+        val key = ProxySettings.MaxFlows
+        val store = ConfigStore(persist = { saved += it[key]!!.value })
+        installConfig(store)
+        val registry = CommandPalette()
+        val registrations = registerProxyCommands(registry)
+        assertEquals(listOf("4", "8", "16", "32", "64"), registry.find("/http-max-flows")?.items()?.map { it.command })
+        registrations.forEach(AutoCloseable::close)
+        assertNull(registry.find("/http-max-flows"))
+
+        val ui = TuiYameObserver(FunctionStore(), Terminal(interactive = false))
+        try {
+            ui.type("/http-max-flows")
+            ui.handleKeyAndAwait("Enter")
+            val options = assertNotNull(ui.paletteSnapshot()).options
+            assertEquals(listOf("4", "8", "16", "32", "64"), options.map { it.value })
+            assertEquals(listOf("", "", "current", "", ""), options.map { it.description })
+            ui.type("32")
+            ui.handleKeyAndAwait("Enter")
+            assertEquals(32, store[key])
+            assertEquals(listOf(32), saved)
+            ui.type("/http-max-flows")
+            ui.handleKeyAndAwait("Enter")
+            assertEquals("current", ui.paletteSnapshot()?.options?.find { it.value == "32" }?.description)
+        } finally {
+            ui.close()
+        }
+        val field = TuiYameObserver::class.java.getDeclaredField("paletteRegistry").apply { isAccessible = true }
+        assertNull((field.get(ui) as CommandPalette).find("/http-max-flows"))
     }
 
     private fun observer(
