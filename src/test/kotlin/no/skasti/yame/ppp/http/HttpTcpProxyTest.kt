@@ -1,5 +1,8 @@
 package no.skasti.yame.ppp.http
 
+import no.skasti.yame.config.ConfigStore
+import no.skasti.yame.config.InstalledConfigTest
+import org.junit.jupiter.api.BeforeEach
 import no.skasti.yame.ppp.ip.Ipv4Address
 import no.skasti.yame.ppp.tcp.TcpFlowKey
 import no.skasti.yame.ppp.tcp.TcpProxyEvent
@@ -14,7 +17,9 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
-class HttpTcpProxyTest {
+class HttpTcpProxyTest : InstalledConfigTest() {
+    @BeforeEach fun configure() = installConfig(ConfigStore())
+
     @Test
     fun `client FIN after completed HTTP response succeeds`() {
         val connectionRemoved = CountDownLatch(1)
