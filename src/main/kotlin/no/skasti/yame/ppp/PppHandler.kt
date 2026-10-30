@@ -26,7 +26,7 @@ interface PppHandler : Closeable {
 
 internal class RetroPppHandler(
     @Volatile var disconnectOnTerminate: Boolean = ConfigStore[PppSettings.DisconnectOnTerminate],
-    subscribeToConfiguration: Boolean = true,
+    private val subscribeToConfiguration: Boolean = true,
     private val connectionId: Long = 0,
     private val logger: (String) -> Unit = ::println,
     private val dnsLogger: (String) -> Unit = logger,
