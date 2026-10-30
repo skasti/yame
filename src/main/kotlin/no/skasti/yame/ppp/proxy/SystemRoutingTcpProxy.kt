@@ -10,6 +10,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 internal class SystemRoutingTcpProxy(
     private val httpConfig: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig(),
+    subscribeToHttpConfiguration: Boolean = false,
     private val logger: (String) -> Unit = {},
     private val diagnosticSink: (YameEvent) -> Unit = {},
     private val transformerSettings: (() -> no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings)? = null,
@@ -22,7 +23,8 @@ internal class SystemRoutingTcpProxy(
     private val directProxy: TcpProxy = SystemTcpProxy(),
     private val httpProxy: TcpProxy = SystemHttpCompatibilityProxy(
         httpConfig,
-        logger,
+        subscribeToConfiguration = subscribeToHttpConfiguration,
+        logger = logger,
         diagnosticSink = diagnosticSink,
         transformerSettings = transformerSettings,
         resourceGraphs = resourceGraphs,
