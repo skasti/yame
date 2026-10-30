@@ -181,11 +181,15 @@ unbounded buffering.
   components resolve their own default config from that installed store. Explicit
   immutable config values remain injectable for isolated component tests. Do not
   use a nullable config argument merely to implement a fallback.
-- Explicit config must allow isolated tests without installing or modifying a
-  global store. Config data-class defaults remain ordinary standalone defaults.
+- Immutable configuration values must remain constructible and testable without
+  installing or modifying a global store; their data-class defaults are ordinary
+  standalone defaults. A component with a live ConfigStore subscription still
+  requires the installed process store, even when given an explicit start value.
 - Factories produce immutable component configuration values without retaining
-  a `ConfigStore` reference. Live updates require a separately owned subscription;
-  never silently overwrite explicit constructor configuration.
+  a `ConfigStore` reference. A component owns and closes its live subscription.
+  Explicit constructor values establish its initial state, not a permanent
+  override: subsequent relevant ConfigStore notifications take precedence.
+  Components without live subscriptions keep their constructor-provided values.
 - `ConfigStore.current` fails fast until `Main` explicitly installs the process store.
   Hold the returned installation handle for the application's lifetime and close it
   after runtime/frontends stop. A second installation is rejected. Multiple
@@ -204,6 +208,11 @@ unbounded buffering.
   notification values in delivery order; request-scoped providers may construct
   immutable settings for each HTTP request. Do not add alternative configuration
   read mechanisms or reintroduce snapshots.
+- A component that reads its initial setting before subscribing may miss a change
+  in the short interval between those operations. This is an accepted trade-off
+  for ordinary, infrequently changed settings; do not add synchronization solely
+  to eliminate this negligible startup race. Use `subscribe(initial = true)`
+  when an atomic initial value and event ordering are required for correctness.
 - Immutable configs contain values only; subscriptions, providers, IO, registries,
   and other runtime dependencies belong in component constructors.
 - Local config types do not require a nested application-wide config tree.
