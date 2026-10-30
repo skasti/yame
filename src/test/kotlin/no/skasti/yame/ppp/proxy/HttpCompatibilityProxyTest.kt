@@ -1,4 +1,7 @@
 package no.skasti.yame.ppp.proxy
+import no.skasti.yame.config.ConfigStore
+import no.skasti.yame.config.InstalledConfigTest
+import org.junit.jupiter.api.BeforeEach
 import no.skasti.yame.ppp.ip.Ipv4Address
 import no.skasti.yame.ppp.proxy.transform.ElementSimplifierConfiguration
 import no.skasti.yame.ppp.proxy.transform.ElementSimplifierRule
@@ -26,7 +29,9 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
-class HttpCompatibilityProxyTest {
+class HttpCompatibilityProxyTest : InstalledConfigTest() {
+    @BeforeEach fun configure() = installConfig(ConfigStore())
+
     @Test
     fun `compatibility proxy exposes a visible redirect and serves the followed URL`() {
         val finalServer = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
@@ -1667,10 +1672,10 @@ class HttpCompatibilityProxyTest {
             start()
         }
 
+        ConfigStore.setTransient(ProxySettings.MaxFlows to 2)
         val proxy = SystemHttpCompatibilityProxy(
             config = PppHttpCompatibilityConfig(
                 requestTimeoutMillis = 2_000,
-                maxFlows = 2,
             ),
         )
         val firstEvents = LinkedBlockingQueue<TcpProxyEvent>()
