@@ -36,7 +36,8 @@ Production code accesses configuration exclusively through the global
 Runtime, presentation, CLI parsing and component factories have no ConfigStore
 parameters or retained store references. Bootstrap creates and installs the one
 process instance. Tests may construct isolated stores and install one for the
-scenario; explicit immutable component config values remain available.
+scenario; explicit scalar constructor values remain available. Some legacy
+immutable component config wrappers still exist and are migrated when touched.
 [ADR 0011](adrs/0011-global-configuration-access.md) records this boundary.
 FunctionStore injection remains independent: constructors default to its lazy
 process-owned registry and may accept an explicit function registry.
@@ -102,13 +103,13 @@ are one modem-owned `LoginCredentials` setting because username/password form on
 validated concept; its two child INI properties live under `[modem]` as `login.username` and `login.password`. Generic
 store contracts contain no feature imports. Each feature's `Settings` owns its
 identity, optional logical file name, static sections, lazily discovered typed keys, and optional
-custom mapping. `Settings` defines ownership, while `ConfigStore` holds current
-values and immutable component `*Config` objects carry values into components;
-component configs do not inherit `Settings`. The generic store contains no central
-list of keys.
-A direct `ConfigStore[key]` read requests the definition attached to the key's group,
-loading that definition on first use. Component `fromConfigStore()` factories
-read only their owned keys through the supplied store.
+custom mapping. `Settings` defines ownership while `ConfigStore` holds current
+values. Some components still accept legacy immutable `*Config` wrappers, but
+the desired interface uses individual constructor parameters with typed
+`ConfigStore[Key]` defaults, not wrapper factories. The generic store has no
+central list of keys.
+A direct `ConfigStore[key]` read requests the definition attached to the key's
+group, loading that definition on first use.
 The `persistence` package supplies the generic INI repository and a store factory.
 Startup and CLI parsing use the same typed store as runtime and presentation.
 INI ownership lives in `IniConfigurationRepository`, scoped to its store. Each
@@ -131,10 +132,11 @@ remains uncommitted.
 transient changes, validated and applied as one batch after parsing. Invocation
 options contain only mode, tone-test number, port-listing choice and log directory.
 Individual settings normally use direct `ConfigStore[key]` reads, including serial
-baud and flow control. Config types are optional value objects for component
-interfaces that benefit from grouped values: `LoggingConfig` supplies initial log
-levels and capture limits to YameLogManager without retaining a store or
-subscriptions. Hayes, PPP, DNS and proxy values remain
+baud and flow control. Some older component interfaces still use config wrappers;
+for example, `LoggingConfig` supplies initial log levels and capture limits to
+`YameLogManager`. These are existing implementations, not preferred patterns,
+and are migrated when the owning constructor is modified. Hayes, PPP, DNS and
+proxy settings remain
 independent. Section-based `yame.ini` names are owned by feature definitions.
 Version checks, CLI precedence, credential permissions, and safe replacement remain.
 The repository restricts every existing INI file to owner-only POSIX permissions
@@ -278,31 +280,39 @@ No core component knows about a palette, GUI toolkit or network transport.
 
 ## Component configuration values
 
-Component configuration follows the pattern in `AGENTS.md`: a local immutable
-config type exposes `fromConfigStore()`, and its component accepts that type as a
-non-null constructor argument defaulting to the factory call. Explicit arguments
-define initial component values; a component owning a live subscription applies
-later ConfigStore notifications even when its initial value was injected.
-Factories read typed keys directly from `ConfigStore`; immutable config values
-do not subscribe or introduce another mutable authority.
-Multi-key read snapshots are intentionally unsupported. YAME accepts the negligible
-possibility that a value changes between individual reads. `ConfigStore.current`
-fails fast until `Main` installs a process store. `install` returns an idempotent
-lifetime handle, rejects an existing owner, and releases the store on close.
-`Main` closes that handle after the runtime and frontend. Multiple frontends use
-the same global configuration facade; they do not replace global state. Explicit
-immutable configuration values can be built without installation, including the
-modem's standalone PPP child defaults. Constructing a component with a live
-subscription still requires an installed process store, even with an explicit
-initial value. Element-simplifier rules are a typed setting in a separate INI
-file loaded from its separate INI file; runtime writes use the repository.
+The preferred constructor takes each setting as an individual parameter with
+its own typed `ConfigStore[Key]` default, not an immutable `*Config` data class
+or `fromConfigStore()` factory. When an agent modifies a component that accepts
+such a wrapper, it also replaces that constructor argument with the actual
+setting values, updates affected callers/tests and removes the wrapper if unused.
+This migration is opportunistic, not a requirement to refactor unrelated
+components in the same PR. Cohesive domain values and genuinely necessary
+request-scoped snapshots are distinct from constructor configuration wrappers.
+
+Each component owns a live `ConfigStore.onChange[Group]` subscription and closes
+it when relevant settings can take effect without reconstructing the component.
+If a setting needs a new connection/instance or has only startup semantics,
+its existing lifecycle handles it instead. Explicit constructor arguments are
+initial values; later relevant store notifications override them for live
+settings. Multi-key read snapshots are intentionally unsupported. YAME accepts
+the negligible possibility that a value changes between individual reads, and
+the small race between reading a default and subscribing for ordinary settings.
+
+`ConfigStore.current` fails fast until `Main` installs a process store.
+`install` returns an idempotent lifetime handle, rejects an existing owner and
+releases the store on close. `Main` closes that handle after the runtime and
+frontend. Multiple frontends share the same global store. Tests can supply
+individual constructor values, but an active live subscription still requires
+an installed store. Genuine domain value types (including the modem's credentials)
+may be constructed without one. Element-simplifier rules are a typed setting in
+a separate INI file; runtime writes use the repository.
 
 ## Ownership and composition boundaries
 
 | Package / component | Owns / depends on |
 | --- | --- |
 | `config`, `function` | Typed generic stores, changes, subscriptions and operations; no concrete features or persistence |
-| `serial`, `modem`, `ppp`, `ppp.dns`, `ppp.proxy`, `logging` | Their own keys, groups, value validation and immutable component configs |
+| `serial`, `modem`, `ppp`, `ppp.dns`, `ppp.proxy`, `logging` | Their own keys, groups, defaults, validation and component-owned setting handling; some legacy config DTOs remain |
 | `ppp.proxy.transform` | HTML switches, element rules/INI, transformation policy and implementation |
 | `persistence` | Generic INI repository and store factory; feature definitions own mappings |
 | `Main` | Load file, apply CLI precedence, install configuration, construct/register/start presentation before constructing/registering/running runtime; close the lifecycle owner in its outer finally |
@@ -315,8 +325,8 @@ normal startup; tone test uses serial, modem, and logging. Neither mode requests
 HTML transformer or element rule definitions merely to parse options. The runtime
 loads only the definitions it needs through typed reads. Runtime and TUI may subscribe
 with initial delivery when atomic initialization matters; other components may
-accept the documented small read/subscribe race. Runtime constructs immutable
-component configurations from direct store reads when a connection is established;
+accept the documented small read/subscribe race. The runtime still constructs
+some legacy immutable component config wrappers when a connection is established;
 the connection generation prevents an older attempt from replacing a newer one.
 No persistence bindings or legacy DTOs enter this path. A cross-feature batch
 restarts the connection once. Logging values and modem tones/credentials update
@@ -331,8 +341,9 @@ transformation configuration;
 `HayesModem` depends on a `PppHandler`, whose standalone default uses ordinary child
 config defaults. `HayesModem` also receives the serial baud value explicitly to report the correct
 CONNECT rate. These do not make modem settings an application config tree.
-`PppHttpCompatibilityConfig` retains immutable transformation values because the
-HTTP handler owns their use in response preparation. Application persistence reuses
+`PppHttpCompatibilityConfig` currently retains immutable transformation values for
+the HTTP handler; this describes the existing implementation, not a reason to
+introduce more constructor config wrappers. Application persistence reuses
 feature value types rather than introducing duplicate file-only versions of them.
 There are no feature-to-persistence dependencies or obsolete compatibility wrappers.
 
