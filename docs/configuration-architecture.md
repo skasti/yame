@@ -136,8 +136,7 @@ baud and flow control. Some older component interfaces still use config wrappers
 for example, `LoggingConfig` supplies initial log levels and capture limits to
 `YameLogManager`. These are existing implementations, not preferred patterns,
 and are migrated when the owning constructor is modified. Hayes, PPP, DNS and
-proxy settings remain
-independent. Section-based `yame.ini` names are owned by feature definitions.
+proxy settings remain independent. Section-based `yame.ini` names are owned by feature definitions.
 Version checks, CLI precedence, credential permissions, and safe replacement remain.
 The repository restricts every existing INI file to owner-only POSIX permissions
 when reading it and writes replacements with the same permissions. A file may
@@ -328,8 +327,8 @@ with initial delivery when atomic initialization matters; other components may
 accept the documented small read/subscribe race. The runtime still constructs
 some legacy immutable component config wrappers when a connection is established;
 the connection generation prevents an older attempt from replacing a newer one.
-No persistence bindings or legacy DTOs enter this path. A cross-feature batch
-restarts the connection once. Logging values and modem tones/credentials update
+No persistence bindings or obsolete configuration-binding DTOs enter this path.
+A cross-feature batch restarts the connection once. Logging values and modem tones/credentials update
 incrementally. TUI keeps presentation state, while configuration values remain
 authoritative in `ConfigStore`.
 
@@ -484,10 +483,10 @@ parsers, writers, resource loaders or initial-file template hooks.
 
 Production bootstrap installs the store before CLI parsing and component
 construction, including tone-test mode. Main uses the global `ConfigStore` facade for its
-own reads; component constructors resolve optional config arguments from the
-installed store. For example, `YameLogManager(logDirectory = path)` defaults its
-`config` argument to `LoggingConfig.fromConfigStore()`. Explicit immutable configs
-remain available for isolated tests. The installation is released on parse/load
+own reads. Components should default individual setting arguments through the
+installed store. The existing `YameLogManager(logDirectory = path)` still defaults
+its legacy `config` argument to `LoggingConfig.fromConfigStore()`; migrate that
+constructor when it is next modified. The installation is released on parse/load
 failure and after lifecycle cleanup, with logging and presentation stopped first.
 ToneTest owns the standalone modem and its forced tone-enabled configuration.
 
