@@ -264,6 +264,15 @@ switches do not rewrite embedded HTML templates. Unterminated tags or raw-text
 elements retain the remaining content unchanged. Attribute cleanup preserves
 IDs used by fragment links and form associations.
 
+HTTP compatibility allows **16 simultaneous connections** by default (previously 4).
+Open `/http-max-flows` in the command palette to choose 4, 8, 16, 32, or 64;
+you can also type `/http-max-flows/32` directly. The current choice is marked
+`current`. The limit is saved to `[proxy] max-flows` in `yame.ini`, accepts
+values from 1 to 64, and applies immediately to the active HTTP proxy.
+Reducing it does not disconnect existing requests; it simply prevents new
+ones until the active count falls below the new limit. No PPP redial or
+serial reconnect is needed.
+
 Use `/ppp-disconnect-on-terminate on` or `/ppp-disconnect-on-terminate off`
 to control whether an acknowledged peer PPP termination drops modem carrier.
 The command palette also offers nested `on` and `off` choices with the current
@@ -332,7 +341,7 @@ Expanded host with known resource paths:
 
 ![YAME TUI with expanded proxy host](docs/assets/tui-proxy-expanded.svg)
 
-Useful palette commands include `/port`, `/baud`, `/flow-control`, `/dns-upstream`, `/http-proxy`, `/fps`, `/tone`, `/login`, `/reconnect`, `/disconnect`, `/clear-log`, and `/quit`. Choose `on` or `off` after `/tone`, or type `/tone on` or `/tone off` directly.
+Useful palette commands include `/port`, `/baud`, `/flow-control`, `/dns-upstream`, `/http-proxy`, `/http-max-flows`, `/fps`, `/tone`, `/login`, `/reconnect`, `/disconnect`, `/clear-log`, and `/quit`. Choose `on` or `off` after `/tone`, or type `/tone on` or `/tone off` directly.
 
 The TUI limits terminal redraws to **60 FPS by default**, with choices of **15, 30, 60, or 120 FPS**. Open `/fps` and select a rate, or enter `/fps/15`, `/fps/30`, `/fps/60`, or `/fps/120` directly. The current rate is marked `current`. Changes take effect without restarting or reconnecting and are saved in `yame.ini`:
 
