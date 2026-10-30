@@ -191,12 +191,16 @@ Slow listeners delay subsequent notifications but do not hold the commit lock.
 Exceptions are reported to the configured failure sink and cannot roll back a
 saved transaction or prevent other listeners from receiving it.
 
-Use `subscribe(initial = true)` to initialize **from the callback**, rather than
-reading before subscribing. Registration and enqueueing the initial notification
-occur under the commit lock, so later events cannot overtake it. Initial
-delivery may be queued behind an existing drainer. Closing a subscription suppresses
-queued deliveries; an already executing callback may finish. Modules own their
-subscriptions and function registration handles.
+Use `subscribe(initial = true)` to initialize **from the callback** when an
+initial state must not miss a concurrent change. Registration and enqueueing the
+initial notification occur under the commit lock, so later events cannot overtake
+it. Initial delivery may be queued behind an existing drainer. Components that
+initialize from a constructor value and then subscribe for live updates accept a
+narrow read/subscribe race: a change during that interval may be missed. For
+ordinary, infrequently changed settings this risk is considered negligible and
+does not justify extra synchronization by default. Closing a subscription
+suppresses queued deliveries; an already executing callback may finish. Modules
+own their subscriptions and function registration handles.
 
 Sensitive credentials are available only to trusted in-process consumers.
 `ConfigChange.toString` and `LoginCredentials.toString` omit values; bridges and
@@ -217,7 +221,8 @@ credential values.
 | Log levels and capture limits | Apply immediately |
 | `element-simplifier.ini` rules | Can be saved through the store; external file edits take effect after restart |
 | Config/log paths, UI mode, tone-test mode | CLI startup policy, not runtime persistent settings |
-| Internal proxy bounds/timeouts and transformation implementation policy | Constructor policy; no new runtime configuration surface |
+| HTTP compatibility `max-flows` | Resize flow admissions and HTTP workers immediately; existing flows continue |
+| Other internal proxy bounds/timeouts and transformation implementation policy | Constructor policy; no new runtime configuration surface |
 
 All existing TUI settings use the store. `HtmlTransformerControl` has been removed.
 The runtime injects a `() -> HtmlTransformerSettings` provider through the PPP/proxy
@@ -276,17 +281,21 @@ No core component knows about a palette, GUI toolkit or network transport.
 Component configuration follows the pattern in `AGENTS.md`: a local immutable
 config type exposes `fromConfigStore()`, and its component accepts that type as a
 non-null constructor argument defaulting to the factory call. Explicit arguments
-bypass global configuration entirely. Factories read typed keys directly from
-`ConfigStore`; they do not subscribe or introduce another mutable authority.
+define initial component values; a component owning a live subscription applies
+later ConfigStore notifications even when its initial value was injected.
+Factories read typed keys directly from `ConfigStore`; immutable config values
+do not subscribe or introduce another mutable authority.
 Multi-key read snapshots are intentionally unsupported. YAME accepts the negligible
 possibility that a value changes between individual reads. `ConfigStore.current`
 fails fast until `Main` installs a process store. `install` returns an idempotent
 lifetime handle, rejects an existing owner, and releases the store on close.
 `Main` closes that handle after the runtime and frontend. Multiple frontends use
-the same global configuration facade; they do not replace global state. Explicit constructor
-configurations never require installation, including the modem's standalone PPP
-child defaults. Element-simplifier rules are a typed setting in a separate INI file
-loaded from its separate INI file; runtime writes use the repository.
+the same global configuration facade; they do not replace global state. Explicit
+immutable configuration values can be built without installation, including the
+modem's standalone PPP child defaults. Constructing a component with a live
+subscription still requires an installed process store, even with an explicit
+initial value. Element-simplifier rules are a typed setting in a separate INI
+file loaded from its separate INI file; runtime writes use the repository.
 
 ## Ownership and composition boundaries
 
@@ -304,8 +313,9 @@ loaded from its separate INI file; runtime writes use the repository.
 The CLI reads serial, modem, PPP, DNS, proxy enabled, and logging defaults for
 normal startup; tone test uses serial, modem, and logging. Neither mode requests
 HTML transformer or element rule definitions merely to parse options. The runtime
-loads only the definitions it needs through typed reads. Runtime and TUI subscribe
-with initial delivery to close the read/subscribe race. Runtime constructs immutable
+loads only the definitions it needs through typed reads. Runtime and TUI may subscribe
+with initial delivery when atomic initialization matters; other components may
+accept the documented small read/subscribe race. Runtime constructs immutable
 component configurations from direct store reads when a connection is established;
 the connection generation prevents an older attempt from replacing a newer one.
 No persistence bindings or legacy DTOs enter this path. A cross-feature batch
