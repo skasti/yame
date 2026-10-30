@@ -14,8 +14,15 @@ internal fun ResourceRepresentation.supportsImageOptimization(
     contentTypes: Set<String>,
 ): Boolean {
     if (body.isEmpty() || body.size > policy.maxEncodedBytes) return false
+    return supportsImageContentType(contentTypes, requireIdentityEncoding = true)
+}
+
+internal fun ResourceRepresentation.supportsImageContentType(
+    contentTypes: Set<String>,
+    requireIdentityEncoding: Boolean,
+): Boolean {
     val encoding = firstImageHeader("content-encoding")
-    if (encoding != null && !encoding.equals("identity", ignoreCase = true)) return false
+    if (requireIdentityEncoding && encoding != null && !encoding.equals("identity", ignoreCase = true)) return false
     val contentType = firstImageHeader("content-type")
         ?.substringBefore(';')?.trim()?.lowercase(Locale.ROOT)
     return contentType in contentTypes
@@ -24,14 +31,15 @@ internal fun ResourceRepresentation.supportsImageOptimization(
 private fun ResourceRepresentation.firstImageHeader(name: String): String? =
     headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value?.firstOrNull()
 
-internal fun ResourceTransformationState.withOptimizedImage(
+internal fun ResourceTransformationState.withImageOutput(
     context: ResourceTransformationContext,
     transformerId: String,
     sourceDimensions: ImageDimensions,
     candidate: LegacyImageOutput,
+    requireSmaller: Boolean = true,
 ): ResourceTransformationState {
     val current = resource.representation
-    if (candidate.bytes.size >= current.body.size) return this
+    if (requireSmaller && candidate.bytes.size >= current.body.size) return this
     val transformedHeaders =
         transformedHeadersFrom(current.headers)
             .filterKeys { !it.equals("content-type", ignoreCase = true) } +

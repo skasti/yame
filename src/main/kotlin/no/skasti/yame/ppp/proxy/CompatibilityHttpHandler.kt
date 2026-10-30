@@ -26,7 +26,8 @@ import no.skasti.yame.ppp.proxy.transform.sourceFingerprint
 import no.skasti.yame.ppp.proxy.transform.ResourceTransformationContext
 import no.skasti.yame.ppp.proxy.transform.ResourceTransformationPipeline
 import no.skasti.yame.ppp.proxy.transform.defaultResourceTransformationPipeline
-import no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings
+import no.skasti.yame.ppp.proxy.transform.PngCompatibilityMode
+import no.skasti.yame.ppp.proxy.transform.ResourceTransformationSettings
 import no.skasti.yame.ppp.tcp.TcpProxyFlow
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
@@ -48,7 +49,7 @@ internal class SystemHttpCompatibilityHandler(
     private val config: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig.fromConfigStore(),
     private val logger: (String) -> Unit = {},
     private val diagnosticSink: (YameEvent) -> Unit = {},
-    private val transformerSettings: (() -> no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings)? = null,
+    private val transformerSettings: (() -> ResourceTransformationSettings)? = null,
     private val resourceGraphs: NavigationResourceRegistry =
         NavigationResourceRegistry(
             maxContexts = config.maxResourceContexts,
@@ -60,7 +61,7 @@ internal class SystemHttpCompatibilityHandler(
         .followRedirects(HttpClient.Redirect.NEVER)
         .build(),
     private val resourceTransformations: ResourceTransformationPipeline =
-        defaultResourceTransformationPipeline(config.maxResponseBytes, config.elementSimplifier),
+        defaultResourceTransformationPipeline(config.maxResponseBytes, config.elementSimplifier, logger),
 ) : HttpRequestHandler {
     private data class ClientCookie(val name: String, val value: String)
     private data class SessionKey(val generation: Long, val peerAddress: String)
@@ -72,7 +73,7 @@ internal class SystemHttpCompatibilityHandler(
         val flow: TcpProxyFlow,
         val session: SessionState,
         val active: () -> Boolean,
-        val htmlTransformers: HtmlTransformerSettings,
+        val transformationSettings: ResourceTransformationSettings,
         val clientCookies: MutableList<ClientCookie> = mutableListOf(),
     )
 
@@ -121,7 +122,9 @@ internal class SystemHttpCompatibilityHandler(
                         SessionState()
                     },
                 active = { connection.isActive },
-                htmlTransformers = transformerSettings?.invoke() ?: config.htmlTransformers,
+                transformationSettings = transformerSettings?.invoke() ?: ResourceTransformationSettings(
+                    htmlTransformers = config.htmlTransformers,
+                ),
             )
         return processRequest(state, request)
     }
@@ -499,7 +502,7 @@ internal class SystemHttpCompatibilityHandler(
                     forceAbsoluteRelativeReferences = response.effectiveBaseUri != null,
                     referenceRole = response.referenceRole,
                     requestMethod = response.requestMethod,
-                    htmlTransformers = state.htmlTransformers,
+                    transformationSettings = state.transformationSettings,
                 )
             resourceGraphs.recordTransformations(
                 response.legacyUri,
@@ -513,11 +516,14 @@ internal class SystemHttpCompatibilityHandler(
                     clientRepresentation.headers,
                     response.locationAlreadyLegacy,
                 )
+            val responseType = firstHeader(legacyHeaders, "content-type")
+                ?.substringBefore(';')?.trim()?.lowercase(Locale.ROOT)
             if (transformerSettings != null &&
-                firstHeader(legacyHeaders, "content-type")?.substringBefore(';')?.trim()?.equals("text/html", true) == true) {
-                // The browser must fetch again after a live profile change instead of reusing old HTML.
+                (preparedResource.transformed != null ||
+                    (responseType != null && responseType in DYNAMIC_TRANSFORM_CONTENT_TYPES))) {
+                // Re-fetch transformable resources after live setting changes; keep source validators intact.
                 legacyHeaders = legacyHeaders.filterKeys {
-                    it.lowercase(Locale.ROOT) !in setOf("cache-control", "expires", "etag", "last-modified")
+                    it.lowercase(Locale.ROOT) !in setOf("cache-control", "expires")
                 } + ("Cache-Control" to listOf("no-store"))
             }
             val legacyBody = clientRepresentation.body
@@ -525,8 +531,8 @@ internal class SystemHttpCompatibilityHandler(
             val rewritten = legacyHeaders != response.headers || bodyRewritten
         val contentLength =
             when {
-                response.contentLength != null &&
-                    response.contentLength != response.body.size.toLong() -> response.contentLength
+                bodyRewritten -> legacyBody.size.toLong()
+                response.contentLength != null -> response.contentLength
                 else -> legacyBody.size.toLong()
             }
         val nominated =
@@ -632,7 +638,7 @@ internal class SystemHttpCompatibilityHandler(
         forceAbsoluteRelativeReferences: Boolean,
         referenceRole: ReferenceRole,
         requestMethod: String,
-        htmlTransformers: HtmlTransformerSettings,
+        transformationSettings: ResourceTransformationSettings,
     ): Resource {
         val source =
             Resource(
@@ -643,7 +649,15 @@ internal class SystemHttpCompatibilityHandler(
                     body = body,
                 ),
             )
-        if (statusCode == 206) return source
+        if (statusCode == 206) {
+            val contentType = headers.entries.firstOrNull { it.key.equals("content-type", ignoreCase = true) }
+                ?.value?.firstOrNull()?.substringBefore(';')?.trim()
+            if (contentType.equals("image/png", ignoreCase = true) &&
+                transformationSettings.pngCompatibilityMode == PngCompatibilityMode.REQUIRE_LEGACY_FORMAT) {
+                logger("PNG legacy-format conversion skipped for $upstreamUri: partial 206 responses are not transformed")
+            }
+            return source
+        }
 
         val context =
             ResourceTransformationContext(
@@ -660,8 +674,9 @@ internal class SystemHttpCompatibilityHandler(
                     ?: referenceRole,
                 requestHeaders = requestHeaders,
                 requestMethod = requestMethod,
-                transformationProfile = "${config.transformationProfile}:html=${htmlTransformers.profileToken}",
-                htmlTransformers = htmlTransformers,
+                transformationProfile = "${config.transformationProfile}:${transformationSettings.profileToken}",
+                htmlTransformers = transformationSettings.htmlTransformers,
+                pngCompatibilityMode = transformationSettings.pngCompatibilityMode,
                 rewriteText = { sourceText ->
                     rewriteBodyUrlsWithBase(
                         flow = flow,
@@ -1482,6 +1497,18 @@ internal class SystemHttpCompatibilityHandler(
         val REDIRECT_STATUS_CODES = setOf(301, 302, 303, 307, 308)
         val REQUEST_HEADERS_TO_STRIP = setOf("host", "connection", "proxy-connection", "proxy-authorization", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade", "content-length", "accept-encoding", "expect", "cookie", "cookie2")
         val SENSITIVE_REQUEST_HEADERS = setOf("authorization", "cookie", "cookie2")
+        val DYNAMIC_TRANSFORM_CONTENT_TYPES = setOf(
+            "text/html",
+            "application/xhtml+xml",
+            "text/css",
+            "text/javascript",
+            "application/javascript",
+            "application/x-javascript",
+            "image/png",
+            "image/jpeg",
+            "image/jpg",
+            "image/pjpeg",
+        )
         val RESPONSE_HEADERS_TO_STRIP = setOf("connection", "proxy-connection", "keep-alive", "transfer-encoding", "trailer", "upgrade", "content-length")
         val RESPONSE_COOKIE_HEADERS = setOf("set-cookie", "set-cookie2")
         val URI_RESPONSE_HEADERS_TO_REWRITE = setOf("location", "content-location", "refresh", "link")

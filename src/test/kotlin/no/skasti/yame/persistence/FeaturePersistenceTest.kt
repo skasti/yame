@@ -9,6 +9,7 @@ import no.skasti.yame.modem.LoginCredentials
 import no.skasti.yame.ppp.proxy.transform.TransformerSettings
 import no.skasti.yame.ppp.proxy.transform.ElementSimplifierSettings
 import no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings
+import no.skasti.yame.ppp.proxy.transform.PngCompatibilityMode
 import no.skasti.yame.logging.LogSettings
 import no.skasti.yame.logging.YameLogModule
 import no.skasti.yame.logging.YameLogLevel
@@ -85,6 +86,7 @@ class FeaturePersistenceTest {
                 TransformerSettings.Style to false,
                 TransformerSettings.Attributes to false,
                 TransformerSettings.Elements to false,
+                TransformerSettings.PngCompatibility to PngCompatibilityMode.REQUIRE_LEGACY_FORMAT.configValue,
             ) + LogSettings.Levels.values.map { it to YameLogLevel.DEBUG } +
                 LogSettings.CaptureLimits.values.map { it to 20 }
             store.set(*changes.toTypedArray())
@@ -93,7 +95,7 @@ class FeaturePersistenceTest {
                 assertEquals(change.value, reloaded[change.key], change.key.path)
             }
             val text = Files.readString(directory.resolve("yame.ini"))
-            for (name in listOf("version=1", "login.username=user", "port=COM4", "subnet=10.99.0.0/30", "upstream=1.1.1.1")) {
+            for (name in listOf("version=1", "login.username=user", "port=COM4", "subnet=10.99.0.0/30", "upstream=1.1.1.1", "png-compatibility-mode=require-legacy-format")) {
                 assertTrue(text.contains(name), name)
             }
         } finally { directory.toFile().deleteRecursively() }

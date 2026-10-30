@@ -4,7 +4,6 @@ import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.ppp.proxy.transform.ElementSimplifierConfiguration
 import no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings
 import no.skasti.yame.ppp.proxy.transform.ElementSimplifierSettings
-import no.skasti.yame.ppp.proxy.transform.TransformerSettings
 
 data class PppHttpCompatibilityConfig(
     val enabled: Boolean = true,

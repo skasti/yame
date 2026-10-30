@@ -12,7 +12,7 @@ internal class SystemRoutingTcpProxy(
     private val httpConfig: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig(),
     private val logger: (String) -> Unit = {},
     private val diagnosticSink: (YameEvent) -> Unit = {},
-    private val transformerSettings: (() -> no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings)? = null,
+    private val transformerSettings: (() -> no.skasti.yame.ppp.proxy.transform.ResourceTransformationSettings)? = null,
     private val resourceGraphs: NavigationResourceRegistry =
         NavigationResourceRegistry(
             maxContexts = httpConfig.maxResourceContexts,

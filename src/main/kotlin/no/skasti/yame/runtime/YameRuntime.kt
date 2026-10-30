@@ -10,7 +10,7 @@ import no.skasti.yame.ppp.PppSettings
 import no.skasti.yame.ppp.dns.DnsSettings
 import no.skasti.yame.ppp.proxy.ProxySettings
 import no.skasti.yame.lifecycle.ApplicationFunctions
-import no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings
+import no.skasti.yame.ppp.proxy.transform.ResourceTransformationSettingsState
 import no.skasti.yame.ppp.PppIpConfig
 import no.skasti.yame.ppp.dns.PppDnsConfig
 import no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig
@@ -208,9 +208,12 @@ internal class YameRuntime(
         startConnection(candidate, failFast)
     }
 
+    private val resourceTransformationSettings = ResourceTransformationSettingsState()
+
     private val configurationSubscription = ConfigStore.onChange.subscribe(initial = true) { changes ->
         val restart = synchronized(lock) {
             if (closed.get()) return@subscribe
+            resourceTransformationSettings.update(changes)
             changes[ModemSettings.Tone]?.let { activeModem?.updateToneSimulationEnabled(it.value) }
             changes[ModemSettings.Login]?.let { login ->
                 activeModem?.updateLoginCredentials(login.value.username, login.value.password)
@@ -295,7 +298,7 @@ internal class YameRuntime(
                 proxyLogger = proxyLogger, diagnosticSink = logManager::eventSink,
                 resourceGraphs = resourceGraphs, ipConfig = ipConfig, dnsConfig = dnsConfig,
                 httpCompatibilityConfig = httpConfig,
-                transformerSettings = { HtmlTransformerSettings.fromConfigStore() },
+                transformerSettings = { resourceTransformationSettings.current },
             )
             val createdModem = try {
                 HayesModem(
