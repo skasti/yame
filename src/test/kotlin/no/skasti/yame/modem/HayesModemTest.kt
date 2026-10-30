@@ -1,5 +1,8 @@
 package no.skasti.yame.modem
 
+import no.skasti.yame.config.ConfigStore
+import no.skasti.yame.config.InstalledConfigTest
+import org.junit.jupiter.api.BeforeEach
 import no.skasti.yame.ppp.PppHandler
 import no.skasti.yame.tone.HandshakeProfile
 import no.skasti.yame.tone.TonePlayer
@@ -17,7 +20,9 @@ import kotlin.time.Duration.Companion.INFINITE
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
-class HayesModemTest {
+class HayesModemTest : InstalledConfigTest() {
+    @BeforeEach fun configure() = installConfig(ConfigStore())
+
     @Test
     fun `guarded Hayes escape enters online command mode and ATH hangs up without closing serial`() {
         val output = ByteArrayOutputStream()

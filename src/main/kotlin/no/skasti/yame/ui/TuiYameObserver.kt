@@ -135,7 +135,7 @@ class TuiYameObserver(
     var stopRequested: Boolean = false
         private set
 
-    private val commandRegistrations = registerCommands() + registerTransformerCommands(paletteRegistry) + registerPppCommands(paletteRegistry)
+    private val commandRegistrations = registerCommands() + registerTransformerCommands(paletteRegistry) + registerPppCommands(paletteRegistry) + registerProxyCommands(paletteRegistry)
     private val work = TuiWorkQueue(teardown = ::teardown)
     // All state changes are still processed in FIFO order. Only screen painting is
     // coalesced, so a burst of resource discovery cannot force one frame per event.

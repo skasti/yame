@@ -300,6 +300,7 @@ class YameRuntimeConnectionTest : InstalledConfigTest() {
         try {
             val functions = FunctionStore()
             val store = ConfigStore(listOf(no.skasti.yame.serial.SerialSettings.Port to "COM1"))
+            installConfig(store)
             val registry = NavigationResourceRegistry(maxContexts = 4)
             val httpConfig = PppHttpCompatibilityConfig(enabled = true, requestTimeoutMillis = 2_000)
 

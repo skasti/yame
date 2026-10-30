@@ -1,11 +1,15 @@
 package no.skasti.yame.ppp.http
 
+import no.skasti.yame.config.ConfigStore
+import no.skasti.yame.ppp.proxy.ProxySettings
+
 import no.skasti.yame.ppp.tcp.TcpProxy
 import no.skasti.yame.ppp.tcp.TcpProxyEvent
 import no.skasti.yame.ppp.tcp.TcpProxyFlow
 import java.io.Closeable
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.Future
 import java.util.concurrent.FutureTask
 import java.util.concurrent.Semaphore
@@ -36,7 +40,7 @@ internal interface HttpRequestHandler : Closeable {
 
 internal class HttpTcpProxy(
     private val handler: HttpRequestHandler,
-    private val maxFlows: Int,
+    maxFlows: Int = ConfigStore[ProxySettings.MaxFlows],
     private val maxRequestBytes: Int,
     private val responseChunkBytes: Int = DEFAULT_RESPONSE_CHUNK_BYTES,
     private val shutdownTimeoutMillis: Long = SHUTDOWN_TIMEOUT_MILLIS,
@@ -62,16 +66,47 @@ internal class HttpTcpProxy(
     )
 
     private val handlerClosed = java.util.concurrent.CountDownLatch(1)
-    private val executor = Executors.newFixedThreadPool(maxFlows) { runnable ->
-        Thread(runnable, "http-tcp-proxy").apply { isDaemon = true }
+    private class ResizableSemaphore(permits: Int) : Semaphore(permits) {
+        fun reduce(by: Int) = reducePermits(by)
     }
-    private val flowSlots = Semaphore(maxFlows)
+
+    private val executor = ThreadPoolExecutor(
+        maxFlows, maxFlows, 0L, TimeUnit.MILLISECONDS,
+        LinkedBlockingQueue<Runnable>(),
+    ) { runnable -> Thread(runnable, "http-tcp-proxy").apply { isDaemon = true } }
+    private val flowSlots = ResizableSemaphore(maxFlows)
+    private var configuredMaxFlows = maxFlows
     private val flows = ConcurrentHashMap<TcpProxyFlow, FlowState>()
     private val minimumGeneration = AtomicLong(Long.MIN_VALUE)
     private val lifecycleLock = Any()
 
     @Volatile
     private var closed = false
+
+    private val configurationSubscription = ConfigStore.onChange[ProxySettings.Group].subscribe { changes ->
+        changes[ProxySettings.MaxFlows]?.let { updateMaxFlows(it.value) }
+    }
+
+    /** Resize admission and the worker pool without interrupting existing requests. */
+    fun updateMaxFlows(value: Int) {
+        require(value > 0) { "maxFlows must be positive" }
+        synchronized(lifecycleLock) {
+            if (closed || value == configuredMaxFlows) return
+            val difference = value - configuredMaxFlows
+            if (difference > 0) {
+                executor.maximumPoolSize = value
+                executor.corePoolSize = value
+                flowSlots.release(difference)
+            } else {
+                // An over-capacity reduction makes permits negative; active
+                // connections finish normally before more flows are admitted.
+                flowSlots.reduce(-difference)
+                executor.corePoolSize = value
+                executor.maximumPoolSize = value
+            }
+            configuredMaxFlows = value
+        }
+    }
 
     override fun connect(
         flow: TcpProxyFlow,
@@ -475,6 +510,7 @@ internal class HttpTcpProxy(
     }
 
     override fun close() {
+        configurationSubscription.close()
         val flowsToClose =
             synchronized(lifecycleLock) {
                 if (closed) return

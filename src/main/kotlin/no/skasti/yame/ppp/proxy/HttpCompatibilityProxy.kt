@@ -43,7 +43,6 @@ internal class SystemHttpCompatibilityProxy(
     private val http =
         HttpTcpProxy(
             handler = handler,
-            maxFlows = config.maxFlows,
             maxRequestBytes = config.maxRequestBytes,
             responseChunkBytes = RESPONSE_CHUNK_BYTES,
         )

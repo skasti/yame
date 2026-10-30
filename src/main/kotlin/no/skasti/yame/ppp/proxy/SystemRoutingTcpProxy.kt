@@ -22,7 +22,7 @@ internal class SystemRoutingTcpProxy(
     private val directProxy: TcpProxy = SystemTcpProxy(),
     private val httpProxy: TcpProxy = SystemHttpCompatibilityProxy(
         httpConfig,
-        logger,
+        logger = logger,
         diagnosticSink = diagnosticSink,
         transformerSettings = transformerSettings,
         resourceGraphs = resourceGraphs,

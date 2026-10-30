@@ -1,5 +1,8 @@
 package no.skasti.yame.ppp.http
 
+import no.skasti.yame.config.ConfigStore
+import no.skasti.yame.config.InstalledConfigTest
+import org.junit.jupiter.api.BeforeEach
 import no.skasti.yame.ppp.ip.Ipv4Address
 import no.skasti.yame.ppp.tcp.TcpFlowKey
 import no.skasti.yame.ppp.tcp.TcpProxyEvent
@@ -14,7 +17,9 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
-class HttpTcpProxyTest {
+class HttpTcpProxyTest : InstalledConfigTest() {
+    @BeforeEach fun configure() = installConfig(ConfigStore())
+
     @Test
     fun `client FIN after completed HTTP response succeeds`() {
         val connectionRemoved = CountDownLatch(1)
@@ -415,6 +420,99 @@ class HttpTcpProxyTest {
         assertTrue(handlerClosed.await(2, TimeUnit.SECONDS))
         assertTrue(proxy.awaitQuiescence(java.time.Duration.ofSeconds(2)))
         assertTrue(handlerClosedAfterWorker.get())
+    }
+
+    @Test
+    fun `setting changes resize the active HTTP proxy without reconnecting`() {
+        val key = no.skasti.yame.ppp.proxy.ProxySettings.MaxFlows
+        ConfigStore.setTransient(key to 1)
+        val handler = object : HttpRequestHandler {
+            override fun handle(connection: HttpConnection, request: HttpRequest): HttpResponse =
+                error("no request expected")
+        }
+        // Intentionally omit maxFlows to exercise the ConfigStore constructor default.
+        val proxy = HttpTcpProxy(handler, maxRequestBytes = 1024)
+        fun connect(port: Int): TcpProxyEvent {
+            val events = LinkedBlockingQueue<TcpProxyEvent>()
+            proxy.connect(flow(peerPort = port), events::offer)
+            return requireNotNull(events.poll(2, TimeUnit.SECONDS))
+        }
+        try {
+            assertIs<TcpProxyEvent.Connected>(connect(1330))
+            assertIs<TcpProxyEvent.Failure>(connect(1331))
+            ConfigStore.set(key to 2)
+            assertIs<TcpProxyEvent.Connected>(connect(1331))
+            ConfigStore.set(key to 1)
+            assertIs<TcpProxyEvent.Failure>(connect(1332))
+            proxy.closeFlow(flow(peerPort = 1330))
+            assertIs<TcpProxyEvent.Failure>(connect(1332))
+            proxy.closeFlow(flow(peerPort = 1331))
+            assertIs<TcpProxyEvent.Connected>(connect(1332))
+        } finally {
+            proxy.close()
+        }
+    }
+
+    @Test
+    fun `live HTTP flow limit adjusts admissions without evicting connections`() {
+        val handler = object : HttpRequestHandler {
+            override fun handle(connection: HttpConnection, request: HttpRequest): HttpResponse =
+                error("no HTTP request expected")
+        }
+        val proxy = HttpTcpProxy(handler, maxFlows = 2, maxRequestBytes = 1024)
+        fun connect(port: Int): TcpProxyEvent {
+            val events = LinkedBlockingQueue<TcpProxyEvent>()
+            proxy.connect(flow(peerPort = port), events::offer)
+            return requireNotNull(events.poll(2, TimeUnit.SECONDS))
+        }
+        try {
+            assertIs<TcpProxyEvent.Connected>(connect(1310))
+            assertIs<TcpProxyEvent.Connected>(connect(1311))
+            assertIs<TcpProxyEvent.Failure>(connect(1312))
+            proxy.updateMaxFlows(3)
+            assertIs<TcpProxyEvent.Connected>(connect(1312))
+            proxy.updateMaxFlows(1)
+            assertIs<TcpProxyEvent.Failure>(connect(1313))
+            proxy.closeFlow(flow(peerPort = 1310))
+            proxy.closeFlow(flow(peerPort = 1311))
+            assertIs<TcpProxyEvent.Failure>(connect(1313))
+            proxy.closeFlow(flow(peerPort = 1312))
+            assertIs<TcpProxyEvent.Connected>(connect(1313))
+        } finally {
+            proxy.close()
+        }
+    }
+
+    @Test
+    fun `increasing HTTP limit also increases the concurrent worker count`() {
+        val firstStarted = CountDownLatch(1)
+        val bothStarted = CountDownLatch(2)
+        val release = CountDownLatch(1)
+        val handler = object : HttpRequestHandler {
+            override fun handle(connection: HttpConnection, request: HttpRequest): HttpResponse {
+                firstStarted.countDown()
+                bothStarted.countDown()
+                release.await(2, TimeUnit.SECONDS)
+                return HttpResponse(200, "OK", headers = emptyList(), body = ByteArray(0))
+            }
+        }
+        val proxy = HttpTcpProxy(handler, maxFlows = 1, maxRequestBytes = 1024)
+        val request = "GET / HTTP/1.0\r\nHost: example.test\r\n\r\n".toByteArray()
+        try {
+            val first = flow(peerPort = 1320)
+            proxy.connect(first) { }
+            proxy.send(first, request).getOrThrow()
+            assertTrue(firstStarted.await(2, TimeUnit.SECONDS))
+
+            proxy.updateMaxFlows(2)
+            val second = flow(peerPort = 1321)
+            proxy.connect(second) { }
+            proxy.send(second, request).getOrThrow()
+            assertTrue(bothStarted.await(2, TimeUnit.SECONDS), "The increased limit must run both HTTP requests")
+        } finally {
+            release.countDown()
+            proxy.close()
+        }
     }
 
     private fun collectResponse(events: LinkedBlockingQueue<TcpProxyEvent>): String {

@@ -1,5 +1,8 @@
 package no.skasti.yame.ppp.proxy
 
+import no.skasti.yame.config.ConfigStore
+import no.skasti.yame.config.InstalledConfigTest
+import org.junit.jupiter.api.BeforeEach
 import no.skasti.yame.ppp.ipcp.IpcpOptionType
 import no.skasti.yame.ppp.lcp.LcpOption
 import no.skasti.yame.ppp.lcp.LcpOptionType
@@ -20,7 +23,9 @@ import kotlin.test.Test
 import kotlin.test.assertTrue
 import kotlin.test.fail
 
-class HttpCompatibilityPppIntegrationTest {
+class HttpCompatibilityPppIntegrationTest : InstalledConfigTest() {
+    @BeforeEach fun configure() = installConfig(ConfigStore())
+
     @Test
     fun `legacy HTTP request follows real HTTPS redirect through PPP TCP stack`() {
         val sent = CopyOnWriteArrayList<PppFrame>()
