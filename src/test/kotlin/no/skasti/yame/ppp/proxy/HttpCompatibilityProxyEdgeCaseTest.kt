@@ -1,4 +1,7 @@
 package no.skasti.yame.ppp.proxy
+import no.skasti.yame.config.ConfigStore
+import no.skasti.yame.config.InstalledConfigTest
+import org.junit.jupiter.api.BeforeEach
 import no.skasti.yame.ppp.ip.Ipv4Address
 import no.skasti.yame.ppp.proxy.PppHttpCompatibilityConfig
 import no.skasti.yame.ppp.proxy.SystemHttpCompatibilityProxy
@@ -15,7 +18,9 @@ import kotlin.test.Test
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
-class HttpCompatibilityProxyEdgeCaseTest {
+class HttpCompatibilityProxyEdgeCaseTest : InstalledConfigTest() {
+    @BeforeEach fun configure() = installConfig(ConfigStore())
+
     @Test
     fun `half close with incomplete request returns error and releases flow slot`() {
         val proxy = proxy(maxFlows = 1)
@@ -255,9 +260,12 @@ class HttpCompatibilityProxyEdgeCaseTest {
         } finally { proxy.close(); runCatching { server.close() }; thread.join(2_000) }
     }
 
-    private fun proxy(maxFlows: Int = 16) = SystemHttpCompatibilityProxy(
-        PppHttpCompatibilityConfig(enabled = true, maxFlows = maxFlows, requestTimeoutMillis = 2_000),
-    )
+    private fun proxy(maxFlows: Int = 16): SystemHttpCompatibilityProxy {
+        ConfigStore.setTransient(ProxySettings.MaxFlows to maxFlows)
+        return SystemHttpCompatibilityProxy(
+            PppHttpCompatibilityConfig(enabled = true, requestTimeoutMillis = 2_000),
+        )
+    }
 
     private fun assertCanConnect(proxy: SystemHttpCompatibilityProxy, port: Int) {
         val events = LinkedBlockingQueue<TcpProxyEvent>()
