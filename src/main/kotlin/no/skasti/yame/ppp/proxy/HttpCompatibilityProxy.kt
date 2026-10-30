@@ -1,7 +1,5 @@
 package no.skasti.yame.ppp.proxy
 
-import no.skasti.yame.config.ConfigStore
-
 import no.skasti.yame.observer.YameEvent
 import no.skasti.yame.ppp.http.HttpTcpProxy
 import no.skasti.yame.ppp.proxy.transform.ResourceTransformationPipeline
@@ -14,7 +12,6 @@ import java.time.Duration
 
 internal class SystemHttpCompatibilityProxy(
     config: PppHttpCompatibilityConfig = PppHttpCompatibilityConfig.fromConfigStore(),
-    subscribeToConfiguration: Boolean = false,
     logger: (String) -> Unit = {},
     diagnosticSink: (YameEvent) -> Unit = {},
     transformerSettings: (() -> no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings)? = null,
@@ -46,19 +43,9 @@ internal class SystemHttpCompatibilityProxy(
     private val http =
         HttpTcpProxy(
             handler = handler,
-            maxFlows = config.maxFlows,
             maxRequestBytes = config.maxRequestBytes,
             responseChunkBytes = RESPONSE_CHUNK_BYTES,
         )
-
-    // A production HTTP proxy owns and releases its configuration subscription.
-    // Explicitly configured test proxies need no process-global store.
-    private val configurationSubscription =
-        if (subscribeToConfiguration) {
-            ConfigStore.onChange[ProxySettings.Group].subscribe(initial = true) { changes ->
-                changes[ProxySettings.MaxFlows]?.let { http.updateMaxFlows(it.value) }
-            }
-        } else null
 
     override fun connect(
         flow: TcpProxyFlow,
@@ -91,10 +78,7 @@ internal class SystemHttpCompatibilityProxy(
     internal fun resourceGraphSnapshots(): List<NavigationResourceGraphSnapshot> =
         handler.resourceGraphSnapshots()
 
-    override fun close() {
-        configurationSubscription?.close()
-        http.close()
-    }
+    override fun close() = http.close()
     override fun awaitQuiescence(timeout: Duration): Boolean = http.awaitQuiescence(timeout)
 
     private companion object {
