@@ -1,5 +1,8 @@
 package no.skasti.yame.ppp.http
 
+import no.skasti.yame.config.ConfigStore
+import no.skasti.yame.ppp.proxy.ProxySettings
+
 import no.skasti.yame.ppp.tcp.TcpProxy
 import no.skasti.yame.ppp.tcp.TcpProxyEvent
 import no.skasti.yame.ppp.tcp.TcpProxyFlow
@@ -37,7 +40,7 @@ internal interface HttpRequestHandler : Closeable {
 
 internal class HttpTcpProxy(
     private val handler: HttpRequestHandler,
-    private val maxFlows: Int,
+    maxFlows: Int = ConfigStore[ProxySettings.MaxFlows],
     private val maxRequestBytes: Int,
     private val responseChunkBytes: Int = DEFAULT_RESPONSE_CHUNK_BYTES,
     private val shutdownTimeoutMillis: Long = SHUTDOWN_TIMEOUT_MILLIS,
@@ -79,6 +82,10 @@ internal class HttpTcpProxy(
 
     @Volatile
     private var closed = false
+
+    private val configurationSubscription = ConfigStore.onChange[ProxySettings.Group].subscribe { changes ->
+        changes[ProxySettings.MaxFlows]?.let { updateMaxFlows(it.value) }
+    }
 
     /** Resize admission and the worker pool without interrupting existing requests. */
     fun updateMaxFlows(value: Int) {
@@ -503,6 +510,7 @@ internal class HttpTcpProxy(
     }
 
     override fun close() {
+        configurationSubscription.close()
         val flowsToClose =
             synchronized(lifecycleLock) {
                 if (closed) return
