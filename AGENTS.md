@@ -162,34 +162,41 @@ unbounded buffering.
 
 ## Component configuration pattern
 
-- Prefer direct `ConfigStore[key]` reads for individual settings. Use an immutable
-  component config only when its interface benefits from grouped values; do not
-  introduce a mandatory wrapper for every feature or group of keys.
-
-- Keep a component's immutable configuration type beside its owning component.
-- Provide `ConfigType.fromConfigStore()` on its companion object. Read owned
-  keys through the global `ConfigStore[key]` facade, which delegates to the one
-  installed process store and triggers lazy loading. Production code must not
-  accept, retain, pass around or construct local ConfigStore instances. Bootstrap
-  constructs the one instance directly for installation. Tests may construct local
-  stores and install one for each scenario. See ADR 0011.
-- Accept an explicitly constructed immutable config independently of any store.
-  A non-null constructor default such as
-  `config: ConfigType = ConfigType.fromConfigStore()` is useful when appropriate,
-  and is the production construction pattern for configured components. Main
-  installs ConfigStore before parsing CLI flags or constructing any component;
-  components resolve their own default config from that installed store. Explicit
-  immutable config values remain injectable for isolated component tests. Do not
-  use a nullable config argument merely to implement a fallback.
-- Explicit config must allow isolated tests without installing or modifying a
-  global store. Config data-class defaults remain ordinary standalone defaults.
-- Factories produce immutable component configuration values without retaining
-  a `ConfigStore` reference. Live updates require a separately owned subscription;
-  never silently overwrite explicit constructor configuration.
-- `ConfigStore.current` fails fast until `Main` explicitly installs the process store.
-  Hold the returned installation handle for the application's lifetime and close it
-  after runtime/frontends stop. A second installation is rejected. Multiple
-  frontends share the existing store; they never install a replacement.
+- Do not introduce immutable configuration data classes merely to group a
+  component's settings. Prefer individual constructor parameters with direct
+  typed defaults such as `maxFlows: Int = ConfigStore[ProxySettings.MaxFlows]`.
+  Each parameter represents the setting the component actually uses, without an
+  intermediate `*Config` wrapper or `fromConfigStore()` factory.
+- **When modifying a type that accepts an immutable configuration data class in
+  its constructor, migrate that type in the same change:** replace the config
+  argument with individual values, default each setting-backed value directly
+  from its owning `ConfigStore[Key]`, and update affected callers and tests.
+  Remove obsolete wrapper/factory code once unused. Do not expand the scope to
+  unrelated components merely to eliminate every existing config class at once.
+  Genuine cohesive domain values (for example, credentials or transformation
+  rules) may remain value types; do not flatten them solely because they are immutable.
+- When later configuration changes can meaningfully and safely affect a running
+  component, that component owns a `ConfigStore.onChange[Group]` subscription,
+  applies relevant changes to its own state, and closes the subscription on
+  shutdown. Do not route these updates through unrelated parent components or
+  add follow-subscription flags solely to preserve a constructor override.
+  For settings requiring a reconnect/rebuild, or only meaningful at startup,
+  keep the appropriate existing lifecycle instead of forcing a live subscription.
+- Explicit constructor arguments specify initial state, not permanent overrides:
+  later relevant `ConfigStore` notifications take precedence for live settings.
+  Components without live subscriptions retain their constructor values until
+  their normal reconstruction or restart.
+- Production defaults and subscriptions use the single installed global
+  `ConfigStore` facade; never accept, retain, pass around or construct local
+  stores in production components. `Main` installs it before creating components;
+  tests may install a local store for a scenario and pass explicit constructor
+  values for isolation. Components with live subscriptions still require the
+  installed store even when all initial values were provided explicitly.
+  See [ADR 0011](docs/adrs/0011-global-configuration-access.md).
+- `ConfigStore.current` fails fast until `Main` explicitly installs the process
+  store. Hold the returned installation handle for the application's lifetime and
+  close it after runtime/frontends stop. A second installation is rejected.
+  Multiple frontends share that same store.
 - Runtime and presentation always use the global ConfigStore facade. They may
   accept an explicit FunctionStore, defaulting to FunctionStore.current
   ([ADR 0009](docs/adrs/0009-lazy-global-function-store.md)). Configuration-store
@@ -197,24 +204,28 @@ unbounded buffering.
   or reset. Do not duplicate initial setting values or pass an application-wide
   configuration tree to components.
 - `ConfigStore` is the single authoritative source of configuration values.
-  Components read settings directly through typed keys; multi-key read snapshots
-  are intentionally unsupported. YAME accepts the negligible possibility that a
-  setting changes between individual reads. Build immutable component configs
-  when needed and use subscriptions to handle relevant runtime changes. Apply
-  notification values in delivery order; request-scoped providers may construct
-  immutable settings for each HTTP request. Do not add alternative configuration
-  read mechanisms or reintroduce snapshots.
-- Immutable configs contain values only; subscriptions, providers, IO, registries,
-  and other runtime dependencies belong in component constructors.
-- Local config types do not require a nested application-wide config tree.
+  Components read owned settings directly through typed keys; multi-key read
+  snapshots are intentionally unsupported. YAME accepts the negligible chance
+  that values change between individual reads. Apply notifications in delivery
+  order. Request-scoped settings snapshots are acceptable where they represent
+  a genuinely necessary consistent request policy, not a constructor config DTO.
+  Do not add alternative reads or reintroduce application-wide snapshots.
+- A component that reads its initial setting before subscribing may miss a
+  change in the short interval between those operations. This is accepted for
+  ordinary, infrequently changed settings; do not add synchronization solely
+  to eliminate this negligible startup race. Use `subscribe(initial = true)`
+  when atomic initial state and notification ordering are required for correctness.
+- Subscriptions, providers, IO, registries and other runtime dependencies belong
+  to the owning component, not inside configuration value objects.
 
 ## Configuration ownership and dependency direction
 
 - `no.skasti.yame.config` and `.function` contain generic infrastructure only.
   They must not import concrete features, persistence adapters, or frontends.
-- Each feature owns its keys, groups, immutable values, validation, and component
-  factories. Modem config contains modem behavior/credentials only; PPP addressing,
-  DNS, and HTTP compatibility are independent component configs.
+- Each feature owns its keys, groups, defaults, validation, and genuine domain
+  value types. Modem behavior, PPP addressing, DNS, and HTTP compatibility are
+  independent features; avoid intermediate configuration data classes to pass
+  their settings through constructors.
 - HTML transformation settings and rules live in `ppp.proxy.transform`, alongside
   the transformation implementation. The shared repository reads their INI file
   through `ElementSimplifierSettings`. First-run creation uses ConfigStore and the
@@ -227,8 +238,9 @@ unbounded buffering.
   registry, or per-key codecs. One lazy reflection pass discovers public keys,
   including key collections. Ordinary scalar values use `kotlinx.serialization`;
   multi-property values use a reusable `CompositeSetting<T>` companion.
-  `ConfigStore` owns the current values; immutable component `*Config` objects are
-  ordinary values and do not inherit from `Settings`.
+  `ConfigStore` owns the current values. Existing immutable component `*Config`
+  wrappers are migration targets when their consuming types are modified; domain
+  value objects remain separate from `Settings`.
   `file = null` uses the configured primary file; `SeparateSettings(id)` uses a
   separate file named after its ID. Use a bare name such as `shared-settings`,
   never an extension or path. `IniConfigurationRepository` resolves it to
@@ -267,8 +279,10 @@ unbounded buffering.
 - Startup and CLI parsing use the runtime ConfigStore directly. CLI overrides are
   one transient typed batch; invocation options must not become a configuration
   aggregate. Persistence mappings live in feature definitions. See ADR 0010.
-- Serial transport and logging may use immutable feature-owned values; never nest
-  these or unrelated PPP/DNS/proxy settings inside Hayes modem configuration.
+- Serial transport and logging own their settings directly; when their consuming
+  constructors are modified, migrate any old immutable config wrapper as described
+  above. Never nest unrelated PPP/DNS/proxy settings inside Hayes modem
+  configuration.
 - `YameRuntime` composes serial, modem, PPP, DNS, proxy, and logging behavior. TUI
   and plain mode use that same runtime, ConfigStore, and FunctionStore.
 - A user selecting unchanged serial settings expresses a reconnect action through
