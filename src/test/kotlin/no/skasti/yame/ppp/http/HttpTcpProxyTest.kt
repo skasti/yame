@@ -423,6 +423,37 @@ class HttpTcpProxyTest : InstalledConfigTest() {
     }
 
     @Test
+    fun `setting changes resize the active HTTP proxy without reconnecting`() {
+        val key = no.skasti.yame.ppp.proxy.ProxySettings.MaxFlows
+        ConfigStore.setTransient(key to 1)
+        val handler = object : HttpRequestHandler {
+            override fun handle(connection: HttpConnection, request: HttpRequest): HttpResponse =
+                error("no request expected")
+        }
+        // Intentionally omit maxFlows to exercise the ConfigStore constructor default.
+        val proxy = HttpTcpProxy(handler, maxRequestBytes = 1024)
+        fun connect(port: Int): TcpProxyEvent {
+            val events = LinkedBlockingQueue<TcpProxyEvent>()
+            proxy.connect(flow(peerPort = port), events::offer)
+            return requireNotNull(events.poll(2, TimeUnit.SECONDS))
+        }
+        try {
+            assertIs<TcpProxyEvent.Connected>(connect(1330))
+            assertIs<TcpProxyEvent.Failure>(connect(1331))
+            ConfigStore.set(key to 2)
+            assertIs<TcpProxyEvent.Connected>(connect(1331))
+            ConfigStore.set(key to 1)
+            assertIs<TcpProxyEvent.Failure>(connect(1332))
+            proxy.closeFlow(flow(peerPort = 1330))
+            assertIs<TcpProxyEvent.Failure>(connect(1332))
+            proxy.closeFlow(flow(peerPort = 1331))
+            assertIs<TcpProxyEvent.Connected>(connect(1332))
+        } finally {
+            proxy.close()
+        }
+    }
+
+    @Test
     fun `live HTTP flow limit adjusts admissions without evicting connections`() {
         val handler = object : HttpRequestHandler {
             override fun handle(connection: HttpConnection, request: HttpRequest): HttpResponse =
