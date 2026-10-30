@@ -1,5 +1,8 @@
 package no.skasti.yame.ppp.session
 
+import no.skasti.yame.config.ConfigStore
+import no.skasti.yame.config.InstalledConfigTest
+import org.junit.jupiter.api.BeforeEach
 import no.skasti.yame.ppp.ipcp.IpcpOptionType
 import no.skasti.yame.ppp.PppAddresses
 import no.skasti.yame.ppp.PppControlOption
@@ -32,7 +35,9 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-class PppIpv4SessionTest {
+class PppIpv4SessionTest : InstalledConfigTest() {
+    @BeforeEach fun configure() = installConfig(ConfigStore())
+
     @Test
     fun `unsupported ICMP and IPv4 cases capture original packet including options and padding`() {
         val sent = mutableListOf<PppFrame>()
