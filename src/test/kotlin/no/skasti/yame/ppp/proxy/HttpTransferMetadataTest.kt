@@ -2,6 +2,7 @@ package no.skasti.yame.ppp.proxy
 
 import com.sun.net.httpserver.HttpServer
 import no.skasti.yame.observer.*
+import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.ppp.ip.Ipv4Address
 import no.skasti.yame.ppp.session.PppSessionIdentity
 import no.skasti.yame.ppp.session.TransferIdentity
@@ -17,6 +18,7 @@ import kotlin.test.*
 
 /** Runs with an installed broker in its own JVM, like the other facade integration tests. */
 class HttpTransferMetadataTest {
+    private val configInstallation = ConfigStore.install(ConfigStore())
     private val broker = EventBroker()
     private val installation = YameEvents.install(broker)
     private val observed = CopyOnWriteArrayList<TransferResourceChanged>()
@@ -38,6 +40,7 @@ class HttpTransferMetadataTest {
         assertEquals(BrokerWaitResult.COMPLETED, broker.awaitClosed(Duration.ofSeconds(5)))
         subscription.close()
         installation.close()
+        configInstallation.close()
     }
 
     private fun flow(generation: Long = 0) = TcpProxyFlow(
