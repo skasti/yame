@@ -1,0 +1,116 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+<html lang="no">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+  <title>YAME - Slik bruker du kommandopaletten</title>
+</head>
+<body bgcolor="#C0C0C0" text="#202020" link="#000080" vlink="#660066">
+<center>
+<table width="750" border="0" cellpadding="0" cellspacing="0">
+<tr><td bgcolor="#005555">
+  <table width="100%" border="0" cellpadding="12" cellspacing="0">
+    <tr><td>
+      <font face="Arial, Helvetica" color="#FFFFFF" size="+2"><b>YAME</b></font><br>
+      <font face="Arial, Helvetica" color="#FFFFFF" size="2">GUIDE TIL RASPBERRY PI OG TERMINALEN</font>
+    </td><td align="right">
+      <font face="Arial, Helvetica" color="#FFFFFF" size="3"><b>KOMMANDOPALETTE</b></font>
+    </td></tr>
+  </table>
+</td></tr>
+<tr><td bgcolor="#FFFFFF">
+  <table width="100%" border="0" cellpadding="17" cellspacing="0"><tr><td>
+    <font face="Arial, Helvetica" size="4"><b>Hva er YAME?</b></font>
+    <p><font face="Arial, Helvetica" size="3">
+      <b>YAME</b> betyr <i>Yet Another Modem Emulator</i>.
+      Programmet kj&oslash;rer p&aring; Raspberry Pi og oppf&oslash;rer seg
+      som et klassisk telefonmodem. Windows 98 sender modemkommandoer og
+      internettdata gjennom en <b>RS-232-seriekabel</b>.
+      YAME snakker PPP med Windows og videreformidler nettverkstrafikken.
+    </font></p>
+
+    <table width="100%" border="1" cellpadding="10" cellspacing="0" bordercolor="#808080">
+      <tr bgcolor="#E6F2E6"><td align="center">
+        <font face="Courier New, Courier" size="3"><b>
+          Windows 98 &nbsp; &lt;--- seriellkabel ---&gt; &nbsp; Raspberry Pi / YAME
+        </b></font>
+        <br><font face="Arial, Helvetica" size="2">YAME gir en gammel datamaskin tilgang til dagens Internett.</font>
+      </td></tr>
+    </table>
+
+    <p><font face="Arial, Helvetica" size="4"><b>Pr&oslash;v kommandopaletten</b></font></p>
+    <table width="100%" border="1" cellspacing="0" cellpadding="10" bordercolor="#808080">
+    <tr bgcolor="#FFFFCC"><td><font face="Arial, Helvetica" size="3">
+      <ol>
+        <li>Se p&aring; skjermen som viser YAME.</li>
+        <li>Trykk <b>/</b> (skr&aring;strek) p&aring; tastaturet for &aring; &aring;pne kommandopaletten.</li>
+        <li>Bruk <b>pil opp/ned</b> for &aring; velge, eller <b>skriv</b> for &aring; filtrere.</li>
+        <li>Trykk <b>Enter</b> for &aring; &aring;pne et valg eller utf&oslash;re en kommando.</li>
+        <li>Trykk <b>Esc</b> for &aring; g&aring; tilbake eller lukke paletten.</li>
+      </ol>
+      </font></td></tr>
+    </table>
+
+    <p><font face="Arial, Helvetica" size="4"><b>Dette kan du utforske</b></font></p>
+    <table width="100%" border="1" cellspacing="0" cellpadding="8" bordercolor="#C0C0C0">
+      <tr bgcolor="#DDEEFF"><td width="39%"><font face="Arial, Helvetica" size="2"><b>Kommando</b></font></td>
+          <td><font face="Arial, Helvetica" size="2"><b>Hva den gj&oslash;r</b></font></td></tr>
+      <tr><td><font face="Courier New, Courier" size="2">/tone</font></td>
+          <td><font face="Arial, Helvetica" size="2">Sl&aring; de simulerte modemlydene p&aring; eller av.</font></td></tr>
+      <tr bgcolor="#F1F1F1"><td><font face="Courier New, Courier" size="2">/transformers</font></td>
+          <td><font face="Arial, Helvetica" size="2">Se hvordan YAME forenkler moderne nettsider.</font></td></tr>
+      <tr><td><font face="Courier New, Courier" size="2">/transformers/style-remover</font></td>
+          <td><font face="Arial, Helvetica" size="2">Velg <b>on/off</b> for fjerning av CSS og stilark.</font></td></tr>
+      <tr bgcolor="#F1F1F1"><td><font face="Courier New, Courier" size="2">/http-proxy</font></td>
+          <td><font face="Arial, Helvetica" size="2">HTTP- og HTTPS-kompatibilitet (ikke endre under vanlig demonstrasjon).</font></td></tr>
+      <tr><td><font face="Courier New, Courier" size="2">/fps</font></td>
+          <td><font face="Arial, Helvetica" size="2">Endre hvor raskt terminalbildet kan tegnes.</font></td></tr>
+      <tr bgcolor="#F1F1F1"><td><font face="Courier New, Courier" size="2">/clear-log</font></td>
+          <td><font face="Arial, Helvetica" size="2">T&oslash;m loggen som vises p&aring; skjermen.</font></td></tr>
+    </table>
+
+    <p><font face="Arial, Helvetica" size="4"><b>Andre nyttige taster</b></font></p>
+    <font face="Arial, Helvetica" size="3">
+    <ul>
+      <li><b>Tab:</b> Bytt mellom DNS-, overf&oslash;rings- og proxyvisning n&aring;r paletten er lukket.</li>
+      <li><b>Pil opp/ned:</b> Marker et nettsted i proxyvisningen.</li>
+      <li><b>Enter eller pil h&oslash;yre:</b> Utvid et markert nettsted i proxyvisningen.</li>
+      <li><b>Pil venstre:</b> Sl&aring; sammen et utvidet nettsted.</li>
+    </ul>
+    </font>
+
+    <table width="100%" border="1" cellspacing="0" cellpadding="9" bordercolor="#808080">
+    <tr bgcolor="#FFDDDD"><td><font face="Arial, Helvetica" size="3">
+      <b>Pass p&aring; under demonstrasjonen:</b>
+      Ikke endre <b>/port</b>, <b>/baud</b>, <b>/flow-control</b>
+      eller bruk <b>/disconnect</b> eller <b>/quit</b>
+      uten hjelp. Det kan avbryte forbindelsen til Windows-PC-en.
+    </font></td></tr></table>
+
+    <p><font face="Arial, Helvetica" size="4"><b>Hva skjer n&aring;r du &aring;pner en nettside?</b></font></p>
+    <font face="Arial, Helvetica" size="3">
+    <ol>
+      <li>Windows sender DNS- og TCP-trafikk gjennom modemforbindelsen.</li>
+      <li>YAME henter data fra nettet p&aring; vegne av den gamle PC-en.</li>
+      <li>Ved behov oversetter YAME HTTPS og rydder i HTML,
+          slik at eldre nettlesere har st&oslash;rre sjanse til &aring; vise innholdet.</li>
+      <li>Du kan f&oslash;lge med p&aring; aktiviteten i YAME-terminalen.</li>
+    </ol>
+    </font>
+    <p><font face="Arial, Helvetica" size="3">
+      <b>Merk:</b> N&aring;r JavaScript og CSS fjernes, kan innholdet havne
+      langt nede p&aring; siden. P&aring; Windows-maskinen m&aring; du ofte
+      scrolle mye for &aring; finne teksten.
+    </font></p>
+    <hr>
+    <center><font face="Arial, Helvetica" size="2">
+      <a href="index.html">&laquo; Tilbake til Windows 98-guiden</a>
+      &nbsp;|&nbsp;
+      <a href="https://github.com/skasti/yame">YAME p&aring; GitHub</a>
+    </font></center>
+  </td></tr></table>
+</td></tr>
+<tr><td bgcolor="#808080" height="7">&nbsp;</td></tr>
+</table>
+</center>
+</body>
+</html>
