@@ -115,7 +115,7 @@ Bodyless responses may still participate in resource-level transforms when heade
 
 ## HTML cleanup and element rules
 
-The structural stages run in this order: `script-remover`, `style-remover`,
+The structural stages run in this order: optional `readability`, then `script-remover`, `style-remover`,
 `attribute-cleaner`, then `element-simplifier`. Attribute cleanup removes
 upstream inline styles before element rules add explicitly configured styles.
 URL rewriting and image optimization run afterward.
@@ -132,7 +132,7 @@ for the format and editing behavior.
 Live on/off settings are separate from the immutable INI rules. The HTTP handler
 uses an injected store-backed provider to construct one immutable
 `HtmlTransformerSettings` object for each request before fetching upstream. Its transformation
-profile and transformed-cache/in-flight-work keys include the four effective switch
+profile and transformed-cache/in-flight-work keys include all effective switch
 values. Element simplification requires both the rule file's general `enabled`
 setting and the `/transformers` switch. The same source bytes under different settings never share transformed
 output. Source acquisition may still be coalesced because it is independent of
@@ -237,3 +237,68 @@ Download and extract the full archive, then open `index.html` locally.
 These fixtures are repeatable behavioral examples, **not** a representative corpus
 of real website logos/photos. Visual checks in Netscape 4.08 are still useful,
 especially for browser-specific GIF transparency rendering.
+
+## Page interpretation
+
+[ADR 0014](adrs/0014-page-interpretation.md) records the interpretation/renderer boundary.
+The optional `readability` structural transformer uses
+[Readability4J 1.0.8](https://github.com/dankito/Readability4J) through a small
+`PageInterpreter` interface. It receives original HTML and the final upstream URI,
+before script/style/attribute cleanup removes information useful to the library.
+An `InterpretedPage` carries title, byline, extracted HTML and effective base URI;
+it does not expose library types. Additional libraries can implement this interface
+without changing the renderer or introducing a runtime plugin system.
+
+`LegacyHtmlRenderer` owns the client representation. It accepts only a small
+HTML vocabulary for headings, paragraphs, lists, code, tables, images and links,
+escapes metadata, drops scripts/styles/forms and event handlers, and permits only
+HTTP(S) resource URLs and HTTP(S)/mailto links. Relative references use the source
+base URI (including a valid HTTP(S) `<base>`); the existing compatibility stage
+then rewrites HTTPS links and registers routes. Non-ASCII characters are emitted
+as named or decimal numeric entities so they survive re-encoding with the source HTTP charset. Hexadecimal numeric references emitted by jsoup are converted after HTML escaping; literal entity examples in text remain escaped. Image tag
+and image body optimization remain independent later stages.
+
+The switch is off by default because article extraction can intentionally discard
+menus, forms, repository file lists and other useful non-article content. The TUI
+registers `/transformers/readability/on|off` through the existing transformer
+palette; request-scoped settings and profile keys prevent stale transformed-cache
+reuse after toggling it. No new subscription or configuration reader is needed.
+
+Only complete, identity-encoded `200 text/html` GET navigations are eligible.
+Inputs are capped at 1 MiB encoded and decoded characters, 10,000 markup openings,
+30,000 DOM nodes and depth 128. DOM limits are checked before Readability4J runs;
+its element limit is also set explicitly. These budgets bound input/traversal
+work, rather than promising a hard wall-clock timeout. No library network calls
+or script execution occur. Empty extraction, fewer than 200 text characters,
+ordinary parser failures, excessive input work or output beyond `maxResponseBytes`
+retain the prior representation for ordinary cleanup. Source bytes remain untouched.
+
+Readability4J is isolated behind the adapter and uses an explicitly selected
+current jsoup dependency rather than its old transitive parser version.
+Deterministic synthetic fixtures cover news, documentation, a GitHub-shaped README,
+and navigation-only fallback. They test the real library and production pipeline,
+relative/base URLs, Unicode, unsafe markup, code/lists/tables, limits, HTTP framing
+and live same-URL toggles. They are not captured real-world websites or proof of
+Netscape rendering fidelity. General menu/layout recognition and a dedicated
+GitHub interpreter are not implemented by this first adapter.
+
+### HTML character decoding
+
+The shared text-body rewrite helper resolves `text/html` character encoding before
+any cleanup or Readability interpretation: byte-order mark first, then a valid
+HTTP charset, then a valid `meta charset` or `meta http-equiv=Content-Type`
+declaration in the first 1024 bytes. A bounded jsoup parse of that prefix avoids
+mistaking comments, script contents or quoted attributes for metadata. Invalid
+labels are ignored. HTML's legacy Latin-1/ASCII labels and undeclared fallback use
+Windows-1252 so smart punctuation does not become C1 control characters. A UTF-16
+meta declaration in an ASCII-compatible head is treated as UTF-8; real UTF-16
+input is recognized through its BOM. This is deliberately a small HTML policy,
+not a complete encoding-sniffing implementation. Non-HTML text retains its prior
+HTTP/BOM/ISO-8859-1 behavior. Charset detection alone does not rewrite bytes;
+unchanged transformations and the original resource representation remain intact.
+
+The reader renderer serializes numerically escaped characters in decimal form
+(for example `&#8211;` for an en dash), including metadata and attributes. This
+prevents jsoup's hexadecimal reference syntax from leaking into the legacy view.
+Norwegian letters, punctuation, soft hyphens and word joiners are covered by
+regression tests alongside literal entity examples.

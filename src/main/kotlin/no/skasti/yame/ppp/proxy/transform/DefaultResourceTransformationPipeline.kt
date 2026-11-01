@@ -1,5 +1,7 @@
 package no.skasti.yame.ppp.proxy.transform
 
+import no.skasti.yame.ppp.proxy.transform.readability.ReadablePageTransformer
+
 internal fun defaultResourceTransformationPipeline(
     maxResponseBytes: Int,
     elementSimplifier: ElementSimplifierConfiguration = ElementSimplifierConfiguration.defaults(),
@@ -7,6 +9,7 @@ internal fun defaultResourceTransformationPipeline(
     val imagePolicy = ImageOptimizationPolicy(maxEncodedBytes = maxResponseBytes)
     return ResourceTransformationPipeline(
         listOf(
+            ReadablePageTransformer(maxResponseBytes),
             ScriptRemover(),
             StyleRemover(),
             AttributeCleaner(),

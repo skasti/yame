@@ -1,7 +1,5 @@
 package no.skasti.yame.ppp.proxy.transform
 
-import java.nio.charset.Charset
-import java.nio.charset.StandardCharsets
 import java.util.Locale
 
 internal class LegacyTextResourceTransformer : ResourceTransformer {
@@ -78,30 +76,11 @@ internal fun rewriteEncodedTextBody(
         .firstOrNull { (name, _) -> name.equals("content-type", ignoreCase = true) }
         ?.value
         ?.firstOrNull()
-    val declaredCharset = contentType
-        ?.let { CHARSET_PARAMETER_PATTERN.find(it) }
-        ?.let { match -> match.groupValues.drop(1).firstOrNull { it.isNotEmpty() } }
-        ?.let { name -> runCatching { Charset.forName(name) }.getOrNull() }
-    val charset = declaredCharset ?: bomCharset(body) ?: StandardCharsets.ISO_8859_1
+    val charset = textBodyCharset(contentType, body)
     val source = body.toString(charset)
     val rewritten = transform(source)
     return if (rewritten == source) body else rewritten.toByteArray(charset)
 }
-
-private fun bomCharset(body: ByteArray): Charset? =
-    when {
-        body.size >= 4 && body[0] == 0x00.toByte() && body[1] == 0x00.toByte() &&
-            body[2] == 0xFE.toByte() && body[3] == 0xFF.toByte() -> Charset.forName("UTF-32BE")
-        body.size >= 4 && body[0] == 0xFF.toByte() && body[1] == 0xFE.toByte() &&
-            body[2] == 0x00.toByte() && body[3] == 0x00.toByte() -> Charset.forName("UTF-32LE")
-        body.size >= 3 && body[0] == 0xEF.toByte() && body[1] == 0xBB.toByte() && body[2] == 0xBF.toByte() -> StandardCharsets.UTF_8
-        body.size >= 2 && body[0] == 0xFE.toByte() && body[1] == 0xFF.toByte() -> StandardCharsets.UTF_16
-        body.size >= 2 && body[0] == 0xFF.toByte() && body[1] == 0xFE.toByte() -> StandardCharsets.UTF_16
-        else -> null
-    }
-
-private val CHARSET_PARAMETER_PATTERN =
-    Regex("""(?i)(?:^|;)\s*charset\s*=\s*(?:"([^"]+)"|'([^']+)'|([^;\s]+))""")
 
 private val REWRITABLE_CONTENT_TYPES = setOf(
     "text/html",

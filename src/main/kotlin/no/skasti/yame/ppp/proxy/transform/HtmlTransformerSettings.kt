@@ -7,6 +7,7 @@ enum class HtmlTransformer(val command: String) {
     STYLE_REMOVER("style-remover"),
     ATTRIBUTE_CLEANER("attribute-cleaner"),
     ELEMENT_SIMPLIFIER("element-simplifier"),
+    READABILITY("readability"),
 }
 
 data class HtmlTransformerSettings(
@@ -14,6 +15,7 @@ data class HtmlTransformerSettings(
     val styleRemover: Boolean = true,
     val attributeCleaner: Boolean = true,
     val elementSimplifier: Boolean = true,
+    val readability: Boolean = false,
 ) {
     companion object {
         fun fromConfigStore(): HtmlTransformerSettings =
@@ -22,6 +24,7 @@ data class HtmlTransformerSettings(
                 ConfigStore[TransformerSettings.Style],
                 ConfigStore[TransformerSettings.Attributes],
                 ConfigStore[TransformerSettings.Elements] && ConfigStore[ElementSimplifierSettings.Enabled],
+                ConfigStore[TransformerSettings.Readability],
             )
     }
 
@@ -30,6 +33,7 @@ data class HtmlTransformerSettings(
         HtmlTransformer.STYLE_REMOVER -> styleRemover
         HtmlTransformer.ATTRIBUTE_CLEANER -> attributeCleaner
         HtmlTransformer.ELEMENT_SIMPLIFIER -> elementSimplifier
+        HtmlTransformer.READABILITY -> readability
     }
 
     fun withEnabled(transformer: HtmlTransformer, enabled: Boolean): HtmlTransformerSettings = when (transformer) {
@@ -37,6 +41,7 @@ data class HtmlTransformerSettings(
         HtmlTransformer.STYLE_REMOVER -> copy(styleRemover = enabled)
         HtmlTransformer.ATTRIBUTE_CLEANER -> copy(attributeCleaner = enabled)
         HtmlTransformer.ELEMENT_SIMPLIFIER -> copy(elementSimplifier = enabled)
+        HtmlTransformer.READABILITY -> copy(readability = enabled)
     }
 
     val profileToken: String get() = HtmlTransformer.entries.joinToString("") { if (enabled(it)) "1" else "0" }

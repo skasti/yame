@@ -11,6 +11,7 @@ import java.net.URI
 import java.time.Instant
 import no.skasti.yame.BuildInfo
 import no.skasti.yame.ppp.proxy.ResourceKind
+import no.skasti.yame.ppp.proxy.transform.ResourceTransformationSummary
 import no.skasti.yame.ppp.proxy.ResourceState
 import java.io.File
 import kotlin.test.Test
@@ -54,10 +55,15 @@ class DashboardScreenshotTest {
                 TransferState.OPEN, 256, 32768, 1, 10_000_000_001, "HTTP response",
             )),
             httpHosts = listOf(DashboardHttpHost("example.test", listOf(
-                DashboardHttpResource("http://example.test/", ResourceState.READY, ResourceKind.DOCUMENT),
+                DashboardHttpResource("http://example.test/", ResourceState.READY, ResourceKind.DOCUMENT,
+                    transformations = listOf(
+                        ResourceTransformationSummary("readability", 65536, 8192, "article extracted"),
+                        ResourceTransformationSummary("attribute-cleaner", 8192, 7168, "legacy HTML"),
+                    ), expanded = true),
                 DashboardHttpResource("http://example.test/assets/logo.gif", ResourceState.READY, ResourceKind.IMAGE),
                 DashboardHttpResource("http://example.test/assets/banner.jpg", ResourceState.FETCHING, ResourceKind.IMAGE),
             ), expanded = true)),
+            selectedHttpResourceUrl = "http://example.test/",
         )
         val identity = TransferIdentity.create(PppSessionIdentity(1, 1), 0)
         val uri = URI("https://example.test/download")

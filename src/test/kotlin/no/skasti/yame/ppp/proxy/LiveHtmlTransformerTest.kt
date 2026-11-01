@@ -131,7 +131,32 @@ class LiveHtmlTransformerTest {
         }
     }
 
-    private fun server(beforeResponse: (com.sun.net.httpserver.HttpExchange) -> Unit): HttpServer {
+    @Test
+    fun `reader switch changes same URL without stale cache and keeps finite HTTP framing`() {
+        val article = javaClass.getResource("/readability/documentation.html")!!.readText()
+        val server = server(article) {}
+        val store = ConfigStore()
+        val handler = SystemHttpCompatibilityHandler(config = PppHttpCompatibilityConfig(),
+            transformerSettings = { withInstalledConfig(store) { HtmlTransformerSettings.fromConfigStore() } })
+        try {
+            val request = request(server)
+            val before = handler.handle(connection(), request)
+            assertTrue(before.body.toString(Charsets.UTF_8).contains("Sign in"))
+            store.set(TransformerSettings.Readability to true)
+            val readable = handler.handle(connection(), request)
+            val html = readable.body.toString(Charsets.UTF_8)
+            assertFalse(html.contains("Sign in"))
+            assertTrue(html.contains("baud=38400"))
+            assertEquals(200, readable.statusCode)
+            assertEquals(readable.body.size.toString(), header(readable, "Content-Length"))
+            assertNull(header(readable, "Transfer-Encoding"))
+            assertEquals("no-store", header(readable, "Cache-Control"))
+            store.set(TransformerSettings.Readability to false)
+            assertEquals(before.body.toList(), handler.handle(connection(), request).body.toList())
+        } finally { handler.close(); server.stop(0) }
+    }
+
+    private fun server(html: String = source, beforeResponse: (com.sun.net.httpserver.HttpExchange) -> Unit): HttpServer {
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.createContext("/page") { exchange ->
             exchange.use {
@@ -139,7 +164,7 @@ class LiveHtmlTransformerTest {
                 it.responseHeaders.add("Content-Type", "text/html; charset=utf-8")
                 it.responseHeaders.add("Cache-Control", "max-age=3600")
                 it.responseHeaders.add("ETag", "\"source\"")
-                val bytes = source.toByteArray()
+                val bytes = html.toByteArray()
                 it.sendResponseHeaders(200, bytes.size.toLong())
                 it.responseBody.write(bytes)
             }

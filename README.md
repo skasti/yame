@@ -287,8 +287,8 @@ value marked. The default is `on`; changes are saved as
 `[ppp] disconnect-on-terminate` and apply immediately to the active PPP handler.
 Changing the setting itself does not hang up or reconnect the serial connection.
 
-Open `/transformers` in the command palette to enable or disable the four HTML
-cleanup stages. Within that palette, type `/style-remover off` or select
+Open `/transformers` in the command palette to enable or disable the HTML
+transformation stages. Within that palette, type `/style-remover off` or select
 `/style-remover` and then `off`. A full path such as
 `/transformers/style-remover/off` also works from the root palette.
 `Esc` returns to the parent palette; `Backspace` does the same when the local
@@ -299,6 +299,18 @@ page to see the new result. A request already in progress finishes using its
 original settings. TUI changes are saved under `[transformers]` as
 `<name>-enabled=true|false` in `yame.ini`, independently of the mapping rules
 in `element-simplifier.ini`.
+`/transformers/readability/on` enables an optional Readability4J reader view
+(default off; `[transformers] readability-enabled=false`). It extracts the main
+article before ordinary cleanup and renders headings, paragraphs, links, lists,
+code, tables and images as basic HTML without CSS or JavaScript. Turn it off to
+recover navigation or controls omitted by article extraction. Changes apply on
+the next page request, including requests for the same URL.
+
+This is an initial article reader, not a general layout engine: GitHub README-like
+content can work, but repository file lists, issue controls and horizontal/vertical
+menus are not reconstructed. Empty, failed or oversized extraction falls back to
+the existing cleanup pipeline. See [page interpretation](docs/resource-transformation.md#page-interpretation).
+
 Turning off `style-remover` retains style blocks and linked stylesheets;
 `attribute-cleaner` separately controls removal of upstream inline styles.
 
@@ -322,7 +334,7 @@ The dashboard contains:
 
 On wide terminals (150+ columns and at least 30 rows), two capacity bars share **one row directly below the panels and above the keyboard help**. Each bar contains its own title, occupied/total count, and percentage: **Event broker** (queued YAME events out of the broker's configured capacity) and **TUI work** (queued worker slots out of the TUI queue capacity). Both exclude the item currently being processed. The TUI work queue batches adjacent observations, so its bar measures occupied slots rather than the number of events inside those batches. The bars are omitted on smaller screens so log and detail panels retain their space. These are momentary queue-occupancy samples taken during regular screen redraws, not transfer progress or extra monitoring events.
 
-When the command palette is closed, use **Up/Down** to select a proxy host, **Enter/Right** to expand it, and **Left** to collapse it. Hosts are kept unique and ordered with recently used hosts first, with usage frequency as a secondary signal. Expanded hosts show the unique paths and queries currently represented by host resource graphs; entries disappear when their registry context is evicted.
+When the command palette is closed, use **Up/Down** to select a proxy host, **Enter/Right** to expand it, and **Left** to collapse it. Hosts are kept unique and ordered with recently used hosts first, with usage frequency as a secondary signal. Expanded hosts show the unique paths and queries currently represented by host resource graphs; entries disappear when their registry context is evicted. Select a resource and press **Enter/Right** again to expand its transformations. Each child row shows the transformer name, input/output size, savings and optional detail, in the order received in the resource snapshot. **Up/Down** also selects transformation rows and scrolls them into view. **Left** returns from a transformation to its resource, collapses an expanded resource, or returns from a collapsed resource to its host. Resources with no recorded transformations show `(no transformations)`; expansion state is discarded when the resource disappears.
 
 For example, the proxy panel may look like:
 
