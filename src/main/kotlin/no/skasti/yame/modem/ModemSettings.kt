@@ -12,6 +12,8 @@ object ModemSettings : Settings("modem") {
         description = "Modem handshake sound profile used during connection setup.", default = { HayesModemConfig().handshakeProfile })
     val Tone = SettingKey<Boolean>("tone-simulation-enabled", Group,
         description = "Play simulated modem tones during dialing and handshaking.", default = { HayesModemConfig().toneSimulationEnabled })
+    val HangupOnPeerDtrDrop = SettingKey<Boolean>("hangup-on-peer-dtr-drop", Group,
+        description = "Hang up when peer DTR drops, observed through DSR/DCD. Disable for cables with unreliable control signals. Changes apply without reconnecting the serial port.", default = { true })
     val Login = SettingKey<LoginCredentials>("login", Group, sensitive = true,
         description = "Terminal login credentials. Set both username and password, or omit both.\nCredentials are stored in plaintext; protect this file.", default = { LoginCredentials(null, null) })
 }
