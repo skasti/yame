@@ -12,7 +12,7 @@ class ConfigurationArchitectureTest {
     @Test fun `production consumers only use the installed configuration facade`() {
         Files.walk(sources).use { files ->
             files.filter { it.toString().endsWith(".kt") }.forEach { file ->
-                val relative = sources.relativize(file).toString()
+                val relative = sources.relativize(file).toString().replace("\\", "/")
                 if (relative.startsWith("config/")) return@forEach
                 val text = Files.readString(file)
                 assertFalse(Regex("\\b\\w+\\s*:\\s*ConfigStore\\b").containsMatchIn(text),
