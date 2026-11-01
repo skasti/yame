@@ -81,6 +81,11 @@ class CommandPaletteTest : InstalledConfigTest() {
             assertFalse(store[no.skasti.yame.ppp.proxy.transform.TransformerSettings.Style])
             assertTrue(store[no.skasti.yame.ppp.proxy.transform.TransformerSettings.Script])
             assertEquals("current", options.item("off")?.description)
+            val reader = assertNotNull(CommandPalette.find("/transformers/readability"))
+            assertEquals("current", reader.item("off")?.description)
+            (reader.item("on") as PaletteChoice).select()
+            assertTrue(store[no.skasti.yame.ppp.proxy.transform.TransformerSettings.Readability])
+            assertEquals("current", reader.item("on")?.description)
             } finally { registrations.forEach(AutoCloseable::close) }
         }
         assertNull(CommandPalette.find("/transformers"))

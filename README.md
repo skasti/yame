@@ -287,8 +287,8 @@ value marked. The default is `on`; changes are saved as
 `[ppp] disconnect-on-terminate` and apply immediately to the active PPP handler.
 Changing the setting itself does not hang up or reconnect the serial connection.
 
-Open `/transformers` in the command palette to enable or disable the four HTML
-cleanup stages. Within that palette, type `/style-remover off` or select
+Open `/transformers` in the command palette to enable or disable the HTML
+transformation stages. Within that palette, type `/style-remover off` or select
 `/style-remover` and then `off`. A full path such as
 `/transformers/style-remover/off` also works from the root palette.
 `Esc` returns to the parent palette; `Backspace` does the same when the local
@@ -299,6 +299,18 @@ page to see the new result. A request already in progress finishes using its
 original settings. TUI changes are saved under `[transformers]` as
 `<name>-enabled=true|false` in `yame.ini`, independently of the mapping rules
 in `element-simplifier.ini`.
+`/transformers/readability/on` enables an optional Readability4J reader view
+(default off; `[transformers] readability-enabled=false`). It extracts the main
+article before ordinary cleanup and renders headings, paragraphs, links, lists,
+code, tables and images as basic HTML without CSS or JavaScript. Turn it off to
+recover navigation or controls omitted by article extraction. Changes apply on
+the next page request, including requests for the same URL.
+
+This is an initial article reader, not a general layout engine: GitHub README-like
+content can work, but repository file lists, issue controls and horizontal/vertical
+menus are not reconstructed. Empty, failed or oversized extraction falls back to
+the existing cleanup pipeline. See [page interpretation](docs/resource-transformation.md#page-interpretation).
+
 Turning off `style-remover` retains style blocks and linked stylesheets;
 `attribute-cleaner` separately controls removal of upstream inline styles.
 

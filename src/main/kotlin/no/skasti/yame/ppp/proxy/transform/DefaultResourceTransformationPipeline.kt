@@ -7,6 +7,7 @@ internal fun defaultResourceTransformationPipeline(
     val imagePolicy = ImageOptimizationPolicy(maxEncodedBytes = maxResponseBytes)
     return ResourceTransformationPipeline(
         listOf(
+            ReadablePageTransformer(maxResponseBytes),
             ScriptRemover(),
             StyleRemover(),
             AttributeCleaner(),
