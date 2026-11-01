@@ -106,15 +106,12 @@ class TuiYameObserver(
     private var pendingTransferCount = 0
     private val retiredTransfers = linkedSetOf<String>()
 
-    private data class HttpSelectionRow(
-        val host: String,
-        val resourceUrl: String?,
-    )
-
     private val httpGraphs = HttpGraphProjection()
     private val expandedHttpHosts = linkedSetOf<String>()
+    private val expandedHttpResources = linkedSetOf<String>()
     private var selectedHttpHost: String? = null
     private var selectedHttpResourceUrl: String? = null
+    private var selectedHttpTransformationIndex: Int? = null
     private var commandPalette: TuiCommandPalette? = null
     private var activeDashboardPanel = DashboardDetailPanel.PROXY
     private var keyboardInput: JLineKeyboardInput? = null
@@ -187,8 +184,8 @@ class TuiYameObserver(
                 key.equals("q", ignoreCase = true) -> requestQuit()
                 key == "ArrowUp" -> moveHttpSelection(-1)
                 key == "ArrowDown" -> moveHttpSelection(1)
-                key == "ArrowRight" || key == "Enter" -> setSelectedHttpHostExpanded(true)
-                key == "ArrowLeft" -> setSelectedHttpHostExpanded(false)
+                key == "ArrowRight" || key == "Enter" -> setSelectedHttpItemExpanded(true)
+                key == "ArrowLeft" -> setSelectedHttpItemExpanded(false)
             }
         } catch (error: Exception) {
             if (work.fatalFailure != null) throw error
@@ -542,6 +539,7 @@ class TuiYameObserver(
     private fun ResourceLifecycleEvent.dashboardResource() = DashboardHttpResource(
         url = resourceLegacyUri.toString(), state = state, kind = kind,
         prefetched = prefetched, transformations = transformations,
+        expanded = resourceLegacyUri.toString() in expandedHttpResources,
     )
 
     private fun httpHostSnapshots(): List<DashboardHttpHost> {
@@ -588,6 +586,7 @@ class TuiYameObserver(
     private fun normalizeHttpHostSelection() {
         val hosts = httpHostSnapshots()
         expandedHttpHosts.retainAll(hosts.mapTo(mutableSetOf()) { it.host })
+        expandedHttpResources.retainAll(hosts.flatMap { it.resources }.mapTo(mutableSetOf()) { it.url })
         selectedHttpHost = selectedHttpHost
             ?.takeIf { selected -> hosts.any { it.host == selected } }
             ?: hosts.firstOrNull()?.host
@@ -599,37 +598,41 @@ class TuiYameObserver(
                         ?.let { host -> host.expanded && host.resources.any { it.url == resourceUrl } }
                 ) == true
             }
+        val resource = hosts.firstOrNull { it.host == selectedHttpHost }?.resources
+            ?.firstOrNull { it.url == selectedHttpResourceUrl }
+        selectedHttpTransformationIndex = selectedHttpTransformationIndex?.takeIf { index ->
+            resource != null && resource.expanded && index in 0 until resource.transformations.size.coerceAtLeast(1)
+        }
     }
 
     private fun moveHttpSelection(delta: Int) {
-        val hosts = httpHostSnapshots()
-        if (hosts.isEmpty()) return
-        val rows =
-            hosts.flatMap { host ->
-                buildList {
-                    add(HttpSelectionRow(host.host, null))
-                    if (host.expanded) {
-                        host.resources.forEach { resource ->
-                            add(HttpSelectionRow(host.host, resource.url))
-                        }
-                    }
-                }
-            }
-        val current =
-            rows.indexOfFirst {
-                it.host == selectedHttpHost && it.resourceUrl == selectedHttpResourceUrl
-            }.takeIf { it >= 0 }
-                ?: 0
-        val next = (current + delta).coerceIn(0, rows.lastIndex)
-        selectedHttpHost = rows[next].host
-        selectedHttpResourceUrl = rows[next].resourceUrl
+        val rows = httpProxyRows(httpHostSnapshots())
+        if (rows.isEmpty()) return
+        val current = rows.indexOfFirst {
+            it.host.host == selectedHttpHost && it.resource?.url == selectedHttpResourceUrl &&
+                it.transformationIndex == selectedHttpTransformationIndex
+        }.takeIf { it >= 0 } ?: 0
+        val next = rows[(current + delta).coerceIn(0, rows.lastIndex)]
+        selectedHttpHost = next.host.host
+        selectedHttpResourceUrl = next.resource?.url
+        selectedHttpTransformationIndex = next.transformationIndex
         render()
     }
 
-    private fun setSelectedHttpHostExpanded(expanded: Boolean) {
+    private fun setSelectedHttpItemExpanded(expanded: Boolean) {
         val host = selectedHttpHost ?: return
-        if (expanded) expandedHttpHosts += host else expandedHttpHosts -= host
-        if (!expanded) selectedHttpResourceUrl = null
+        val resource = selectedHttpResourceUrl
+        when {
+            selectedHttpTransformationIndex != null -> {
+                if (!expanded) selectedHttpTransformationIndex = null
+            }
+            resource != null -> {
+                if (expanded) expandedHttpResources += resource
+                else if (!expandedHttpResources.remove(resource)) selectedHttpResourceUrl = null
+            }
+            expanded -> expandedHttpHosts += host
+            else -> expandedHttpHosts -= host
+        }
         render()
     }
 
@@ -1186,6 +1189,7 @@ class TuiYameObserver(
                         .indexOfFirst { it.host == selectedHttpHost }
                         .coerceAtLeast(0),
                     selectedHttpResourceUrl = selectedHttpResourceUrl,
+                    selectedHttpTransformationIndex = selectedHttpTransformationIndex,
                     commandPalette = commandPalette,
                     activeDetailPanel = activeDashboardPanel,
                     headerElapsedNanos = System.nanoTime() - headerStartedNanos,
@@ -1288,6 +1292,7 @@ internal data class DashboardHttpResource(
     val kind: ResourceKind = ResourceKind.OTHER,
     val prefetched: Boolean = false,
     val transformations: List<ResourceTransformationSummary> = emptyList(),
+    val expanded: Boolean = false,
 )
 
 internal data class DashboardHttpGraphMetadata(
@@ -1358,6 +1363,7 @@ internal data class DashboardState(
     val httpHosts: List<DashboardHttpHost>,
     val selectedHttpHostIndex: Int,
     val selectedHttpResourceUrl: String? = null,
+    val selectedHttpTransformationIndex: Int? = null,
     val commandPalette: TuiCommandPalette?,
     val activeDetailPanel: DashboardDetailPanel = DashboardDetailPanel.PROXY,
     val headerElapsedNanos: Long = 0,
@@ -1534,6 +1540,7 @@ internal object YameDashboardRenderer {
                     lowerHeight - 2,
                     rightWidth - 4,
                     state.proxyStatus,
+                    state.selectedHttpTransformationIndex,
                 ),
                 styles = styles,
             )
@@ -1645,6 +1652,7 @@ internal object YameDashboardRenderer {
                         detailHeight - 2,
                         width - 4,
                         state.proxyStatus,
+                        state.selectedHttpTransformationIndex,
                     ),
                     styles = styles,
                 )
@@ -1816,10 +1824,11 @@ internal object YameDashboardRenderer {
         visibleRows: Int,
         contentWidth: Int,
         status: String? = null,
+        selectedTransformationIndex: Int? = null,
     ): List<DashboardLine> {
         if (status != null) return listOf(DashboardLine(clip(status, contentWidth), DashboardTone.WARNING)) +
             if (visibleRows > 1) httpHostLines(hosts, selectedHostIndex, selectedResourceUrl,
-                visibleRows - 1, contentWidth) else emptyList()
+                visibleRows - 1, contentWidth, selectedTransformationIndex = selectedTransformationIndex) else emptyList()
 
         if (hosts.isEmpty()) {
             return listOf(DashboardLine("(no compatibility proxy hosts yet)", DashboardTone.MUTED))
@@ -1827,90 +1836,56 @@ internal object YameDashboardRenderer {
 
         val selected = selectedHostIndex.coerceIn(0, hosts.lastIndex)
         val rows = visibleRows.coerceAtLeast(1)
-        val selectedResourceIndex =
-            hosts[selected].resources.indexOfFirst { it.url == selectedResourceUrl }
-                .takeIf { selectedResourceUrl != null && it >= 0 }
-        val selectedLine =
-            hosts.take(selected).sumOf { host ->
-                1 + if (host.expanded) host.resources.size else 0
-            } +
-                if (selectedResourceIndex != null && hosts[selected].expanded) {
-                    1 + selectedResourceIndex
-                } else {
-                    0
-                }
-        val itemCount = hosts.sumOf { host ->
-            1 + if (host.expanded) host.resources.size else 0
-        }
-        val start = viewportStart(
-            selectedIndex = selectedLine.coerceIn(0, (itemCount - 1).coerceAtLeast(0)),
-            itemCount = itemCount,
-            visibleRows = rows,
-        )
+        val treeRows = httpProxyRows(hosts)
+        val selectedLine = treeRows.indexOfFirst {
+            it.host.host == hosts[selected].host && it.resource?.url == selectedResourceUrl &&
+                it.transformationIndex == selectedTransformationIndex
+        }.takeIf { it >= 0 } ?: treeRows.indexOfFirst { it.host.host == hosts[selected].host }
+        val start = viewportStart(selectedLine, treeRows.size, rows)
 
-        return sequence {
-            hosts.forEachIndexed { index, host ->
-                val marker = if (host.expanded) "v" else ">"
-                val hostSelected = index == selected && selectedResourceIndex == null
-                val selection = if (hostSelected) ">" else " "
-                yield(
-                    DashboardLine(
-                        clip(
-                            "$selection $marker ${host.host}  (${host.resources.size})" +
-                                if (host.savedBytes > 0) " | saved ${formatBytes(host.savedBytes)}" else "",
-                            contentWidth,
-                        ),
-                        if (hostSelected) DashboardTone.SELECTED else DashboardTone.ACCENT,
-                    ),
+        return treeRows.drop(start).take(rows).mapIndexed { offset, row ->
+            val host = row.host
+            val resource = row.resource
+            val isSelected = start + offset == selectedLine
+            val selection = if (isSelected) ">" else " "
+            when {
+                resource == null -> DashboardLine(
+                    clip("$selection ${if (host.expanded) "v" else ">"} ${host.host}  (${host.resources.size})" +
+                        if (host.savedBytes > 0) " | saved ${formatBytes(host.savedBytes)}" else "", contentWidth),
+                    if (isSelected) DashboardTone.SELECTED else DashboardTone.ACCENT,
                 )
-                if (host.expanded) {
-                    host.resources.forEach { resource ->
-                        val path = runCatching { URI(resource.url) }.getOrNull()?.let { uri ->
-                            buildString {
-                                append(uri.rawPath?.takeIf { it.isNotEmpty() } ?: "/")
-                                uri.rawQuery?.let { append('?').append(it) }
-                            }
-                        } ?: resource.url
-                        val summary = resource.transformations.lastOrNull()
-                        val transformText = summary?.let(::formatTransformationSummary).orEmpty()
-                        val prefetchText = if (resource.prefetched) " [P]" else ""
-                        val statusText =
-                            when (resource.state) {
-                                ResourceState.DISCOVERED -> "."
-                                ResourceState.FETCHING,
-                                ResourceState.SOURCE_READY,
-                                ResourceState.TRANSFORMING -> "~"
-                                ResourceState.READY -> "*"
-                                ResourceState.FAILED -> "!"
-                            }
-                        val tone =
-                            when (resource.state) {
-                                ResourceState.DISCOVERED -> DashboardTone.RESOURCE_KNOWN
-                                ResourceState.FETCHING,
-                                ResourceState.SOURCE_READY,
-                                ResourceState.TRANSFORMING -> DashboardTone.RESOURCE_ACTIVE
-                                ResourceState.READY -> DashboardTone.RESOURCE_READY
-                                ResourceState.FAILED -> DashboardTone.RESOURCE_FAILED
-                            }
-                        val resourceSelected =
-                            index == selected &&
-                                resource.url == selectedResourceUrl
-                        yield(
-                            DashboardLine(
-                                formatHttpResourceLine(
-                                    selection = if (resourceSelected) ">" else " ",
-                                    statusText = statusText,
-                                    path = path,
-                                    suffix = "$prefetchText$transformText",
-                                    contentWidth = contentWidth,
-                                ),
-                                if (resourceSelected) DashboardTone.SELECTED else tone,
-                            ),
-                        )
+                row.transformationIndex != null -> {
+                    val summary = resource.transformations.getOrNull(row.transformationIndex)
+                    val text = summary?.let { "${it.transformerId}${formatTransformationSummary(it)}" }
+                        ?: "(no transformations)"
+                    DashboardLine(clip("$selection      $text", contentWidth),
+                        if (isSelected) DashboardTone.SELECTED else DashboardTone.MUTED)
+                }
+                else -> {
+                    val path = runCatching { URI(resource.url) }.getOrNull()?.let { uri ->
+                        (uri.rawPath?.takeIf { it.isNotEmpty() } ?: "/") +
+                            (uri.rawQuery?.let { "?$it" } ?: "")
+                    } ?: resource.url
+                    val statusText = when (resource.state) {
+                        ResourceState.DISCOVERED -> "."
+                        ResourceState.FETCHING, ResourceState.SOURCE_READY, ResourceState.TRANSFORMING -> "~"
+                        ResourceState.READY -> "*"
+                        ResourceState.FAILED -> "!"
                     }
+                    val tone = when (resource.state) {
+                        ResourceState.DISCOVERED -> DashboardTone.RESOURCE_KNOWN
+                        ResourceState.FETCHING, ResourceState.SOURCE_READY, ResourceState.TRANSFORMING -> DashboardTone.RESOURCE_ACTIVE
+                        ResourceState.READY -> DashboardTone.RESOURCE_READY
+                        ResourceState.FAILED -> DashboardTone.RESOURCE_FAILED
+                    }
+                    val transformText = resource.transformations.lastOrNull()?.let(::formatTransformationSummary).orEmpty()
+                    DashboardLine(formatHttpResourceLine(selection,
+                        "$statusText ${if (resource.expanded) "v" else ">"}", path,
+                        (if (resource.prefetched) " [P]" else "") + transformText, contentWidth),
+                        if (isSelected) DashboardTone.SELECTED else tone)
                 }
             }
-        }.drop(start).take(rows).toList()
+        }
     }
 
     private fun formatHttpResourceLine(

@@ -218,6 +218,60 @@ class HttpGraphProjectionTest : InstalledConfigTest() {
         }
     }
 
+    @Test fun `resource expansion navigates every transformation and collapses one level at a time`() {
+        observer().use { ui ->
+            val transforms = listOf(ResourceTransformationSummary("z-reader", 400, 200),
+                ResourceTransformationSummary("a-cleanup", 200, 100))
+            ui.onEvent(graph())
+            ui.onEvent(resource(transforms = transforms))
+            ui.onEvent(resource(uri = URI("http://cdn.test/next"), edges = emptyList()))
+            ui.handleKeyAndAwait("ArrowRight") // host
+            ui.handleKeyAndAwait("ArrowDown") // resource
+            ui.handleKeyAndAwait("Enter")
+            assertTrue(ui.httpHostProjectionSnapshot().single().resources.first().expanded)
+            ui.handleKeyAndAwait("ArrowDown") // first transform
+            ui.handleKeyAndAwait("ArrowLeft") // parent resource, still expanded
+            assertEquals(child.toString(), ui.httpSelectionSnapshot().second)
+            assertTrue(ui.httpHostProjectionSnapshot().single().resources.first().expanded)
+            repeat(3) { ui.handleKeyAndAwait("ArrowDown") } // both transforms, next resource
+            assertEquals("http://cdn.test/next", ui.httpSelectionSnapshot().second)
+            repeat(3) { ui.handleKeyAndAwait("ArrowUp") }
+            ui.handleKeyAndAwait("ArrowLeft") // collapse resource
+            assertFalse(ui.httpHostProjectionSnapshot().single().resources.first().expanded)
+            assertEquals(child.toString(), ui.httpSelectionSnapshot().second)
+            ui.handleKeyAndAwait("ArrowLeft") // parent host
+            assertNull(ui.httpSelectionSnapshot().second)
+            assertTrue(ui.httpHostProjectionSnapshot().single().expanded)
+            ui.handleKeyAndAwait("ArrowLeft")
+            assertFalse(ui.httpHostProjectionSnapshot().single().expanded)
+        }
+    }
+
+    @Test fun `expanded resources retain snapshot order without duplicating events and forget removed lifetimes`() {
+        observer().use { ui ->
+            val first = ResourceTransformationSummary("z-reader", 400, 200)
+            val second = ResourceTransformationSummary("a-cleanup", 200, 100)
+            ui.onEvent(graph())
+            ui.onEvent(resource(transforms = listOf(first)))
+            ui.handleKeyAndAwait("Enter")
+            ui.handleKeyAndAwait("ArrowDown")
+            ui.handleKeyAndAwait("Enter")
+            val update = resource(change = ResourceLifecycleChange.TRANSFORMATIONS_UPDATED,
+                transforms = listOf(first, second), revision = 2)
+            repeat(2) { ui.onEvent(update) }
+            val current = ui.httpHostProjectionSnapshot().single().resources.single()
+            assertTrue(current.expanded)
+            assertEquals(listOf(first, second), current.transformations)
+            ui.handleKeyAndAwait("ArrowDown")
+            ui.onEvent(resource(change = ResourceLifecycleChange.REMOVED, revision = 3))
+            assertNull(ui.httpSelectionSnapshot().second)
+            ui.onEvent(graph(change = ResourceGraphChange.REMOVED))
+            ui.onEvent(graph(id = 2))
+            ui.onEvent(resource(id = 2))
+            assertFalse(ui.httpHostProjectionSnapshot().single().resources.single().expanded)
+        }
+    }
+
     @Test fun `selection expansion recency and resource identity survive incremental updates and reconnect`() {
         observer().use { ui ->
             ui.onEvent(graph())

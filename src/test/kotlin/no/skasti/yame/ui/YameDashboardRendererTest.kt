@@ -262,6 +262,55 @@ class YameDashboardRendererTest {
         assertContains(rendered, "184K->31K -83%")
     }
 
+    private fun transformationState(expanded: Boolean, transforms: List<ResourceTransformationSummary>, selected: Int? = null) =
+        DashboardState(portName = null, baud = 115200, connected = false,
+            dnsUpstream = "8.8.8.8", httpProxyEnabled = true, logs = emptyList(),
+            dnsLookups = emptyList(), transfers = emptyList(),
+            httpHosts = listOf(DashboardHttpHost("example.test", listOf(DashboardHttpResource(
+                "http://example.test/article", ResourceState.READY,
+                transformations = transforms, expanded = expanded)), expanded = true)),
+            selectedHttpHostIndex = 0, selectedHttpResourceUrl = "http://example.test/article",
+            selectedHttpTransformationIndex = selected, commandPalette = null)
+
+    @Test fun expandedResourceShowsAllTransformationsInReceivedOrderInBothLayouts() {
+        val transforms = listOf(ResourceTransformationSummary("z-readability", 4096, 2048, "article extracted"),
+            ResourceTransformationSummary("a-cleanup", 2048, 1024, "attributes removed"))
+        for (width in listOf(100, 260)) {
+            val rendered = YameDashboardRenderer.render(transformationState(true, transforms), width, 40)
+            assertTrue(rendered.indexOf("z-readability") < rendered.indexOf("a-cleanup"), rendered)
+            assertContains(rendered, "z-readability")
+            assertContains(rendered, "a-cleanup")
+            assertContains(rendered, "4.0K->2.0K -50%")
+            assertContains(rendered, "article extracted")
+            assertContains(rendered, "attributes removed")
+            assertTrue(rendered.lines().all { it.length == width })
+            val collapsed = YameDashboardRenderer.render(transformationState(false, transforms), width, 40)
+            assertFalse(collapsed.contains("z-readability"))
+            assertFalse(collapsed.contains("a-cleanup"))
+        }
+    }
+
+    @Test fun selectedTransformationScrollsIntoViewPastEarlierHostsResourcesAndDetails() {
+        val transforms = (0..39).map { ResourceTransformationSummary("stage-$it", 100, 50) }
+        for (width in listOf(100, 260)) {
+            val state = transformationState(true, transforms, selected = 39)
+            val rendered = YameDashboardRenderer.render(state, width, 30)
+            assertContains(rendered, ">      stage-39")
+            assertFalse(rendered.contains("stage-0 "))
+            assertTrue(rendered.lines().all { it.length == width })
+            val nextHost = DashboardHttpHost("next.test", emptyList(), expanded = false)
+            val next = YameDashboardRenderer.render(state.copy(httpHosts = state.httpHosts + nextHost,
+                selectedHttpHostIndex = 1, selectedHttpResourceUrl = null,
+                selectedHttpTransformationIndex = null), width, 30)
+            assertContains(next, "> > next.test")
+        }
+    }
+
+    @Test fun expandedUntransformedResourceShowsExplicitEmptyState() {
+        val rendered = YameDashboardRenderer.render(transformationState(true, emptyList(), 0), 100, 30)
+        assertContains(rendered, ">      (no transformations)")
+    }
+
     @Test
     fun proxyResourcesExposeLifecycleStates() {
         val rendered =
@@ -317,12 +366,12 @@ class YameDashboardRendererTest {
                 height = 50,
             )
 
-        assertContains(rendered, ". /known.gif")
-        assertContains(rendered, "~ /fetching.gif")
-        assertContains(rendered, "~ /source-ready.gif")
-        assertContains(rendered, "~ /transforming.jpg")
-        assertContains(rendered, "* /ready.jpg")
-        assertContains(rendered, "! /failed.gif")
+        assertContains(rendered, ". > /known.gif")
+        assertContains(rendered, "~ > /fetching.gif")
+        assertContains(rendered, "~ > /source-ready.gif")
+        assertContains(rendered, "~ > /transforming.jpg")
+        assertContains(rendered, "* > /ready.jpg")
+        assertContains(rendered, "! > /failed.gif")
     }
 
     @Test
