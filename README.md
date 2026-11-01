@@ -205,6 +205,13 @@ restricted to owner-only read/write permissions on POSIX systems when read or
 written, including files whose settings have not yet been loaded; `/yame.ini`
 is ignored by Git.
 
+For serial cables with unreliable DTR control signals, set
+`hangup-on-peer-dtr-drop=false` under `[modem]`. The default is `true`:
+YAME hangs up when peer DTR drops, as observed through DSR/DCD. Changes through
+ConfigStore apply immediately without reconnecting the serial port. Disabling
+this only ignores DTR-triggered hangup; PPP termination and Hayes escape/`ATH`
+remain available.
+
 ### HTML element simplification
 
 YAME creates `element-simplifier.ini` alongside `yame.ini` on first normal

@@ -8,6 +8,7 @@ import no.skasti.yame.observer.YameEvent
 import no.skasti.yame.observer.YameEvents
 import no.skasti.yame.observer.EventBroker
 import no.skasti.yame.observer.BrokerWaitResult
+import no.skasti.yame.modem.ModemSettings
 import no.skasti.yame.config.ConfigStore
 import no.skasti.yame.function.FunctionStore
 import no.skasti.yame.lifecycle.ApplicationFunctions
@@ -86,13 +87,23 @@ class YameRuntimeConnectionTest : InstalledConfigTest() {
     }
 
     @Test
-    fun `peer DTR drop hangs up only the modem call and permits redial on the same serial transport`() {
+    fun `peer DTR drop hangs up by default and live changes preserve the serial transport`() {
+        verifyPeerDtrPolicy(initiallyEnabled = true)
+    }
+
+    @Test
+    fun `peer DTR drop can be disabled before connection and enabled live`() {
+        verifyPeerDtrPolicy(initiallyEnabled = false)
+    }
+
+    private fun verifyPeerDtrPolicy(initiallyEnabled: Boolean) {
         val directory = Files.createTempDirectory("yame-peer-dtr")
         try {
             val store = ConfigStore(listOf(
                 SerialSettings.Port to "COM1",
-                no.skasti.yame.modem.ModemSettings.Tone to false,
+                ModemSettings.Tone to false,
             ))
+            if (!initiallyEnabled) store.set(ModemSettings.HangupOnPeerDtrDrop to false)
             val portReady = CountDownLatch(1)
             val port = Port(onReadingStarted = { portReady.countDown() })
             var opens = 0
@@ -112,6 +123,12 @@ class YameRuntimeConnectionTest : InstalledConfigTest() {
                         port.receive("ATE0\rATD123\r")
                         assertTrue(port.output.toString().contains("CONNECT"))
                         port.output.reset()
+                        if (!initiallyEnabled) {
+                            port.dropPeerDtr()
+                            assertEquals("", port.output.toString())
+                            assertFalse(port.closed)
+                            store.set(ModemSettings.HangupOnPeerDtrDrop to true)
+                        }
                         port.dropPeerDtr()
                         assertEquals("\r\nNO CARRIER\r\n", port.output.toString())
                         assertFalse(port.closed)
@@ -119,6 +136,15 @@ class YameRuntimeConnectionTest : InstalledConfigTest() {
                         port.receive("AT\rATD123\r")
                         assertTrue(port.output.toString().contains("OK"))
                         assertTrue(port.output.toString().contains("CONNECT"))
+                        // A live policy change must neither hang up nor reopen the transport.
+                        store.set(ModemSettings.HangupOnPeerDtrDrop to false)
+                        port.output.reset()
+                        port.dropPeerDtr()
+                        assertEquals("", port.output.toString())
+                        assertFalse(port.closed)
+                        store.set(ModemSettings.HangupOnPeerDtrDrop to true)
+                        port.dropPeerDtr()
+                        assertEquals("\r\nNO CARRIER\r\n", port.output.toString())
                         assertEquals(1, opens)
                     } finally {
                         runtime.close()

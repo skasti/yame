@@ -45,6 +45,7 @@ internal class YameRuntime(
         SerialConnection::availablePortDescriptors,
     private val failFastStartup: Boolean = false,
     private val connectionFactory: (String, Int, SerialFlowControl, (String) -> Unit) -> SerialTransport = ::SerialConnection,
+    @Volatile private var hangupOnPeerDtrDrop: Boolean = ConfigStore[ModemSettings.HangupOnPeerDtrDrop],
 ) : AutoCloseable {
     private val lock = java.lang.Object()
     private val closed = java.util.concurrent.atomic.AtomicBoolean()
@@ -211,6 +212,7 @@ internal class YameRuntime(
     private val configurationSubscription = ConfigStore.onChange.subscribe(initial = true) { changes ->
         val restart = synchronized(lock) {
             if (closed.get()) return@subscribe
+            changes[ModemSettings.HangupOnPeerDtrDrop]?.let { hangupOnPeerDtrDrop = it.value }
             changes[ModemSettings.Tone]?.let { activeModem?.updateToneSimulationEnabled(it.value) }
             changes[ModemSettings.Login]?.let { login ->
                 activeModem?.updateLoginCredentials(login.value.username, login.value.password)
@@ -316,7 +318,9 @@ internal class YameRuntime(
             }
             createdModem.attachOutput(opened.output)
             createdModem.attachCarrierPresent(opened::setCarrierPresent)
-            opened.onPeerDtrDropped(createdModem::hangup)
+            opened.onPeerDtrDropped {
+                if (hangupOnPeerDtrDrop) createdModem.hangup()
+            }
 
             var initialized = false
             var stoppedDuringInitialization = false
