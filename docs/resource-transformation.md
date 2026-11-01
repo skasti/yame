@@ -255,7 +255,7 @@ escapes metadata, drops scripts/styles/forms and event handlers, and permits onl
 HTTP(S) resource URLs and HTTP(S)/mailto links. Relative references use the source
 base URI (including a valid HTTP(S) `<base>`); the existing compatibility stage
 then rewrites HTTPS links and registers routes. Non-ASCII characters are emitted
-as entities so they survive re-encoding with the source HTTP charset. Image tag
+as named or decimal numeric entities so they survive re-encoding with the source HTTP charset. Hexadecimal numeric references emitted by jsoup are converted after HTML escaping; literal entity examples in text remain escaped. Image tag
 and image body optimization remain independent later stages.
 
 The switch is off by default because article extraction can intentionally discard
@@ -281,3 +281,24 @@ relative/base URLs, Unicode, unsafe markup, code/lists/tables, limits, HTTP fram
 and live same-URL toggles. They are not captured real-world websites or proof of
 Netscape rendering fidelity. General menu/layout recognition and a dedicated
 GitHub interpreter are not implemented by this first adapter.
+
+### HTML character decoding
+
+The shared text-body rewrite helper resolves `text/html` character encoding before
+any cleanup or Readability interpretation: byte-order mark first, then a valid
+HTTP charset, then a valid `meta charset` or `meta http-equiv=Content-Type`
+declaration in the first 1024 bytes. A bounded jsoup parse of that prefix avoids
+mistaking comments, script contents or quoted attributes for metadata. Invalid
+labels are ignored. HTML's legacy Latin-1/ASCII labels and undeclared fallback use
+Windows-1252 so smart punctuation does not become C1 control characters. A UTF-16
+meta declaration in an ASCII-compatible head is treated as UTF-8; real UTF-16
+input is recognized through its BOM. This is deliberately a small HTML policy,
+not a complete encoding-sniffing implementation. Non-HTML text retains its prior
+HTTP/BOM/ISO-8859-1 behavior. Charset detection alone does not rewrite bytes;
+unchanged transformations and the original resource representation remain intact.
+
+The reader renderer serializes numerically escaped characters in decimal form
+(for example `&#8211;` for an en dash), including metadata and attributes. This
+prevents jsoup's hexadecimal reference syntax from leaking into the legacy view.
+Norwegian letters, punctuation, soft hyphens and word joiners are covered by
+regression tests alongside literal entity examples.

@@ -20,7 +20,15 @@ internal class LegacyHtmlRenderer {
         page.byline?.takeIf { it.isNotBlank() }?.let { output.body().appendElement("p").text(it) }
         body.childNodes().toList().forEach { output.body().appendChild(it) }
         // ASCII entities preserve characters with any source HTTP charset retained by the pipeline.
-        return output.outerHtml()
+        // Netscape-era HTML consumers need decimal numeric references. jsoup has
+        // no decimal output mode; convert only serialized references, after escaping.
+        return HEX_REFERENCE.replace(output.outerHtml()) { match ->
+            "&#${match.groupValues[1].toInt(16)};"
+        }
+    }
+
+    private companion object {
+        val HEX_REFERENCE = Regex("&#[xX]([0-9a-fA-F]+);")
     }
 
     private fun allowedMarkup() = Safelist()

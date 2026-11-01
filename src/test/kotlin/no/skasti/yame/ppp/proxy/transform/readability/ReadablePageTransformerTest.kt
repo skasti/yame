@@ -120,6 +120,38 @@ class ReadablePageTransformerTest {
         assertEquals("https://example.test:8443/docs/images/retro.gif", doc.selectFirst("img")!!.attr("src"))
     }
 
+    @Test fun `UTF8 article with only meta charset preserves Norwegian headline and punctuation`() {
+        val title = "Lei av å bo alene på fjellet: Nå vil han bygge moderne «bygde\u00ADkollektiv»"
+        val html = fixture("news").replace("<head>", "<head><meta charset='UTF-8'>")
+            .replace("Vintage computing news", title)
+            .replace("A serial PPP", "Blåbær – \u2060 A serial PPP")
+        val original = resource(html).let { it.copy(source = it.source.copy(
+            headers = mapOf("Content-Type" to listOf("text/html")))) }
+        val result = defaultResourceTransformationPipeline(1_048_576).transform(context(), original).resource
+        assertSame(original.source, result.source)
+        val rendered = result.representation.body.toString(Charsets.US_ASCII)
+        val doc = Jsoup.parse(rendered)
+        // Readability removes the optional soft hyphen while normalizing metadata.
+        assertEquals(title.replace("\u00AD", ""), doc.title())
+        assertTrue(doc.body().text().contains("Blåbær –"))
+        assertFalse(rendered.contains("&#x", ignoreCase = true), rendered)
+        assertFalse(doc.title().contains("Ã"))
+        assertContains(rendered, "&#8211;")
+        assertContains(rendered, "&#8288;")
+    }
+
+    @Test fun `renderer emits decimal references without changing literal entity examples or attributes`() {
+        val rendered = LegacyHtmlRenderer().render(InterpretedPage("å – \u2060", null,
+            "<p>– \u2060 &amp;#x2013; <a title='–' href='next'>Lenke</a></p>", uri))
+        assertFalse(rendered.contains("&#x", ignoreCase = true))
+        assertContains(rendered, "&#8211;")
+        assertContains(rendered, "&#8288;")
+        val doc = Jsoup.parse(rendered)
+        assertEquals("å – \u2060", doc.title())
+        assertContains(doc.body().text(), "&#x2013;")
+        assertEquals("–", doc.selectFirst("a")!!.attr("title"))
+    }
+
     @Test fun `base URI is honored and unicode survives source charsets via entities`() {
         for (charset in listOf("UTF-8", "ISO-8859-1")) {
             val html = fixture("news").replace("<head>", "<head><base href='https://assets.test/docs/'>")
