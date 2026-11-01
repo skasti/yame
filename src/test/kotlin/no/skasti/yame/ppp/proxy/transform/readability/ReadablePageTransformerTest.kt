@@ -1,4 +1,12 @@
-package no.skasti.yame.ppp.proxy.transform
+package no.skasti.yame.ppp.proxy.transform.readability
+
+import no.skasti.yame.ppp.proxy.transform.HtmlTransformerSettings
+import no.skasti.yame.ppp.proxy.transform.Resource
+import no.skasti.yame.ppp.proxy.transform.ResourceRepresentation
+import no.skasti.yame.ppp.proxy.transform.ResourceTransformationContext
+import no.skasti.yame.ppp.proxy.transform.ResourceTransformationState
+import no.skasti.yame.ppp.proxy.transform.ResourceTransformationPipeline
+import no.skasti.yame.ppp.proxy.transform.defaultResourceTransformationPipeline
 
 import no.skasti.yame.ppp.proxy.ReferenceRole
 import no.skasti.yame.ppp.proxy.ResourceKind

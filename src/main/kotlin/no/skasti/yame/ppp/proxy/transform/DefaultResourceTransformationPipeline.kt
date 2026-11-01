@@ -1,5 +1,7 @@
 package no.skasti.yame.ppp.proxy.transform
 
+import no.skasti.yame.ppp.proxy.transform.readability.ReadablePageTransformer
+
 internal fun defaultResourceTransformationPipeline(
     maxResponseBytes: Int,
     elementSimplifier: ElementSimplifierConfiguration = ElementSimplifierConfiguration.defaults(),

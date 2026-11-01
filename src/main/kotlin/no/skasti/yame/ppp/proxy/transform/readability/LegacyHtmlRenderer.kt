@@ -1,4 +1,4 @@
-package no.skasti.yame.ppp.proxy.transform
+package no.skasti.yame.ppp.proxy.transform.readability
 
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document

@@ -1,7 +1,17 @@
-package no.skasti.yame.ppp.proxy.transform
+package no.skasti.yame.ppp.proxy.transform.readability
 
 import no.skasti.yame.ppp.proxy.ReferenceRole
 import no.skasti.yame.ppp.proxy.ResourceKind
+import no.skasti.yame.ppp.proxy.transform.HtmlTransformer
+import no.skasti.yame.ppp.proxy.transform.ResourceTransformer
+import no.skasti.yame.ppp.proxy.transform.ResourceTransformPhase
+import no.skasti.yame.ppp.proxy.transform.ResourceTransformationContext
+import no.skasti.yame.ppp.proxy.transform.ResourceTransformationState
+import no.skasti.yame.ppp.proxy.transform.ResourceRepresentation
+import no.skasti.yame.ppp.proxy.transform.ResourceTransformationSummary
+import no.skasti.yame.ppp.proxy.transform.TransformedRepresentation
+import no.skasti.yame.ppp.proxy.transform.rewriteEncodedTextBody
+import no.skasti.yame.ppp.proxy.transform.transformedHeadersFrom
 
 internal class ReadablePageTransformer(
     private val maxOutputBytes: Int,

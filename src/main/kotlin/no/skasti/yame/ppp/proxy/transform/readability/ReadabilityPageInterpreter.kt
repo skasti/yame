@@ -1,4 +1,4 @@
-package no.skasti.yame.ppp.proxy.transform
+package no.skasti.yame.ppp.proxy.transform.readability
 
 import net.dankito.readability4j.Readability4J
 import net.dankito.readability4j.model.ReadabilityOptions
