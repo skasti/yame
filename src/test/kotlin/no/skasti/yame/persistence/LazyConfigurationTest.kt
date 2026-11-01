@@ -409,7 +409,7 @@ class LazyConfigurationTest {
         assertFalse(store[ModemSettings.Tone])
         var modemKeyCount = 0
         store.onChange[ModemSettings.Group].subscribe(initial = true) { modemKeyCount = it.count() }.close()
-        assertEquals(5, modemKeyCount)
+        assertEquals(ModemSettings.allSettingKeys.size, modemKeyCount)
     }
 
     @Test fun `new definitions share an INI without central registration`() {
