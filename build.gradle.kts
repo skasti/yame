@@ -17,7 +17,7 @@ dependencies {
     // Override Readability4J's old transitive parser; also used by the legacy renderer.
     implementation("org.jsoup:jsoup:1.23.2")
     // Readability4J must not print logging-backend warnings over the TUI.
-    runtimeOnly("org.slf4j:slf4j-nop:1.7.36")
+    runtimeOnly("org.slf4j:slf4j-nop:2.0.20")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0")
     implementation("com.fazecast:jSerialComm:2.11.4")
     implementation("com.github.ajalt.mordant:mordant:3.1.0")
