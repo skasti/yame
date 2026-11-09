@@ -15,7 +15,7 @@ dependencies {
     implementation(kotlin("reflect"))
     implementation("net.dankito.readability4j:readability4j:1.0.8")
     // Override Readability4J's old transitive parser; also used by the legacy renderer.
-    implementation("org.jsoup:jsoup:1.23.2")
+    implementation("org.jsoup:jsoup:1.24.1")
     // Readability4J must not print logging-backend warnings over the TUI.
     runtimeOnly("org.slf4j:slf4j-nop:1.7.36")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0")
